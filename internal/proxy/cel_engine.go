@@ -23,14 +23,15 @@ type CELPolicy struct {
 
 // CELPolicyEngine handles CEL policy evaluation
 type CELPolicyEngine struct {
-	logger   *zap.Logger
-	env      *cel.Env
-	policies []CELPolicy
-	mu       sync.RWMutex
+	logger        *zap.Logger
+	env           *cel.Env
+	policies      []CELPolicy
+	mu            sync.RWMutex
+	defaultPolicy string // allow or deny
 }
 
 // NewCELPolicyEngine creates a new CEL policy engine
-func NewCELPolicyEngine(logger *zap.Logger) (*CELPolicyEngine, error) {
+func NewCELPolicyEngine(logger *zap.Logger, defaultPolicy string) (*CELPolicyEngine, error) {
 	// Create CEL environment with custom functions
 	env, err := cel.NewEnv(
 		cel.Variable("request", cel.DynType),
@@ -51,10 +52,16 @@ func NewCELPolicyEngine(logger *zap.Logger) (*CELPolicyEngine, error) {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
 
+	// Validate default policy
+	if defaultPolicy != "allow" && defaultPolicy != "deny" {
+		return nil, fmt.Errorf("invalid default policy: %s", defaultPolicy)
+	}
+
 	return &CELPolicyEngine{
-		logger:   logger,
-		env:      env,
-		policies: make([]CELPolicy, 0),
+		logger:        logger,
+		env:           env,
+		policies:      make([]CELPolicy, 0),
+		defaultPolicy: defaultPolicy,
 	}, nil
 }
 
@@ -90,26 +97,23 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 }
 
 // Evaluate evaluates a tool call request against all policies
-func (e *CELPolicyEngine) Evaluate(req mcp.CallToolRequest) (bool, string, error) {
+func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (bool, string, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	// Convert request params to a map that CEL can understand
-	params := make(map[string]interface{})
-	if req.Request.Params.Meta != nil {
-		params["meta"] = map[string]interface{}{
-			"additionalFields": req.Request.Params.Meta.AdditionalFields,
-		}
-	}
-
-	// Create evaluation context
+	// Create evaluation context with proper structure
 	vars := map[string]interface{}{
 		"request": map[string]interface{}{
 			"method": req.Request.Method,
-			"params": params,
+			"params": map[string]interface{}{
+				"name":      req.Params.Name,
+				"arguments": req.Params.Arguments,
+				"meta":      req.Request.Params.Meta,
+			},
 		},
 	}
 
+	e.logger.Debug("policies", zap.Any("policies", e.policies))
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
 		// Compile the expression
@@ -123,6 +127,8 @@ func (e *CELPolicyEngine) Evaluate(req mcp.CallToolRequest) (bool, string, error
 		if err != nil {
 			return false, "", fmt.Errorf("failed to create program for policy %s: %w", policy.Name, err)
 		}
+
+		e.logger.Debug("evaluating tool call", zap.Any("vars", vars), zap.Any("policy", policy))
 
 		// Evaluate the expression
 		out, _, err := prg.Eval(vars)
@@ -147,6 +153,11 @@ func (e *CELPolicyEngine) Evaluate(req mcp.CallToolRequest) (bool, string, error
 		}
 	}
 
-	// If no policies matched, deny by default
+	// If no policies matched, use the default policy
+	if e.defaultPolicy == "allow" {
+		e.logger.Info("allowing tool call by default policy", zap.Any("request", req))
+		return true, "", nil
+	}
+	e.logger.Info("denying tool call by default policy", zap.Any("request", req))
 	return false, "no matching policy found", nil
 }

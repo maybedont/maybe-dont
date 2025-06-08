@@ -11,7 +11,7 @@ import (
 
 func TestCELPolicyEngine_Evaluate(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	engine, err := NewCELPolicyEngine(logger)
+	engine, err := NewCELPolicyEngine(logger, "deny")
 	require.NoError(t, err)
 
 	policies := []config.CELPolicy{
@@ -93,7 +93,7 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, msg, err := engine.Evaluate(tt.req)
+			allowed, msg, err := engine.EvaluateToolCall(tt.req)
 			require.NoError(t, err)
 			require.Equal(t, tt.want, allowed)
 			require.Equal(t, tt.msg, msg)

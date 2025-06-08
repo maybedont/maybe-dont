@@ -1,0 +1,8 @@
+# Example CEL policy rules
+rules:
+- name: deny-kubectl-delete
+  description: Deny kubectl delete
+  expression: |- 
+    request.method == "tools/call" && request.params.name == "kubectl" && request.params.arguments.command.contains("delete")
+  action: deny
+  message: Denied access to kubectl delete

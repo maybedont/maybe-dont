@@ -74,7 +74,7 @@ func NewToolCELValidationHandler(logger *zap.Logger, engine *CELPolicyEngine) *T
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) error {
 	// Evaluate policies
-	allowed, message, err := h.engine.Evaluate(req)
+	allowed, message, err := h.engine.EvaluateToolCall(req)
 	if err != nil {
 		return fmt.Errorf("policy evaluation failed: %w", err)
 	}

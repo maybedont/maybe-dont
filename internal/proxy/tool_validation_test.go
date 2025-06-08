@@ -13,14 +13,14 @@ import (
 
 func TestValidationChain(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	engine, err := NewCELPolicyEngine(logger)
+	engine, err := NewCELPolicyEngine(logger, "deny")
 	require.NoError(t, err)
 
 	// Load default policies
 	defaultPolicies := []config.CELPolicy{
 		{
 			Name:       "allow-tools-call",
-			Expression: `request.method == "tools/call"`,
+			Expression: `request.method == "tools/call" && request.params.name == "read_file"`,
 			Action:     "allow",
 			Message:    "Allowed to call tools",
 		},
@@ -40,23 +40,17 @@ func TestValidationChain(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid tool call with meta",
-			req: mcp.CallToolRequest{
-				Request: mcp.Request{
-					Method: "tools/call",
-					Params: mcp.RequestParams{
-						Meta: &mcp.Meta{},
-					},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid tool call without meta",
+			name: "valid tool call",
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{
 					Method: "tools/call",
 					Params: mcp.RequestParams{},
+				},
+				Params: mcp.CallToolParams{
+					Name: "read_file",
+					Arguments: map[string]string{
+						"command": "cat file.txt",
+					},
 				},
 			},
 			wantErr: false,
@@ -66,12 +60,9 @@ func TestValidationChain(t *testing.T) {
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{
 					Method: "invalid_method",
-					Params: mcp.RequestParams{
-						Meta: &mcp.Meta{},
-					},
 				},
 			},
-			wantErr: true, // Expect error for invalid method
+			wantErr: true,
 		},
 	}
 
@@ -136,7 +127,7 @@ func TestLoggingHandler(t *testing.T) {
 
 func TestCELValidationHandler(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	engine, err := NewCELPolicyEngine(logger)
+	engine, err := NewCELPolicyEngine(logger, "deny")
 	require.NoError(t, err)
 
 	// Load default policies

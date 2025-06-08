@@ -109,6 +109,33 @@ type CELPolicy struct {
 	Message     string `mapstructure:"message"`
 }
 
+// LoadPoliciesFromFile loads CEL policies from a file
+func LoadPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
+	if rulesFile == "" {
+		return nil, nil
+	}
+
+	v := viper.New()
+	v.SetConfigFile(rulesFile)
+	v.SetConfigType("yaml")
+
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("error reading rules file: %w", err)
+	}
+
+	// Create a temporary struct to hold the rules
+	type RulesConfig struct {
+		Rules []CELPolicy `mapstructure:"rules"`
+	}
+
+	var config RulesConfig
+	if err := v.Unmarshal(&config); err != nil {
+		return nil, fmt.Errorf("error unmarshaling rules: %w", err)
+	}
+
+	return config.Rules, nil
+}
+
 // LoadConfig loads the configuration from all sources
 func LoadConfig(configPath string) (*Config, error) {
 	v := viper.New()
@@ -144,6 +171,15 @@ func LoadConfig(configPath string) (*Config, error) {
 	var config Config
 	if err := v.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
+	}
+
+	// Load policies from rules file if specified
+	if config.Policy.RulesFile != "" {
+		policies, err := LoadPoliciesFromFile(config.Policy.RulesFile)
+		if err != nil {
+			return nil, fmt.Errorf("error loading policies from file: %w", err)
+		}
+		config.Policy.Rules = policies
 	}
 
 	// Validate config

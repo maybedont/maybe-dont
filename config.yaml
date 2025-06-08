@@ -7,7 +7,7 @@ server:
   # Address to listen on (host:port)
   listen_addr: "127.0.0.1:8080"
   # Log level (debug, info, warn, error)
-  log_level: "info"
+  log_level: "debug"
   # Log format (json or text)
   log_format: "json"
   
@@ -59,9 +59,9 @@ auth:
 # Policy configuration
 policy:
   # Path to CEL policy rules file
-  rules_file: "rules.cel"
+  rules_file: "rules.yaml"
   # Default policy (allow or deny)
-  default: "deny"
+  default: "allow"
 
 
 # Transport configuration

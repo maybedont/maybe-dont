@@ -38,7 +38,7 @@ type Proxy struct {
 // New creates a new proxy instance
 func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
 	// Create CEL policy engine
-	policyEngine, err := NewCELPolicyEngine(logger)
+	policyEngine, err := NewCELPolicyEngine(logger, cfg.Policy.Default)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL policy engine: %w", err)
 	}
