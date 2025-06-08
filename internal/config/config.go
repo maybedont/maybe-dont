@@ -221,6 +221,11 @@ func LoadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config from %s: %w", v.ConfigFileUsed(), err)
 	}
 
+	// Override OpenAI API key from environment variable if set
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		config.AIPolicyValidation.APIKey = apiKey
+	}
+
 	// Load policies from rules file if specified
 	if config.PolicyValidation.RulesFile != "" {
 		policies, err := LoadCELPoliciesFromFile(config.PolicyValidation.RulesFile)
@@ -365,6 +370,19 @@ func ValidateConfig(cfg *Config) error {
 	// Validate audit configuration
 	if cfg.Audit.Enabled && cfg.Audit.Path == "" {
 		return fmt.Errorf("audit.path is required when audit.enabled is true")
+	}
+
+	// Validate AI validation configuration
+	if cfg.AIPolicyValidation.Enabled {
+		if cfg.AIPolicyValidation.APIKey == "" {
+			return fmt.Errorf("OPENAI_API_KEY environment variable is required when AI validation is enabled")
+		}
+		if cfg.AIPolicyValidation.Endpoint == "" {
+			return fmt.Errorf("ai_validation.endpoint is required when AI validation is enabled")
+		}
+		if cfg.AIPolicyValidation.Model == "" {
+			return fmt.Errorf("ai_validation.model is required when AI validation is enabled")
+		}
 	}
 
 	return nil

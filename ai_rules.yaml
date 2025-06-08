@@ -15,5 +15,6 @@ rules:
       - Deleting a large number of roles
       - Deleting a large number of permissions
       The tool call request is: %s
+      Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
     action: "deny"
     message: "This action is overly destructive and has been blocked."

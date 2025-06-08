@@ -2,10 +2,11 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"strconv"
 	"sync"
 
+	"github.com/invopop/jsonschema"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -43,6 +44,9 @@ func InitAIPolicyEngine(logger *zap.Logger, engine *AIPolicyEngine) error {
 		return fmt.Errorf("invalid default policy: %s", engine.defaultPolicy)
 	}
 
+	// Set the logger
+	engine.logger = logger
+
 	client := openai.NewClient(
 		option.WithAPIKey(engine.apiKey),
 	)
@@ -76,6 +80,11 @@ func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy) error {
 	return nil
 }
 
+type AIResponse struct {
+	Allowed bool   `json:"allowed"`
+	Message string `json:"message"`
+}
+
 // Evaluate evaluates a tool call request against all policies
 func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest) (bool, string, error) {
 	e.mu.RLock()
@@ -84,30 +93,52 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	e.logger.Debug("policies", zap.Any("policies", e.policies))
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
-		// Call the AI API
+		// Format the tool call request for the AI
+		toolCallStr := fmt.Sprintf("Tool: %s\nArguments: %v", req.Params.Name, req.Params.Arguments)
+
+		schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
+			Name:        "ai_response",
+			Description: openai.String("Response from the AI policy engine"),
+			Schema:      GenerateSchema[AIResponse](),
+			Strict:      openai.Bool(true),
+		}
+
+		// Call the AI API with the actual tool call request
 		chatCompletion, err := e.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.UserMessage("Say this is a test"),
+				openai.UserMessage(fmt.Sprintf(policy.Prompt, toolCallStr)),
 			},
-			Model: openai.ChatModelGPT4o,
+			Model: openai.ChatModel(e.model),
+			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONSchema: &openai.ResponseFormatJSONSchemaParam{
+					JSONSchema: schemaParam,
+				},
+			},
 		})
 		if err != nil {
 			return false, "", fmt.Errorf("failed to evaluate tool call: %w", err)
 		}
 
+		if len(chatCompletion.Choices) == 0 {
+			return false, "", fmt.Errorf("no response from AI model")
+		}
+
 		// Check result
-		result, err := strconv.ParseBool(chatCompletion.Choices[0].Message.Content)
+		// Parse the response as JSON
+		var result AIResponse
+		err = json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &result)
 		if err != nil {
 			return false, "", fmt.Errorf("failed to parse result: %w", err)
 		}
+		e.logger.Debug("result", zap.Any("result", result))
 
 		// If policy matches and is a deny rule, deny the request
-		if result && policy.Action == "deny" {
+		if result.Allowed && policy.Action == "deny" {
 			return false, policy.Message, nil
 		}
 
 		// If policy matches and is an allow rule, allow the request
-		if result && policy.Action == "allow" {
+		if result.Allowed && policy.Action == "allow" {
 			return true, "", nil
 		}
 	}
@@ -119,4 +150,16 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	}
 	e.logger.Info("denying tool call by default policy", zap.Any("request", req))
 	return false, "no matching policy found", nil
+}
+
+func GenerateSchema[T any]() interface{} {
+	// Structured Outputs uses a subset of JSON schema
+	// These flags are necessary to comply with the subset
+	reflector := jsonschema.Reflector{
+		AllowAdditionalProperties: false,
+		DoNotReference:            true,
+	}
+	var v T
+	schema := reflector.Reflect(v)
+	return schema
 }
