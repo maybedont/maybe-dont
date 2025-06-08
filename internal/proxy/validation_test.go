@@ -6,64 +6,34 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
-	"github.com/sudermanjr/maybe-dont/internal/config"
-	"go.uber.org/zap/zaptest"
 )
 
 func TestValidationChain(t *testing.T) {
-	// Create test logger
-	logger := zaptest.NewLogger(t)
-
-	// Create test config
-	cfg := &config.Config{
-		Policy: struct {
-			RulesFile string `mapstructure:"rules_file"`
-			Default   string `mapstructure:"default"`
-		}{
-			Default: "deny",
-		},
-	}
-
 	// Create validation chain
-	chain := NewValidationChain(logger, cfg)
+	chain := NewValidationChain(NewLoggingHandler(), NewCELValidationHandler())
 
 	tests := []struct {
 		name    string
-		req     *mcp.Request
+		req     mcp.CallToolRequest
 		wantErr bool
 	}{
 		{
-			name: "ping request",
-			req: &mcp.Request{
-				Method: "ping",
-			},
-			wantErr: false,
-		},
-		{
-			name: "tool call request",
-			req: &mcp.Request{
-				Method: "tools/call",
-				Params: mcp.RequestParams{
-					Meta: &mcp.Meta{},
+			name: "basic tool call",
+			req: mcp.CallToolRequest{
+				Request: mcp.Request{
+					Method: "tools/call",
+					Params: mcp.RequestParams{
+						Meta: &mcp.Meta{},
+					},
 				},
 			},
-			wantErr: false, // Currently CEL validation is a TODO
-		},
-		{
-			name: "resource read request",
-			req: &mcp.Request{
-				Method: "resources/read",
-				Params: mcp.RequestParams{
-					Meta: &mcp.Meta{},
-				},
-			},
-			wantErr: false, // Currently CEL validation is a TODO
+			wantErr: false, // No CEL validation yet
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := chain.Validate(context.Background(), tt.req)
+			err := chain.Handle(context.Background(), tt.req)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -74,17 +44,16 @@ func TestValidationChain(t *testing.T) {
 }
 
 func TestLoggingHandler(t *testing.T) {
-	// Create test logger
-	logger := zaptest.NewLogger(t)
-
 	// Create handler
-	handler := NewLoggingHandler(logger)
+	handler := NewLoggingHandler()
 
 	// Test request
-	req := &mcp.Request{
-		Method: "test",
-		Params: mcp.RequestParams{
-			Meta: &mcp.Meta{},
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{
+			Method: "tools/call",
+			Params: mcp.RequestParams{
+				Meta: &mcp.Meta{},
+			},
 		},
 	}
 
@@ -92,32 +61,22 @@ func TestLoggingHandler(t *testing.T) {
 	err := handler.Handle(context.Background(), req)
 	assert.NoError(t, err)
 }
+
 func TestCELValidationHandler(t *testing.T) {
-	// Create test logger
-	logger := zaptest.NewLogger(t)
-
-	// Create test config
-	cfg := &config.Config{
-		Policy: struct {
-			RulesFile string `mapstructure:"rules_file"`
-			Default   string `mapstructure:"default"`
-		}{
-			Default: "deny",
-		},
-	}
-
 	// Create handler
-	handler := NewCELValidationHandler(logger, cfg)
+	handler := NewCELValidationHandler()
 
 	// Test request
-	req := &mcp.Request{
-		Method: "test",
-		Params: mcp.RequestParams{
-			Meta: &mcp.Meta{},
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{
+			Method: "tools/call",
+			Params: mcp.RequestParams{
+				Meta: &mcp.Meta{},
+			},
 		},
 	}
 
 	// Test handler
 	err := handler.Handle(context.Background(), req)
-	assert.NoError(t, err) // Currently CEL validation is a TODO
+	assert.NoError(t, err) // No CEL validation yet
 }

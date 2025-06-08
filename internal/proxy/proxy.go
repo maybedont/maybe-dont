@@ -55,7 +55,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 	}
 
 	// Initialize validation chain
-	p.validationChain = NewValidationChain(p.logger, p.config)
+	p.validationChain = NewValidationChain(NewLoggingHandler(), NewCELValidationHandler())
 
 	// Initialize downstream client based on transport type
 	if err := p.initDownstreamClient(ctx); err != nil {
@@ -92,8 +92,13 @@ func (p *Proxy) Stop() error {
 
 // Tool handler function
 func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Log the full request including params before validation
+	p.logger.Info("Handling tool call request",
+		zap.Any("request", req),
+	)
+
 	// Validate request through the chain
-	if err := p.validationChain.Validate(ctx, &req.Request); err != nil {
+	if err := p.ValidateToolCall(ctx, req); err != nil {
 		return nil, fmt.Errorf("request validation failed: %w", err)
 	}
 
@@ -103,23 +108,11 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 
 // Prompt handler function
 func (p *Proxy) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-	// Validate request through the chain
-	if err := p.validationChain.Validate(ctx, &req.Request); err != nil {
-		return nil, fmt.Errorf("request validation failed: %w", err)
-	}
-
-	// If we get here, the request passed validation
 	return p.client.GetPrompt(ctx, req)
 }
 
 // Resource handler function
 func (p *Proxy) HandleResourceCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	// Validate request through the chain
-	if err := p.validationChain.Validate(ctx, &req.Request); err != nil {
-		return nil, fmt.Errorf("request validation failed: %w", err)
-	}
-
-	// If we get here, the request passed validation
 	result, err := p.client.ReadResource(ctx, req)
 	if err != nil {
 		return nil, err
@@ -129,12 +122,6 @@ func (p *Proxy) HandleResourceCall(ctx context.Context, req mcp.ReadResourceRequ
 
 // Resource template handler function
 func (p *Proxy) HandleResourceTemplateCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	// Validate request through the chain
-	if err := p.validationChain.Validate(ctx, &req.Request); err != nil {
-		return nil, fmt.Errorf("request validation failed: %w", err)
-	}
-
-	// If we get here, the request passed validation
 	result, err := p.client.ReadResource(ctx, req)
 	if err != nil {
 		return nil, err
