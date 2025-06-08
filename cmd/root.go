@@ -5,12 +5,13 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
+	"github.com/sudermanjr/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
 
 var (
 	cfgFile string
+	cfg     *config.Config
 	logger  *zap.Logger
 )
 
@@ -18,7 +19,28 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "mcp-security-proxy",
 	Short: "MCP Security Proxy - Enterprise-grade security controls for MCP communications",
-	Long:  `A Go-based middleware service that provides enterprise-grade security controls for Model Context Protocol (MCP) communications.`,
+	Long: `MCP Security Proxy is a Go-based middleware service that provides enterprise-grade 
+security controls for Model Context Protocol (MCP) communications. It acts as a transparent 
+proxy between MCP clients and servers, enforcing security policies, validating requests, 
+and providing comprehensive audit logging.`,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		var err error
+		cfg, err = config.LoadConfig(cfgFile)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		if err := config.ValidateConfig(cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+
+		logger, err = config.GetLogger(cfg)
+		if err != nil {
+			return fmt.Errorf("failed to create logger: %w", err)
+		}
+
+		return nil
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -30,78 +52,8 @@ func Execute() {
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
-
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ./config.yaml)")
-	rootCmd.PersistentFlags().StringP("log-level", "l", "info", "logging verbosity (debug, info, warn, error)")
-	rootCmd.PersistentFlags().String("log-format", "json", "output format (json, text)")
-	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "enable verbose output")
-
-	// Bind flags to viper
-	if err := viper.BindPFlag("logging.level", rootCmd.PersistentFlags().Lookup("log-level")); err != nil {
-		fmt.Printf("Failed to bind log-level flag: %v\n", err)
-		os.Exit(1)
-	}
-	if err := viper.BindPFlag("logging.format", rootCmd.PersistentFlags().Lookup("log-format")); err != nil {
-		fmt.Printf("Failed to bind log-format flag: %v\n", err)
-		os.Exit(1)
-	}
-	if err := viper.BindPFlag("logging.verbose", rootCmd.PersistentFlags().Lookup("verbose")); err != nil {
-		fmt.Printf("Failed to bind verbose flag: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// initConfig reads in config file and ENV variables if set.
-func initConfig() {
-	if cfgFile != "" {
-		// Use config file from the flag.
-		viper.SetConfigFile(cfgFile)
-	} else {
-		// Search config in home directory with name ".mcp-proxy" (without extension).
-		viper.AddConfigPath(".")
-		viper.AddConfigPath("$HOME/.mcp-proxy")
-		viper.AddConfigPath("/etc/mcp-proxy")
-		viper.SetConfigName("config")
-	}
-
-	// Read in environment variables that match
-	viper.SetEnvPrefix("MCP_PROXY")
-	viper.AutomaticEnv()
-
-	// Initialize logger
-	initLogger()
-
-	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		logger.Info("Using config file", zap.String("file", viper.ConfigFileUsed()))
-	} else {
-		logger.Warn("No config file found, using defaults")
-	}
-}
-
-func initLogger() {
-	var err error
-	config := zap.NewProductionConfig()
-
-	// Set log level
-	level := viper.GetString("logging.level")
-	if level != "" {
-		if err := config.Level.UnmarshalText([]byte(level)); err != nil {
-			fmt.Printf("Invalid log level: %s\n", err)
-			os.Exit(1)
-		}
-	}
-
-	// Set log format
-	if viper.GetString("logging.format") == "text" {
-		config.Encoding = "console"
-	}
-
-	logger, err = config.Build()
-	if err != nil {
-		fmt.Printf("Failed to initialize logger: %s\n", err)
-		os.Exit(1)
-	}
+	rootCmd.PersistentFlags().String("log-level", "info", "log level (debug, info, warn, error)")
+	rootCmd.PersistentFlags().String("log-format", "json", "log format (json or text)")
 }
