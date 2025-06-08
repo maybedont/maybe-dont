@@ -27,7 +27,10 @@ The server will begin listening for connections and enforcing security policies.
 
 		// Create context that will be canceled on interrupt
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		defer func() {
+			cancel()
+			Logger.Sync()
+		}()
 
 		// Handle OS signals
 		sigCh := make(chan os.Signal, 1)
