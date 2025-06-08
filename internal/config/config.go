@@ -53,8 +53,6 @@ type Config struct {
 		} `mapstructure:"mtls"`
 	} `mapstructure:"auth"`
 
-	DefaultPolicy string `mapstructure:"default"` // allow or deny
-
 	// Policy configuration
 	PolicyValidation struct {
 		RulesFile string      `mapstructure:"rules_file"`

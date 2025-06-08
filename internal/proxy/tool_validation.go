@@ -59,8 +59,6 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.AllowCount += results.AllowCount
 		finalResults.DenyCount += results.DenyCount
 	}
-	//TODO determine the rules for the final results
-	//TODO: If the default policy is set to allow, and the denyCount > 0, set the allowed to false
 
 	return finalResults, nil
 }

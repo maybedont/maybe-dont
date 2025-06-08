@@ -156,11 +156,16 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 		return nil, fmt.Errorf("request validation failed: %w", err)
 	}
 
-	// Add validation results to audit log
-	auditLog["validation"] = map[string]interface{}{
-		"allowed": validationResults.Allowed,
-		"results": validationResults.Results,
+	if validationResults.DenyCount > 0 {
+		validationResults.Allowed = false
+		validationResults.Message = "Maybe Don't, A policy failed."
+	} else {
+		validationResults.Allowed = true
+		validationResults.Message = "All policies passed, maybe do."
 	}
+
+	// Add validation results to audit log
+	auditLog["validation"] = validationResults
 
 	// If validation failed, return error with all validation results
 	if !validationResults.Allowed {
@@ -174,7 +179,7 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 		}
 		auditLog["status"] = "denied"
 		p.auditLogger.Warn("Tool call audit", zap.Any("audit", auditLog))
-		return nil, fmt.Errorf("policy validation failed: %s", string(resultsJSON))
+		return nil, fmt.Errorf("Maybe Don't: %s", string(resultsJSON))
 	}
 
 	// Call the tool
