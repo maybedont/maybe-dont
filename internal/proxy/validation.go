@@ -41,8 +41,7 @@ func NewLoggingHandler(logger *zap.Logger) *LoggingHandler {
 func (h *LoggingHandler) Handle(ctx context.Context, req *mcp.Request) error {
 	// Log request details
 	h.logger.Info("Processing request",
-		zap.String("method", req.Method),
-		zap.Any("params", req.Params),
+		zap.Any("request", req),
 	)
 
 	// Continue to next handler if exists

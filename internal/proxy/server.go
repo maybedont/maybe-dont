@@ -50,28 +50,28 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 	if len(p.capabilityDetails.Tools) > 0 {
 		for _, tool := range p.capabilityDetails.Tools {
 			srv.AddTool(tool, p.HandleToolCall)
-			p.logger.Info("Registered tool", zap.String("name", tool.Name))
+			p.logger.Info("Registered tool", zap.Any("tool", tool))
 		}
 	}
 
 	if len(p.capabilityDetails.Prompts) > 0 {
 		for _, prompt := range p.capabilityDetails.Prompts {
 			srv.AddPrompt(prompt, p.HandlePromptCall)
-			p.logger.Info("Registered prompt", zap.String("name", prompt.Name))
+			p.logger.Info("Registered prompt", zap.Any("prompt", prompt))
 		}
 	}
 
 	if len(p.capabilityDetails.Resources) > 0 {
 		for _, resource := range p.capabilityDetails.Resources {
 			srv.AddResource(resource, p.HandleResourceCall)
-			p.logger.Info("Registered resource", zap.String("name", resource.Name))
+			p.logger.Info("Registered resource", zap.Any("resource", resource))
 		}
 	}
 
 	if len(p.capabilityDetails.Templates) > 0 {
 		for _, template := range p.capabilityDetails.Templates {
 			srv.AddResourceTemplate(template, p.HandleResourceTemplateCall)
-			p.logger.Info("Registered resource template", zap.String("name", template.Name))
+			p.logger.Info("Registered resource template", zap.Any("template", template))
 		}
 	}
 
