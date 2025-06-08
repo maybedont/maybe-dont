@@ -5,8 +5,6 @@ import (
 	"sync"
 
 	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/common/types"
-	"github.com/google/cel-go/common/types/ref"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/sudermanjr/maybe-dont/internal/config"
 	"go.uber.org/zap"
@@ -37,16 +35,6 @@ func NewCELPolicyEngine(logger *zap.Logger, defaultPolicy string) (*CELPolicyEng
 		cel.Variable("request", cel.DynType),
 		cel.Variable("auth", cel.DynType),
 		cel.Variable("response", cel.DynType),
-		cel.Function("hasSecrets",
-			cel.Overload("hasSecrets_string",
-				[]*cel.Type{cel.StringType},
-				cel.BoolType,
-				cel.UnaryBinding(func(val ref.Val) ref.Val {
-					// TODO: Implement secret detection
-					return types.Bool(false)
-				}),
-			),
-		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
