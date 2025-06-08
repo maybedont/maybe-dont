@@ -24,6 +24,7 @@ are valid and can be compiled.`,
 		// 4. Compile CEL policies
 		// 5. Report any errors or warnings
 
+		// Validate AI policies
 		fmt.Println("Configuration validation successful")
 		fmt.Println("All CEL policies compiled successfully")
 		return nil
@@ -32,4 +33,4 @@ are valid and can be compiled.`,
 
 func init() {
 	rootCmd.AddCommand(validateCmd)
-} 
+}

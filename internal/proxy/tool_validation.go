@@ -86,6 +86,35 @@ func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.C
 	return nil
 }
 
+// CELValidationHandler validates tool call requests using CEL policies
+type ToolAIValidationHandler struct {
+	logger *zap.Logger
+	engine *AIPolicyEngine
+}
+
+// NewAIValidationHandler creates a new CEL validation handler
+func NewToolAIValidationHandler(logger *zap.Logger, engine *AIPolicyEngine) *ToolAIValidationHandler {
+	return &ToolAIValidationHandler{
+		logger: logger,
+		engine: engine,
+	}
+}
+
+// HandleToolCall implements ToolValidationHandler
+func (h *ToolAIValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) error {
+	// Evaluate policies
+	allowed, message, err := h.engine.EvaluateToolCall(ctx, req)
+	if err != nil {
+		return fmt.Errorf("policy evaluation failed: %w", err)
+	}
+
+	if !allowed {
+		return fmt.Errorf("Maybe Don't Policy Violation: %s", message)
+	}
+
+	return nil
+}
+
 // ValidateToolCall validates a tool call request
 func (p *Proxy) ValidateToolCall(ctx context.Context, req mcp.CallToolRequest) error {
 	return p.validationChain.Handle(ctx, req)

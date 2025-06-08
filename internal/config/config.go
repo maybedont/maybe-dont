@@ -76,14 +76,24 @@ type Config struct {
 	} `mapstructure:"auth"`
 
 	// Policy configuration
-	Policy struct {
+	PolicyValidation struct {
 		RulesFile string      `mapstructure:"rules_file"`
 		Default   string      `mapstructure:"default"` // allow or deny
 		Rules     []CELPolicy `mapstructure:"rules"`
-	} `mapstructure:"policy"`
+	} `mapstructure:"policy_validation"`
 
 	// AI validation configuration
-	AIValidation AIValidation `mapstructure:"ai_validation"`
+	AIPolicyValidation struct {
+		Default   string     `mapstructure:"default"` // allow or deny
+		Enabled   bool       `mapstructure:"enabled"`
+		Endpoint  string     `mapstructure:"endpoint"`
+		Model     string     `mapstructure:"model"`
+		Timeout   int        `mapstructure:"timeout"` // in seconds
+		MaxTokens int        `mapstructure:"max_tokens"`
+		RulesFile string     `mapstructure:"rules_file"`
+		APIKey    string     `mapstructure:"api_key"`
+		Rules     []AIPolicy `mapstructure:"rules"`
+	} `mapstructure:"ai_validation"`
 
 	// Transport configuration
 	Transport struct {
@@ -114,17 +124,16 @@ type CELPolicy struct {
 	Message     string `mapstructure:"message"`
 }
 
-// AIValidation represents the AI validation configuration
-type AIValidation struct {
-	Enabled   bool   `mapstructure:"enabled"`
-	Endpoint  string `mapstructure:"endpoint"`
-	Model     string `mapstructure:"model"`
-	Timeout   int    `mapstructure:"timeout"` // in seconds
-	MaxTokens int    `mapstructure:"max_tokens"`
+type AIPolicy struct {
+	Name        string `mapstructure:"name"`
+	Description string `mapstructure:"description"`
+	Prompt      string `mapstructure:"prompt"`
+	Action      string `mapstructure:"action"` // allow or deny
+	Message     string `mapstructure:"message"`
 }
 
 // LoadPoliciesFromFile loads CEL policies from a file
-func LoadPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
+func LoadCELPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
 	if rulesFile == "" {
 		return nil, nil
 	}
@@ -148,6 +157,23 @@ func LoadPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
 	}
 
 	return config.Rules, nil
+}
+
+// LoadAIPoliciesFromFile loads AI policies from a file
+func LoadAIPoliciesFromFile(path string) ([]AIPolicy, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("error reading AI policies file: %w", err)
+	}
+
+	var policies struct {
+		Rules []AIPolicy `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal(data, &policies); err != nil {
+		return nil, fmt.Errorf("error unmarshaling AI policies: %w", err)
+	}
+
+	return policies.Rules, nil
 }
 
 // LoadConfig loads the configuration from all sources
@@ -196,12 +222,21 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 
 	// Load policies from rules file if specified
-	if config.Policy.RulesFile != "" {
-		policies, err := LoadPoliciesFromFile(config.Policy.RulesFile)
+	if config.PolicyValidation.RulesFile != "" {
+		policies, err := LoadCELPoliciesFromFile(config.PolicyValidation.RulesFile)
 		if err != nil {
 			return nil, fmt.Errorf("error loading policies from file: %w", err)
 		}
-		config.Policy.Rules = policies
+		config.PolicyValidation.Rules = policies
+	}
+
+	// Load AI policies from rules file if specified
+	if config.AIPolicyValidation.RulesFile != "" {
+		aiPolicies, err := LoadAIPoliciesFromFile(config.AIPolicyValidation.RulesFile)
+		if err != nil {
+			return nil, fmt.Errorf("error loading AI policies from file: %w", err)
+		}
+		config.AIPolicyValidation.Rules = aiPolicies
 	}
 
 	// Validate config

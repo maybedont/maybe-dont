@@ -33,26 +33,48 @@ type Proxy struct {
 	validationChain *ToolValidationChain
 	// CEL policy engine
 	policyEngine *CELPolicyEngine
+	// AI policy engine
+	aiPolicyEngine *AIPolicyEngine
 }
 
 // New creates a new proxy instance
 func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
 	// Create CEL policy engine
-	policyEngine, err := NewCELPolicyEngine(logger, cfg.Policy.Default)
+	policyEngine, err := NewCELPolicyEngine(logger, cfg.PolicyValidation.Default)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL policy engine: %w", err)
 	}
 
+	aiPolicyEngine := &AIPolicyEngine{
+		defaultPolicy: cfg.AIPolicyValidation.Default,
+		endpoint:      cfg.AIPolicyValidation.Endpoint,
+		model:         cfg.AIPolicyValidation.Model,
+		timeout:       cfg.AIPolicyValidation.Timeout,
+		maxTokens:     cfg.AIPolicyValidation.MaxTokens,
+	}
+
+	// Create AI policy engine
+	err = InitAIPolicyEngine(logger, aiPolicyEngine)
+	if err != nil {
+		return nil, fmt.Errorf("failed to init AI policy engine: %w", err)
+	}
+
 	// Load policies from configuration
-	if err := policyEngine.LoadPolicies(cfg.Policy.Rules); err != nil {
+	if err := policyEngine.LoadPolicies(cfg.PolicyValidation.Rules); err != nil {
+		return nil, fmt.Errorf("failed to load policies: %w", err)
+	}
+
+	// Load policies from configuration
+	if err := aiPolicyEngine.LoadPolicies(cfg.AIPolicyValidation.Rules); err != nil {
 		return nil, fmt.Errorf("failed to load policies: %w", err)
 	}
 
 	return &Proxy{
-		logger:       logger,
-		config:       cfg,
-		stopChan:     make(chan struct{}),
-		policyEngine: policyEngine,
+		logger:         logger,
+		config:         cfg,
+		stopChan:       make(chan struct{}),
+		policyEngine:   policyEngine,
+		aiPolicyEngine: aiPolicyEngine,
 	}, nil
 }
 
@@ -72,7 +94,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 	p.validationChain = NewToolValidationChain(
 		NewToolLoggingHandler(p.logger),
 		NewToolCELValidationHandler(p.logger, p.policyEngine),
-		NewAIValidationHandler(p.logger, &p.config.AIValidation),
+		NewToolAIValidationHandler(p.logger, p.aiPolicyEngine),
 	)
 
 	// Initialize downstream client based on transport type

@@ -57,9 +57,9 @@ auth:
   type: none
 
 # Policy configuration
-policy:
+policy_validation:
   # Path to CEL policy rules file
-  rules_file: "rules.yaml"
+  rules_file: "cel_rules.yaml"
   # Default policy (allow or deny)
   default: "allow"
 
@@ -75,6 +75,10 @@ ai_validation:
   timeout: 30
   # Maximum tokens in response
   max_tokens: 100
+  # Path to AI policy rules file
+  rules_file: "ai_rules.yaml"
+  # Default policy (allow or deny)
+  default: "allow"
 
 # Transport configuration
 transport:
@@ -97,4 +101,4 @@ audit:
   # Audit log file path
   path: "stdout"
   # Audit log format (json or text)
-  format: "json" 
+  format: "json"
