@@ -1,20 +1,420 @@
-rules:
-  - name: "Block overly destructive actions"
-    description: |
-      This policy blocks overly destructive actions.
-    prompt: |- 
-      You are an IT/Cloud operations expert. You are given a tool call request and you need to 
-      determine if it is allowed or not. If it should be allowed, return true. If it is not allowed, return false.
-      You must deny the request if it is overly destructive in the context of day-to-day operations.
-      Examples of overly destructive actions include:
-      - Deleting a large number of files
-      - Deleting a large number of records
-      - Deleting a large number of infrastructure
-      - Deleting a large number of users
-      - Deleting a large number of groups
-      - Deleting a large number of roles
-      - Deleting a large number of permissions
-      The tool call request is: %s
-      Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
-    action: "allow"
-    message: "This action is overly destructive and has been blocked."
+policies:
+  rules:
+    # =============================================================================
+    # DESTRUCTIVE OPERATIONS PROTECTION
+    # =============================================================================
+    
+    - name: "Block overly destructive actions"
+      description: |
+        This policy blocks overly destructive actions that could cause significant damage.
+      prompt: |- 
+        You are an IT/Cloud operations expert. You are given a tool call request and you need to 
+        determine if it is allowed or not. If it should be allowed, return true. If it is not allowed, return false.
+        You must deny the request if it is overly destructive in the context of day-to-day operations.
+        Examples of overly destructive actions include:
+        - Deleting a large number of files (more than 10 files at once)
+        - Deleting a large number of records (bulk database deletions)
+        - Deleting a large number of infrastructure components
+        - Deleting a large number of users, groups, roles, or permissions
+        - Using wildcard deletions (*, recursive flags)
+        - Formatting or wiping storage devices
+        - Dropping entire databases or tables
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "This action is overly destructive and has been blocked."
+
+    - name: "Block system file modifications"
+      description: |
+        Prevents modification or deletion of critical system files and directories.
+      prompt: |-
+        You are a system security expert. Analyze the tool call request to determine if it attempts 
+        to modify, delete, or access critical system files or directories.
+        
+        BLOCK access to these critical paths:
+        - /etc/, /sys/, /proc/, /boot/, /root/, /usr/bin/, /usr/sbin/ (Linux)
+        - C:\Windows\, C:\System32\, C:\Program Files\ (Windows)
+        - Any hidden system files or directories (.ssh/, .aws/, etc.)
+        - Configuration files that control system behavior
+        - Executable files in system directories
+        
+        ALLOW access to user directories, temporary folders, and application data folders.
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Access to system files and directories is prohibited."
+
+    # =============================================================================
+    # PATH TRAVERSAL & DIRECTORY SECURITY
+    # =============================================================================
+
+    - name: "Prevent path traversal attacks"
+      description: |
+        Detects and blocks path traversal attempts in file operations.
+      prompt: |-
+        You are a cybersecurity expert specializing in path traversal attacks. Analyze the tool call 
+        request for any attempts to escape from intended directories using path traversal techniques.
+        
+        BLOCK requests containing:
+        - "../" or "..\\" sequences
+        - URL-encoded traversal patterns (%2e%2e, %2f, %5c)
+        - Absolute paths starting with "/" or drive letters
+        - Tilde (~) expansion attempts
+        - Null byte injection attempts
+        - Symbolic link exploitation patterns
+        
+        ALLOW legitimate relative paths within approved directories.
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Path traversal attempt detected and blocked."
+
+    - name: "Enforce approved directory access"
+      description: |
+        Restricts file operations to pre-approved safe directories only.
+      prompt: |-
+        You are a file system security expert. Analyze the tool call request to ensure file operations 
+        are restricted to approved safe directories.
+        
+        APPROVED directories (allow access):
+        - ./workspace/
+        - ./public/
+        - ./uploads/
+        - ./temp/
+        - ./documents/
+        - ./downloads/
+        
+        DENY access to any paths outside these approved directories.
+        Consider the intent and safety of the operation.
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "File access restricted to approved directories only."
+
+    # =============================================================================
+    # DANGEROUS TOOL BLOCKING
+    # =============================================================================
+
+    - name: "Block dangerous system tools"
+      description: |
+        Prevents execution of inherently dangerous tools and system commands.
+      prompt: |-
+        You are a system security expert. Analyze the tool call to determine if it uses dangerous 
+        tools or commands that could compromise system security.
+        
+        DANGEROUS tools to BLOCK:
+        - System command execution (bash, cmd, powershell, sh)
+        - File system tools (chmod, chown, mount, umount)
+        - Network tools (iptables, netsh, route, ifconfig)
+        - Package managers (apt, yum, pip install, npm install)
+        - System utilities (sudo, su, runas, crontab)
+        - Database tools (mysql, psql, mongosh with admin commands)
+        - Archive tools with extraction (tar, unzip, 7z)
+        
+        SAFE tools to ALLOW:
+        - Read-only file operations
+        - Data processing and analysis tools
+        - Text editors and viewers
+        - Approved application-specific tools
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Tool blocked due to security policy - potentially dangerous system access."
+
+    - name: "Block network and external access"
+      description: |
+        Prevents potentially dangerous network operations and external communications.
+      prompt: |-
+        You are a network security expert. Analyze the tool call for network operations that could 
+        pose security risks.
+        
+        BLOCK these network activities:
+        - HTTP/HTTPS requests to unknown or suspicious domains
+        - File downloads from external sources
+        - Email sending or SMS operations
+        - Database connections to external hosts
+        - SSH, FTP, or other remote access protocols
+        - API calls to unknown services
+        - Socket connections and raw network access
+        
+        ALLOW these approved activities:
+        - Requests to pre-approved internal domains
+        - Localhost/127.0.0.1 connections for development
+        - Requests to well-known, safe APIs (if explicitly approved)
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Network operation blocked - external access not permitted."
+
+    # =============================================================================
+    # SENSITIVE DATA PROTECTION
+    # =============================================================================
+
+    - name: "Protect credential and secret files"
+      description: |
+        Blocks access to files that typically contain sensitive information.
+      prompt: |-
+        You are a data security expert. Analyze the tool call to determine if it accesses files 
+        that commonly contain sensitive information like passwords, keys, or credentials.
+        
+        BLOCK access to files with these patterns:
+        - Environment files (.env, .env.local, .environment)
+        - Key files (.key, .pem, .p12, .pfx, .crt, .cer)
+        - SSH configuration (.ssh/*, known_hosts, authorized_keys)
+        - Cloud credentials (.aws/*, .gcp/*, .azure/*)
+        - Password files (password*, passwd, shadow)
+        - Configuration files with "secret", "credential", "token" in name
+        - Database connection strings or config files
+        - API key storage files
+        
+        ALLOW access to general application files and documents.
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Access to credential and secret files is prohibited."
+
+    - name: "Scan for secrets in content"
+      description: |
+        Detects potential secrets, passwords, or sensitive data in file content or responses.
+      prompt: |-
+        You are a data loss prevention expert. Analyze the content in this tool call or response 
+        for potential secrets, credentials, or sensitive information that should not be exposed.
+        
+        LOOK FOR these patterns and BLOCK if found:
+        - API keys (long alphanumeric strings, especially with prefixes like "sk-", "pk-", "key_")
+        - Passwords (password=, pwd=, pass= followed by values)
+        - Tokens (bearer tokens, JWT tokens, access tokens)
+        - Database connection strings
+        - Private keys (BEGIN PRIVATE KEY, BEGIN RSA PRIVATE KEY)
+        - Social Security Numbers, credit card numbers
+        - Email addresses with sensitive domains
+        - Base64 encoded credentials (long base64 strings)
+        
+        ALLOW content that appears to be normal application data, documentation, or logs without secrets.
+        
+        The tool call request/content is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Content contains potential secrets or sensitive data and has been blocked."
+
+    # =============================================================================
+    # RATE LIMITING & RESOURCE PROTECTION
+    # =============================================================================
+
+    - name: "Detect resource abuse patterns"
+      description: |
+        Identifies requests that could lead to resource abuse or denial of service.
+      prompt: |-
+        You are a system performance expert. Analyze the tool call to determine if it could 
+        cause resource abuse, excessive consumption, or denial of service.
+        
+        BLOCK operations that could cause:
+        - Processing extremely large files (>100MB)
+        - Infinite loops or recursive operations
+        - Memory-intensive operations on large datasets
+        - Disk space exhaustion (creating many large files)
+        - Network flooding or excessive API calls
+        - CPU-intensive operations without limits
+        - Opening too many concurrent connections
+        
+        CONSIDER factors like:
+        - File sizes being processed
+        - Number of items being processed
+        - Complexity of operations
+        - Potential for exponential growth
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Operation blocked due to potential resource abuse or performance impact."
+
+    # =============================================================================
+    # ACCESS CONTROL & PERMISSIONS
+    # =============================================================================
+
+    - name: "Enforce role-based access control"
+      description: |
+        Ensures users can only perform operations appropriate for their role and permissions.
+      prompt: |-
+        You are an access control expert. Analyze the tool call in the context of the user's role 
+        and determine if they have appropriate permissions.
+        
+        ROLE RESTRICTIONS:
+        - Guest users: Read-only operations only (view, list, read files)
+        - Regular users: Read/write in their workspace, no system modifications
+        - Power users: Extended file operations, some system queries
+        - Administrators: Most operations except highly destructive ones
+        - Emergency role: Override for critical situations
+        
+        CONSIDER:
+        - The destructiveness of the operation
+        - Whether it affects other users or system-wide settings
+        - If it's a normal business operation for that role
+        - Time sensitivity and business justification
+        
+        User role context and tool call: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Operation not permitted for current user role."
+
+    # =============================================================================
+    # TIME-BASED & CONTEXTUAL SECURITY
+    # =============================================================================
+
+    - name: "Business hours and maintenance restrictions"
+      description: |
+        Applies time-based restrictions for sensitive operations based on user role and system state.
+      prompt: |-
+        You are an operations security expert. Analyze the tool call considering time-based restrictions 
+        and operational context.
+        
+        APPLY these time restrictions:
+        - Contractors: Sensitive operations only during business hours (9 AM - 5 PM weekdays)
+        - Maintenance windows: Block non-emergency operations during system maintenance
+        - Weekend restrictions: Limit destructive operations on weekends unless emergency
+        - After-hours: Require additional approval for risky operations
+        
+        EMERGENCY OVERRIDE conditions:
+        - User has emergency role
+        - Operation is clearly for incident response
+        - System availability is at risk
+        
+        CONSIDER:
+        - Current time and day of week
+        - User's role and location
+        - Operation risk level
+        - Business justification
+        
+        Time context and tool call: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Operation restricted based on time/context policy."
+
+    # =============================================================================
+    # CONTENT VALIDATION & MALWARE DETECTION
+    # =============================================================================
+
+    - name: "Detect malicious content patterns"
+      description: |
+        Scans for potentially malicious content, code injection, or security threats.
+      prompt: |-
+        You are a cybersecurity expert specializing in malware and code injection detection. 
+        Analyze the content in this tool call for malicious patterns.
+        
+        DANGEROUS patterns to BLOCK:
+        - Script injection (<script>, javascript:, eval(), exec())
+        - SQL injection (UNION SELECT, DROP TABLE, etc.)
+        - Command injection (system(), shell_exec(), backticks)
+        - Path manipulation for malicious purposes
+        - Encoded malicious payloads
+        - Suspicious executables or scripts
+        - Social engineering attempts
+        - Phishing content or malicious links
+        
+        FALSE POSITIVES to avoid:
+        - Legitimate documentation or examples
+        - Properly escaped code samples
+        - Normal application data
+        
+        The tool call content is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "Content contains potentially malicious patterns and has been blocked."
+
+    - name: "Validate file types and extensions"
+      description: |
+        Ensures only approved file types are created, modified, or processed.
+      prompt: |-
+        You are a file security expert. Analyze the tool call to ensure it only works with 
+        approved file types and extensions.
+        
+        APPROVED file extensions (ALLOW):
+        - Documents: .txt, .md, .pdf, .doc, .docx
+        - Data: .json, .yaml, .yml, .csv, .xml
+        - Images: .jpg, .jpeg, .png, .gif, .svg
+        - Logs: .log, .out
+        - Configuration: .conf, .config, .ini (in safe directories only)
+        
+        DANGEROUS extensions to BLOCK:
+        - Executables: .exe, .bat, .sh, .cmd, .ps1, .scr
+        - Scripts: .js, .vbs, .py, .rb, .pl (unless in approved dev directories)
+        - Archives: .zip, .rar, .tar, .gz (could contain malware)
+        - System files: .dll, .sys, .bin
+        - Unknown or suspicious extensions
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "deny"
+      message: "File type not approved by security policy."
+
+    # =============================================================================
+    # AUDIT AND COMPLIANCE
+    # =============================================================================
+
+    - name: "Flag compliance-sensitive operations"
+      description: |
+        Identifies operations that may have compliance implications requiring additional oversight.
+      prompt: |-
+        You are a compliance expert familiar with security regulations like SOX, HIPAA, PCI-DSS, 
+        and GDPR. Analyze the tool call for operations that require special compliance consideration.
+        
+        FLAG for additional oversight:
+        - Operations involving personal data (PII)
+        - Financial data access or modification
+        - Health information handling
+        - User account creation/deletion
+        - Permission or role changes
+        - Audit log access or modification
+        - Data export or bulk extraction
+        - System configuration changes
+        
+        IMMEDIATE COMPLIANCE VIOLATIONS (BLOCK):
+        - Unauthorized PII access
+        - Financial data without proper controls
+        - Health data without encryption
+        - Audit log tampering
+        - Bulk data exfiltration
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "allow"  # Most compliance issues are flagged, not blocked
+      message: "Operation flagged for compliance review."
+
+    # =============================================================================
+    # DEFAULT POLICY
+    # =============================================================================
+
+    - name: "Default security evaluation"
+      description: |
+        Final security check for any operations not caught by specific rules.
+      prompt: |-
+        You are a general security expert performing a final security evaluation. Analyze this 
+        tool call for any security concerns not covered by specific rules.
+        
+        GENERAL security principles to apply:
+        - Principle of least privilege
+        - Default deny for unknown operations
+        - Prefer read operations over write operations
+        - Validate all user inputs
+        - Protect system integrity
+        - Maintain data confidentiality
+        - Ensure availability for legitimate users
+        
+        ALLOW operations that are:
+        - Clearly safe and legitimate
+        - Read-only with appropriate scope
+        - Standard business operations
+        - Properly authorized for the user's role
+        
+        If uncertain, err on the side of caution and deny.
+        
+        The tool call request is: %s
+        Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
+      action: "allow"
+      message: "Operation allowed after security evaluation."
