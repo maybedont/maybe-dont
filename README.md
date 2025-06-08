@@ -37,9 +37,13 @@ The proxy searches for `config.yaml` in the following locations:
 - System-wide: `/etc/maybe-dont/config.yaml`
 - Custom path via `--config` flag
 
-### Example Configuration
+### Default Configuration
 
 See [config.yaml](./config.yaml) for a complete example with comment notes.
+
+This file references two other files which contain rules:
+- [ai_rules.yaml](./ai_rules.yaml) - AI-based rules for checking MCP requests
+- [cel_rules.yaml](./cel_rules.yaml) - CEL validation rules for MCP requests
 
 ## Usage
 
@@ -56,19 +60,6 @@ See [config.yaml](./config.yaml) for a complete example with comment notes.
 ### Command Line Options
 
 Use the `--help` flag on any command to see the usage.
-
-### Policy Testing
-
-```bash
-# Test policies against a request file
-./maybe-dont test --config config.yaml --request request.json
-
-# Test policies interactively
-./maybe-dont test --config config.yaml --interactive
-
-# Test with specific auth context
-./maybe-dont test --config config.yaml --auth-context '{"client_id": "test", "roles": ["user"]}'
-```
 
 ## Security Features
 
@@ -94,12 +85,9 @@ The proxy uses Common Expression Language (CEL) for policy rules, providing:
 
 ## Transport Options
 
-### MVP Transports
+### Transports
 1. **STDIO**: Process spawning with bidirectional communication
 2. **SSE**: Server-sent events for streaming
-
-### Phase 2 Transport
-3. **HTTP**: REST-style request/response
 
 ## Audit Logging
 
@@ -109,11 +97,3 @@ The proxy provides comprehensive audit logging with:
 - Request details
 - Policy evaluation results
 - Structured JSON output
-
-## Contributing
-
-Contributions are welcome! Please read our contributing guidelines before submitting pull requests.
-
-## License
-
-[License information to be added] 
