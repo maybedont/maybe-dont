@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/sudermanjr/maybe-dont/internal/config"
 	"github.com/sudermanjr/maybe-dont/internal/proxy"
 	"go.uber.org/zap"
 )
@@ -20,18 +19,6 @@ var startCmd = &cobra.Command{
 The server will begin listening for connections and enforcing security policies.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		Logger.Info("Starting MCP security proxy")
-
-		// Create proxy configuration
-		cfg, err := config.LoadConfig(cfgFile)
-		if err != nil {
-			return err
-		}
-
-		Logger, err = config.GetLogger(cfg)
-		if err != nil {
-			return err
-		}
-
 		// Create proxy instance
 		p, err := proxy.New(cfg, Logger)
 		if err != nil {
@@ -44,7 +31,7 @@ The server will begin listening for connections and enforcing security policies.
 
 		// Handle OS signals
 		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 		go func() {
 			sig := <-sigCh
 			Logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
@@ -59,11 +46,7 @@ The server will begin listening for connections and enforcing security policies.
 		// Wait for context cancellation
 		<-ctx.Done()
 
-		// Gracefully shut down
-		if err := p.Stop(); err != nil {
-			Logger.Error("Error during shutdown", zap.Error(err))
-			return err
-		}
+		Logger.Info("Shutting down proxy")
 
 		return nil
 	},

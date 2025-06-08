@@ -17,8 +17,10 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "maybe-dont",
-	Short: "Maybe Don't, an MCP Security Proxy - Enterprise-grade security controls for MCP communications",
+	Use:           "maybe-dont",
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	Short:         "Maybe Don't, an MCP Security Proxy - Enterprise-grade security controls for MCP communications",
 	Long: `MCP Security Proxy is a Go-based middleware service that provides enterprise-grade 
 security controls for Model Context Protocol (MCP) communications. It acts as a transparent 
 proxy between MCP clients and servers, enforcing security policies, validating requests, 
@@ -41,6 +43,9 @@ and providing comprehensive audit logging.`,
 		Logger.Info("Logger created", zap.Any("config", cfg))
 
 		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		cmd.Usage()
 	},
 }
 
