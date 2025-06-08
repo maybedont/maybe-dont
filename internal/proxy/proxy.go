@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -178,16 +179,28 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 	)
 
 	p.server = srv
+
+	// Create error channel to capture server errors
+	errChan := make(chan error, 1)
+
 	go func() {
 		// Start the SSE server
 		if err := sseSrv.Start(p.config.Server.ListenAddr); err != nil {
 			p.logger.Error("SSE server error", zap.Error(err))
+			errChan <- err
 		}
 		// The SSE server will be cleaned up when the context is cancelled
 		<-ctx.Done()
 	}()
 
-	return nil
+	// Check for immediate startup errors
+	select {
+	case err := <-errChan:
+		return fmt.Errorf("failed to start SSE server: %w", err)
+	case <-time.After(100 * time.Millisecond):
+		// Server started successfully
+		return nil
+	}
 }
 
 func (p *Proxy) handleRequest(ctx context.Context, req *mcp.Request) (any, error) {
