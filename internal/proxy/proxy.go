@@ -15,11 +15,13 @@ import (
 
 // Proxy represents an MCP security proxy instance
 type Proxy struct {
-	logger *zap.Logger
-	config *config.Config
-	server *server.MCPServer
-	client *client.Client
-	mu     sync.RWMutex
+	logger       *zap.Logger
+	config       *config.Config
+	server       *server.MCPServer
+	client       *client.Client
+	mu           sync.RWMutex
+	capabilities *mcp.ServerCapabilities
+	stopChan     chan struct{}
 }
 
 // New creates a new proxy instance
@@ -91,7 +93,7 @@ func (p *Proxy) initStdioClient(ctx context.Context) error {
 	}
 
 	p.client = cl
-	return nil
+	return p.checkCapabilities(ctx)
 }
 
 func (p *Proxy) initSSEClient(ctx context.Context) error {
@@ -104,6 +106,34 @@ func (p *Proxy) initSSEClient(ctx context.Context) error {
 	}
 
 	p.client = cl
+	return p.checkCapabilities(ctx)
+}
+
+func (p *Proxy) checkCapabilities(ctx context.Context) error {
+	req := &mcp.InitializeRequest{
+		Request: mcp.Request{
+			Method: "initialize",
+		},
+		Params: mcp.InitializeParams{
+			ProtocolVersion: "1.0",
+			Capabilities:    mcp.ClientCapabilities{},
+			ClientInfo: mcp.Implementation{
+				Name:    "maybe-dont",
+				Version: "1.0.0",
+			},
+		},
+	}
+
+	resp, err := p.client.Initialize(ctx, *req)
+	if err != nil {
+		return fmt.Errorf("failed to check MCP server capabilities: %w", err)
+	}
+
+	p.capabilities = &resp.Capabilities
+	p.logger.Info("MCP server capabilities",
+		zap.Any("capabilities", resp.Capabilities),
+	)
+
 	return nil
 }
 
@@ -117,10 +147,29 @@ func (p *Proxy) initServer(ctx context.Context) error {
 }
 
 func (p *Proxy) initSSEServer(ctx context.Context) error {
-	srv := server.NewMCPServer("maybe-dont", "1.0.0",
+	opts := []server.ServerOption{
 		server.WithLogging(),
 		server.WithRecovery(),
-	)
+	}
+
+	// Add capabilities if available
+	if p.capabilities != nil {
+		// Enable capabilities based on server response
+		if p.capabilities.Prompts != nil {
+			opts = append(opts, server.WithPromptCapabilities(p.capabilities.Prompts.ListChanged))
+		}
+		if p.capabilities.Resources != nil {
+			opts = append(opts, server.WithResourceCapabilities(
+				p.capabilities.Resources.Subscribe,
+				p.capabilities.Resources.ListChanged,
+			))
+		}
+		if p.capabilities.Tools != nil {
+			opts = append(opts, server.WithToolCapabilities(p.capabilities.Tools.ListChanged))
+		}
+	}
+
+	srv := server.NewMCPServer("maybe-dont", "1.0.0", opts...)
 
 	// Create SSE server
 	sseSrv := server.NewSSEServer(srv,
@@ -137,6 +186,7 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 		// The SSE server will be cleaned up when the context is cancelled
 		<-ctx.Done()
 	}()
+
 	return nil
 }
 
