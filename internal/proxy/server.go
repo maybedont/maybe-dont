@@ -3,6 +3,8 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 
 	"github.com/mark3labs/mcp-go/server"
 	"go.uber.org/zap"
@@ -10,6 +12,8 @@ import (
 
 func (p *Proxy) initServer(ctx context.Context) error {
 	switch p.config.Server.Type {
+	case "stdio":
+		return p.initStdioServer(ctx)
 	case "sse":
 		return p.initSSEServer(ctx)
 	default:
@@ -17,7 +21,8 @@ func (p *Proxy) initServer(ctx context.Context) error {
 	}
 }
 
-func (p *Proxy) initSSEServer(ctx context.Context) error {
+// initMCPServer initializes the MCP server with common configuration and registers tools
+func (p *Proxy) initMCPServer() (*server.MCPServer, error) {
 	opts := []server.ServerOption{
 		server.WithLogging(),
 		server.WithRecovery(),
@@ -73,6 +78,39 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 			srv.AddResourceTemplate(template, p.HandleResourceTemplateCall)
 			p.logger.Info("Registered resource template", zap.Any("template", template))
 		}
+	}
+
+	return srv, nil
+}
+
+func (p *Proxy) initStdioServer(ctx context.Context) error {
+	srv, err := p.initMCPServer()
+	if err != nil {
+		return fmt.Errorf("failed to initialize MCP server: %w", err)
+	}
+
+	// Create STDIO server
+	stdioSrv := server.NewStdioServer(srv)
+
+	// Set error logger
+	stdioSrv.SetErrorLogger(log.New(os.Stderr, "", log.LstdFlags))
+
+	p.server = srv
+
+	// Start server in a goroutine
+	go func() {
+		if err := stdioSrv.Listen(ctx, os.Stdin, os.Stdout); err != nil {
+			p.logger.Error("Failed to start STDIO server", zap.Error(err))
+		}
+	}()
+
+	return nil
+}
+
+func (p *Proxy) initSSEServer(ctx context.Context) error {
+	srv, err := p.initMCPServer()
+	if err != nil {
+		return fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
 
 	// Create SSE server
