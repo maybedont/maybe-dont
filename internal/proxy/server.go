@@ -46,34 +46,31 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 
 	srv := server.NewMCPServer("maybe-dont", "0.0.1", opts...)
 
-	// Register tools if available
+	// Register detailed capability information
 	if len(p.capabilityDetails.Tools) > 0 {
 		for _, tool := range p.capabilityDetails.Tools {
-			srv.AddTool(tool, HandleToolCall)
+			srv.AddTool(tool, p.HandleToolCall)
 			p.logger.Info("Registered tool", zap.String("name", tool.Name))
 		}
 	}
 
-	// Register prompts if available
 	if len(p.capabilityDetails.Prompts) > 0 {
 		for _, prompt := range p.capabilityDetails.Prompts {
-			srv.AddPrompt(prompt, HandlePromptCall)
+			srv.AddPrompt(prompt, p.HandlePromptCall)
 			p.logger.Info("Registered prompt", zap.String("name", prompt.Name))
 		}
 	}
 
-	// Register resources if available
 	if len(p.capabilityDetails.Resources) > 0 {
 		for _, resource := range p.capabilityDetails.Resources {
-			srv.AddResource(resource, HandleResourceCall)
+			srv.AddResource(resource, p.HandleResourceCall)
 			p.logger.Info("Registered resource", zap.String("name", resource.Name))
 		}
 	}
 
-	// Register resource templates if available
 	if len(p.capabilityDetails.Templates) > 0 {
 		for _, template := range p.capabilityDetails.Templates {
-			srv.AddResourceTemplate(template, HandleResourceTemplateCall)
+			srv.AddResourceTemplate(template, p.HandleResourceTemplateCall)
 			p.logger.Info("Registered resource template", zap.String("name", template.Name))
 		}
 	}

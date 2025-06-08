@@ -300,24 +300,30 @@ func (p *Proxy) validateRequest(req *mcp.Request) error {
 	return nil
 }
 
-// Tool handler struct
-
-func HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-
-	return nil, nil
+// Tool handler function
+func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return p.client.CallTool(ctx, req)
 }
 
-// Prompt handler struct
-func HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-	return nil, nil
+// Prompt handler function
+func (p *Proxy) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	return p.client.GetPrompt(ctx, req)
 }
 
-// Resource handler struct
-func HandleResourceCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	return nil, nil
+// Resource handler function
+func (p *Proxy) HandleResourceCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	result, err := p.client.ReadResource(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return result.Contents, nil
 }
 
-// Resource template handler struct
-func HandleResourceTemplateCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	return nil, nil
+// Resource template handler function
+func (p *Proxy) HandleResourceTemplateCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	result, err := p.client.ReadResource(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return result.Contents, nil
 }
