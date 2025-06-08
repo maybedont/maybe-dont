@@ -10,18 +10,18 @@ import (
 )
 
 func (p *Proxy) initDownstreamClient(ctx context.Context) error {
-	switch p.config.Transport.Type {
+	switch p.config.Client.Type {
 	case "stdio":
 		return p.initStdioClient(ctx)
 	case "sse":
 		return p.initSSEClient(ctx)
 	default:
-		return fmt.Errorf("unsupported transport type: %s", p.config.Transport.Type)
+		return fmt.Errorf("unsupported transport type: %s", p.config.Client.Type)
 	}
 }
 
 func (p *Proxy) initStdioClient(ctx context.Context) error {
-	cl, err := client.NewStdioMCPClient(p.config.Transport.Command, nil, p.config.Transport.CommandArgs...)
+	cl, err := client.NewStdioMCPClient(p.config.Client.Command, nil, p.config.Client.CommandArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP client: %w", err)
 	}
@@ -32,8 +32,8 @@ func (p *Proxy) initStdioClient(ctx context.Context) error {
 
 func (p *Proxy) initSSEClient(ctx context.Context) error {
 	cl, err := client.NewSSEMCPClient(
-		p.config.Transport.DownstreamURL,
-		client.WithHeaders(p.config.Transport.SSEConfig.Headers),
+		p.config.Client.DownstreamURL,
+		client.WithHeaders(p.config.Client.SSEConfig.Headers),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create SSE client: %w", err)

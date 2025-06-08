@@ -56,8 +56,6 @@ func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
 		defaultPolicy: cfg.AIPolicyValidation.Default,
 		endpoint:      cfg.AIPolicyValidation.Endpoint,
 		model:         cfg.AIPolicyValidation.Model,
-		timeout:       cfg.AIPolicyValidation.Timeout,
-		maxTokens:     cfg.AIPolicyValidation.MaxTokens,
 		apiKey:        cfg.AIPolicyValidation.APIKey,
 	}
 

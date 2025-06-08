@@ -30,8 +30,6 @@ type AIPolicyEngine struct {
 	mu            sync.RWMutex
 	endpoint      string
 	model         string
-	timeout       int
-	maxTokens     int
 	apiKey        string
 	defaultPolicy string // allow or deny
 	client        *openai.Client

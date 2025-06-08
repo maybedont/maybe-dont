@@ -10,41 +10,9 @@ server:
   log_level: "debug"
   # Log format (json or text)
   log_format: "json"
-  
-  # HTTP server configuration (used when type: "http")
-  http:
-    # Timeouts in seconds
-    read_timeout: 30
-    write_timeout: 30
-    idle_timeout: 120
-    # TLS configuration
-    tls:
-      enabled: false
-      cert_file: "/path/to/cert.pem"
-      key_file: "/path/to/key.pem"
-    # CORS configuration
-    cors:
-      enabled: true
-      allowed_origins:
-        - "*"
-      allowed_methods:
-        - "GET"
-        - "POST"
-        - "OPTIONS"
-      allowed_headers:
-        - "Content-Type"
-        - "Authorization"
-        - "X-Requested-With"
 
   # SSE server configuration (used when type: "sse")
   sse:
-    # Timeouts in seconds
-    read_timeout: 30
-    write_timeout: 30
-    idle_timeout: 120
-    # SSE-specific settings
-    retry_interval: 3000  # milliseconds
-    max_connections: 1000
     # TLS configuration
     tls:
       enabled: false
@@ -71,33 +39,23 @@ ai_validation:
   endpoint: "https://api.openai.com/v1/chat/completions"
   # Model to use for validation
   model: "gpt-4o-mini"
-  # Request timeout in seconds
-  timeout: 30
-  # Maximum tokens in response
-  max_tokens: 100
   # Path to AI policy rules file
   rules_file: "ai_rules.yaml"
   # Default policy (allow or deny)
   default: "allow"
 
 # Transport configuration
-transport:
+client:
   # Transport type (stdio, sse, http)
   type: stdio
   # Command to execute (for stdio)
   command: "/home/user/bin/kai"
   # Command arguments
   command_args: ["--mcp-server"]
-  # SSE-specific configuration
-  # sse:
-  #   headers:
-  #     Content-Type: "text/event-stream"
-  #   timeout: 30
+
 
 # Audit configuration
 audit:
-  # Enable audit logging
-  enabled: true
   # Audit log file path
   path: "stdout"
   # Audit log format (json or text)

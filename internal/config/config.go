@@ -27,30 +27,8 @@ type Config struct {
 		ListenAddr string     `mapstructure:"listen_addr"`
 		LogLevel   string     `mapstructure:"log_level"`
 		LogFormat  string     `mapstructure:"log_format"`
-		// Server-specific configuration
-		HTTP struct {
-			ReadTimeout  int `mapstructure:"read_timeout"`  // in seconds
-			WriteTimeout int `mapstructure:"write_timeout"` // in seconds
-			IdleTimeout  int `mapstructure:"idle_timeout"`  // in seconds
-			TLS          struct {
-				Enabled  bool   `mapstructure:"enabled"`
-				CertFile string `mapstructure:"cert_file"`
-				KeyFile  string `mapstructure:"key_file"`
-			} `mapstructure:"tls"`
-			CORS struct {
-				Enabled        bool     `mapstructure:"enabled"`
-				AllowedOrigins []string `mapstructure:"allowed_origins"`
-				AllowedMethods []string `mapstructure:"allowed_methods"`
-				AllowedHeaders []string `mapstructure:"allowed_headers"`
-			} `mapstructure:"cors"`
-		} `mapstructure:"http"`
-		SSE struct {
-			ReadTimeout    int `mapstructure:"read_timeout"`   // in seconds
-			WriteTimeout   int `mapstructure:"write_timeout"`  // in seconds
-			IdleTimeout    int `mapstructure:"idle_timeout"`   // in seconds
-			RetryInterval  int `mapstructure:"retry_interval"` // in milliseconds
-			MaxConnections int `mapstructure:"max_connections"`
-			TLS            struct {
+		SSE        struct {
+			TLS struct {
 				Enabled  bool   `mapstructure:"enabled"`
 				CertFile string `mapstructure:"cert_file"`
 				KeyFile  string `mapstructure:"key_file"`
@@ -88,24 +66,21 @@ type Config struct {
 		Enabled   bool       `mapstructure:"enabled"`
 		Endpoint  string     `mapstructure:"endpoint"`
 		Model     string     `mapstructure:"model"`
-		Timeout   int        `mapstructure:"timeout"` // in seconds
-		MaxTokens int        `mapstructure:"max_tokens"`
 		RulesFile string     `mapstructure:"rules_file"`
 		APIKey    string     `mapstructure:"api_key"`
 		Rules     []AIPolicy `mapstructure:"rules"`
 	} `mapstructure:"ai_validation"`
 
-	// Transport configuration
-	Transport struct {
+	// Client configuration
+	Client struct {
 		Type          string   `mapstructure:"type"` // stdio, sse, http
 		DownstreamURL string   `mapstructure:"downstream_url"`
 		Command       string   `mapstructure:"command"`
 		CommandArgs   []string `mapstructure:"command_args"`
 		SSEConfig     struct {
 			Headers map[string]string `mapstructure:"headers"`
-			Timeout int               `mapstructure:"timeout"`
 		} `mapstructure:"sse"`
-	} `mapstructure:"transport"`
+	} `mapstructure:"client"`
 
 	// Audit configuration
 	Audit struct {
@@ -259,21 +234,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.log_level", "info")
 	v.SetDefault("server.log_format", "json")
 
-	// HTTP server defaults
-	v.SetDefault("server.http.read_timeout", 30)
-	v.SetDefault("server.http.write_timeout", 30)
-	v.SetDefault("server.http.idle_timeout", 120)
-	v.SetDefault("server.http.tls.enabled", false)
-	v.SetDefault("server.http.cors.enabled", false)
-	v.SetDefault("server.http.cors.allowed_methods", []string{"GET", "POST", "OPTIONS"})
-	v.SetDefault("server.http.cors.allowed_headers", []string{"Content-Type", "Authorization"})
-
 	// SSE server defaults
-	v.SetDefault("server.sse.read_timeout", 30)
-	v.SetDefault("server.sse.write_timeout", 30)
-	v.SetDefault("server.sse.idle_timeout", 120)
-	v.SetDefault("server.sse.retry_interval", 3000)
-	v.SetDefault("server.sse.max_connections", 1000)
 	v.SetDefault("server.sse.tls.enabled", false)
 
 	// Auth defaults
@@ -281,21 +242,21 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.jwt.claim_roles", "roles")
 
 	// Policy defaults
-	v.SetDefault("policy.default", "deny")
+	v.SetDefault("policy_validation.default", "deny")
 
 	// AI validation defaults
 	v.SetDefault("ai_validation.enabled", false)
 	v.SetDefault("ai_validation.endpoint", "")
 	v.SetDefault("ai_validation.model", "")
-	v.SetDefault("ai_validation.timeout", 30)
-	v.SetDefault("ai_validation.max_tokens", 100)
 
-	// Transport defaults
-	v.SetDefault("transport.type", "stdio")
-	v.SetDefault("transport.sse.timeout", 30)
+	// Client defaults
+	v.SetDefault("client.type", "stdio")
+	v.SetDefault("client.downstream_url", "")
+	v.SetDefault("client.command", "")
+	v.SetDefault("client.command_args", []string{})
 
 	// Audit defaults
-	v.SetDefault("audit.enabled", true)
+	v.SetDefault("audit.path", "stdout")
 	v.SetDefault("audit.format", "json")
 }
 
@@ -312,18 +273,6 @@ func ValidateConfig(cfg *Config) error {
 	// Validate server configuration
 	if cfg.Server.ListenAddr == "" {
 		return fmt.Errorf("server.listen_addr is required")
-	}
-
-	// Validate HTTP server configuration if HTTP type
-	if cfg.Server.Type == ServerTypeHTTP {
-		if cfg.Server.HTTP.TLS.Enabled {
-			if cfg.Server.HTTP.TLS.CertFile == "" {
-				return fmt.Errorf("server.http.tls.cert_file is required when TLS is enabled")
-			}
-			if cfg.Server.HTTP.TLS.KeyFile == "" {
-				return fmt.Errorf("server.http.tls.key_file is required when TLS is enabled")
-			}
-		}
 	}
 
 	// Validate SSE server configuration if SSE type
@@ -354,15 +303,15 @@ func ValidateConfig(cfg *Config) error {
 		}
 	}
 
-	// Validate transport configuration
-	switch cfg.Transport.Type {
+	// Validate client configuration
+	switch cfg.Client.Type {
 	case "stdio":
-		if cfg.Transport.Command == "" {
-			return fmt.Errorf("transport.command is required when transport.type is stdio")
+		if cfg.Client.Command == "" {
+			return fmt.Errorf("client.command is required when client.type is stdio")
 		}
 	case "sse", "http":
-		if cfg.Transport.DownstreamURL == "" {
-			return fmt.Errorf("transport.downstream_url is required when transport.type is %s", cfg.Transport.Type)
+		if cfg.Client.DownstreamURL == "" {
+			return fmt.Errorf("client.downstream_url is required when client.type is %s", cfg.Client.Type)
 		}
 	}
 
