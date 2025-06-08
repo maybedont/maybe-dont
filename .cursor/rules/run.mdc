@@ -1,6 +1,0 @@
----
-description: 
-globs: 
-alwaysApply: true
----
-The project must run successfully with the built-in config.yaml

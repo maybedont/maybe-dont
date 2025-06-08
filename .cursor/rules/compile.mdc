@@ -1,6 +1,0 @@
----
-description: 
-globs: 
-alwaysApply: true
----
-Always run `go mod tidy` and then compile the project. It must compile successfully

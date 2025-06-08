@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+You are an expert go developer. When you make changes to the code, you always take into account the following:
+
+- You always use the latest version of any import
+- You always run `go mod tidy` after making any changes to dependencies
+- The code should always compile successfully. Go is located at `/usr/local/go/bin/go`
+- The code should always pass `/home/user/go/bin/golangci-lint`
+- You write unit tests where applicable
