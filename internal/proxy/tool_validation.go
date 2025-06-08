@@ -80,7 +80,7 @@ func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.C
 	}
 
 	if !allowed {
-		return fmt.Errorf("policy violation: %s", message)
+		return fmt.Errorf("Maybe Don't Policy Violation: %s", message)
 	}
 
 	return nil

@@ -1,8 +1,14 @@
 # Example CEL policy rules
 rules:
-- name: deny-kubectl-delete
-  description: Deny kubectl delete
+- name: deny-kubectl-delete-namespace
+  description: Deny kubectl delete namespace
   expression: |- 
-    request.method == "tools/call" && request.params.name == "kubectl" && request.params.arguments.command.contains("delete")
+    request.method == "tools/call" && 
+    request.params.name == "kubectl" && 
+    request.params.arguments.command.contains("delete") && 
+    (
+        request.params.arguments.command.contains("namespace") || 
+        request.params.arguments.command.contains("ns")
+    )
   action: deny
-  message: Denied access to kubectl delete
+  message: Denied access to kubectl delete namespace
