@@ -29,7 +29,7 @@ The server will begin listening for connections and enforcing security policies.
 		ctx, cancel := context.WithCancel(context.Background())
 		defer func() {
 			cancel()
-			Logger.Sync()
+			_ = Logger.Sync()
 		}()
 
 		// Handle OS signals

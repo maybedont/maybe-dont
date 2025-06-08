@@ -82,6 +82,6 @@ audit:
   # Enable audit logging
   enabled: true
   # Audit log file path
-  path: "/var/log/mcp-proxy/audit.log"
+  path: "stdout"
   # Audit log format (json or text)
   format: "json" 

@@ -45,7 +45,7 @@ and providing comprehensive audit logging.`,
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		cmd.Usage()
+		_ = cmd.Usage()
 	},
 }
 
