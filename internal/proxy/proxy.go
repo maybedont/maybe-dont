@@ -31,14 +31,28 @@ type Proxy struct {
 	}
 	// Validation chain for request processing
 	validationChain *ToolValidationChain
+	// CEL policy engine
+	policyEngine *CELPolicyEngine
 }
 
 // New creates a new proxy instance
 func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
+	// Create CEL policy engine
+	policyEngine, err := NewCELPolicyEngine(logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CEL policy engine: %w", err)
+	}
+
+	// Load policies from configuration
+	if err := policyEngine.LoadPolicies(cfg.Policy.Rules); err != nil {
+		return nil, fmt.Errorf("failed to load policies: %w", err)
+	}
+
 	return &Proxy{
-		logger:   logger,
-		config:   cfg,
-		stopChan: make(chan struct{}),
+		logger:       logger,
+		config:       cfg,
+		stopChan:     make(chan struct{}),
+		policyEngine: policyEngine,
 	}, nil
 }
 
@@ -55,7 +69,10 @@ func (p *Proxy) Start(ctx context.Context) error {
 	}
 
 	// Initialize validation chain
-	p.validationChain = NewToolValidationChain(NewToolLoggingHandler(), NewToolCELValidationHandler())
+	p.validationChain = NewToolValidationChain(
+		NewToolLoggingHandler(p.logger),
+		NewToolCELValidationHandler(p.logger, p.policyEngine),
+	)
 
 	// Initialize downstream client based on transport type
 	if err := p.initDownstreamClient(ctx); err != nil {

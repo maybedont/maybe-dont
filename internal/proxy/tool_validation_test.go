@@ -6,11 +6,33 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/sudermanjr/maybe-dont/internal/config"
+	"go.uber.org/zap/zaptest"
 )
 
 func TestValidationChain(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	engine, err := NewCELPolicyEngine(logger)
+	require.NoError(t, err)
+
+	// Load default policies
+	defaultPolicies := []config.CELPolicy{
+		{
+			Name:       "allow-tools-call",
+			Expression: `request.method == "tools/call"`,
+			Action:     "allow",
+			Message:    "Allowed to call tools",
+		},
+	}
+	err = engine.LoadPolicies(defaultPolicies)
+	require.NoError(t, err)
+
 	// Create validation chain
-	chain := NewToolValidationChain(NewToolLoggingHandler(), NewToolCELValidationHandler())
+	chain := NewToolValidationChain(
+		NewToolLoggingHandler(logger),
+		NewToolCELValidationHandler(logger, engine),
+	)
 
 	tests := []struct {
 		name    string
@@ -49,7 +71,7 @@ func TestValidationChain(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false, // Currently no validation for method
+			wantErr: true, // Expect error for invalid method
 		},
 	}
 
@@ -66,8 +88,10 @@ func TestValidationChain(t *testing.T) {
 }
 
 func TestLoggingHandler(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
 	// Create handler
-	handler := NewToolLoggingHandler()
+	handler := NewToolLoggingHandler(logger)
 
 	tests := []struct {
 		name    string
@@ -111,8 +135,24 @@ func TestLoggingHandler(t *testing.T) {
 }
 
 func TestCELValidationHandler(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	engine, err := NewCELPolicyEngine(logger)
+	require.NoError(t, err)
+
+	// Load default policies
+	defaultPolicies := []config.CELPolicy{
+		{
+			Name:       "allow-tools-call",
+			Expression: `request.method == "tools/call"`,
+			Action:     "allow",
+			Message:    "Allowed to call tools",
+		},
+	}
+	err = engine.LoadPolicies(defaultPolicies)
+	require.NoError(t, err)
+
 	// Create handler
-	handler := NewToolCELValidationHandler()
+	handler := NewToolCELValidationHandler(logger, engine)
 
 	tests := []struct {
 		name    string

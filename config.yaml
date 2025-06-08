@@ -63,6 +63,7 @@ policy:
   # Default policy (allow or deny)
   default: "deny"
 
+
 # Transport configuration
 transport:
   # Transport type (stdio, sse, http)

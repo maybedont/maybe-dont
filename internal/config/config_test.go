@@ -210,11 +210,13 @@ Policy:
 					Format:  "json",
 				},
 				Policy: struct {
-					RulesFile string `mapstructure:"rules_file"`
-					Default   string `mapstructure:"default"`
+					RulesFile string      `mapstructure:"rules_file"`
+					Default   string      `mapstructure:"default"`
+					Rules     []CELPolicy `mapstructure:"rules"`
 				}{
 					RulesFile: "rules.json",
 					Default:   "deny",
+					Rules:     nil,
 				},
 			},
 			wantErr: false,

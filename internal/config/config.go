@@ -75,8 +75,9 @@ type Config struct {
 
 	// Policy configuration
 	Policy struct {
-		RulesFile string `mapstructure:"rules_file"`
-		Default   string `mapstructure:"default"` // allow or deny
+		RulesFile string      `mapstructure:"rules_file"`
+		Default   string      `mapstructure:"default"` // allow or deny
+		Rules     []CELPolicy `mapstructure:"rules"`
 	} `mapstructure:"policy"`
 
 	// Transport configuration
@@ -97,6 +98,15 @@ type Config struct {
 		Path    string `mapstructure:"path"`
 		Format  string `mapstructure:"format"` // json or text
 	} `mapstructure:"audit"`
+}
+
+// CELPolicy represents a single CEL policy rule
+type CELPolicy struct {
+	Name        string `mapstructure:"name"`
+	Description string `mapstructure:"description"`
+	Expression  string `mapstructure:"expression"`
+	Action      string `mapstructure:"action"` // allow or deny
+	Message     string `mapstructure:"message"`
 }
 
 // LoadConfig loads the configuration from all sources

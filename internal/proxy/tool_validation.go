@@ -2,8 +2,10 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"go.uber.org/zap"
 )
 
 // ValidationHandler defines the interface for tool call validation handlers
@@ -36,30 +38,51 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 }
 
 // LoggingHandler logs tool call request details
-type ToolLoggingHandler struct{}
+type ToolLoggingHandler struct {
+	logger *zap.Logger
+}
 
 // NewLoggingHandler creates a new logging handler
-func NewToolLoggingHandler() *ToolLoggingHandler {
-	return &ToolLoggingHandler{}
+func NewToolLoggingHandler(logger *zap.Logger) *ToolLoggingHandler {
+	return &ToolLoggingHandler{
+		logger: logger,
+	}
 }
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) error {
-	// Logging removed for generic handler
+	h.logger.Info("Validating tool call",
+		zap.Any("request", req),
+	)
 	return nil
 }
 
 // CELValidationHandler validates tool call requests using CEL policies
-type ToolCELValidationHandler struct{}
+type ToolCELValidationHandler struct {
+	logger *zap.Logger
+	engine *CELPolicyEngine
+}
 
 // NewCELValidationHandler creates a new CEL validation handler
-func NewToolCELValidationHandler() *ToolCELValidationHandler {
-	return &ToolCELValidationHandler{}
+func NewToolCELValidationHandler(logger *zap.Logger, engine *CELPolicyEngine) *ToolCELValidationHandler {
+	return &ToolCELValidationHandler{
+		logger: logger,
+		engine: engine,
+	}
 }
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) error {
-	// TODO: Implement CEL policy evaluation for tool calls
+	// Evaluate policies
+	allowed, message, err := h.engine.Evaluate(req)
+	if err != nil {
+		return fmt.Errorf("policy evaluation failed: %w", err)
+	}
+
+	if !allowed {
+		return fmt.Errorf("policy violation: %s", message)
+	}
+
 	return nil
 }
 
