@@ -1,6 +1,6 @@
 # Makefile for MCP Security Proxy
 
-BINARY_NAME = mcp-security-proxy
+BINARY_NAME = maybe-dont
 GO = /usr/local/go/bin/go
 
 .PHONY: all build clean
@@ -8,7 +8,7 @@ GO = /usr/local/go/bin/go
 all: build
 
 build:
-	$(GO) build -o $(BINARY_NAME) ./cmd/mcp-security-proxy
+	$(GO) build -o $(BINARY_NAME) ./
 
 clean:
 	rm -f $(BINARY_NAME) 
