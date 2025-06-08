@@ -39,9 +39,18 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "enable verbose output")
 
 	// Bind flags to viper
-	viper.BindPFlag("logging.level", rootCmd.PersistentFlags().Lookup("log-level"))
-	viper.BindPFlag("logging.format", rootCmd.PersistentFlags().Lookup("log-format"))
-	viper.BindPFlag("logging.verbose", rootCmd.PersistentFlags().Lookup("verbose"))
+	if err := viper.BindPFlag("logging.level", rootCmd.PersistentFlags().Lookup("log-level")); err != nil {
+		fmt.Printf("Failed to bind log-level flag: %v\n", err)
+		os.Exit(1)
+	}
+	if err := viper.BindPFlag("logging.format", rootCmd.PersistentFlags().Lookup("log-format")); err != nil {
+		fmt.Printf("Failed to bind log-format flag: %v\n", err)
+		os.Exit(1)
+	}
+	if err := viper.BindPFlag("logging.verbose", rootCmd.PersistentFlags().Lookup("verbose")); err != nil {
+		fmt.Printf("Failed to bind verbose flag: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // initConfig reads in config file and ENV variables if set.

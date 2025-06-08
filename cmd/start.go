@@ -36,8 +36,16 @@ func init() {
 	startCmd.Flags().String("auth-type", "", "Override authentication type")
 
 	// Bind flags to viper
-	viper.BindPFlag("proxy.dry_run", startCmd.Flags().Lookup("dry-run"))
-	viper.BindPFlag("proxy.listen.address", startCmd.Flags().Lookup("listen-addr"))
-	viper.BindPFlag("server.url", startCmd.Flags().Lookup("downstream-url"))
-	viper.BindPFlag("security.auth.type", startCmd.Flags().Lookup("auth-type"))
-} 
+	if err := viper.BindPFlag("proxy.dry_run", startCmd.Flags().Lookup("dry-run")); err != nil {
+		logger.Fatal("Failed to bind dry-run flag", zap.Error(err))
+	}
+	if err := viper.BindPFlag("proxy.listen.address", startCmd.Flags().Lookup("listen-addr")); err != nil {
+		logger.Fatal("Failed to bind listen-addr flag", zap.Error(err))
+	}
+	if err := viper.BindPFlag("server.url", startCmd.Flags().Lookup("downstream-url")); err != nil {
+		logger.Fatal("Failed to bind downstream-url flag", zap.Error(err))
+	}
+	if err := viper.BindPFlag("security.auth.type", startCmd.Flags().Lookup("auth-type")); err != nil {
+		logger.Fatal("Failed to bind auth-type flag", zap.Error(err))
+	}
+}
