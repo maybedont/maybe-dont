@@ -135,6 +135,11 @@ func LoadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
+	// Validate config
+	if err := ValidateConfig(&config); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	return &config, nil
 }
 

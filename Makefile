@@ -3,7 +3,7 @@
 BINARY_NAME = maybe-dont
 GO = /usr/local/go/bin/go
 
-.PHONY: all build clean lint
+.PHONY: all build clean lint test
 
 all: build
 
@@ -14,4 +14,7 @@ clean:
 	rm -f $(BINARY_NAME)
 
 lint:
-	golangci-lint run 
+	golangci-lint run
+
+test:
+	$(GO) test -v ./...
