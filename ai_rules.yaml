@@ -4,7 +4,7 @@ rules:
       This policy blocks overly destructive actions.
     prompt: |- 
       You are an IT/Cloud operations expert. You are given a tool call request and you need to 
-      determine if it is allowed or not. If it should be stopped, return true. If it is allowed, return false.
+      determine if it is allowed or not. If it should be allowed, return true. If it is not allowed, return false.
       You must deny the request if it is overly destructive in the context of day-to-day operations.
       Examples of overly destructive actions include:
       - Deleting a large number of files
@@ -16,5 +16,5 @@ rules:
       - Deleting a large number of permissions
       The tool call request is: %s
       Respond with structured JSON: { "allowed": true/false, "message": "reason for the decision" }
-    action: "deny"
+    action: "allow"
     message: "This action is overly destructive and has been blocked."

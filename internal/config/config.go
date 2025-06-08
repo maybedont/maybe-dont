@@ -109,9 +109,8 @@ type Config struct {
 
 	// Audit configuration
 	Audit struct {
-		Enabled bool   `mapstructure:"enabled"`
-		Path    string `mapstructure:"path"`
-		Format  string `mapstructure:"format"` // json or text
+		Path   string `mapstructure:"path"`
+		Format string `mapstructure:"format"` // json or text
 	} `mapstructure:"audit"`
 }
 
@@ -368,8 +367,8 @@ func ValidateConfig(cfg *Config) error {
 	}
 
 	// Validate audit configuration
-	if cfg.Audit.Enabled && cfg.Audit.Path == "" {
-		return fmt.Errorf("audit.path is required when audit.enabled is true")
+	if cfg.Audit.Path == "" {
+		return fmt.Errorf("audit.path is required")
 	}
 
 	// Validate AI validation configuration
@@ -409,5 +408,12 @@ func GetLogger(cfg *Config) (*zap.Logger, error) {
 	config.OutputPaths = []string{"stdout"}
 	config.ErrorOutputPaths = []string{"stderr"}
 
-	return config.Build()
+	// Build the logger
+	logger, err := config.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build logger: %w", err)
+	}
+
+	// Add logger type designation
+	return logger.With(zap.String("logger", "application")), nil
 }

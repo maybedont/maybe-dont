@@ -16,6 +16,7 @@ import (
 // Proxy represents an MCP security proxy instance
 type Proxy struct {
 	logger       *zap.Logger
+	auditLogger  *zap.Logger
 	config       *config.Config
 	server       *server.MCPServer
 	client       *client.Client
@@ -39,6 +40,9 @@ type Proxy struct {
 
 // New creates a new proxy instance
 func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
+	// Create audit logger with a specific field to identify it
+	auditLogger := logger.With(zap.String("logger", "audit"))
+
 	// Create CEL policy engine
 	policyEngine, err := NewCELPolicyEngine(logger, cfg.PolicyValidation.Default)
 	if err != nil {
@@ -72,6 +76,7 @@ func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
 
 	return &Proxy{
 		logger:         logger,
+		auditLogger:    auditLogger,
 		config:         cfg,
 		stopChan:       make(chan struct{}),
 		policyEngine:   policyEngine,
@@ -93,7 +98,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 
 	// Initialize validation chain
 	p.validationChain = NewToolValidationChain(
-		NewToolLoggingHandler(p.logger),
+		NewToolLoggingHandler(p.auditLogger),
 		NewToolCELValidationHandler(p.logger, p.policyEngine),
 		NewToolAIValidationHandler(p.logger, p.aiPolicyEngine),
 	)
@@ -168,7 +173,7 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 	// Create a summary of passed validations
 	validationSummary := make(map[string]string)
 	for _, v := range validationResults.Results {
-		if v.Allowed {
+		if v.Allowed && v.PolicyType != "audit" {
 			validationSummary[v.PolicyName] = "passed"
 		}
 	}

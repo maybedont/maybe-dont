@@ -9,25 +9,25 @@ import (
 
 // LoggingHandler logs tool call request details
 type ToolLoggingHandler struct {
-	logger *zap.Logger
+	auditLogger *zap.Logger
 }
 
 // NewLoggingHandler creates a new logging handler
-func NewToolLoggingHandler(logger *zap.Logger) *ToolLoggingHandler {
+func NewToolLoggingHandler(auditLogger *zap.Logger) *ToolLoggingHandler {
 	return &ToolLoggingHandler{
-		logger: logger,
+		auditLogger: auditLogger,
 	}
 }
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResult, error) {
-	h.logger.Info("Validating tool call",
+	h.auditLogger.Info("Audit log: Tool call request",
 		zap.Any("request", req),
 	)
 	return ValidationResult{
-		PolicyName: "Logging",
-		PolicyType: "logging",
+		PolicyName: "Audit Logging",
+		PolicyType: "audit",
 		Allowed:    true,
-		Message:    "Request logged successfully",
+		Message:    "Request logged for audit",
 	}, nil
 }
