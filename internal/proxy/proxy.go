@@ -30,7 +30,7 @@ type Proxy struct {
 		Templates []mcp.ResourceTemplate
 	}
 	// Validation chain for request processing
-	validationChain *ValidationChain
+	validationChain *ToolValidationChain
 }
 
 // New creates a new proxy instance
@@ -55,7 +55,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 	}
 
 	// Initialize validation chain
-	p.validationChain = NewValidationChain(NewLoggingHandler(), NewCELValidationHandler())
+	p.validationChain = NewToolValidationChain(NewToolLoggingHandler(), NewToolCELValidationHandler())
 
 	// Initialize downstream client based on transport type
 	if err := p.initDownstreamClient(ctx); err != nil {

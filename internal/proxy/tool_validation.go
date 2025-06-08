@@ -8,27 +8,27 @@ import (
 
 // ValidationHandler defines the interface for tool call validation handlers
 // (now using mcp.CallToolRequest)
-type ValidationHandler interface {
-	Handle(ctx context.Context, req mcp.CallToolRequest) error
+type ToolValidationHandler interface {
+	HandleToolCall(ctx context.Context, req mcp.CallToolRequest) error
 }
 
 // ValidationChain represents a chain of validation handlers
 // (now using mcp.CallToolRequest)
-type ValidationChain struct {
-	handlers []ValidationHandler
+type ToolValidationChain struct {
+	handlers []ToolValidationHandler
 }
 
 // NewValidationChain creates a new validation chain
-func NewValidationChain(handlers ...ValidationHandler) *ValidationChain {
-	return &ValidationChain{
+func NewToolValidationChain(handlers ...ToolValidationHandler) *ToolValidationChain {
+	return &ToolValidationChain{
 		handlers: handlers,
 	}
 }
 
 // Handle processes a tool call request through the validation chain
-func (c *ValidationChain) Handle(ctx context.Context, req mcp.CallToolRequest) error {
+func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolRequest) error {
 	for _, handler := range c.handlers {
-		if err := handler.Handle(ctx, req); err != nil {
+		if err := handler.HandleToolCall(ctx, req); err != nil {
 			return err
 		}
 	}
@@ -36,29 +36,29 @@ func (c *ValidationChain) Handle(ctx context.Context, req mcp.CallToolRequest) e
 }
 
 // LoggingHandler logs tool call request details
-type LoggingHandler struct{}
+type ToolLoggingHandler struct{}
 
 // NewLoggingHandler creates a new logging handler
-func NewLoggingHandler() *LoggingHandler {
-	return &LoggingHandler{}
+func NewToolLoggingHandler() *ToolLoggingHandler {
+	return &ToolLoggingHandler{}
 }
 
-// Handle implements ValidationHandler
-func (h *LoggingHandler) Handle(ctx context.Context, req mcp.CallToolRequest) error {
+// HandleToolCall implements ToolValidationHandler
+func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) error {
 	// Logging removed for generic handler
 	return nil
 }
 
 // CELValidationHandler validates tool call requests using CEL policies
-type CELValidationHandler struct{}
+type ToolCELValidationHandler struct{}
 
 // NewCELValidationHandler creates a new CEL validation handler
-func NewCELValidationHandler() *CELValidationHandler {
-	return &CELValidationHandler{}
+func NewToolCELValidationHandler() *ToolCELValidationHandler {
+	return &ToolCELValidationHandler{}
 }
 
-// Handle implements ValidationHandler
-func (h *CELValidationHandler) Handle(ctx context.Context, req mcp.CallToolRequest) error {
+// HandleToolCall implements ToolValidationHandler
+func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) error {
 	// TODO: Implement CEL policy evaluation for tool calls
 	return nil
 }
