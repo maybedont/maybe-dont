@@ -24,10 +24,9 @@ server:
       key_file: "/path/to/key.pem"
     # CORS configuration
     cors:
-      enabled: false
+      enabled: true
       allowed_origins:
-        - "https://example.com"
-        - "https://api.example.com"
+        - "*"
       allowed_methods:
         - "GET"
         - "POST"
