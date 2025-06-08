@@ -8,14 +8,15 @@ The MCP Security Proxy is a Go-based middleware service that provides enterprise
 
 - **Zero-trust security model** for MCP communications
 - **Drop-in replacement** for existing MCP servers with no client modifications
-- **Policy-as-code** approach to security rules
+- **Policy-as-code** approach using industry-standard CEL (Common Expression Language)
 - **Enterprise-ready** with authentication, authorization, and audit trails
 - **Transport agnostic** supporting STDIO and SSE in MVP, with HTTP and WebSocket coming later
+- **Familiar policy language** - same as Kubernetes, Istio, and other cloud-native tools
 
 ### Target Users
 
-1. **Security Teams**: Need visibility and control over AI model interactions
-2. **Platform Engineers**: Require centralized policy enforcement
+1. **Security Teams**: Need visibility and control over AI model interactions with familiar CEL policy language
+2. **Platform Engineers**: Require centralized policy enforcement using cloud-native standards
 3. **Compliance Officers**: Must maintain audit trails for regulatory requirements
 4. **Development Teams**: Want seamless integration without changing existing tools
 
@@ -29,6 +30,7 @@ The implementation MUST use the following libraries:
 - **[uber-go/zap](https://github.com/uber-go/zap)**: Structured logging with high performance
 - **[spf13/cobra](https://github.com/spf13/cobra)**: CLI interface and command structure
 - **[spf13/viper](https://github.com/spf13/viper)**: Configuration management with multiple sources
+- **[google/cel-go](https://github.com/google/cel-go)**: Common Expression Language for policy evaluation
 
 ### Architecture Requirements
 
@@ -64,9 +66,9 @@ Configuration search paths:
 #### Primary Commands
 
 - `mcp-security-proxy start` - Launch the proxy server
-- `mcp-security-proxy validate` - Validate configuration without starting
+- `mcp-security-proxy validate` - Validate configuration and compile CEL policies
 - `mcp-security-proxy version` - Display version and build information
-- `mcp-security-proxy test` - Test security policies against sample requests
+- `mcp-security-proxy test` - Test CEL policies against sample requests
 
 #### Global Flags
 
@@ -81,6 +83,30 @@ Configuration search paths:
 - `--listen-addr` - Override listen address
 - `--downstream-url` - Override downstream server URL
 - `--auth-type` - Override authentication type
+
+#### Test Command
+
+The `test` command allows validation of CEL policies without running the proxy:
+
+```bash
+# Test policies against a request file
+mcp-security-proxy test --config config.yaml --request request.json
+
+# Test policies interactively
+mcp-security-proxy test --config config.yaml --interactive
+
+# Test with specific auth context
+mcp-security-proxy test --config config.yaml --auth-context '{"client_id": "test", "roles": ["user"]}'
+```
+
+The test command must:
+- Load and compile all CEL expressions
+- Validate expression syntax and types
+- Execute policies against test requests
+- Show which rules match and their outcomes
+- Measure policy evaluation performance
+- Support exporting test cases for CI/CD pipelines
+- Allow importing policy test suites
 
 ### Logging Requirements
 
@@ -105,7 +131,8 @@ All logs MUST be structured JSON by default with the following requirements:
 
 3. **Security Fields**:
    - `auth_type` - Authentication method used
-   - `policy_violations` - Array of violated policies
+   - `policy_results` - Array of CEL policy evaluations
+   - `policy_denied` - Name of denying policy (if any)
    - `access_decision` - allow/deny with reason
 
 #### Log Levels
@@ -168,13 +195,30 @@ Role-based access control (RBAC) with:
 
 #### Policy Engine
 
-Validation rules that can:
-- Whitelist/blacklist specific tools
-- Restrict file system paths
-- Limit response sizes
-- Scan for secrets/sensitive data
-- Apply rate limits
-- Validate request parameters
+The proxy MUST use **Common Expression Language (CEL)** for policy rules, providing:
+
+- **Expressive policies**: Write complex conditions in a familiar, type-safe language
+- **Performance**: CEL compiles to efficient evaluation programs
+- **Type safety**: Compile-time type checking prevents runtime errors
+- **Ecosystem**: Leverage existing CEL tooling and knowledge
+- **Standard language**: Same policy language as Kubernetes, Envoy, and other infrastructure
+- **Extensibility**: Add custom functions and macros for domain-specific logic
+
+Example policy capabilities with CEL:
+- Tool allowlisting: `request.method == "tools/call" && request.params.name in ["read_file", "list_directory"]`
+- Path restrictions: `request.params.uri.startsWith("/safe/") || request.params.uri.startsWith("/public/")`
+- Rate limiting: `rateLimit("client:" + auth.client_id, 100, "1m")`
+- Content filtering: `size(response.content) < 10 * 1024 * 1024 && !hasSecrets(response.content)`
+- Time-based access: `now().getHours() >= 9 && now().getHours() <= 17`
+- Role-based access: `"admin" in auth.roles || (request.method == "resources/read" && "reader" in auth.roles)`
+
+Policy evaluation context must include:
+- `request`: The incoming MCP request object
+- `auth`: Authentication context (client_id, roles, metadata)
+- `response`: The MCP response (for post-processing rules)
+- `now()`: Current timestamp function
+- Custom functions: `hasSecrets()`, `rateLimit()`, `matchesPattern()`
+- Environment info: `env.hostname`, `env.region`, `env.deployment`
 
 ### Transport Requirements
 
@@ -201,6 +245,11 @@ Every request MUST generate an audit entry with:
 - Timestamp (nanosecond precision)
 - Client identification (ID, IP, authentication method)
 - Request details (method, parameters)
+- Policy evaluation results:
+  - CEL expressions evaluated
+  - Expression results (allow/deny)
+  - Evaluation time per expression
+  - Variables used in evaluation
 - Authorization decision and reasoning
 - Response summary (success/failure, size)
 - Duration and performance metrics
@@ -214,10 +263,12 @@ Every request MUST generate an audit entry with:
 
 ### Performance Requirements
 
-- Latency overhead: <10ms for policy evaluation
+- Latency overhead: <10ms for policy evaluation (including CEL expression execution)
+- CEL compilation: Expressions compiled once at startup/reload
+- CEL optimization: Use CEL's built-in optimization for frequently evaluated expressions
 - Memory usage: <100MB baseline, linear with concurrent connections
 - Connection handling: 1000+ concurrent clients
-- Startup time: <1 second to ready state
+- Startup time: <1 second to ready state (including CEL compilation)
 
 ### Deployment Requirements
 
@@ -244,6 +295,16 @@ server:
   transport: stdio
   command: mcp-server-filesystem
   args: ["--root", "/safe-directory"]
+
+# Optional: Add basic security policy
+policies:
+  rules:
+    - name: "allow-read-only"
+      expression: 'request.method in ["resources/read", "resources/list"]'
+      action: allow
+    - name: "deny-all-others"
+      expression: "true"
+      action: deny
 ```
 
 ### Full Configuration Structure
@@ -294,9 +355,60 @@ security:
       
 # Policy configuration
 policies:
-  validation:
-    enabled: bool
-    rules: []
+  # CEL language version (for future compatibility)
+  cel_version: "v0.20.0"
+  
+  # CEL policies evaluated in order, first deny wins
+  rules:
+    - name: "deny-dangerous-tools"
+      description: "Block potentially dangerous tool calls"
+      expression: |
+        request.method == "tools/call" && 
+        request.params.name in ["execute_command", "write_file", "delete_file"]
+      action: deny
+      message: "Tool {{request.params.name}} is not allowed"
+      
+    - name: "restrict-file-paths"
+      description: "Limit file access to safe directories"
+      expression: |
+        request.method in ["resources/read", "tools/call"] &&
+        has(request.params.uri) &&
+        !(request.params.uri.startsWith("/safe/") || 
+          request.params.uri.startsWith("/public/"))
+      action: deny
+      message: "Access to {{request.params.uri}} is not permitted"
+      
+    - name: "rate-limit-by-client"
+      description: "Limit requests per client"
+      expression: |
+        !rateLimit("client:" + auth.client_id, 100, duration("1m"))
+      action: deny
+      message: "Rate limit exceeded"
+      
+    - name: "business-hours-only"
+      description: "Allow access only during business hours"
+      expression: |
+        auth.roles.contains("contractor") &&
+        (now().getHours() < 9 || now().getHours() > 17)
+      action: deny
+      message: "Access permitted only during business hours"
+      
+    - name: "response-size-limit"
+      description: "Limit response sizes"
+      expression: |
+        has(response.size) && response.size > 10 * 1024 * 1024
+      phase: response  # Evaluate after response
+      action: deny
+      message: "Response too large: {{response.size}} bytes"
+      
+  # Custom CEL functions available in expressions
+  functions:
+    - name: "rateLimit"
+      description: "Check rate limit for a key"
+    - name: "hasSecrets" 
+      description: "Scan content for potential secrets"
+    - name: "matchesPattern"
+      description: "Regex pattern matching"
     
 # Logging configuration
 logging:
@@ -340,15 +452,15 @@ audit:
 
 1. **Client Errors**: Return MCP-compliant error responses
 2. **Downstream Errors**: Circuit breaker pattern with fallback
-3. **Policy Violations**: Detailed error messages with violation reasons
+3. **Policy Violations**: Return custom message from CEL rule with violation details
 4. **System Errors**: Graceful degradation without data loss
 
 ### Security Operations
 
 1. **Key Rotation**: Support hot-reload of authentication keys
-2. **Policy Updates**: Apply new rules without restart
-3. **Incident Response**: Detailed audit trail for forensics
-4. **Rate Limiting**: Prevent DoS with configurable limits
+2. **Policy Updates**: Hot-reload CEL policies with syntax validation
+3. **Incident Response**: Detailed audit trail with policy decisions
+4. **Rate Limiting**: CEL-based dynamic rate limits
 
 ## Future Considerations (Post-MVP)
 
@@ -362,9 +474,10 @@ audit:
 ### Advanced Security
 
 1. **Multi-Factor Authentication**: Combine multiple auth methods
-2. **Dynamic Authorization**: Context-aware permissions (time, location, risk score)
-3. **Anomaly Detection**: ML-based detection of unusual patterns
-4. **Secret Scanning**: Deep content inspection for leaked credentials
+2. **Dynamic Authorization**: Context-aware CEL expressions with external data sources
+3. **Anomaly Detection**: CEL expressions analyzing request patterns
+4. **Secret Scanning**: Deep content inspection via CEL custom functions
+5. **Policy Composition**: Hierarchical CEL policies with inheritance
 
 ### Enterprise Features
 
@@ -383,26 +496,30 @@ audit:
 ## Success Metrics
 
 1. **Adoption**: Number of deployments and active users
-2. **Security**: Prevented policy violations and blocked attacks
-3. **Performance**: P99 latency overhead below 10ms
+2. **Security**: Policy violations caught, attacks prevented
+3. **Performance**: P99 latency overhead below 10ms (including CEL evaluation)
 4. **Reliability**: 99.9% uptime for proxy service
 5. **Compliance**: Successful audits with complete trail
+6. **Policy Effectiveness**: Percentage of requests evaluated, false positive rate
 
 ## Development Priorities
 
 ### Phase 1 (MVP)
 - Core proxy functionality with STDIO and SSE transports
 - Basic authentication (API key)
-- File path validation
+- CEL-based policy engine with common security rules
+- File path validation via CEL expressions
 - Structured logging with zap
 - CLI with cobra/viper
+- Policy testing framework
 
 ### Phase 2
 - HTTP transport support
 - JWT authentication
-- Advanced validation rules
-- Prometheus metrics
+- Advanced CEL features (macros, external data sources)
+- Prometheus metrics with CEL policy performance
 - Docker packaging
+- Policy library and templates
 
 ### Phase 3
 - mTLS authentication
