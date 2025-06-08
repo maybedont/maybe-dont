@@ -139,12 +139,42 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 	)
 
 	// Validate request through the chain
-	if err := p.ValidateToolCall(ctx, req); err != nil {
+	validationResults, err := p.ValidateToolCall(ctx, req)
+	if err != nil {
 		return nil, fmt.Errorf("request validation failed: %w", err)
 	}
 
-	// If we get here, the request passed validation
-	return p.client.CallTool(ctx, req)
+	// Call the tool
+	result, err := p.client.CallTool(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("tool call failed: %w", err)
+	}
+
+	// If validation failed, return error with all validation results
+	if !validationResults.Allowed {
+		// Convert validation results to JSON for error message
+		resultsJSON, err := json.Marshal(validationResults)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal validation results: %w", err)
+		}
+		return nil, fmt.Errorf("policy validation failed: %s", string(resultsJSON))
+	}
+
+	// Add validation summary to the result metadata
+	if result.Meta == nil {
+		result.Meta = make(map[string]interface{})
+	}
+
+	// Create a summary of passed validations
+	validationSummary := make(map[string]string)
+	for _, v := range validationResults.Results {
+		if v.Allowed {
+			validationSummary[v.PolicyName] = "passed"
+		}
+	}
+	result.Meta["validation_summary"] = validationSummary
+
+	return result, nil
 }
 
 // Prompt handler function

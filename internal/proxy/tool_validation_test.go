@@ -35,9 +35,11 @@ func TestValidationChain(t *testing.T) {
 	)
 
 	tests := []struct {
-		name    string
-		req     mcp.CallToolRequest
-		wantErr bool
+		name           string
+		req            mcp.CallToolRequest
+		wantAllowed    bool
+		wantErr        bool
+		wantResultType string
 	}{
 		{
 			name: "valid tool call",
@@ -53,7 +55,9 @@ func TestValidationChain(t *testing.T) {
 					},
 				},
 			},
-			wantErr: false,
+			wantAllowed:    true,
+			wantErr:        false,
+			wantResultType: "cel",
 		},
 		{
 			name: "invalid method",
@@ -62,18 +66,31 @@ func TestValidationChain(t *testing.T) {
 					Method: "invalid_method",
 				},
 			},
-			wantErr: true,
+			wantAllowed:    false,
+			wantErr:        false,
+			wantResultType: "cel",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := chain.Handle(context.Background(), tt.req)
+			results, err := chain.Handle(context.Background(), tt.req)
 			if tt.wantErr {
 				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
+				return
 			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, results.Allowed)
+
+			// Check that we have the expected validation results
+			found := false
+			for _, result := range results.Results {
+				if result.PolicyType == tt.wantResultType {
+					found = true
+					assert.Equal(t, tt.wantAllowed, result.Allowed)
+				}
+			}
+			assert.True(t, found, "Expected to find validation result of type %s", tt.wantResultType)
 		})
 	}
 }
@@ -115,12 +132,15 @@ func TestLoggingHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := handler.HandleToolCall(context.Background(), tt.req)
+			result, err := handler.HandleToolCall(context.Background(), tt.req)
 			if tt.wantErr {
 				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
+				return
 			}
+			require.NoError(t, err)
+			assert.True(t, result.Allowed)
+			assert.Equal(t, "Logging", result.PolicyName)
+			assert.Equal(t, "logging", result.PolicyType)
 		})
 	}
 }
@@ -176,12 +196,15 @@ func TestCELValidationHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := handler.HandleToolCall(context.Background(), tt.req)
+			result, err := handler.HandleToolCall(context.Background(), tt.req)
 			if tt.wantErr {
 				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
+				return
 			}
+			require.NoError(t, err)
+			assert.True(t, result.Allowed)
+			assert.Equal(t, "CEL Policy", result.PolicyName)
+			assert.Equal(t, "cel", result.PolicyType)
 		})
 	}
 }
