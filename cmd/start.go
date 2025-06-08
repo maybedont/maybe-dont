@@ -31,7 +31,7 @@ The server will begin listening for connections and enforcing security policies.
 
 		// Handle OS signals
 		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			sig := <-sigCh
 			Logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
@@ -47,6 +47,10 @@ The server will begin listening for connections and enforcing security policies.
 		<-ctx.Done()
 
 		Logger.Info("Shutting down proxy")
+		if err := p.Stop(); err != nil {
+			Logger.Error("Error during shutdown", zap.Error(err))
+			return err
+		}
 
 		return nil
 	},

@@ -50,9 +50,19 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 
 	p.server = srv
 
-	if err := sseSrv.Start(p.config.Server.ListenAddr); err != nil {
-		p.logger.Error("SSE server error", zap.Error(err))
-		return fmt.Errorf("failed to start SSE server: %w", err)
-	}
+	// Start server in a goroutine
+	go func() {
+		if err := sseSrv.Start(p.config.Server.ListenAddr); err != nil {
+			p.logger.Error("SSE server error", zap.Error(err))
+		}
+	}()
+
+	// Monitor context for cancellation
+	go func() {
+		<-ctx.Done()
+		p.logger.Info("Context cancelled, shutting down SSE server")
+		// The server will be terminated when the process exits
+	}()
+
 	return nil
 }

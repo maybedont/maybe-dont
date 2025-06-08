@@ -27,8 +27,9 @@ type Proxy struct {
 // New creates a new proxy instance
 func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
 	return &Proxy{
-		logger: logger,
-		config: cfg,
+		logger:   logger,
+		config:   cfg,
+		stopChan: make(chan struct{}),
 	}, nil
 }
 
@@ -52,6 +53,26 @@ func (p *Proxy) Start(ctx context.Context) error {
 	// Initialize server based on server type
 	if err := p.initServer(ctx); err != nil {
 		return fmt.Errorf("failed to initialize server: %w", err)
+	}
+
+	return nil
+}
+
+// Stop gracefully shuts down the proxy
+func (p *Proxy) Stop() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.logger.Info("Stopping proxy")
+
+	// Close the stop channel to signal shutdown
+	close(p.stopChan)
+
+	// Close the client if it exists
+	if p.client != nil {
+		if err := p.client.Close(); err != nil {
+			p.logger.Error("Error closing client", zap.Error(err))
+		}
 	}
 
 	return nil
