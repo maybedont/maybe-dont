@@ -1,0 +1,12 @@
+{
+    "method": "tools/call",
+    "params": {
+      "name": "kubectl",
+      "arguments": {
+        "command": "kubectl delete po --all -A\n"
+      },
+      "_meta": {
+        "progressToken": 64
+      }
+    }
+  }

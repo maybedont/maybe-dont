@@ -25,10 +25,8 @@ go build -o maybe-dont
 
 The proxy supports multiple configuration sources with the following precedence:
 
-1. Command-line flags (highest priority)
-2. Environment variables (with `MCP_PROXY_` prefix)
-3. Configuration file (YAML format) - This is the recommended method for any non-secrets.
-4. Default values (lowest priority)
+1. Configuration file (YAML format) - This is the recommended method for any non-secrets.
+2. Default values (lowest priority)
 
 ### Configuration File Locations
 
