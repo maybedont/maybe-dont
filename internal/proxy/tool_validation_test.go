@@ -16,16 +16,22 @@ func TestValidationChain(t *testing.T) {
 	engine, err := NewCELPolicyEngine(logger, "deny")
 	require.NoError(t, err)
 
-	// Load default policies
-	defaultPolicies := []config.CELPolicy{
+	// Load test policies
+	policies := []config.CELPolicy{
 		{
-			Name:       "allow-tools-call",
+			Name:       "allow-read-tool",
 			Expression: `request.method == "tools/call" && request.params.name == "read_file"`,
 			Action:     "allow",
-			Message:    "Allowed to call tools",
+			Message:    "Allowed to call read_file",
+		},
+		{
+			Name:       "deny-delete-tool",
+			Expression: `request.method == "tools/call" && request.params.name == "delete_file"`,
+			Action:     "deny",
+			Message:    "delete_file is not allowed",
 		},
 	}
-	err = engine.LoadPolicies(defaultPolicies)
+	err = engine.LoadPolicies(policies)
 	require.NoError(t, err)
 
 	// Create validation chain
@@ -35,18 +41,16 @@ func TestValidationChain(t *testing.T) {
 	)
 
 	tests := []struct {
-		name           string
-		req            mcp.CallToolRequest
-		wantAllowed    bool
-		wantErr        bool
-		wantResultType string
+		name        string
+		req         mcp.CallToolRequest
+		wantAllowed bool
+		wantErr     bool
 	}{
 		{
-			name: "valid tool call",
+			name: "allowed read_file request",
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{
 					Method: "tools/call",
-					Params: mcp.RequestParams{},
 				},
 				Params: mcp.CallToolParams{
 					Name: "read_file",
@@ -55,20 +59,24 @@ func TestValidationChain(t *testing.T) {
 					},
 				},
 			},
-			wantAllowed:    true,
-			wantErr:        false,
-			wantResultType: "cel",
+			wantAllowed: true,
+			wantErr:     false,
 		},
 		{
-			name: "invalid method",
+			name: "denied delete_file request",
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{
-					Method: "invalid_method",
+					Method: "tools/call",
+				},
+				Params: mcp.CallToolParams{
+					Name: "delete_file",
+					Arguments: map[string]string{
+						"command": "rm file.txt",
+					},
 				},
 			},
-			wantAllowed:    false,
-			wantErr:        false,
-			wantResultType: "cel",
+			wantAllowed: false,
+			wantErr:     false,
 		},
 	}
 
@@ -82,23 +90,25 @@ func TestValidationChain(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAllowed, results.Allowed)
 
-			// Check that we have the expected validation results
-			found := false
-			for _, result := range results.Results {
-				if result.PolicyType == tt.wantResultType {
-					found = true
-					assert.Equal(t, tt.wantAllowed, result.Allowed)
-				}
-			}
-			assert.True(t, found, "Expected to find validation result of type %s", tt.wantResultType)
+			// Verify audit logging result
+			auditResult := results.Results[0]
+			assert.Equal(t, "Audit Logging", auditResult.PolicyName)
+			assert.Equal(t, "audit", auditResult.PolicyType)
+			assert.True(t, auditResult.Allowed)
+			assert.Empty(t, auditResult.Results)
+
+			// Verify CEL validation result
+			celResult := results.Results[1]
+			assert.Equal(t, "CEL Policy", celResult.PolicyName)
+			assert.Equal(t, "cel", celResult.PolicyType)
+			assert.Equal(t, tt.wantAllowed, celResult.Allowed)
+			assert.NotEmpty(t, celResult.Results)
 		})
 	}
 }
 
 func TestLoggingHandler(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-
-	// Create handler
 	handler := NewToolLoggingHandler(logger)
 
 	tests := []struct {
@@ -139,8 +149,9 @@ func TestLoggingHandler(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.True(t, result.Allowed)
-			assert.Equal(t, "Logging", result.PolicyName)
-			assert.Equal(t, "logging", result.PolicyType)
+			assert.Equal(t, "Audit Logging", result.PolicyName)
+			assert.Equal(t, "audit", result.PolicyType)
+			assert.Empty(t, result.Results)
 		})
 	}
 }

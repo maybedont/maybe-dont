@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/sudermanjr/maybe-dont/internal/config"
 	"go.uber.org/zap/zaptest"
@@ -33,10 +34,10 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name string
-		req  mcp.CallToolRequest
-		want bool
-		msg  string
+		name        string
+		req         mcp.CallToolRequest
+		wantAllowed bool
+		wantMessage string
 	}{
 		{
 			name: "allow read_file",
@@ -51,8 +52,8 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 					},
 				},
 			},
-			want: true,
-			msg:  "",
+			wantAllowed: true,
+			wantMessage: "",
 		},
 		{
 			name: "deny delete_file",
@@ -67,8 +68,8 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 					},
 				},
 			},
-			want: false,
-			msg:  "delete_file is not allowed",
+			wantAllowed: false,
+			wantMessage: "delete_file is not allowed",
 		},
 		{
 			name: "deny unknown tool",
@@ -80,17 +81,28 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 					Name: "unknown_tool",
 				},
 			},
-			want: false,
-			msg:  "no matching policy found",
+			wantAllowed: false,
+			wantMessage: "Denied by default policy",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, msg, err := engine.EvaluateToolCall(tt.req)
+			result, err := engine.EvaluateToolCall(tt.req)
 			require.NoError(t, err)
-			require.Equal(t, tt.want, allowed)
-			require.Equal(t, tt.msg, msg)
+			assert.Equal(t, tt.wantAllowed, result.Allowed)
+			assert.Equal(t, tt.wantMessage, result.Message)
+			assert.NotEmpty(t, result.Results)
+
+			// Verify policy evaluation results
+			for _, policyResult := range result.Results {
+				assert.Equal(t, "cel", policyResult.PolicyType)
+				if policyResult.PolicyName == "allow-read-tool" {
+					assert.Equal(t, tt.req.Params.Name == "read_file", policyResult.Allowed)
+				} else if policyResult.PolicyName == "deny-delete-tool" {
+					assert.Equal(t, tt.req.Params.Name == "delete_file", policyResult.Allowed)
+				}
+			}
 		})
 	}
 }

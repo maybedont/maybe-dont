@@ -53,16 +53,16 @@ type Config struct {
 		} `mapstructure:"mtls"`
 	} `mapstructure:"auth"`
 
+	DefaultPolicy string `mapstructure:"default"` // allow or deny
+
 	// Policy configuration
 	PolicyValidation struct {
 		RulesFile string      `mapstructure:"rules_file"`
-		Default   string      `mapstructure:"default"` // allow or deny
 		Rules     []CELPolicy `mapstructure:"rules"`
 	} `mapstructure:"policy_validation"`
 
 	// AI validation configuration
 	AIPolicyValidation struct {
-		Default   string     `mapstructure:"default"` // allow or deny
 		Enabled   bool       `mapstructure:"enabled"`
 		Endpoint  string     `mapstructure:"endpoint"`
 		Model     string     `mapstructure:"model"`
@@ -154,9 +154,6 @@ func LoadAIPoliciesFromFile(path string) ([]AIPolicy, error) {
 func LoadConfig(configPath string) (*Config, error) {
 	v := viper.New()
 
-	// Set default values
-	setDefaults(v)
-
 	// Set environment variable prefix
 	v.SetEnvPrefix("MCP_PROXY")
 	v.AutomaticEnv()
@@ -224,40 +221,6 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 
 	return &config, nil
-}
-
-// setDefaults sets the default configuration values
-func setDefaults(v *viper.Viper) {
-	// Server defaults
-	v.SetDefault("server.type", "stdio")
-	v.SetDefault("server.listen_addr", "localhost:8080")
-	v.SetDefault("server.log_level", "info")
-	v.SetDefault("server.log_format", "json")
-
-	// SSE server defaults
-	v.SetDefault("server.sse.tls.enabled", false)
-
-	// Auth defaults
-	v.SetDefault("auth.type", "api_key")
-	v.SetDefault("auth.jwt.claim_roles", "roles")
-
-	// Policy defaults
-	v.SetDefault("policy_validation.default", "deny")
-
-	// AI validation defaults
-	v.SetDefault("ai_validation.enabled", false)
-	v.SetDefault("ai_validation.endpoint", "")
-	v.SetDefault("ai_validation.model", "")
-
-	// Client defaults
-	v.SetDefault("client.type", "stdio")
-	v.SetDefault("client.downstream_url", "")
-	v.SetDefault("client.command", "")
-	v.SetDefault("client.command_args", []string{})
-
-	// Audit defaults
-	v.SetDefault("audit.path", "stdout")
-	v.SetDefault("audit.format", "json")
 }
 
 // ValidateConfig validates the configuration

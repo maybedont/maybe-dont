@@ -12,30 +12,32 @@ type ValidationResult struct {
 	PolicyName string `json:"policy_name"`
 	PolicyType string `json:"policy_type"` // "cel" or "ai"
 	Allowed    bool   `json:"allowed"`
-	Message    string `json:"message"`
+	Message    string `json:"message,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
 // ValidationResults represents all validation results for a request
 type ValidationResults struct {
-	Results []ValidationResult `json:"results"`
-	Allowed bool               `json:"allowed"`
-	Message string             `json:"message"`
+	Results       []ValidationResult `json:"results"`
+	Allowed       bool               `json:"allowed"`
+	Message       string             `json:"message,omitempty"`
+	Error         string             `json:"error,omitempty"`
+	DefaultPolicy string             `json:"default_policy"`
+	AllowCount    int                `json:"allow_count"`
+	DenyCount     int                `json:"deny_count"`
 }
 
-// ValidationHandler defines the interface for tool call validation handlers
-// (now using mcp.CallToolRequest)
+// ToolValidationHandler defines the interface for tool validation handlers
 type ToolValidationHandler interface {
-	HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResult, error)
+	HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error)
 }
 
-// ValidationChain represents a chain of validation handlers
-// (now using mcp.CallToolRequest)
+// ToolValidationChain implements a chain of validation handlers
 type ToolValidationChain struct {
 	handlers []ToolValidationHandler
 }
 
-// NewValidationChain creates a new validation chain
+// NewToolValidationChain creates a new validation chain
 func NewToolValidationChain(handlers ...ToolValidationHandler) *ToolValidationChain {
 	return &ToolValidationChain{
 		handlers: handlers,
@@ -43,36 +45,33 @@ func NewToolValidationChain(handlers ...ToolValidationHandler) *ToolValidationCh
 }
 
 // Handle processes a tool call request through the validation chain
-func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolRequest) (*ValidationResults, error) {
-	results := &ValidationResults{
-		Results: make([]ValidationResult, 0),
-		Allowed: true,
-	}
+func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+	var finalResults ValidationResults
 
 	for _, handler := range c.handlers {
-		result, err := handler.HandleToolCall(ctx, req)
+		results, err := handler.HandleToolCall(ctx, req)
 		if err != nil {
-			result.Error = err.Error()
+			return results, err
 		}
-		results.Results = append(results.Results, result)
 
-		// If any validation fails, the overall result is not allowed
-		if !result.Allowed {
-			results.Allowed = false
-			results.Message = result.Message
-		}
+		finalResults.Results = append(finalResults.Results, results.Results...)
+		finalResults.DefaultPolicy = results.DefaultPolicy
+		finalResults.AllowCount += results.AllowCount
+		finalResults.DenyCount += results.DenyCount
 	}
+	//TODO determine the rules for the final results
+	//TODO: If the default policy is set to allow, and the denyCount > 0, set the allowed to false
 
-	return results, nil
+	return finalResults, nil
 }
 
-// CELValidationHandler validates tool call requests using CEL policies
+// ToolCELValidationHandler handles CEL policy validation
 type ToolCELValidationHandler struct {
 	logger *zap.Logger
 	engine *CELPolicyEngine
 }
 
-// NewCELValidationHandler creates a new CEL validation handler
+// NewToolCELValidationHandler creates a new CEL validation handler
 func NewToolCELValidationHandler(logger *zap.Logger, engine *CELPolicyEngine) *ToolCELValidationHandler {
 	return &ToolCELValidationHandler{
 		logger: logger,
@@ -81,33 +80,17 @@ func NewToolCELValidationHandler(logger *zap.Logger, engine *CELPolicyEngine) *T
 }
 
 // HandleToolCall implements ToolValidationHandler
-func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResult, error) {
-	// Evaluate policies
-	allowed, message, err := h.engine.EvaluateToolCall(req)
-	if err != nil {
-		return ValidationResult{
-			PolicyName: "CEL Policy",
-			PolicyType: "cel",
-			Allowed:    false,
-			Error:      err.Error(),
-		}, nil
-	}
-
-	return ValidationResult{
-		PolicyName: "CEL Policy",
-		PolicyType: "cel",
-		Allowed:    allowed,
-		Message:    message,
-	}, nil
+func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+	return h.engine.EvaluateToolCall(req)
 }
 
-// CELValidationHandler validates tool call requests using CEL policies
+// ToolAIValidationHandler handles AI policy validation
 type ToolAIValidationHandler struct {
 	logger *zap.Logger
 	engine *AIPolicyEngine
 }
 
-// NewAIValidationHandler creates a new CEL validation handler
+// NewToolAIValidationHandler creates a new AI validation handler
 func NewToolAIValidationHandler(logger *zap.Logger, engine *AIPolicyEngine) *ToolAIValidationHandler {
 	return &ToolAIValidationHandler{
 		logger: logger,
@@ -116,27 +99,11 @@ func NewToolAIValidationHandler(logger *zap.Logger, engine *AIPolicyEngine) *Too
 }
 
 // HandleToolCall implements ToolValidationHandler
-func (h *ToolAIValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResult, error) {
-	// Evaluate policies
-	allowed, message, err := h.engine.EvaluateToolCall(ctx, req)
-	if err != nil {
-		return ValidationResult{
-			PolicyName: "AI Policy",
-			PolicyType: "ai",
-			Allowed:    false,
-			Error:      err.Error(),
-		}, nil
-	}
-
-	return ValidationResult{
-		PolicyName: "AI Policy",
-		PolicyType: "ai",
-		Allowed:    allowed,
-		Message:    message,
-	}, nil
+func (h *ToolAIValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+	return h.engine.EvaluateToolCall(ctx, req)
 }
 
 // ValidateToolCall validates a tool call request
-func (p *Proxy) ValidateToolCall(ctx context.Context, req mcp.CallToolRequest) (*ValidationResults, error) {
+func (p *Proxy) ValidateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
 	return p.validationChain.Handle(ctx, req)
 }

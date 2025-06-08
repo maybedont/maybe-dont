@@ -29,7 +29,7 @@ type CELPolicyEngine struct {
 }
 
 // NewCELPolicyEngine creates a new CEL policy engine
-func NewCELPolicyEngine(logger *zap.Logger, defaultPolicy string) (*CELPolicyEngine, error) {
+func NewCELPolicyEngine(logger *zap.Logger) (*CELPolicyEngine, error) {
 	// Create CEL environment with custom functions
 	env, err := cel.NewEnv(
 		cel.Variable("request", cel.DynType),
@@ -40,16 +40,10 @@ func NewCELPolicyEngine(logger *zap.Logger, defaultPolicy string) (*CELPolicyEng
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
 
-	// Validate default policy
-	if defaultPolicy != "allow" && defaultPolicy != "deny" {
-		return nil, fmt.Errorf("invalid default policy: %s", defaultPolicy)
-	}
-
 	return &CELPolicyEngine{
-		logger:        logger,
-		env:           env,
-		policies:      make([]CELPolicy, 0),
-		defaultPolicy: defaultPolicy,
+		logger:   logger,
+		env:      env,
+		policies: make([]CELPolicy, 0),
 	}, nil
 }
 
@@ -85,7 +79,7 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 }
 
 // Evaluate evaluates a tool call request against all policies
-func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (bool, string, error) {
+func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -102,18 +96,23 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (bool, strin
 	}
 
 	e.logger.Debug("policies", zap.Any("policies", e.policies))
+
+	// Track all policy evaluations start with the default policy
+	results := ValidationResults{
+		Results: make([]ValidationResult, 0),
+	}
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
 		// Compile the expression
 		ast, issues := e.env.Compile(policy.Expression)
 		if issues != nil && issues.Err() != nil {
-			return false, "", fmt.Errorf("failed to compile policy %s: %w", policy.Name, issues.Err())
+			return ValidationResults{}, fmt.Errorf("failed to compile policy %s: %w", policy.Name, issues.Err())
 		}
 
 		// Create program
 		prg, err := e.env.Program(ast)
 		if err != nil {
-			return false, "", fmt.Errorf("failed to create program for policy %s: %w", policy.Name, err)
+			return ValidationResults{}, fmt.Errorf("failed to create program for policy %s: %w", policy.Name, err)
 		}
 
 		e.logger.Debug("evaluating tool call", zap.Any("vars", vars), zap.Any("policy", policy))
@@ -121,31 +120,37 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (bool, strin
 		// Evaluate the expression
 		out, _, err := prg.Eval(vars)
 		if err != nil {
-			return false, "", fmt.Errorf("failed to evaluate policy %s: %w", policy.Name, err)
+			return ValidationResults{}, fmt.Errorf("failed to evaluate policy %s: %w", policy.Name, err)
 		}
 
 		// Check result
 		result, ok := out.Value().(bool)
 		if !ok {
-			return false, "", fmt.Errorf("policy %s did not return a boolean", policy.Name)
+			return ValidationResults{}, fmt.Errorf("policy %s did not return a boolean", policy.Name)
 		}
 
 		// If policy matches and is a deny rule, deny the request
 		if result && policy.Action == "deny" {
-			return false, policy.Message, nil
+			results.Results = append(results.Results, ValidationResult{
+				PolicyName: policy.Name,
+				PolicyType: "cel",
+				Allowed:    false,
+				Message:    policy.Message,
+			})
+			results.DenyCount++
 		}
 
 		// If policy matches and is an allow rule, allow the request
 		if result && policy.Action == "allow" {
-			return true, "", nil
+			results.Results = append(results.Results, ValidationResult{
+				PolicyName: policy.Name,
+				PolicyType: "cel",
+				Allowed:    true,
+				Message:    policy.Message,
+			})
+			results.AllowCount++
 		}
 	}
 
-	// If no policies matched, use the default policy
-	if e.defaultPolicy == "allow" {
-		e.logger.Info("allowing tool call by default policy", zap.Any("request", req))
-		return true, "", nil
-	}
-	e.logger.Info("denying tool call by default policy", zap.Any("request", req))
-	return false, "no matching policy found", nil
+	return results, nil
 }

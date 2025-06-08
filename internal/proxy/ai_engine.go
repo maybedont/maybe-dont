@@ -84,11 +84,15 @@ type AIResponse struct {
 }
 
 // Evaluate evaluates a tool call request against all policies
-func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest) (bool, string, error) {
+func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	e.logger.Debug("policies", zap.Any("policies", e.policies))
+
+	// Track all policy evaluations
+	var results ValidationResults
+
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
 		// Format the tool call request for the AI
@@ -114,11 +118,11 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			},
 		})
 		if err != nil {
-			return false, "", fmt.Errorf("failed to evaluate tool call: %w", err)
+			return ValidationResults{}, fmt.Errorf("failed to evaluate tool call: %w", err)
 		}
 
 		if len(chatCompletion.Choices) == 0 {
-			return false, "", fmt.Errorf("no response from AI model")
+			return ValidationResults{}, fmt.Errorf("no response from AI model")
 		}
 
 		// Check result
@@ -126,28 +130,36 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		var result AIResponse
 		err = json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &result)
 		if err != nil {
-			return false, "", fmt.Errorf("failed to parse result: %w", err)
+			return ValidationResults{}, fmt.Errorf("failed to parse result: %w", err)
 		}
 		e.logger.Debug("result", zap.Any("result", result))
 
 		// If policy matches and is a deny rule, deny the request
 		if result.Allowed && policy.Action == "deny" {
-			return false, policy.Message, nil
+			// Record policy evaluation
+			results.Results = append(results.Results, ValidationResult{
+				PolicyName: policy.Name,
+				PolicyType: "ai",
+				Allowed:    false,
+				Message:    result.Message,
+			})
+			results.DenyCount++
 		}
 
 		// If policy matches and is an allow rule, allow the request
 		if result.Allowed && policy.Action == "allow" {
-			return true, "", nil
+			// Record policy evaluation
+			results.Results = append(results.Results, ValidationResult{
+				PolicyName: policy.Name,
+				PolicyType: "ai",
+				Allowed:    true,
+				Message:    result.Message,
+			})
+			results.AllowCount++
 		}
 	}
 
-	// If no policies matched, use the default policy
-	if e.defaultPolicy == "allow" {
-		e.logger.Info("allowing tool call by default policy", zap.Any("request", req))
-		return true, "", nil
-	}
-	e.logger.Info("denying tool call by default policy", zap.Any("request", req))
-	return false, "no matching policy found", nil
+	return results, nil
 }
 
 func GenerateSchema[T any]() interface{} {

@@ -47,16 +47,15 @@ func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
 	}
 
 	// Create CEL policy engine
-	policyEngine, err := NewCELPolicyEngine(logger, cfg.PolicyValidation.Default)
+	policyEngine, err := NewCELPolicyEngine(logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL policy engine: %w", err)
 	}
 
 	aiPolicyEngine := &AIPolicyEngine{
-		defaultPolicy: cfg.AIPolicyValidation.Default,
-		endpoint:      cfg.AIPolicyValidation.Endpoint,
-		model:         cfg.AIPolicyValidation.Model,
-		apiKey:        cfg.AIPolicyValidation.APIKey,
+		endpoint: cfg.AIPolicyValidation.Endpoint,
+		model:    cfg.AIPolicyValidation.Model,
+		apiKey:   cfg.AIPolicyValidation.APIKey,
 	}
 
 	// Create AI policy engine
@@ -139,21 +138,28 @@ func (p *Proxy) Stop() error {
 
 // Tool handler function
 func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Log the full request including params before validation
-	p.logger.Info("Handling tool call request",
-		zap.Any("request", req),
-	)
+	// Create audit log entry
+	auditLog := map[string]interface{}{
+		"request": map[string]interface{}{
+			"tool":      req.Params.Name,
+			"arguments": req.Params.Arguments,
+			"meta":      req.Request.Params.Meta,
+		},
+	}
 
 	// Validate request through the chain
 	validationResults, err := p.ValidateToolCall(ctx, req)
 	if err != nil {
+		auditLog["error"] = err.Error()
+		auditLog["status"] = "validation_error"
+		p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("request validation failed: %w", err)
 	}
 
-	// Call the tool
-	result, err := p.client.CallTool(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("tool call failed: %w", err)
+	// Add validation results to audit log
+	auditLog["validation"] = map[string]interface{}{
+		"allowed": validationResults.Allowed,
+		"results": validationResults.Results,
 	}
 
 	// If validation failed, return error with all validation results
@@ -161,10 +167,28 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 		// Convert validation results to JSON for error message
 		resultsJSON, err := json.Marshal(validationResults)
 		if err != nil {
+			auditLog["error"] = fmt.Sprintf("failed to marshal validation results: %v", err)
+			auditLog["status"] = "marshal_error"
+			p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
 			return nil, fmt.Errorf("failed to marshal validation results: %w", err)
 		}
+		auditLog["status"] = "denied"
+		p.auditLogger.Warn("Tool call audit", zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("policy validation failed: %s", string(resultsJSON))
 	}
+
+	// Call the tool
+	result, err := p.client.CallTool(ctx, req)
+	if err != nil {
+		auditLog["error"] = err.Error()
+		auditLog["status"] = "execution_error"
+		p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
+		return nil, fmt.Errorf("tool call failed: %w", err)
+	}
+
+	// Add execution result to audit log
+	auditLog["result"] = result
+	auditLog["status"] = "success"
 
 	// Add validation summary to the result metadata
 	if result.Meta == nil {
@@ -179,6 +203,9 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 		}
 	}
 	result.Meta["validation_summary"] = validationSummary
+
+	// Log the complete audit entry
+	p.auditLogger.Info("Tool call audit", zap.Any("audit", auditLog))
 
 	return result, nil
 }
