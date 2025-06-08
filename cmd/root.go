@@ -12,7 +12,7 @@ import (
 var (
 	cfgFile string
 	cfg     *config.Config
-	logger  *zap.Logger
+	Logger  *zap.Logger
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -34,10 +34,11 @@ and providing comprehensive audit logging.`,
 			return fmt.Errorf("invalid config: %w", err)
 		}
 
-		logger, err = config.GetLogger(cfg)
+		Logger, err = config.GetLogger(cfg)
 		if err != nil {
 			return fmt.Errorf("failed to create logger: %w", err)
 		}
+		Logger.Info("Logger created", zap.Any("config", cfg))
 
 		return nil
 	},
@@ -54,6 +55,6 @@ func Execute() {
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ./config.yaml)")
-	rootCmd.PersistentFlags().String("log-level", "info", "log level (debug, info, warn, error)")
+	rootCmd.PersistentFlags().String("log-level", "debug", "log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("log-format", "json", "log format (json or text)")
 }

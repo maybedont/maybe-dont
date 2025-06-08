@@ -12,3 +12,4 @@ You are an expert go developer. When you make changes to the code, you always ta
 - The code should always pass `/home/user/go/bin/golangci-lint`
 - You write unit tests where applicable
 - CLI configuration goes in the cmd/ folder
+- Always try to run the mcp-proxy with the example configuration

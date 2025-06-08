@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // ServerType represents the type of server to run
@@ -270,11 +271,15 @@ func GetLogger(cfg *Config) (*zap.Logger, error) {
 	}
 
 	// Set log level
-	level, err := zap.ParseAtomicLevel(cfg.Server.LogLevel)
+	level, err := zapcore.ParseLevel(cfg.Server.LogLevel)
 	if err != nil {
 		return nil, fmt.Errorf("invalid log level: %w", err)
 	}
-	config.Level = level
+	config.Level = zap.NewAtomicLevelAt(level)
+
+	// Ensure logs go to stdout
+	config.OutputPaths = []string{"stdout"}
+	config.ErrorOutputPaths = []string{"stderr"}
 
 	return config.Build()
 }

@@ -1,8 +1,15 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/sudermanjr/maybe-dont/internal/config"
+	"github.com/sudermanjr/maybe-dont/internal/proxy"
 	"go.uber.org/zap"
 )
 
@@ -12,15 +19,51 @@ var startCmd = &cobra.Command{
 	Long: `Start the MCP security proxy server with the configured settings.
 The server will begin listening for connections and enforcing security policies.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logger := zap.L().Named("start")
-		logger.Info("Starting MCP security proxy")
+		Logger.Info("Starting MCP security proxy")
 
-		// TODO: Implement proxy server startup
-		// 1. Initialize proxy configuration
-		// 2. Set up authentication
-		// 3. Load and compile CEL policies
-		// 4. Start transport listeners
-		// 5. Begin accepting connections
+		// Create proxy configuration
+		cfg, err := config.LoadConfig(cfgFile)
+		if err != nil {
+			return err
+		}
+
+		Logger, err = config.GetLogger(cfg)
+		if err != nil {
+			return err
+		}
+
+		// Create proxy instance
+		p, err := proxy.New(cfg, Logger)
+		if err != nil {
+			return err
+		}
+
+		// Create context that will be canceled on interrupt
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Handle OS signals
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			sig := <-sigCh
+			Logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
+			cancel()
+		}()
+
+		// Start the proxy
+		if err := p.Start(ctx); err != nil {
+			return err
+		}
+
+		// Wait for context cancellation
+		<-ctx.Done()
+
+		// Gracefully shut down
+		if err := p.Stop(); err != nil {
+			Logger.Error("Error during shutdown", zap.Error(err))
+			return err
+		}
 
 		return nil
 	},
@@ -37,15 +80,15 @@ func init() {
 
 	// Bind flags to viper
 	if err := viper.BindPFlag("proxy.dry_run", startCmd.Flags().Lookup("dry-run")); err != nil {
-		logger.Fatal("Failed to bind dry-run flag", zap.Error(err))
+		Logger.Fatal("Failed to bind dry-run flag", zap.Error(err))
 	}
-	if err := viper.BindPFlag("proxy.listen.address", startCmd.Flags().Lookup("listen-addr")); err != nil {
-		logger.Fatal("Failed to bind listen-addr flag", zap.Error(err))
+	if err := viper.BindPFlag("server.listen_addr", startCmd.Flags().Lookup("listen-addr")); err != nil {
+		Logger.Fatal("Failed to bind listen-addr flag", zap.Error(err))
 	}
-	if err := viper.BindPFlag("server.url", startCmd.Flags().Lookup("downstream-url")); err != nil {
-		logger.Fatal("Failed to bind downstream-url flag", zap.Error(err))
+	if err := viper.BindPFlag("transport.downstream_url", startCmd.Flags().Lookup("downstream-url")); err != nil {
+		Logger.Fatal("Failed to bind downstream-url flag", zap.Error(err))
 	}
 	if err := viper.BindPFlag("security.auth.type", startCmd.Flags().Lookup("auth-type")); err != nil {
-		logger.Fatal("Failed to bind auth-type flag", zap.Error(err))
+		Logger.Fatal("Failed to bind auth-type flag", zap.Error(err))
 	}
 }

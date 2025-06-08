@@ -3,9 +3,9 @@
 # Server configuration
 server:
   # Server type (stdio, http, sse)
-  type: "stdio"
+  type: sse
   # Address to listen on (host:port)
-  listen_addr: "localhost:8080"
+  listen_addr: "127.0.0.1:8080"
   # Log level (debug, info, warn, error)
   log_level: "info"
   # Log format (json or text)
@@ -55,27 +55,7 @@ server:
 # Authentication configuration
 auth:
   # Authentication type (api_key, jwt, mtls)
-  type: "api_key"
-  # API key for simple authentication
-  api_key: "your-api-key-here"
-  # JWT configuration
-  jwt:
-    # JWKS URL for key discovery
-    jwks_url: "https://your-auth-server/.well-known/jwks.json"
-    # Token issuer
-    issuer: "https://your-auth-server"
-    # Token audience
-    audience: ["mcp-proxy"]
-    # JWT claim containing roles
-    claim_roles: "roles"
-  # mTLS configuration
-  mtls:
-    # CA certificate file
-    ca_file: "/path/to/ca.pem"
-    # Client certificate file
-    cert_file: "/path/to/cert.pem"
-    # Client key file
-    key_file: "/path/to/key.pem"
+  type: none
 
 # Policy configuration
 policy:
@@ -87,20 +67,16 @@ policy:
 # Transport configuration
 transport:
   # Transport type (stdio, sse, http)
-  type: "stdio"
-  # Downstream server URL (for sse/http)
-  downstream_url: "http://localhost:8081"
+  type: stdio
   # Command to execute (for stdio)
-  command: "/usr/local/bin/mcp-server"
+  command: "/home/user/bin/kai"
   # Command arguments
-  command_args: ["--config", "/etc/mcp-server/config.yaml"]
+  command_args: ["--mcp-server"]
   # SSE-specific configuration
-  sse:
-    # Custom headers
-    headers:
-      X-Custom-Header: "value"
-    # Connection timeout in seconds
-    timeout: 30
+  # sse:
+  #   headers:
+  #     Content-Type: "text/event-stream"
+  #   timeout: 30
 
 # Audit configuration
 audit:
