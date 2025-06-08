@@ -22,6 +22,13 @@ type Proxy struct {
 	mu           sync.RWMutex
 	capabilities *mcp.ServerCapabilities
 	stopChan     chan struct{}
+	// Detailed capability information
+	capabilityDetails struct {
+		Tools     []mcp.Tool
+		Prompts   []mcp.Prompt
+		Resources []mcp.Resource
+		Templates []mcp.ResourceTemplate
+	}
 }
 
 // New creates a new proxy instance
@@ -291,4 +298,26 @@ func (p *Proxy) validateRequest(req *mcp.Request) error {
 	}
 
 	return nil
+}
+
+// Tool handler struct
+
+func HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+
+	return nil, nil
+}
+
+// Prompt handler struct
+func HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	return nil, nil
+}
+
+// Resource handler struct
+func HandleResourceCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	return nil, nil
+}
+
+// Resource template handler struct
+func HandleResourceTemplateCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	return nil, nil
 }

@@ -68,7 +68,8 @@ func (p *Proxy) checkCapabilities(ctx context.Context) error {
 		zap.Any("capabilities", resp.Capabilities),
 	)
 
-	if p.capabilities.Tools != nil {
+	// Check and get details for each enabled capability
+	if p.capabilities.Tools != nil && p.capabilities.Tools.ListChanged {
 		toolsReq := &mcp.ListToolsRequest{
 			PaginatedRequest: mcp.PaginatedRequest{
 				Request: mcp.Request{
@@ -83,8 +84,71 @@ func (p *Proxy) checkCapabilities(ctx context.Context) error {
 			return fmt.Errorf("failed to list available tools: %w", err)
 		}
 
+		p.capabilityDetails.Tools = toolsResp.Tools
 		p.logger.Info("Available tools from MCP server",
 			zap.Any("tools", toolsResp.Tools),
+		)
+	}
+
+	if p.capabilities.Prompts != nil && p.capabilities.Prompts.ListChanged {
+		promptsReq := &mcp.ListPromptsRequest{
+			PaginatedRequest: mcp.PaginatedRequest{
+				Request: mcp.Request{
+					Method: "prompts/list",
+				},
+				Params: mcp.PaginatedParams{},
+			},
+		}
+
+		promptsResp, err := p.client.ListPrompts(ctx, *promptsReq)
+		if err != nil {
+			return fmt.Errorf("failed to list available prompts: %w", err)
+		}
+
+		p.capabilityDetails.Prompts = promptsResp.Prompts
+		p.logger.Info("Available prompts from MCP server",
+			zap.Any("prompts", promptsResp.Prompts),
+		)
+	}
+
+	if p.capabilities.Resources != nil && p.capabilities.Resources.ListChanged {
+		resourcesReq := &mcp.ListResourcesRequest{
+			PaginatedRequest: mcp.PaginatedRequest{
+				Request: mcp.Request{
+					Method: "resources/list",
+				},
+				Params: mcp.PaginatedParams{},
+			},
+		}
+
+		resourcesResp, err := p.client.ListResources(ctx, *resourcesReq)
+		if err != nil {
+			return fmt.Errorf("failed to list available resources: %w", err)
+		}
+
+		p.capabilityDetails.Resources = resourcesResp.Resources
+		p.logger.Info("Available resources from MCP server",
+			zap.Any("resources", resourcesResp.Resources),
+		)
+
+		// Also list resource templates if available
+		templatesReq := &mcp.ListResourceTemplatesRequest{
+			PaginatedRequest: mcp.PaginatedRequest{
+				Request: mcp.Request{
+					Method: "resources/templates/list",
+				},
+				Params: mcp.PaginatedParams{},
+			},
+		}
+
+		templatesResp, err := p.client.ListResourceTemplates(ctx, *templatesReq)
+		if err != nil {
+			return fmt.Errorf("failed to list resource templates: %w", err)
+		}
+
+		p.capabilityDetails.Templates = templatesResp.ResourceTemplates
+		p.logger.Info("Available resource templates from MCP server",
+			zap.Any("templates", templatesResp.ResourceTemplates),
 		)
 	}
 
