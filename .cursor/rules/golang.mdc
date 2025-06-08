@@ -10,3 +10,4 @@ You are an expert go developer. When you make changes to the code, you always ta
 - The code should always compile successfully. Go is located at `/usr/local/go/bin/go`
 - The code should always pass `/home/user/go/bin/golangci-lint`
 - You write unit tests where applicable
+- CLI configuration goes in the cmd/ folder
