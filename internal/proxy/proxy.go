@@ -124,7 +124,7 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 
 	// Create SSE server
 	sseSrv := server.NewSSEServer(srv,
-		server.WithSSEEndpoint("/events"),
+		server.WithSSEEndpoint("/sse"),
 		server.WithMessageEndpoint("/message"),
 	)
 
