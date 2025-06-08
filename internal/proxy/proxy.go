@@ -72,6 +72,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 	p.validationChain = NewToolValidationChain(
 		NewToolLoggingHandler(p.logger),
 		NewToolCELValidationHandler(p.logger, p.policyEngine),
+		NewAIValidationHandler(p.logger, &p.config.AIValidation),
 	)
 
 	// Initialize downstream client based on transport type

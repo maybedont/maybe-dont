@@ -63,6 +63,18 @@ policy:
   # Default policy (allow or deny)
   default: "allow"
 
+# AI validation configuration
+ai_validation:
+  # Enable AI-powered tool validation
+  enabled: true
+  # OpenAI-compatible API endpoint
+  endpoint: "https://api.openai.com/v1/chat/completions"
+  # Model to use for validation
+  model: "gpt-4o-mini"
+  # Request timeout in seconds
+  timeout: 30
+  # Maximum tokens in response
+  max_tokens: 100
 
 # Transport configuration
 transport:

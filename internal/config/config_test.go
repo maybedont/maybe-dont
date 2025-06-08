@@ -11,6 +11,13 @@ import (
 )
 
 func TestLoadConfig(t *testing.T) {
+	tmpRulesFile := "rules.json"
+	rulesContent := []byte(`rules: []`)
+	if err := os.WriteFile(tmpRulesFile, rulesContent, 0644); err != nil {
+		t.Fatalf("failed to create temp rules file: %v", err)
+	}
+	defer os.Remove(tmpRulesFile)
+
 	tests := []struct {
 		name    string
 		config  string
@@ -51,6 +58,12 @@ audit:
 Policy:
   rules_file: "rules.json"
   default: deny
+ai_validation:
+  enabled: true
+  endpoint: "https://api.openai.com/v1/chat/completions"
+  model: "gpt-4o-mini"
+  timeout: 30
+  max_tokens: 100
 `,
 			want: &Config{
 				Server: struct {
@@ -216,7 +229,14 @@ Policy:
 				}{
 					RulesFile: "rules.json",
 					Default:   "deny",
-					Rules:     nil,
+					Rules:     []CELPolicy{},
+				},
+				AIValidation: AIValidation{
+					Enabled:   true,
+					Endpoint:  "https://api.openai.com/v1/chat/completions",
+					Model:     "gpt-4o-mini",
+					Timeout:   30,
+					MaxTokens: 100,
 				},
 			},
 			wantErr: false,

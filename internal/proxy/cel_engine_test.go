@@ -17,13 +17,13 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 	policies := []config.CELPolicy{
 		{
 			Name:       "allow-read-tool",
-			Expression: `request.method == "tools/call" && request.params.meta.additionalFields.name == "read_file"`,
+			Expression: `request.method == "tools/call" && request.params.name == "read_file"`,
 			Action:     "allow",
 			Message:    "Allowed to call read_file",
 		},
 		{
 			Name:       "deny-delete-tool",
-			Expression: `request.method == "tools/call" && request.params.meta.additionalFields.name == "delete_file"`,
+			Expression: `request.method == "tools/call" && request.params.name == "delete_file"`,
 			Action:     "deny",
 			Message:    "delete_file is not allowed",
 		},
@@ -43,12 +43,11 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{
 					Method: "tools/call",
-					Params: mcp.RequestParams{
-						Meta: &mcp.Meta{
-							AdditionalFields: map[string]any{
-								"name": "read_file",
-							},
-						},
+				},
+				Params: mcp.CallToolParams{
+					Name: "read_file",
+					Arguments: map[string]any{
+						"command": "cat file.txt",
 					},
 				},
 			},
@@ -60,12 +59,11 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{
 					Method: "tools/call",
-					Params: mcp.RequestParams{
-						Meta: &mcp.Meta{
-							AdditionalFields: map[string]any{
-								"name": "delete_file",
-							},
-						},
+				},
+				Params: mcp.CallToolParams{
+					Name: "delete_file",
+					Arguments: map[string]any{
+						"command": "rm file.txt",
 					},
 				},
 			},
@@ -77,13 +75,9 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{
 					Method: "tools/call",
-					Params: mcp.RequestParams{
-						Meta: &mcp.Meta{
-							AdditionalFields: map[string]any{
-								"name": "unknown_tool",
-							},
-						},
-					},
+				},
+				Params: mcp.CallToolParams{
+					Name: "unknown_tool",
 				},
 			},
 			want: false,

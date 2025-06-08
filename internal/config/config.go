@@ -82,6 +82,9 @@ type Config struct {
 		Rules     []CELPolicy `mapstructure:"rules"`
 	} `mapstructure:"policy"`
 
+	// AI validation configuration
+	AIValidation AIValidation `mapstructure:"ai_validation"`
+
 	// Transport configuration
 	Transport struct {
 		Type          string   `mapstructure:"type"` // stdio, sse, http
@@ -109,6 +112,15 @@ type CELPolicy struct {
 	Expression  string `mapstructure:"expression"`
 	Action      string `mapstructure:"action"` // allow or deny
 	Message     string `mapstructure:"message"`
+}
+
+// AIValidation represents the AI validation configuration
+type AIValidation struct {
+	Enabled   bool   `mapstructure:"enabled"`
+	Endpoint  string `mapstructure:"endpoint"`
+	Model     string `mapstructure:"model"`
+	Timeout   int    `mapstructure:"timeout"` // in seconds
+	MaxTokens int    `mapstructure:"max_tokens"`
 }
 
 // LoadPoliciesFromFile loads CEL policies from a file
@@ -231,6 +243,13 @@ func setDefaults(v *viper.Viper) {
 
 	// Policy defaults
 	v.SetDefault("policy.default", "deny")
+
+	// AI validation defaults
+	v.SetDefault("ai_validation.enabled", false)
+	v.SetDefault("ai_validation.endpoint", "")
+	v.SetDefault("ai_validation.model", "")
+	v.SetDefault("ai_validation.timeout", 30)
+	v.SetDefault("ai_validation.max_tokens", 100)
 
 	// Transport defaults
 	v.SetDefault("transport.type", "stdio")
