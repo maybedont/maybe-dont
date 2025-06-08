@@ -2,10 +2,12 @@ package config
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/yaml.v3"
 )
 
 // ServerType represents the type of server to run
@@ -162,7 +164,15 @@ func LoadConfig(configPath string) (*Config, error) {
 	// Read config file
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return nil, fmt.Errorf("error reading config file: %w", err)
+			// Try to read the file directly to get better error messages
+			if configPath != "" {
+				if data, readErr := os.ReadFile(configPath); readErr == nil {
+					if parseErr := yaml.Unmarshal(data, &Config{}); parseErr != nil {
+						return nil, fmt.Errorf("YAML parsing error in %s: %w", configPath, parseErr)
+					}
+				}
+			}
+			return nil, fmt.Errorf("error reading config file %s: %w", configPath, err)
 		}
 		// Config file not found, but that's okay - we'll use defaults
 	}
@@ -170,7 +180,7 @@ func LoadConfig(configPath string) (*Config, error) {
 	// Unmarshal config
 	var config Config
 	if err := v.Unmarshal(&config); err != nil {
-		return nil, fmt.Errorf("error unmarshaling config: %w", err)
+		return nil, fmt.Errorf("error unmarshaling config from %s: %w", v.ConfigFileUsed(), err)
 	}
 
 	// Load policies from rules file if specified
