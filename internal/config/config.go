@@ -417,3 +417,30 @@ func GetLogger(cfg *Config) (*zap.Logger, error) {
 	// Add logger type designation
 	return logger.With(zap.String("logger", "application")), nil
 }
+
+// GetAuditLogger creates a new audit logger based on the configuration
+func GetAuditLogger(cfg *Config) (*zap.Logger, error) {
+	var config zap.Config
+
+	if cfg.Audit.Format == "json" {
+		config = zap.NewProductionConfig()
+	} else {
+		config = zap.NewDevelopmentConfig()
+	}
+
+	// Set log level to info for audit logs
+	config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+
+	// Set output path to the configured audit path
+	config.OutputPaths = []string{cfg.Audit.Path}
+	config.ErrorOutputPaths = []string{cfg.Audit.Path}
+
+	// Build the logger
+	logger, err := config.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build audit logger: %w", err)
+	}
+
+	// Add logger type designation
+	return logger.With(zap.String("logger", "audit")), nil
+}

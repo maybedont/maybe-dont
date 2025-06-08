@@ -40,8 +40,11 @@ type Proxy struct {
 
 // New creates a new proxy instance
 func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
-	// Create audit logger with a specific field to identify it
-	auditLogger := logger.With(zap.String("logger", "audit"))
+	// Create audit logger with its own configuration
+	auditLogger, err := config.GetAuditLogger(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create audit logger: %w", err)
+	}
 
 	// Create CEL policy engine
 	policyEngine, err := NewCELPolicyEngine(logger, cfg.PolicyValidation.Default)
