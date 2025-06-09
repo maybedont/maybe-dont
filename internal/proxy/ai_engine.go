@@ -20,7 +20,6 @@ type AIPolicy struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 	Prompt      string `yaml:"prompt"`
-	Action      string `yaml:"action"` // allow or deny
 	Message     string `yaml:"message"`
 }
 
@@ -161,20 +160,11 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 
 			// Create validation result based on policy action and AI response
 			var validationResult ValidationResult
-			if result.Allowed {
-				validationResult = ValidationResult{
-					PolicyName: p.Name,
-					PolicyType: "ai",
-					Allowed:    p.Action == "allow",
-					Message:    result.Message,
-				}
-			} else {
-				validationResult = ValidationResult{
-					PolicyName: p.Name,
-					PolicyType: "ai",
-					Allowed:    true, // If AI says not allowed, we allow it (policy didn't match)
-					Message:    result.Message,
-				}
+			validationResult = ValidationResult{
+				PolicyName: p.Name,
+				PolicyType: "ai",
+				Message:    result.Message,
+				Allowed:    result.Allowed,
 			}
 
 			resultChan <- policyResult{
