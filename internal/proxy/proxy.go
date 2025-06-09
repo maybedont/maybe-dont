@@ -9,7 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/sudermanjr/maybe-dont/internal/config"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
 

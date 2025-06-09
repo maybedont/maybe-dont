@@ -6,8 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/maybedont/maybe-dont/internal/proxy"
 	"github.com/spf13/cobra"
-	"github.com/sudermanjr/maybe-dont/internal/proxy"
 	"go.uber.org/zap"
 )
 

@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/sudermanjr/maybe-dont/internal/config"
 	"go.uber.org/zap/zaptest"
 )
 

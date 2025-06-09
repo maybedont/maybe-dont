@@ -7,9 +7,8 @@ import (
 )
 
 var (
-	version   = "dev"
-	commit    = "unknown"
-	buildTime = "unknown"
+	version       = "dev"
+	versionCommit = "dev"
 )
 
 var versionCmd = &cobra.Command{
@@ -19,8 +18,7 @@ var versionCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("MCP Security Proxy\n")
 		fmt.Printf("Version:    %s\n", version)
-		fmt.Printf("Commit:     %s\n", commit)
-		fmt.Printf("Build Time: %s\n", buildTime)
+		fmt.Printf("Commit:     %s\n", versionCommit)
 	},
 }
 

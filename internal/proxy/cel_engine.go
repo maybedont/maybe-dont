@@ -9,7 +9,7 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/sudermanjr/maybe-dont/internal/config"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
 

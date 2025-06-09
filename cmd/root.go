@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/spf13/cobra"
-	"github.com/sudermanjr/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
 
@@ -50,9 +50,10 @@ and providing comprehensive audit logging.`,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
-func Execute() {
+func Execute(VERSION string, COMMIT string, aiRules []byte, celRules []byte) {
+	version = VERSION
+	versionCommit = COMMIT
 	if err := rootCmd.Execute(); err != nil {
-		// Print the full error chain
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
