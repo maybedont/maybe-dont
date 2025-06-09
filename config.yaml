@@ -11,19 +11,6 @@ server:
   # Log format (json or text)
   log_format: "json"
 
-  # SSE server configuration (used when type: "sse")
-  sse:
-    # TLS configuration
-    tls:
-      enabled: false
-      cert_file: "/path/to/cert.pem"
-      key_file: "/path/to/key.pem"
-
-# Authentication configuration
-auth:
-  # Authentication type (api_key, jwt, mtls)
-  type: none
-
 # Policy configuration
 policy_validation:
   # Enable CEL-based tool validation
@@ -42,12 +29,12 @@ ai_validation:
   # Path to AI policy rules file (optional, uses embedded rules by default)
   # rules_file: "ai_rules.yaml"
 
-# Transport configuration
+# Client configuration
 client:
   # Transport type (stdio, sse, http)
   type: stdio
   # Command to execute (for stdio)
-  command: "/home/user/bin/kai"
+  command: "./kubectl-ai"
   # Command arguments
   command_args: ["--mcp-server"]
 
