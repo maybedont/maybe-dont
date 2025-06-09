@@ -5,6 +5,9 @@ import (
 	"sync"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/sudermanjr/maybe-dont/internal/config"
 	"go.uber.org/zap"
@@ -30,11 +33,49 @@ type CELPolicyEngine struct {
 
 // NewCELPolicyEngine creates a new CEL policy engine
 func NewCELPolicyEngine(logger *zap.Logger) (*CELPolicyEngine, error) {
-	// Create CEL environment with custom functions
+	// Create CEL environment with custom functions and safe field access
 	env, err := cel.NewEnv(
 		cel.Variable("request", cel.DynType),
 		cel.Variable("auth", cel.DynType),
 		cel.Variable("response", cel.DynType),
+		cel.Function("has",
+			cel.Overload("has_map_string", []*cel.Type{cel.MapType(cel.StringType, cel.DynType), cel.StringType}, cel.BoolType,
+				cel.BinaryBinding(func(lhs, rhs ref.Val) ref.Val {
+					obj, ok := lhs.(traits.Mapper)
+					if !ok {
+						return types.Bool(false)
+					}
+					field, ok := rhs.(types.String)
+					if !ok {
+						return types.Bool(false)
+					}
+					_, found := obj.Find(field)
+					return types.Bool(found)
+				}),
+			),
+		),
+		cel.Function("get",
+			cel.Overload("get_map_string_dyn", []*cel.Type{cel.MapType(cel.StringType, cel.DynType), cel.StringType, cel.DynType}, cel.DynType,
+				cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+					if len(args) != 3 {
+						return types.NewErr("get() requires exactly 3 arguments")
+					}
+					obj, ok := args[0].(traits.Mapper)
+					if !ok {
+						return args[2]
+					}
+					field, ok := args[1].(types.String)
+					if !ok {
+						return args[2]
+					}
+					val, found := obj.Find(field)
+					if !found {
+						return args[2]
+					}
+					return val
+				}),
+			),
+		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)

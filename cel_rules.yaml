@@ -3,8 +3,10 @@ rules:
 - name: deny-kubectl-delete-namespace
   description: Deny kubectl delete namespace
   expression: |- 
-    request.method == "tools/call" && 
-    request.params.name == "kubectl" && 
+    get(request, "method", "") == "tools/call" && 
+    get(request.params, "name", "") == "kubectl" && 
+    has(request.params, "arguments") && 
+    has(request.params.arguments, "command") && 
     request.params.arguments.command.contains("delete") && 
     (
         request.params.arguments.command.contains("namespace") || 
