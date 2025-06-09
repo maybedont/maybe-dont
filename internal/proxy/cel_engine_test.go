@@ -97,10 +97,18 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 			// Verify policy evaluation results
 			for _, policyResult := range results.Results {
 				assert.Equal(t, "cel", policyResult.PolicyType)
-				if policyResult.PolicyName == "allow-read-tool" {
-					assert.Equal(t, tt.req.Params.Name == "read_file", policyResult.Allowed)
-				} else if policyResult.PolicyName == "deny-delete-tool" {
-					assert.Equal(t, tt.req.Params.Name == "delete_file", policyResult.Allowed)
+				switch policyResult.PolicyName {
+				case "allow-read-tool":
+					assert.True(t, policyResult.Allowed)
+					assert.Equal(t, "Allowed to call read_file", policyResult.Message)
+				case "deny-delete-tool":
+					assert.False(t, policyResult.Allowed)
+					assert.Equal(t, "delete_file is not allowed", policyResult.Message)
+				case "default-deny":
+					assert.False(t, policyResult.Allowed)
+					assert.Equal(t, "Denied by default policy", policyResult.Message)
+				default:
+					t.Errorf("unexpected policy name: %s", policyResult.PolicyName)
 				}
 			}
 

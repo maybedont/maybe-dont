@@ -25,10 +25,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 # Copy binary from builder
 COPY --from=builder /app/maybe-dont /app/maybe-dont
 
-# Copy config files
+# Copy config file
 COPY --from=builder /app/config.yaml /app/config.yaml
-COPY --from=builder /app/cel_rules.yaml /app/cel_rules.yaml
-COPY --from=builder /app/ai_rules.yaml /app/ai_rules.yaml
 
 # Set working directory
 WORKDIR /app

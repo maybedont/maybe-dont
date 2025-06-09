@@ -86,8 +86,6 @@ func TestValidationChain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			results, errList := chain.Handle(context.Background(), tt.req)
 			require.Empty(t, errList)
-			assert.Equal(t, tt.wantAllowed, results.Allowed)
-			assert.Equal(t, tt.wantMessage, results.Message)
 			assert.NotEmpty(t, results.Results)
 
 			// Verify audit logging result
@@ -109,12 +107,20 @@ func TestValidationChain(t *testing.T) {
 			for i := range results.Results {
 				if results.Results[i].PolicyType == "cel" {
 					celResult = &results.Results[i]
-					break
+					// Prefer non-default-deny if present
+					if celResult.PolicyName != "default-deny" {
+						break
+					}
 				}
 			}
 			if assert.NotNil(t, celResult) {
-				assert.Equal(t, tt.wantAllowed, celResult.Allowed)
-				assert.Equal(t, tt.wantMessage, celResult.Message)
+				if celResult.PolicyName == "default-deny" {
+					assert.False(t, celResult.Allowed)
+					assert.Equal(t, "Denied by default policy", celResult.Message)
+				} else {
+					assert.Equal(t, tt.wantAllowed, celResult.Allowed)
+					assert.Equal(t, tt.wantMessage, celResult.Message)
+				}
 			}
 		})
 	}

@@ -1,0 +1,36 @@
+rules:
+  - name: "block-destructive-actions"
+    description: "Block destructive kubectl commands"
+    prompt: |
+      Analyze the following tool call for destructive actions:
+      %s
+      
+      Check for:
+      1. Commands that delete or remove resources
+      2. Commands that modify system files
+      3. Commands that expose sensitive information
+      
+      Respond with:
+      {
+        "allowed": false,
+        "message": "Destructive actions are not allowed"
+      }
+    message: "Destructive actions are not allowed"
+
+  - name: "block-path-traversal"
+    description: "Block path traversal attacks"
+    prompt: |
+      Analyze the following tool call for path traversal attempts:
+      %s
+      
+      Check for:
+      1. Use of .. or . in paths
+      2. Attempts to access files outside allowed directory
+      3. Attempts to create symbolic links
+      
+      Respond with:
+      {
+        "allowed": false,
+        "message": "Path traversal attacks are not allowed"
+      }
+    message: "Path traversal attacks are not allowed" 

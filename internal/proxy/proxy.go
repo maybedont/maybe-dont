@@ -203,7 +203,7 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 		}
 		auditLog["status"] = "denied"
 		p.auditLogger.Warn("Tool call audit", zap.Any("audit", auditLog))
-		return nil, fmt.Errorf("Maybe Don't: %s", string(resultsJSON))
+		return nil, fmt.Errorf("maybe don't: %s", string(resultsJSON))
 	}
 
 	// Call the tool

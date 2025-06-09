@@ -1,0 +1,36 @@
+rules:
+  - name: "block-destructive-actions"
+    description: "Block destructive kubectl commands"
+    expression: |
+      has(params.arguments.command) &&
+      (
+        get(params.arguments.command, "").contains("delete") ||
+        get(params.arguments.command, "").contains("remove") ||
+        get(params.arguments.command, "").contains("destroy")
+      )
+    action: "deny"
+    message: "Destructive actions are not allowed"
+
+  - name: "block-system-files"
+    description: "Block modifications to system files"
+    expression: |
+      has(params.arguments.path) &&
+      (
+        get(params.arguments.path, "").startsWith("/etc/") ||
+        get(params.arguments.path, "").startsWith("/var/") ||
+        get(params.arguments.path, "").startsWith("/usr/")
+      )
+    action: "deny"
+    message: "Modifying system files is not allowed"
+
+  - name: "block-path-traversal"
+    description: "Block path traversal attacks"
+    expression: |
+      has(params.arguments.path) &&
+      (
+        get(params.arguments.path, "").contains("..") ||
+        get(params.arguments.path, "").contains("./") ||
+        get(params.arguments.path, "").contains("/.")
+      )
+    action: "deny"
+    message: "Path traversal attacks are not allowed" 

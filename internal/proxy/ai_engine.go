@@ -158,13 +158,12 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				return
 			}
 
-			// Create validation result based on policy action and AI response
-			var validationResult ValidationResult
-			validationResult = ValidationResult{
-				PolicyName: p.Name,
-				PolicyType: "ai",
-				Message:    result.Message,
+			// Evaluate the policy
+			validationResult := ValidationResult{
 				Allowed:    result.Allowed,
+				Message:    result.Message,
+				PolicyName: policy.Name,
+				PolicyType: "ai",
 			}
 
 			resultChan <- policyResult{

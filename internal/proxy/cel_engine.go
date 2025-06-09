@@ -24,11 +24,10 @@ type CELPolicy struct {
 
 // CELPolicyEngine handles CEL policy evaluation
 type CELPolicyEngine struct {
-	logger        *zap.Logger
-	env           *cel.Env
-	policies      []CELPolicy
-	mu            sync.RWMutex
-	defaultPolicy string // allow or deny
+	logger   *zap.Logger
+	env      *cel.Env
+	policies []CELPolicy
+	mu       sync.RWMutex
 }
 
 // NewCELPolicyEngine creates a new CEL policy engine
@@ -139,15 +138,17 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 		zap.Int("policy_count", len(e.policies)),
 	)
 
-	// Create evaluation context with proper structure
-	vars := map[string]interface{}{
+	// Create evaluation context
+	ctx := map[string]interface{}{
 		"request": map[string]interface{}{
-			"method": req.Request.Method,
+			"method": req.Method,
 			"params": map[string]interface{}{
 				"name":      req.Params.Name,
 				"arguments": req.Params.Arguments,
-				"meta":      req.Request.Params.Meta,
 			},
+		},
+		"auth": map[string]interface{}{
+			"type": "none",
 		},
 	}
 
@@ -180,7 +181,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 		}
 
 		// Evaluate the expression
-		out, _, err := prg.Eval(vars)
+		out, _, err := prg.Eval(ctx)
 		if err != nil {
 			return ValidationResults{}, fmt.Errorf("failed to evaluate policy %s: %w", policy.Name, err)
 		}
@@ -233,8 +234,15 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 		results.Allowed = true
 		results.Message = allowMsg
 	} else {
-		results.Allowed = true // Default to allow if no policies matched
-		results.Message = "No policies matched"
+		results.Allowed = false // Default to deny if no policies matched
+		results.Message = "Denied by default policy"
+		results.DenyCount = 1
+		results.Results = append(results.Results, ValidationResult{
+			PolicyName: "default-deny",
+			PolicyType: "cel",
+			Allowed:    false,
+			Message:    "Denied by default policy",
+		})
 	}
 
 	e.logger.Info("CEL policy evaluation complete",

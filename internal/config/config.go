@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/viper"
+	"github.com/sudermanjr/maybe-dont/internal/rules"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/yaml.v3"
@@ -189,20 +190,50 @@ func LoadConfig(configPath string) (*Config, error) {
 		config.AIPolicyValidation.APIKey = apiKey
 	}
 
-	// Load policies from rules file if specified
-	if config.PolicyValidation.RulesFile != "" {
-		policies, err := LoadCELPoliciesFromFile(config.PolicyValidation.RulesFile)
+	// Load policies from rules file if specified, otherwise use embedded rules
+	if config.PolicyValidation.Enabled {
+		var policies []CELPolicy
+		var err error
+
+		if config.PolicyValidation.RulesFile != "" {
+			policies, err = LoadCELPoliciesFromFile(config.PolicyValidation.RulesFile)
+		} else {
+			// Use embedded rules
+			var embeddedRules struct {
+				Rules []CELPolicy `yaml:"rules"`
+			}
+			if err := yaml.Unmarshal(rules.DefaultCELRules, &embeddedRules); err != nil {
+				return nil, fmt.Errorf("error unmarshaling embedded CEL rules: %w", err)
+			}
+			policies = embeddedRules.Rules
+		}
+
 		if err != nil {
-			return nil, fmt.Errorf("error loading policies from file: %w", err)
+			return nil, fmt.Errorf("error loading policies: %w", err)
 		}
 		config.PolicyValidation.Rules = policies
 	}
 
-	// Load AI policies from rules file if specified
-	if config.AIPolicyValidation.RulesFile != "" {
-		aiPolicies, err := LoadAIPoliciesFromFile(config.AIPolicyValidation.RulesFile)
+	// Load AI policies from rules file if specified, otherwise use embedded rules
+	if config.AIPolicyValidation.Enabled {
+		var aiPolicies []AIPolicy
+		var err error
+
+		if config.AIPolicyValidation.RulesFile != "" {
+			aiPolicies, err = LoadAIPoliciesFromFile(config.AIPolicyValidation.RulesFile)
+		} else {
+			// Use embedded rules
+			var embeddedRules struct {
+				Rules []AIPolicy `yaml:"rules"`
+			}
+			if err := yaml.Unmarshal(rules.DefaultAIRules, &embeddedRules); err != nil {
+				return nil, fmt.Errorf("error unmarshaling embedded AI rules: %w", err)
+			}
+			aiPolicies = embeddedRules.Rules
+		}
+
 		if err != nil {
-			return nil, fmt.Errorf("error loading AI policies from file: %w", err)
+			return nil, fmt.Errorf("error loading AI policies: %w", err)
 		}
 		config.AIPolicyValidation.Rules = aiPolicies
 	}
