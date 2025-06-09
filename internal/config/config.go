@@ -55,6 +55,7 @@ type Config struct {
 
 	// Policy configuration
 	PolicyValidation struct {
+		Enabled   bool        `mapstructure:"enabled"`
 		RulesFile string      `mapstructure:"rules_file"`
 		Rules     []CELPolicy `mapstructure:"rules"`
 	} `mapstructure:"policy_validation"`
@@ -109,25 +110,19 @@ func LoadCELPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
 		return nil, nil
 	}
 
-	v := viper.New()
-	v.SetConfigFile(rulesFile)
-	v.SetConfigType("yaml")
-
-	if err := v.ReadInConfig(); err != nil {
+	data, err := os.ReadFile(rulesFile)
+	if err != nil {
 		return nil, fmt.Errorf("error reading rules file: %w", err)
 	}
 
-	// Create a temporary struct to hold the rules
-	type RulesConfig struct {
-		Rules []CELPolicy `mapstructure:"rules"`
+	var policies struct {
+		Rules []CELPolicy `yaml:"rules"`
 	}
-
-	var config RulesConfig
-	if err := v.Unmarshal(&config); err != nil {
+	if err := yaml.Unmarshal(data, &policies); err != nil {
 		return nil, fmt.Errorf("error unmarshaling rules: %w", err)
 	}
 
-	return config.Rules, nil
+	return policies.Rules, nil
 }
 
 // LoadAIPoliciesFromFile loads AI policies from a file

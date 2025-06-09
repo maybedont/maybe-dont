@@ -46,32 +46,47 @@ func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
 		return nil, fmt.Errorf("failed to create audit logger: %w", err)
 	}
 
-	// Create CEL policy engine
-	policyEngine, err := NewCELPolicyEngine(logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create CEL policy engine: %w", err)
+	// Initialize policy engines
+	var policyEngine *CELPolicyEngine
+	var aiPolicyEngine *AIPolicyEngine
+
+	// Initialize CEL policy engine only if enabled
+	if cfg.PolicyValidation.Enabled {
+		logger.Info("Initializing CEL policy engine")
+		policyEngine, err = NewCELPolicyEngine(logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CEL policy engine: %w", err)
+		}
+
+		// Load policies from configuration
+		if err := policyEngine.LoadPolicies(cfg.PolicyValidation.Rules); err != nil {
+			return nil, fmt.Errorf("failed to load CEL policies: %w", err)
+		}
+	} else {
+		logger.Info("CEL policy validation is disabled")
 	}
 
-	aiPolicyEngine := &AIPolicyEngine{
-		endpoint: cfg.AIPolicyValidation.Endpoint,
-		model:    cfg.AIPolicyValidation.Model,
-		apiKey:   cfg.AIPolicyValidation.APIKey,
-	}
+	// Initialize AI policy engine only if enabled
+	if cfg.AIPolicyValidation.Enabled {
+		logger.Info("Initializing AI policy engine")
+		aiPolicyEngine = &AIPolicyEngine{
+			endpoint: cfg.AIPolicyValidation.Endpoint,
+			model:    cfg.AIPolicyValidation.Model,
+			apiKey:   cfg.AIPolicyValidation.APIKey,
+		}
 
-	// Create AI policy engine
-	err = InitAIPolicyEngine(logger, aiPolicyEngine)
-	if err != nil {
-		return nil, fmt.Errorf("failed to init AI policy engine: %w", err)
-	}
+		// Create AI policy engine
+		err = InitAIPolicyEngine(logger, aiPolicyEngine)
+		if err != nil {
+			return nil, fmt.Errorf("failed to init AI policy engine: %w", err)
+		}
 
-	// Load policies from configuration
-	if err := policyEngine.LoadPolicies(cfg.PolicyValidation.Rules); err != nil {
-		return nil, fmt.Errorf("failed to load policies: %w", err)
-	}
-
-	// Load policies from configuration
-	if err := aiPolicyEngine.LoadPolicies(cfg.AIPolicyValidation.Rules); err != nil {
-		return nil, fmt.Errorf("failed to load policies: %w", err)
+		// Load policies from configuration
+		if err := aiPolicyEngine.LoadPolicies(cfg.AIPolicyValidation.Rules); err != nil {
+			return nil, fmt.Errorf("failed to load AI policies: %w", err)
+		}
+	} else {
+		logger.Info("AI policy validation is disabled")
 	}
 
 	return &Proxy{
@@ -96,12 +111,24 @@ func (p *Proxy) Start(ctx context.Context) error {
 		p.logger.Warn("Failed to marshal config for debug print", zap.Error(err))
 	}
 
-	// Initialize validation chain
-	p.validationChain = NewToolValidationChain(
+	// Initialize validation chain with required handlers
+	handlers := []ToolValidationHandler{
 		NewToolLoggingHandler(p.auditLogger),
-		NewToolCELValidationHandler(p.logger, p.policyEngine),
-		NewToolAIValidationHandler(p.logger, p.aiPolicyEngine),
-	)
+	}
+
+	// Add CEL validation handler if enabled
+	if p.config.PolicyValidation.Enabled && p.policyEngine != nil {
+		p.logger.Info("Adding CEL validation handler to chain")
+		handlers = append(handlers, NewToolCELValidationHandler(p.logger, p.policyEngine))
+	}
+
+	// Add AI validation handler if enabled
+	if p.config.AIPolicyValidation.Enabled && p.aiPolicyEngine != nil {
+		p.logger.Info("Adding AI validation handler to chain")
+		handlers = append(handlers, NewToolAIValidationHandler(p.logger, p.aiPolicyEngine))
+	}
+
+	p.validationChain = NewToolValidationChain(handlers...)
 
 	// Initialize downstream client based on transport type
 	if err := p.initDownstreamClient(ctx); err != nil {
@@ -197,11 +224,15 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 		result.Meta = make(map[string]interface{})
 	}
 
-	// Create a summary of passed validations
+	// Create a summary of all validations
 	validationSummary := make(map[string]string)
 	for _, v := range validationResults.Results {
-		if v.Allowed && v.PolicyType != "audit" {
-			validationSummary[v.PolicyName] = "passed"
+		if v.PolicyType != "audit" {
+			if v.Allowed {
+				validationSummary[v.PolicyName] = "passed"
+			} else {
+				validationSummary[v.PolicyName] = "failed"
+			}
 		}
 	}
 	result.Meta["validation_summary"] = validationSummary

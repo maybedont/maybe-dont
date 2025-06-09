@@ -93,8 +93,16 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	e.logger.Info("Loading CEL policies", zap.Int("count", len(policies)))
+
 	// Validate and compile each policy
 	for _, policy := range policies {
+		e.logger.Info("Loading CEL policy",
+			zap.String("name", policy.Name),
+			zap.String("action", policy.Action),
+			zap.String("expression", policy.Expression),
+		)
+
 		// Compile the expression
 		_, issues := e.env.Compile(policy.Expression)
 		if issues != nil && issues.Err() != nil {
@@ -116,6 +124,7 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 		})
 	}
 
+	e.logger.Info("Loaded CEL policies", zap.Int("count", len(e.policies)))
 	return nil
 }
 
@@ -123,6 +132,12 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+
+	e.logger.Info("Evaluating tool call with CEL policies",
+		zap.String("tool", req.Params.Name),
+		zap.Any("arguments", req.Params.Arguments),
+		zap.Int("policy_count", len(e.policies)),
+	)
 
 	// Create evaluation context with proper structure
 	vars := map[string]interface{}{
@@ -146,6 +161,12 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
+		e.logger.Debug("Evaluating CEL policy",
+			zap.String("name", policy.Name),
+			zap.String("action", policy.Action),
+			zap.String("expression", policy.Expression),
+		)
+
 		// Compile the expression
 		ast, issues := e.env.Compile(policy.Expression)
 		if issues != nil && issues.Err() != nil {
@@ -158,8 +179,6 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 			return ValidationResults{}, fmt.Errorf("failed to create program for policy %s: %w", policy.Name, err)
 		}
 
-		e.logger.Debug("evaluating tool call", zap.Any("vars", vars), zap.Any("policy", policy))
-
 		// Evaluate the expression
 		out, _, err := prg.Eval(vars)
 		if err != nil {
@@ -171,6 +190,12 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 		if !ok {
 			return ValidationResults{}, fmt.Errorf("policy %s did not return a boolean", policy.Name)
 		}
+
+		e.logger.Debug("CEL policy evaluation result",
+			zap.String("name", policy.Name),
+			zap.Bool("result", result),
+			zap.String("action", policy.Action),
+		)
 
 		if result && policy.Action == "deny" {
 			results.Results = append(results.Results, ValidationResult{
@@ -200,7 +225,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 		}
 	}
 
-	// Set top-level fields
+	// Set final result
 	if denyMatched {
 		results.Allowed = false
 		results.Message = denyMsg
@@ -208,9 +233,15 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 		results.Allowed = true
 		results.Message = allowMsg
 	} else {
-		results.Allowed = false
-		results.Message = "Denied by default policy"
+		results.Allowed = true // Default to allow if no policies matched
+		results.Message = "No policies matched"
 	}
+
+	e.logger.Info("CEL policy evaluation complete",
+		zap.Any("results", results),
+		zap.Bool("allowed", results.Allowed),
+		zap.String("message", results.Message),
+	)
 
 	return results, nil
 }

@@ -26,23 +26,21 @@ auth:
 
 # Policy configuration
 policy_validation:
+  # Enable CEL-based tool validation
+  enabled: true
   # Path to CEL policy rules file
   rules_file: "cel_rules.yaml"
-  # Default policy (allow or deny)
-  default: "allow"
 
 # AI validation configuration
 ai_validation:
   # Enable AI-powered tool validation
-  enabled: true
+  enabled: false
   # OpenAI-compatible API endpoint
   endpoint: "https://api.openai.com/v1/chat/completions"
   # Model to use for validation
   model: "gpt-4o-mini"
   # Path to AI policy rules file
   rules_file: "ai_rules.yaml"
-  # Default policy (allow or deny)
-  default: "allow"
 
 # Transport configuration
 client:
