@@ -34,7 +34,7 @@ policy_validation:
 # AI validation configuration
 ai_validation:
   # Enable AI-powered tool validation
-  enabled: false
+  enabled: true
   # OpenAI-compatible API endpoint
   endpoint: "https://api.openai.com/v1/chat/completions"
   # Model to use for validation
