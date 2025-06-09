@@ -30,10 +30,6 @@ archives:
       - goos: windows
         formats: [zip]
 
-dockers:
-  - image_templates:
-      - ghcr.io/maybedont/maybe-dont
-
 changelog:
   sort: asc
   filters:
