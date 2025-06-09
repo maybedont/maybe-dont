@@ -15,6 +15,9 @@ var (
 	Logger   *zap.Logger
 	aiRules  []byte
 	celRules []byte
+	version  string
+	commit   string
+	date     string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -52,9 +55,12 @@ and providing comprehensive audit logging.`,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
-func Execute(VERSION string, COMMIT string, AIRules []byte, CELRules []byte) {
+func Execute(VERSION string, COMMIT string, DATE string, AIRules []byte, CELRules []byte) {
 	aiRules = AIRules
 	celRules = CELRules
+	version = VERSION
+	commit = COMMIT
+	date = DATE
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

@@ -10,7 +10,9 @@ var (
 	// version is set during build
 	version = "development"
 	// commit is set during build
-	versionCommit = "n/a"
+	commit = "n/a"
+	// date is set during build
+	date = "n/a"
 
 	//go:embed ai_rules.yaml
 	aiRules []byte
@@ -20,5 +22,5 @@ var (
 )
 
 func main() {
-	cmd.Execute(version, versionCommit, aiRules, celRules)
+	cmd.Execute(version, commit, date, aiRules, celRules)
 }

@@ -6,11 +6,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	version       = "dev"
-	versionCommit = "dev"
-)
-
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Display version and build information",
@@ -18,7 +13,8 @@ var versionCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("MCP Security Proxy\n")
 		fmt.Printf("Version:    %s\n", version)
-		fmt.Printf("Commit:     %s\n", versionCommit)
+		fmt.Printf("Commit:     %s\n", commit)
+		fmt.Printf("Date:       %s\n", date)
 	},
 }
 
