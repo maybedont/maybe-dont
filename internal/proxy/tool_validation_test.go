@@ -84,8 +84,8 @@ func TestValidationChain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, err := chain.Handle(context.Background(), tt.req)
-			require.NoError(t, err)
+			results, errList := chain.Handle(context.Background(), tt.req)
+			require.Empty(t, errList)
 			assert.Equal(t, tt.wantAllowed, results.Allowed)
 			assert.Equal(t, tt.wantMessage, results.Message)
 			assert.NotEmpty(t, results.Results)

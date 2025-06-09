@@ -148,12 +148,12 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 	}
 
 	// Validate request through the chain
-	validationResults, err := p.ValidateToolCall(ctx, req)
-	if err != nil {
-		auditLog["error"] = err.Error()
+	validationResults, errList := p.ValidateToolCall(ctx, req)
+	if len(errList) > 0 {
+		auditLog["error"] = errList
 		auditLog["status"] = "validation_error"
 		p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
-		return nil, fmt.Errorf("request validation failed: %w", err)
+		return nil, fmt.Errorf("request validation failed: %w", errList)
 	}
 	p.logger.Debug("Validation results", zap.Any("validationResults", validationResults))
 

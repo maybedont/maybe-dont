@@ -82,8 +82,6 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	e.logger.Debug("policies", zap.Any("policies", e.policies))
-
 	// Track all policy evaluations
 	var results ValidationResults
 
