@@ -140,20 +140,16 @@ func (p *Proxy) Stop() error {
 func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Create audit log entry
 	auditLog := map[string]interface{}{
-		"request": map[string]interface{}{
-			"tool":      req.Params.Name,
-			"arguments": req.Params.Arguments,
-			"meta":      req.Request.Params.Meta,
-		},
+		"request": req,
 	}
 
 	// Validate request through the chain
-	validationResults, errList := p.ValidateToolCall(ctx, req)
-	if len(errList) > 0 {
-		auditLog["error"] = errList
+	validationResults, err := p.ValidateToolCall(ctx, req)
+	if err != nil {
+		auditLog["error"] = err.Error()
 		auditLog["status"] = "validation_error"
 		p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
-		return nil, fmt.Errorf("request validation failed: %w", errList)
+		return nil, fmt.Errorf("request validation failed: %v", err)
 	}
 	p.logger.Debug("Validation results", zap.Any("validationResults", validationResults))
 

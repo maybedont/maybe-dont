@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
@@ -44,14 +45,19 @@ func NewToolValidationChain(handlers ...ToolValidationHandler) *ToolValidationCh
 }
 
 // Handle processes a tool call request through the validation chain
-func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, []error) {
+func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
 	var finalResults ValidationResults
-	var finalErrors []error
+	var finalError error
 
 	for _, handler := range c.handlers {
 		results, err := handler.HandleToolCall(ctx, req)
 		if err != nil {
-			finalErrors = append(finalErrors, err)
+			if finalError == nil {
+				finalError = err
+			} else {
+				finalError = fmt.Errorf("%w %w", finalError, err)
+			}
+			continue
 		}
 
 		finalResults.Results = append(finalResults.Results, results.Results...)
@@ -59,7 +65,7 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.DenyCount += results.DenyCount
 	}
 
-	return finalResults, finalErrors
+	return finalResults, finalError
 }
 
 // ToolCELValidationHandler handles CEL policy validation
@@ -101,6 +107,6 @@ func (h *ToolAIValidationHandler) HandleToolCall(ctx context.Context, req mcp.Ca
 }
 
 // ValidateToolCall validates a tool call request
-func (p *Proxy) ValidateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, []error) {
+func (p *Proxy) ValidateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
 	return p.validationChain.Handle(ctx, req)
 }
