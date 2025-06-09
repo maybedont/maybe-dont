@@ -18,13 +18,12 @@ type ValidationResult struct {
 
 // ValidationResults represents all validation results for a request
 type ValidationResults struct {
-	Results       []ValidationResult `json:"results"`
-	Allowed       bool               `json:"allowed"`
-	Message       string             `json:"message,omitempty"`
-	Error         string             `json:"error,omitempty"`
-	DefaultPolicy string             `json:"default_policy"`
-	AllowCount    int                `json:"allow_count"`
-	DenyCount     int                `json:"deny_count"`
+	Results    []ValidationResult `json:"results"`
+	Allowed    bool               `json:"allowed"`
+	Message    string             `json:"message,omitempty"`
+	Error      string             `json:"error,omitempty"`
+	AllowCount int                `json:"allow_count"`
+	DenyCount  int                `json:"deny_count"`
 }
 
 // ToolValidationHandler defines the interface for tool validation handlers
@@ -55,7 +54,6 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		}
 
 		finalResults.Results = append(finalResults.Results, results.Results...)
-		finalResults.DefaultPolicy = results.DefaultPolicy
 		finalResults.AllowCount += results.AllowCount
 		finalResults.DenyCount += results.DenyCount
 	}

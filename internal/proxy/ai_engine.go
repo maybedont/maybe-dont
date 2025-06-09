@@ -25,23 +25,17 @@ type AIPolicy struct {
 
 // AIPolicyEngine handles AI policy evaluation
 type AIPolicyEngine struct {
-	logger        *zap.Logger
-	policies      []AIPolicy
-	mu            sync.RWMutex
-	endpoint      string
-	model         string
-	apiKey        string
-	defaultPolicy string // allow or deny
-	client        *openai.Client
+	logger   *zap.Logger
+	policies []AIPolicy
+	mu       sync.RWMutex
+	endpoint string
+	model    string
+	apiKey   string
+	client   *openai.Client
 }
 
 // NewAIPolicyEngine creates a new AI policy engine
 func InitAIPolicyEngine(logger *zap.Logger, engine *AIPolicyEngine) error {
-	// Validate default policy
-	if engine.defaultPolicy != "allow" && engine.defaultPolicy != "deny" {
-		return fmt.Errorf("invalid default policy: %s", engine.defaultPolicy)
-	}
-
 	// Set the logger
 	engine.logger = logger
 

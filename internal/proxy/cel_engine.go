@@ -95,12 +95,14 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 		},
 	}
 
-	e.logger.Debug("policies", zap.Any("policies", e.policies))
-
-	// Track all policy evaluations start with the default policy
 	results := ValidationResults{
 		Results: make([]ValidationResult, 0),
 	}
+	allowMatched := false
+	denyMatched := false
+	allowMsg := ""
+	denyMsg := ""
+
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
 		// Compile the expression
@@ -129,7 +131,6 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 			return ValidationResults{}, fmt.Errorf("policy %s did not return a boolean", policy.Name)
 		}
 
-		// If policy matches and is a deny rule, deny the request
 		if result && policy.Action == "deny" {
 			results.Results = append(results.Results, ValidationResult{
 				PolicyName: policy.Name,
@@ -138,9 +139,11 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 				Message:    policy.Message,
 			})
 			results.DenyCount++
+			if !denyMatched {
+				denyMatched = true
+				denyMsg = policy.Message
+			}
 		}
-
-		// If policy matches and is an allow rule, allow the request
 		if result && policy.Action == "allow" {
 			results.Results = append(results.Results, ValidationResult{
 				PolicyName: policy.Name,
@@ -149,7 +152,23 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 				Message:    policy.Message,
 			})
 			results.AllowCount++
+			if !allowMatched {
+				allowMatched = true
+				allowMsg = policy.Message
+			}
 		}
+	}
+
+	// Set top-level fields
+	if denyMatched {
+		results.Allowed = false
+		results.Message = denyMsg
+	} else if allowMatched {
+		results.Allowed = true
+		results.Message = allowMsg
+	} else {
+		results.Allowed = false
+		results.Message = "Denied by default policy"
 	}
 
 	return results, nil

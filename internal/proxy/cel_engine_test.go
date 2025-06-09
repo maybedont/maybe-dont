@@ -12,7 +12,7 @@ import (
 
 func TestCELPolicyEngine_Evaluate(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	engine, err := NewCELPolicyEngine(logger, "deny")
+	engine, err := NewCELPolicyEngine(logger)
 	require.NoError(t, err)
 
 	policies := []config.CELPolicy{
@@ -48,12 +48,12 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 				Params: mcp.CallToolParams{
 					Name: "read_file",
 					Arguments: map[string]any{
-						"command": "cat file.txt",
+						"target_file": "test.txt",
 					},
 				},
 			},
 			wantAllowed: true,
-			wantMessage: "",
+			wantMessage: "Allowed to call read_file",
 		},
 		{
 			name: "deny delete_file",
@@ -64,7 +64,7 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 				Params: mcp.CallToolParams{
 					Name: "delete_file",
 					Arguments: map[string]any{
-						"command": "rm file.txt",
+						"target_file": "test.txt",
 					},
 				},
 			},
@@ -88,20 +88,29 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := engine.EvaluateToolCall(tt.req)
+			results, err := engine.EvaluateToolCall(tt.req)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantAllowed, result.Allowed)
-			assert.Equal(t, tt.wantMessage, result.Message)
-			assert.NotEmpty(t, result.Results)
+			assert.Equal(t, tt.wantAllowed, results.Allowed)
+			assert.Equal(t, tt.wantMessage, results.Message)
+			assert.NotEmpty(t, results.Results)
 
 			// Verify policy evaluation results
-			for _, policyResult := range result.Results {
+			for _, policyResult := range results.Results {
 				assert.Equal(t, "cel", policyResult.PolicyType)
 				if policyResult.PolicyName == "allow-read-tool" {
 					assert.Equal(t, tt.req.Params.Name == "read_file", policyResult.Allowed)
 				} else if policyResult.PolicyName == "deny-delete-tool" {
 					assert.Equal(t, tt.req.Params.Name == "delete_file", policyResult.Allowed)
 				}
+			}
+
+			// Verify allow/deny counts
+			if tt.wantAllowed {
+				assert.Equal(t, 1, results.AllowCount)
+				assert.Equal(t, 0, results.DenyCount)
+			} else {
+				assert.Equal(t, 0, results.AllowCount)
+				assert.Equal(t, 1, results.DenyCount)
 			}
 		})
 	}

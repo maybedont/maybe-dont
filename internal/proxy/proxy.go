@@ -155,6 +155,7 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 		p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("request validation failed: %w", err)
 	}
+	p.logger.Debug("Validation results", zap.Any("validationResults", validationResults))
 
 	if validationResults.DenyCount > 0 {
 		validationResults.Allowed = false

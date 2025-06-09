@@ -21,6 +21,6 @@ func NewToolLoggingHandler(auditLogger *zap.Logger) *ToolLoggingHandler {
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
-	// Always allow, no validation needed
+	// Always allow, no validation needed. No need to log this either
 	return ValidationResults{}, nil
 }
