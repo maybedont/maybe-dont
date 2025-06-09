@@ -100,7 +100,6 @@ type AIPolicy struct {
 	Name        string `mapstructure:"name"`
 	Description string `mapstructure:"description"`
 	Prompt      string `mapstructure:"prompt"`
-	Action      string `mapstructure:"action"` // allow or deny
 	Message     string `mapstructure:"message"`
 }
 

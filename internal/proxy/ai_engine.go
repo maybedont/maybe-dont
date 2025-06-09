@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/invopop/jsonschema"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -54,17 +55,11 @@ func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy) error {
 	// Validate each policy
 	for _, policy := range policies {
 
-		// Validate action
-		if policy.Action != "allow" && policy.Action != "deny" {
-			return fmt.Errorf("invalid action %s for policy %s", policy.Action, policy.Name)
-		}
-
 		// Store the compiled policy
 		e.policies = append(e.policies, AIPolicy{
 			Name:        policy.Name,
 			Description: policy.Description,
 			Prompt:      policy.Prompt,
-			Action:      policy.Action,
 			Message:     policy.Message,
 		})
 	}
@@ -84,72 +79,145 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 
 	// Track all policy evaluations
 	var results ValidationResults
+	results.Results = make([]ValidationResult, 0)
 
-	// Evaluate each policy in order
+	// Create a channel to collect results from goroutines
+	type policyResult struct {
+		result ValidationResult
+		err    error
+	}
+	resultChan := make(chan policyResult, len(e.policies))
+
+	// Format the tool call request for the AI once
+	toolCallStr := fmt.Sprintf("Tool: %s\nArguments: %v", req.Params.Name, req.Params.Arguments)
+
+	// Launch a goroutine for each policy
 	for _, policy := range e.policies {
-		// Format the tool call request for the AI
-		toolCallStr := fmt.Sprintf("Tool: %s\nArguments: %v", req.Params.Name, req.Params.Arguments)
+		go func(p AIPolicy) {
+			// Create a new context for this goroutine
+			policyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
 
-		schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
-			Name:        "ai_response",
-			Description: openai.String("Response from the AI policy engine"),
-			Schema:      GenerateSchema[AIResponse](),
-			Strict:      openai.Bool(true),
-		}
+			schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
+				Name:        "ai_response",
+				Description: openai.String("Response from the AI policy engine"),
+				Schema:      GenerateSchema[AIResponse](),
+				Strict:      openai.Bool(true),
+			}
 
-		// Call the AI API with the actual tool call request
-		chatCompletion, err := e.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.UserMessage(fmt.Sprintf(policy.Prompt, toolCallStr)),
-			},
-			Model: openai.ChatModel(e.model),
-			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-				OfJSONSchema: &openai.ResponseFormatJSONSchemaParam{
-					JSONSchema: schemaParam,
+			// Call the AI API with the actual tool call request
+			chatCompletion, err := e.client.Chat.Completions.New(policyCtx, openai.ChatCompletionNewParams{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.UserMessage(fmt.Sprintf(p.Prompt, toolCallStr)),
 				},
-			},
-		})
-		if err != nil {
-			return ValidationResults{}, fmt.Errorf("failed to evaluate tool call: %w", err)
-		}
-
-		if len(chatCompletion.Choices) == 0 {
-			return ValidationResults{}, fmt.Errorf("no response from AI model")
-		}
-
-		// Check result
-		// Parse the response as JSON
-		var result AIResponse
-		err = json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &result)
-		if err != nil {
-			return ValidationResults{}, fmt.Errorf("failed to parse result: %w", err)
-		}
-		e.logger.Debug("result", zap.Any("result", result))
-
-		// If policy matches and is a deny rule, deny the request
-		if result.Allowed && policy.Action == "deny" {
-			// Record policy evaluation
-			results.Results = append(results.Results, ValidationResult{
-				PolicyName: policy.Name,
-				PolicyType: "ai",
-				Allowed:    false,
-				Message:    result.Message,
+				Model: openai.ChatModel(e.model),
+				ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+					OfJSONSchema: &openai.ResponseFormatJSONSchemaParam{
+						JSONSchema: schemaParam,
+					},
+				},
 			})
+			if err != nil {
+				resultChan <- policyResult{
+					result: ValidationResult{
+						PolicyName: p.Name,
+						PolicyType: "ai",
+						Allowed:    false,
+						Error:      fmt.Sprintf("Failed to evaluate policy: %v", err),
+					},
+					err: err,
+				}
+				return
+			}
+
+			if len(chatCompletion.Choices) == 0 {
+				resultChan <- policyResult{
+					result: ValidationResult{
+						PolicyName: p.Name,
+						PolicyType: "ai",
+						Allowed:    false,
+						Error:      "No response from AI model",
+					},
+					err: fmt.Errorf("no response from AI model"),
+				}
+				return
+			}
+
+			// Parse the response as JSON
+			var result AIResponse
+			err = json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &result)
+			if err != nil {
+				resultChan <- policyResult{
+					result: ValidationResult{
+						PolicyName: p.Name,
+						PolicyType: "ai",
+						Allowed:    false,
+						Error:      fmt.Sprintf("Failed to parse result: %v", err),
+					},
+					err: err,
+				}
+				return
+			}
+
+			// Create validation result based on policy action and AI response
+			var validationResult ValidationResult
+			if result.Allowed {
+				validationResult = ValidationResult{
+					PolicyName: p.Name,
+					PolicyType: "ai",
+					Allowed:    p.Action == "allow",
+					Message:    result.Message,
+				}
+			} else {
+				validationResult = ValidationResult{
+					PolicyName: p.Name,
+					PolicyType: "ai",
+					Allowed:    true, // If AI says not allowed, we allow it (policy didn't match)
+					Message:    result.Message,
+				}
+			}
+
+			resultChan <- policyResult{
+				result: validationResult,
+				err:    nil,
+			}
+		}(policy)
+	}
+
+	// Collect results from all goroutines
+	for i := 0; i < len(e.policies); i++ {
+		result := <-resultChan
+		if result.err != nil {
+			e.logger.Error("Policy evaluation failed",
+				zap.String("policy", result.result.PolicyName),
+				zap.Error(result.err),
+			)
+		}
+		results.Results = append(results.Results, result.result)
+		if result.result.Allowed {
+			results.AllowCount++
+		} else {
 			results.DenyCount++
 		}
-
-		// If policy matches and is an allow rule, allow the request
-		if result.Allowed && policy.Action == "allow" {
-			// Record policy evaluation
-			results.Results = append(results.Results, ValidationResult{
-				PolicyName: policy.Name,
-				PolicyType: "ai",
-				Allowed:    true,
-				Message:    result.Message,
-			})
-			results.AllowCount++
-		}
 	}
+
+	// Set final result
+	if results.DenyCount > 0 {
+		results.Allowed = false
+		results.Message = "Maybe Don't, A policy failed."
+	} else if results.AllowCount > 0 {
+		results.Allowed = true
+		results.Message = "All policies passed, maybe do."
+	} else {
+		results.Allowed = true // Default to allow if no policies matched
+		results.Message = "No policies matched"
+	}
+
+	e.logger.Info("Tool call evaluation complete",
+		zap.Any("results", results),
+		zap.Bool("allowed", results.Allowed),
+		zap.String("message", results.Message),
+	)
 
 	return results, nil
 }
