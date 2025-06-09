@@ -143,7 +143,7 @@ func LoadAIPoliciesFromFile(path string) ([]AIPolicy, error) {
 }
 
 // LoadConfig loads the configuration from all sources
-func LoadConfig(configPath string) (*Config, error) {
+func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte) (*Config, error) {
 	v := viper.New()
 
 	// Set environment variable prefix
@@ -189,22 +189,38 @@ func LoadConfig(configPath string) (*Config, error) {
 		config.AIPolicyValidation.APIKey = apiKey
 	}
 
-	// Load policies from rules file if specified
+	// Load policies from rules file if specified, otherwise use embedded rules
 	if config.PolicyValidation.RulesFile != "" {
 		policies, err := LoadCELPoliciesFromFile(config.PolicyValidation.RulesFile)
 		if err != nil {
 			return nil, fmt.Errorf("error loading policies from file: %w", err)
 		}
 		config.PolicyValidation.Rules = policies
+	} else if defaultCELRules != nil {
+		var policies struct {
+			Rules []CELPolicy `yaml:"rules"`
+		}
+		if err := yaml.Unmarshal(defaultCELRules, &policies); err != nil {
+			return nil, fmt.Errorf("error unmarshaling default CEL rules: %w", err)
+		}
+		config.PolicyValidation.Rules = policies.Rules
 	}
 
-	// Load AI policies from rules file if specified
+	// Load AI policies from rules file if specified, otherwise use embedded rules
 	if config.AIPolicyValidation.RulesFile != "" {
 		aiPolicies, err := LoadAIPoliciesFromFile(config.AIPolicyValidation.RulesFile)
 		if err != nil {
 			return nil, fmt.Errorf("error loading AI policies from file: %w", err)
 		}
 		config.AIPolicyValidation.Rules = aiPolicies
+	} else if defaultAIRules != nil {
+		var policies struct {
+			Rules []AIPolicy `yaml:"rules"`
+		}
+		if err := yaml.Unmarshal(defaultAIRules, &policies); err != nil {
+			return nil, fmt.Errorf("error unmarshaling default AI rules: %w", err)
+		}
+		config.AIPolicyValidation.Rules = policies.Rules
 	}
 
 	// Validate config

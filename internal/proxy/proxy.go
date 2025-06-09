@@ -182,7 +182,11 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 
 	if validationResults.DenyCount > 0 {
 		validationResults.Allowed = false
-		validationResults.Message = "Maybe Don't, A policy failed."
+		if validationResults.DenyCount == 1 {
+			validationResults.Message = "Maybe Don't, a policy failed."
+		} else {
+			validationResults.Message = fmt.Sprintf("Maybe Don't, %d policies failed.", validationResults.DenyCount)
+		}
 	} else {
 		validationResults.Allowed = true
 		validationResults.Message = "All policies passed, maybe do."

@@ -67,22 +67,6 @@ rules:
         
         Return ONLY JSON in this exact format: { "allowed": true/false, "message": "your message" }
 
-    - name: "Check path traversal attacks"
-      description: "Prevent directory traversal using ../ patterns"
-      prompt: |-
-        ANALYZE: Does this operation contain path traversal patterns?
-        
-        Look for: file paths containing ../, ..\, %2e%2e%2f, %2e%2e%5c
-        
-        EXAMPLES:
-        - kubectl get po → NO file path → { "allowed": true, "message": "No file path" }
-        - read_file path="../../../etc/passwd" → HAS traversal → { "allowed": false, "message": "Path traversal blocked" }
-        - read_file path="./workspace/file.txt" → NO traversal → { "allowed": true, "message": "Safe path" }
-        
-        Tool call: %s
-        
-        Return ONLY JSON in this exact format: { "allowed": true/false, "message": "your message" }
-
     - name: "Check external network access"
       description: "Prevent HTTP requests to external domains"
       prompt: |-

@@ -28,8 +28,8 @@ auth:
 policy_validation:
   # Enable CEL-based tool validation
   enabled: true
-  # Path to CEL policy rules file
-  rules_file: "cel_rules.yaml"
+  # Path to CEL policy rules file (optional, uses embedded rules by default)
+  # rules_file: "cel_rules.yaml"
 
 # AI validation configuration
 ai_validation:
@@ -39,8 +39,8 @@ ai_validation:
   endpoint: "https://api.openai.com/v1/chat/completions"
   # Model to use for validation
   model: "gpt-4o-mini"
-  # Path to AI policy rules file
-  rules_file: "ai_rules.yaml"
+  # Path to AI policy rules file (optional, uses embedded rules by default)
+  # rules_file: "ai_rules.yaml"
 
 # Transport configuration
 client:
@@ -50,7 +50,6 @@ client:
   command: "/home/user/bin/kai"
   # Command arguments
   command_args: ["--mcp-server"]
-
 
 # Audit configuration
 audit:
