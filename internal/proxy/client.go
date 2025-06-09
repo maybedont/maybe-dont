@@ -64,7 +64,7 @@ func (p *Proxy) checkCapabilities(ctx context.Context) error {
 	}
 
 	p.capabilities = &resp.Capabilities
-	p.logger.Info("MCP server capabilities",
+	p.logger.Debug("MCP server capabilities",
 		zap.Any("capabilities", resp.Capabilities),
 	)
 
@@ -85,7 +85,7 @@ func (p *Proxy) checkCapabilities(ctx context.Context) error {
 		}
 
 		p.capabilityDetails.Tools = toolsResp.Tools
-		p.logger.Info("Available tools from MCP server",
+		p.logger.Debug("Available tools from MCP server",
 			zap.Any("tools", toolsResp.Tools),
 		)
 	}

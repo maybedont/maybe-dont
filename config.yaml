@@ -7,7 +7,7 @@ server:
   # Address to listen on (host:port)
   listen_addr: "127.0.0.1:8080"
   # Log level (debug, info, warn, error)
-  log_level: "debug"
+  log_level: "info"
   # Log format (json or text)
   log_format: "json"
 

@@ -40,7 +40,7 @@ and providing comprehensive audit logging.`,
 		if err != nil {
 			return fmt.Errorf("failed to create logger: %w", err)
 		}
-		Logger.Info("Logger created", zap.Any("config", cfg))
+		Logger.Debug("Logger created", zap.Any("config", cfg))
 
 		return nil
 	},
