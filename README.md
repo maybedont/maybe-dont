@@ -10,6 +10,48 @@ A security proxy for MCP that enforces policy-based validation of tool calls usi
 - Detailed audit logging
 - Support for HTTP, SSE, and STDIO transports
 
+## Quick Start
+
+### Running the Proxy
+
+```bash
+./maybe-dont --config path/to/config.yaml
+```
+
+### Required Files
+
+* `config.yaml`: Main config (proxy settings, transports)
+* `cel_rules.yaml`: CEL rules
+
+## Config Example
+
+```yaml
+transports:
+  - type: http
+    listen: 127.0.0.1:3000
+
+rules:
+  cel: ./cel_rules.yaml
+  ai:
+    enabled: true
+    openai_api_key: $OPENAI_API_KEY
+```
+
+## CEL Rules Example
+
+```yaml
+rules:
+  - name: deny-kubectl-delete-namespace
+    expression: >
+      get(request, "method", "") == "tools/call" &&
+      get(request.params, "name", "") == "kubectl" &&
+      request.params.arguments.command.contains("delete") &&
+      (request.params.arguments.command.contains("namespace") ||
+       request.params.arguments.command.contains("ns"))
+    action: deny
+    message: Denied access to kubectl delete namespace
+```
+
 ## Built-in Rules
 
 ### CEL Rules
@@ -246,6 +288,13 @@ The proxy provides the following custom CEL functions:
 
 Example usage:
 ```cel
-has(request.params, "arguments") && 
+has(request.params, "arguments") &&
+
+
+## Transports
+
+* `http`: JSON over HTTP
+* `sse`: stream events
+* `stdio`: read/write from standard IO
 get(request.params.arguments, "command", "").contains("delete")
 ```
