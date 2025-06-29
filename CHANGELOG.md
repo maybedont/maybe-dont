@@ -1,3 +1,9 @@
+## v0.0.7 (2025-06-29)
+
+### Refactor
+
+- remove unused request.json file
+
 ## v0.0.6 (2025-06-29)
 
 ## v0.0.5 (2025-06-29)
