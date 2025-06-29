@@ -12,6 +12,8 @@ rules:
 
         EXAMPLES:
         - kubectl get po → NOT deletion → { "allowed": true, "message": "Not a deletion operation" }
+        - kubectl delete po --all → IS dangerous deletion → { "allowed": false, "message": "Wildcard deletion blocked" }
+        - kubectl delete po app-1234 → NOT dangerous deletion → { "allowed": true, "message": "Single pod deletion allowed" }
         - delete_file path="*" → IS dangerous deletion → { "allowed": false, "message": "Wildcard deletion blocked" }
         - delete_file path="./file.txt" → IS safe deletion → { "allowed": true, "message": "Single file deletion allowed" }
 
@@ -112,23 +114,6 @@ rules:
         - read_file path="huge.csv" size=200MB → TOO LARGE → { "allowed": false, "message": "File too large" }
         - write_file content="[10MB+ data]" → TOO MUCH content → { "allowed": false, "message": "Content too large" }
         - read_file path="document.pdf" → NORMAL size → { "allowed": true, "message": "Normal file size" }
-
-        Tool call: %s
-
-        Return ONLY JSON in this exact format: { "allowed": true/false, "message": "your message" }
-
-    - name: "Allow safe operations"
-      description: "Default allow for common safe operations"
-      prompt: |-
-        ANALYZE: Is this a safe, normal business operation?
-
-        SAFE OPERATIONS: kubectl commands, git operations, reading files from safe directories, writing to workspace/temp, database reads, API calls to known services
-
-        EXAMPLES:
-        - kubectl get po → SAFE operation → { "allowed": true, "message": "Safe Kubernetes operation" }
-        - git status → SAFE operation → { "allowed": true, "message": "Safe git operation" }
-        - read_file path="document.txt" → SAFE operation → { "allowed": true, "message": "Safe file read" }
-        - write_file path="/etc/passwd" content="malicious" → DANGEROUS operation → { "allowed": false, "message": "Security risk detected" }
 
         Tool call: %s
 
