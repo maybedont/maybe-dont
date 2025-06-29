@@ -34,7 +34,7 @@ func TestPolicyDeniedError_Structure(t *testing.T) {
 func TestPolicyDeniedError_ErrorHandler(t *testing.T) {
 	// Test with a PolicyDeniedError
 	policyErr := &PolicyDeniedError{
-		Message: "Request denied by policy: delete_file is not allowed",
+		Message: "Request denied by policy 'deny-dangerous-tool': delete_file is not allowed",
 		Data: map[string]interface{}{
 			"denied_policies": []string{"deny-dangerous-tool"},
 			"denied_count":    1,
@@ -74,6 +74,7 @@ func TestPolicyDeniedError_ErrorHandler(t *testing.T) {
 	textContent, ok := mcp.AsTextContent(content)
 	require.True(t, ok, "Content should be TextContent")
 	assert.Contains(t, textContent.Text, "Request denied by policy", "Error message should be user-friendly")
+	assert.Contains(t, textContent.Text, "deny-dangerous-tool", "Should include the policy name")
 	assert.Contains(t, textContent.Text, "delete_file is not allowed", "Should include the policy message")
 
 	// Check that the error code is set correctly
