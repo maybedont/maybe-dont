@@ -79,6 +79,9 @@ type Config struct {
 		SSEConfig     struct {
 			Headers map[string]string `mapstructure:"headers"`
 		} `mapstructure:"sse"`
+		HTTPConfig struct {
+			Headers map[string]string `mapstructure:"headers"`
+		} `mapstructure:"http"`
 	} `mapstructure:"client"`
 
 	// Audit configuration

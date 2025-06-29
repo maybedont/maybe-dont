@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
 )
@@ -15,6 +16,8 @@ func (p *Proxy) initDownstreamClient(ctx context.Context) error {
 		return p.initStdioClient(ctx)
 	case "sse":
 		return p.initSSEClient(ctx)
+	case "http":
+		return p.initHTTPClient(ctx)
 	default:
 		return fmt.Errorf("unsupported transport type: %s", p.config.Client.Type)
 	}
@@ -37,6 +40,19 @@ func (p *Proxy) initSSEClient(ctx context.Context) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create SSE client: %w", err)
+	}
+
+	p.client = cl
+	return p.checkCapabilities(ctx)
+}
+
+func (p *Proxy) initHTTPClient(ctx context.Context) error {
+	cl, err := client.NewStreamableHttpClient(
+		p.config.Client.DownstreamURL,
+		transport.WithHTTPHeaders(p.config.Client.HTTPConfig.Headers),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %w", err)
 	}
 
 	p.client = cl
