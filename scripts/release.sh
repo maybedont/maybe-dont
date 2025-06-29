@@ -43,9 +43,12 @@ if [[ -z "$VERSION" ]]; then
     exit 1
 fi
 
-VERSION_DIR="${DOWNLOAD_DIR}/${VERSION}"
+# Extract the actual version from the git reference if it contains refs/tags/
+VERSION_CLEAN="${VERSION#refs/tags/}"
 
-log_info "Starting release process for version: $VERSION"
+VERSION_DIR="${DOWNLOAD_DIR}/${VERSION_CLEAN}"
+
+log_info "Starting release process for version: $VERSION_CLEAN"
 
 # Store the absolute path to the dist directory before changing directories
 ORIGINAL_DIST_DIR="$(cd "$(dirname "$DIST_DIR")" && pwd)/$(basename "$DIST_DIR")"
@@ -62,7 +65,7 @@ git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${WEBSITE_REPO}.git
 cd "$TEMP_DIR"
 
 # Create a new branch for this release
-BRANCH_NAME="release-${VERSION}"
+BRANCH_NAME="release-${VERSION_CLEAN}"
 git checkout -b "$BRANCH_NAME"
 
 # Create the version directory
@@ -93,10 +96,13 @@ update_version_in_file() {
     
     if [[ -f "$file" ]]; then
         log_info "Updating version in $file"
+        # Escape special characters for sed
+        old_version_escaped=$(echo "$old_version" | sed 's/[[\.*^$()+?{|]/\\&/g')
+        new_version_escaped=$(echo "$new_version" | sed 's/[[\.*^$()+?{|]/\\&/g')
+        
         # Use sed to replace the old version with the new one
         # This handles various version formats (v1.2.3, 1.2.3, etc.)
-        sed -i "s/${old_version}/${new_version}/g" "$file"
-        sed -i "s/v${old_version}/v${new_version}/g" "$file"
+        sed -i "s/${old_version_escaped}/${new_version_escaped}/g" "$file"
     fi
 }
 
@@ -105,14 +111,14 @@ PREVIOUS_VERSION=""
 if [[ -d "$DOWNLOAD_DIR" ]]; then
     # Get the most recent version directory (excluding the current one)
     # Look for directories that start with 'v' followed by numbers
-    PREVIOUS_VERSION=$(find "$DOWNLOAD_DIR" -maxdepth 1 -type d -name "v*" | grep -v "$VERSION" | sort -V | tail -n 1 | xargs basename 2>/dev/null || echo "")
+    PREVIOUS_VERSION=$(find "$DOWNLOAD_DIR" -maxdepth 1 -type d -name "v*" | grep -v "$VERSION_CLEAN" | sort -V | tail -n 1 | xargs basename 2>/dev/null || echo "")
 fi
 
 if [[ -n "$PREVIOUS_VERSION" ]]; then
     log_info "Previous version found: $PREVIOUS_VERSION"
     
     # Update version in common files
-    update_version_in_file "content/download.md" "$PREVIOUS_VERSION" "$VERSION"
+    update_version_in_file "content/download.md" "$PREVIOUS_VERSION" "$VERSION_CLEAN"
 else
     log_warn "No previous version found, skipping version string updates"
 fi
@@ -130,7 +136,7 @@ fi
 git config user.name "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
 
-COMMIT_MESSAGE="Add maybe-dont ${VERSION} release artifacts
+COMMIT_MESSAGE="Add maybe-dont ${VERSION_CLEAN} release artifacts
 
 - Added ${VERSION_DIR} directory with release artifacts
 - Updated download index page
@@ -146,8 +152,8 @@ git push origin "$BRANCH_NAME"
 # Create pull request using GitHub CLI or curl
 log_info "Creating pull request..."
 
-PR_TITLE="Add maybe-dont ${VERSION} release artifacts"
-PR_BODY="This PR adds the release artifacts for maybe-dont version ${VERSION}.
+PR_TITLE="Add maybe-dont ${VERSION_CLEAN} release artifacts"
+PR_BODY="This PR adds the release artifacts for maybe-dont version ${VERSION_CLEAN}.
 
 ## Changes
 - Added \`${VERSION_DIR}\` directory with release artifacts
@@ -183,4 +189,4 @@ else
 fi
 
 log_info "Release process completed successfully!"
-log_info "Pull request created for version $VERSION" 
+log_info "Pull request created for version $VERSION_CLEAN" 
