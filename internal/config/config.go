@@ -160,8 +160,12 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 
 	// Explicitly bind environment variables for nested map structures
 	// This is needed because Viper's automatic binding doesn't work well with nested maps
-	v.BindEnv("client.sse.headers.Authorization", "MCP_PROXY_CLIENT_SSE_HEADERS_AUTHORIZATION")
-	v.BindEnv("client.http.headers.Authorization", "MCP_PROXY_CLIENT_HTTP_HEADERS_AUTHORIZATION")
+	if err := v.BindEnv("client.sse.headers.Authorization", "MCP_PROXY_CLIENT_SSE_HEADERS_AUTHORIZATION"); err != nil {
+		return nil, fmt.Errorf("failed to bind SSE authorization environment variable: %w", err)
+	}
+	if err := v.BindEnv("client.http.headers.Authorization", "MCP_PROXY_CLIENT_HTTP_HEADERS_AUTHORIZATION"); err != nil {
+		return nil, fmt.Errorf("failed to bind HTTP authorization environment variable: %w", err)
+	}
 
 	// Set config file name
 	v.SetConfigName("config")
