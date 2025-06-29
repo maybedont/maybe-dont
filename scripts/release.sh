@@ -108,51 +108,10 @@ if [[ -n "$PREVIOUS_VERSION" ]]; then
     log_info "Previous version found: $PREVIOUS_VERSION"
     
     # Update version in common files
-    update_version_in_file "package.json" "$PREVIOUS_VERSION" "$VERSION"
-    update_version_in_file "config.toml" "$PREVIOUS_VERSION" "$VERSION"
-    update_version_in_file "hugo.toml" "$PREVIOUS_VERSION" "$VERSION"
-    update_version_in_file "README.md" "$PREVIOUS_VERSION" "$VERSION"
-    
-    # Also update without 'v' prefix (in case files contain version without 'v')
-    PREVIOUS_VERSION_CLEAN="${PREVIOUS_VERSION#v}"
-    VERSION_CLEAN="${VERSION#v}"
-    update_version_in_file "package.json" "$PREVIOUS_VERSION_CLEAN" "$VERSION_CLEAN"
-    update_version_in_file "config.toml" "$PREVIOUS_VERSION_CLEAN" "$VERSION_CLEAN"
-    update_version_in_file "hugo.toml" "$PREVIOUS_VERSION_CLEAN" "$VERSION_CLEAN"
-    update_version_in_file "README.md" "$PREVIOUS_VERSION_CLEAN" "$VERSION_CLEAN"
+    update_version_in_file "content/download.md" "$PREVIOUS_VERSION" "$VERSION"
 else
     log_warn "No previous version found, skipping version string updates"
 fi
-
-# Create a simple index file for the download directory
-cat > "${VERSION_DIR}/index.html" << EOF
-<!DOCTYPE html>
-<html>
-<head>
-    <title>maybe-dont ${VERSION} Downloads</title>
-</head>
-<body>
-    <h1>maybe-dont ${VERSION} Downloads</h1>
-    <p>Release date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")</p>
-    <ul>
-EOF
-
-# Add download links for each artifact
-if [[ -d "$VERSION_DIR" ]]; then
-    for file in "$VERSION_DIR"/*.tar.gz "$VERSION_DIR"/*.zip "$VERSION_DIR"/*checksums.txt; do
-        if [[ -f "$file" ]]; then
-            filename=$(basename "$file")
-            echo "        <li><a href=\"$filename\">$filename</a></li>" >> "${VERSION_DIR}/index.html"
-        fi
-    done
-fi
-
-cat >> "${VERSION_DIR}/index.html" << EOF
-    </ul>
-    <p><a href="../">Back to downloads</a></p>
-</body>
-</html>
-EOF
 
 # Stage all changes
 git add .
@@ -170,8 +129,7 @@ git config user.email "github-actions[bot]@users.noreply.github.com"
 COMMIT_MESSAGE="Add maybe-dont ${VERSION} release artifacts
 
 - Added ${VERSION_DIR} directory with release artifacts
-- Updated version strings in configuration files
-- Generated download index page
+- Updated download index page
 
 This PR was automatically created by the release process."
 
@@ -189,8 +147,7 @@ PR_BODY="This PR adds the release artifacts for maybe-dont version ${VERSION}.
 
 ## Changes
 - Added \`${VERSION_DIR}\` directory with release artifacts
-- Updated version strings in configuration files
-- Generated download index page
+- Updated download index page
 
 ## Artifacts included
 $(find "$VERSION_DIR" -name "*.tar.gz" -o -name "*.zip" -o -name "*checksums.txt" | while read -r file; do
