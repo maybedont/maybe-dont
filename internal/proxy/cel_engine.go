@@ -24,11 +24,10 @@ type CELPolicy struct {
 
 // CELPolicyEngine handles CEL policy evaluation
 type CELPolicyEngine struct {
-	logger        *zap.Logger
-	env           *cel.Env
-	policies      []CELPolicy
-	mu            sync.RWMutex
-	defaultPolicy string // allow or deny
+	logger   *zap.Logger
+	env      *cel.Env
+	policies []CELPolicy
+	mu       sync.RWMutex
 }
 
 // NewCELPolicyEngine creates a new CEL policy engine
@@ -142,7 +141,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 	// Create evaluation context with proper structure
 	vars := map[string]interface{}{
 		"request": map[string]interface{}{
-			"method": req.Request.Method,
+			"method": req.Method,
 			"params": map[string]interface{}{
 				"name":      req.Params.Name,
 				"arguments": req.Params.Arguments,

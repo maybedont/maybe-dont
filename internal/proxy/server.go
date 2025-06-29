@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"go.uber.org/zap"
 )
@@ -54,7 +55,7 @@ func (p *Proxy) initMCPServer() (*server.MCPServer, error) {
 	// Register detailed capability information
 	if len(p.capabilityDetails.Tools) > 0 {
 		for _, tool := range p.capabilityDetails.Tools {
-			srv.AddTool(tool, p.HandleToolCall)
+			srv.AddTool(tool, p.handleToolCallWithErrorHandling)
 			p.logger.Debug("Registered tool", zap.Any("tool", tool))
 		}
 	}
@@ -137,4 +138,28 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+// Custom tool handler that handles PolicyDeniedError and returns proper MCP error responses
+func (p *Proxy) handleToolCallWithErrorHandling(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	result, err := p.HandleToolCall(ctx, req)
+	if err != nil {
+		// Check if it's a PolicyDeniedError
+		if policyErr, ok := err.(*PolicyDeniedError); ok {
+			// Create error result with user-friendly message
+			errorResult := mcp.NewToolResultError(policyErr.Message)
+
+			// Add structured error data to the result
+			if errorResult.Meta == nil {
+				errorResult.Meta = make(map[string]interface{})
+			}
+			errorResult.Meta["error_code"] = -32600 // Invalid Request
+			errorResult.Meta["error_data"] = policyErr.Data
+
+			return errorResult, nil
+		}
+		// For other errors, return them as-is
+		return nil, err
+	}
+	return result, nil
 }
