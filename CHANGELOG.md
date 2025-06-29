@@ -1,3 +1,16 @@
+## Unreleased
+
+### Feat
+
+- output a more coherent error message for the user
+
+### Fix
+
+- capture all failed policies
+- add policy name to error message
+- tweak rules to be less restrictive
+- fix bugs in validation chain and tests
+
 ## v0.0.7 (2025-06-29)
 
 ### Refactor
@@ -25,16 +38,6 @@
 ### Feat
 
 - use embed. change names
-
-### Fix
-
-- pass version info better
-- embed files
-
-## v0.0.1 (2025-06-08)
-
-### Feat
-
 - add a bunch of rules
 - ai calls are working
 - ai rules engine and first rule
@@ -48,6 +51,8 @@
 
 ### Fix
 
+- pass version info better
+- embed files
 - remove docker since it doesn't do podman
 - ci and docs stuff
 - turn AI back on
