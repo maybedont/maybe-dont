@@ -41,6 +41,14 @@ client:
 # Audit configuration
 audit:
   # Audit log file path
-  path: "stdout"
+  # Options:
+  # - "stdout" - Write to standard output
+  # - "stderr" - Write to standard error
+  # - "audit.log" - Write to a file in current directory
+  # - "/var/log/maybe-dont/audit.log" - Write to a specific path
+  # - "/dev/null" - Disable audit logging
+  path: "audit.log"
   # Audit log format (json or text)
+  # - "json" - Structured JSON format (recommended for production)
+  # - "text" - Human-readable text format
   format: "json"

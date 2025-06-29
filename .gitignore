@@ -1,3 +1,4 @@
 maybe-dont
 dist/
 kubectl-ai
+./audit.log
