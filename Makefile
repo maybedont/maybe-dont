@@ -1,5 +1,5 @@
 BINARY_NAME = maybe-dont
-GO = /usr/local/go/bin/go
+GO = go
 COMMIT = $(shell git rev-parse HEAD)
 DATE = $(shell date -u '+%Y-%m-%d %H:%M:%S')
 
