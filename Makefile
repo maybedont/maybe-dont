@@ -21,3 +21,5 @@ lint:
 
 test:
 	$(GO) test -v ./...
+bump-version:
+	cz bump

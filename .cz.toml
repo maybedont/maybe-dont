@@ -1,0 +1,7 @@
+[tool.commitizen]
+version_scheme = "semver"
+tag_format = "v$major.$minor.$patch$prerelease"
+update_changelog_on_bump = true
+annotated_tag = true
+major_version_zero = true
+version_provider = "scm"
