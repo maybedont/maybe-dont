@@ -47,6 +47,10 @@ VERSION_DIR="${DOWNLOAD_DIR}/${VERSION}"
 
 log_info "Starting release process for version: $VERSION"
 
+# Store the absolute path to the dist directory before changing directories
+ORIGINAL_DIST_DIR="$(cd "$(dirname "$DIST_DIR")" && pwd)/$(basename "$DIST_DIR")"
+log_info "Original dist directory: $ORIGINAL_DIST_DIR"
+
 # Create temporary directory for website repo
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -67,15 +71,15 @@ mkdir -p "$VERSION_DIR"
 log_info "Copying release artifacts to ${VERSION_DIR}..."
 
 # Copy all tarball artifacts from the dist directory
-if [[ -d "$DIST_DIR" ]]; then
+if [[ -d "$ORIGINAL_DIST_DIR" ]]; then
     # Find all tarball, zip, and checksums.txt files and copy them
-    find "$DIST_DIR" \( -name "*.tar.gz" -o -name "*.zip" -o -name "*checksums.txt" \) | while read -r file; do
+    find "$ORIGINAL_DIST_DIR" \( -name "*.tar.gz" -o -name "*.zip" -o -name "*checksums.txt" \) | while read -r file; do
         filename=$(basename "$file")
         log_info "Copying $filename"
         cp "$file" "$VERSION_DIR/"
     done
 else
-    log_warn "Dist directory not found at $DIST_DIR"
+    log_warn "Dist directory not found at $ORIGINAL_DIST_DIR"
 fi
 
 # Update version strings in relevant files
