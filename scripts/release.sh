@@ -61,8 +61,16 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 log_info "Cloning website repository..."
 
 # Clone the website repository
-git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${WEBSITE_REPO}.git" "$TEMP_DIR"
 cd "$TEMP_DIR"
+
+# Check if Git LFS is available
+if ! git lfs version >/dev/null 2>&1; then
+    log_error "Git LFS is required but not available. Please install Git LFS and try again."
+    exit 1
+fi
+
+log_info "Initializing Git LFS..."
+git lfs install
 
 # Create a new branch for this release
 BRANCH_NAME="release-${VERSION_CLEAN}"
@@ -123,6 +131,11 @@ else
     log_warn "No previous version found, skipping version string updates"
 fi
 
+# Track large files with LFS (binaries, archives, etc.)
+log_info "Setting up LFS tracking for large files..."
+git lfs track "*.tar.gz"
+git lfs track "*.zip"
+
 # Stage all changes
 git add .
 
@@ -140,6 +153,8 @@ COMMIT_MESSAGE="Add maybe-dont ${VERSION_CLEAN} release artifacts
 
 - Added ${VERSION_DIR} directory with release artifacts
 - Updated download index page
+- Configured Git LFS for large files
+- Configured Git LFS for large files
 
 This PR was automatically created by the release process."
 
@@ -158,6 +173,8 @@ PR_BODY="This PR adds the release artifacts for maybe-dont version ${VERSION_CLE
 ## Changes
 - Added \`${VERSION_DIR}\` directory with release artifacts
 - Updated download index page
+- Configured Git LFS for large files
+- Configured Git LFS for large files
 
 ## Artifacts included
 $(find "$VERSION_DIR" -name "*.tar.gz" -o -name "*.zip" -o -name "*checksums.txt" | while read -r file; do
