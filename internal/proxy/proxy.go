@@ -13,6 +13,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// PolicyDeniedError represents a policy denial error with structured data
+type PolicyDeniedError struct {
+	Message string                 `json:"message"`
+	Data    map[string]interface{} `json:"data"`
+}
+
+// Error implements the error interface
+func (e *PolicyDeniedError) Error() string {
+	return e.Message
+}
+
 // Proxy represents an MCP security proxy instance
 type Proxy struct {
 	logger       *zap.Logger
@@ -195,19 +206,45 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 	// Add validation results to audit log
 	auditLog["validation"] = validationResults
 
-	// If validation failed, return error with all validation results
+	// If validation failed, return structured error with user-friendly message
 	if !validationResults.Allowed {
-		// Convert validation results to JSON for error message
-		resultsJSON, err := json.Marshal(validationResults)
-		if err != nil {
-			auditLog["error"] = fmt.Sprintf("failed to marshal validation results: %v", err)
-			auditLog["status"] = "marshal_error"
-			p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
-			return nil, fmt.Errorf("failed to marshal validation results: %w", err)
+		// Create a user-friendly error message
+		var deniedPolicies []string
+		var deniedMessages []string
+
+		for _, result := range validationResults.Results {
+			if !result.Allowed && result.PolicyType != "audit" {
+				deniedPolicies = append(deniedPolicies, result.PolicyName)
+				if result.Message != "" {
+					deniedMessages = append(deniedMessages, result.Message)
+				}
+			}
 		}
+
+		// Build user-friendly error message
+		var errorMessage string
+		if len(deniedMessages) > 0 {
+			errorMessage = fmt.Sprintf("Request denied by policy: %s", deniedMessages[0])
+		} else {
+			errorMessage = fmt.Sprintf("Request denied by %d policy(ies)", len(deniedPolicies))
+		}
+
+		// Create structured error data
+		errorData := map[string]interface{}{
+			"denied_policies": deniedPolicies,
+			"denied_count":    validationResults.DenyCount,
+			"tool_name":       req.Params.Name,
+		}
+
 		auditLog["status"] = "denied"
 		p.auditLogger.Warn("Tool call audit", zap.Any("audit", auditLog))
-		return nil, fmt.Errorf("Maybe Don't: %s", string(resultsJSON))
+
+		// Return error with proper MCP error code (-32600 for Invalid Request)
+		// Note: We'll need to handle this error code in the server layer
+		return nil, &PolicyDeniedError{
+			Message: errorMessage,
+			Data:    errorData,
+		}
 	}
 
 	// Call the tool

@@ -23,7 +23,7 @@ func NewToolLoggingHandler(auditLogger *zap.Logger) *ToolLoggingHandler {
 func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
 	// Log the tool call for audit purposes
 	h.auditLogger.Info("Tool call audit log",
-		zap.String("method", req.Request.Method),
+		zap.String("method", req.Method),
 		zap.String("tool_name", req.Params.Name),
 		zap.Any("arguments", req.Params.Arguments),
 	)
