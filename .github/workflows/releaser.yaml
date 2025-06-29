@@ -45,11 +45,11 @@ jobs:
         run: |
           VERSION=${{ github.ref }}
           echo "Running release script for version: $VERSION"
-          
+
           # Set environment variables for the release script
           export GITHUB_TOKEN="${{ secrets.WEBSITE_DEPLOY_TOKEN }}"
           export VERSION="$VERSION"
           export DIST_DIR="./dist"
-          
+
           # Run the release script
           ./scripts/release.sh
