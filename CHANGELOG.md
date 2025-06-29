@@ -1,7 +1,9 @@
-## Unreleased
+## v0.1.0 (2025-06-29)
 
 ### Feat
 
+- support http auth using env vars for header
+- add support for HTTP on the client and server
 - output a more coherent error message for the user
 
 ### Fix
@@ -10,6 +12,10 @@
 - add policy name to error message
 - tweak rules to be less restrictive
 - fix bugs in validation chain and tests
+
+### Refactor
+
+- add error handling to satisfy linter
 
 ## v0.0.7 (2025-06-29)
 
