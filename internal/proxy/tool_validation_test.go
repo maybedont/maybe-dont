@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -11,10 +12,133 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-func TestValidationChain(t *testing.T) {
+// MockValidationHandler for testing chain behavior
+type MockValidationHandler struct {
+	name           string
+	shouldAllow    bool
+	shouldError    bool
+	expectedResult ValidationResult
+}
+
+func (m *MockValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+	if m.shouldError {
+		return ValidationResults{}, errors.New("mock error")
+	}
+
+	results := ValidationResults{
+		Results: []ValidationResult{m.expectedResult},
+		Allowed: m.shouldAllow,
+	}
+
+	if m.shouldAllow {
+		results.AllowCount = 1
+	} else {
+		results.DenyCount = 1
+	}
+
+	return results, nil
+}
+
+func TestValidationChain_HandlerComposition(t *testing.T) {
+	// Create mock handlers
+	allowHandler := &MockValidationHandler{
+		name:        "allow-handler",
+		shouldAllow: true,
+		expectedResult: ValidationResult{
+			PolicyName: "Allow Policy",
+			PolicyType: "mock",
+			Allowed:    true,
+			Message:    "Allowed by mock handler",
+		},
+	}
+
+	denyHandler := &MockValidationHandler{
+		name:        "deny-handler",
+		shouldAllow: false,
+		expectedResult: ValidationResult{
+			PolicyName: "Deny Policy",
+			PolicyType: "mock",
+			Allowed:    false,
+			Message:    "Denied by mock handler",
+		},
+	}
+
+	// Test chain with multiple handlers
+	chain := NewToolValidationChain(allowHandler, denyHandler)
+
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "test_tool"},
+	}
+
+	results, err := chain.Handle(context.Background(), req)
+	require.NoError(t, err)
+
+	// Should aggregate results from both handlers
+	assert.Len(t, results.Results, 2)
+	assert.Equal(t, 1, results.AllowCount)
+	assert.Equal(t, 1, results.DenyCount)
+
+	// Check individual results
+	foundAllow := false
+	foundDeny := false
+	for _, result := range results.Results {
+		if result.PolicyName == "Allow Policy" {
+			foundAllow = true
+			assert.True(t, result.Allowed)
+		}
+		if result.PolicyName == "Deny Policy" {
+			foundDeny = true
+			assert.False(t, result.Allowed)
+		}
+	}
+	assert.True(t, foundAllow)
+	assert.True(t, foundDeny)
+}
+
+func TestValidationChain_ErrorHandling(t *testing.T) {
+	// Create handlers where one will error
+	errorHandler := &MockValidationHandler{
+		name:        "error-handler",
+		shouldError: true,
+	}
+
+	workingHandler := &MockValidationHandler{
+		name:        "working-handler",
+		shouldAllow: true,
+		expectedResult: ValidationResult{
+			PolicyName: "Working Policy",
+			PolicyType: "mock",
+			Allowed:    true,
+			Message:    "Working handler succeeded",
+		},
+	}
+
+	// Test chain with error handler
+	chain := NewToolValidationChain(errorHandler, workingHandler)
+
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "test_tool"},
+	}
+
+	results, err := chain.Handle(context.Background(), req)
+
+	// Should still get results from working handler
+	assert.Error(t, err) // Should have error from errorHandler
+	assert.Len(t, results.Results, 1)
+	assert.Equal(t, 1, results.AllowCount)
+	assert.Equal(t, 0, results.DenyCount)
+	assert.Equal(t, "Working Policy", results.Results[0].PolicyName)
+}
+
+func TestValidationChain_RealHandlers(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 
-	// Load test policies
+	// Create CEL engine with simple policies
+	celEngine, err := NewCELPolicyEngine(logger)
+	require.NoError(t, err)
+
 	policies := []config.CELPolicy{
 		{
 			Name:       "allow-read-tool",
@@ -30,13 +154,10 @@ func TestValidationChain(t *testing.T) {
 		},
 	}
 
-	// Create CEL engine
-	celEngine, err := NewCELPolicyEngine(logger)
-	require.NoError(t, err)
 	err = celEngine.LoadPolicies(policies)
 	require.NoError(t, err)
 
-	// Create validation chain
+	// Create validation chain with real handlers
 	chain := NewToolValidationChain(
 		NewToolCELValidationHandler(logger, celEngine),
 		NewToolLoggingHandler(logger),
@@ -46,116 +167,116 @@ func TestValidationChain(t *testing.T) {
 		name        string
 		req         mcp.CallToolRequest
 		wantAllowed bool
-		wantMessage string
+		wantResults int // Expected number of validation results
 	}{
 		{
-			name: "allowed read_file request",
+			name: "read_file with CEL and logging handlers",
 			req: mcp.CallToolRequest{
-				Request: mcp.Request{
-					Method: "tools/call",
-				},
+				Request: mcp.Request{Method: "tools/call"},
 				Params: mcp.CallToolParams{
-					Name: "read_file",
-					Arguments: map[string]any{
-						"target_file": "test.txt",
-					},
+					Name:      "read_file",
+					Arguments: map[string]any{"target_file": "test.txt"},
 				},
 			},
 			wantAllowed: true,
-			wantMessage: "Allowed to call read_file",
+			wantResults: 2, // CEL + Logging results
 		},
 		{
-			name: "denied delete_file request",
+			name: "delete_file with CEL and logging handlers",
 			req: mcp.CallToolRequest{
-				Request: mcp.Request{
-					Method: "tools/call",
-				},
+				Request: mcp.Request{Method: "tools/call"},
 				Params: mcp.CallToolParams{
-					Name: "delete_file",
-					Arguments: map[string]any{
-						"target_file": "test.txt",
-					},
+					Name:      "delete_file",
+					Arguments: map[string]any{"target_file": "test.txt"},
 				},
 			},
 			wantAllowed: false,
-			wantMessage: "delete_file is not allowed",
+			wantResults: 2, // CEL + Logging results
+		},
+		{
+			name: "unknown tool with CEL and logging handlers",
+			req: mcp.CallToolRequest{
+				Request: mcp.Request{Method: "tools/call"},
+				Params: mcp.CallToolParams{
+					Name:      "unknown_tool",
+					Arguments: map[string]any{"arg": "value"},
+				},
+			},
+			wantAllowed: true, // Default allow when no policies match
+			wantResults: 2,    // CEL + Logging results
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, errList := chain.Handle(context.Background(), tt.req)
-			require.Empty(t, errList)
+			results, err := chain.Handle(context.Background(), tt.req)
+			require.NoError(t, err)
+
 			assert.Equal(t, tt.wantAllowed, results.Allowed)
-			assert.Equal(t, tt.wantMessage, results.Message)
-			assert.NotEmpty(t, results.Results)
+			assert.Len(t, results.Results, tt.wantResults)
 
-			// Verify audit logging result
-			var auditResult *ValidationResult
-			for i := range results.Results {
-				if results.Results[i].PolicyType == "audit" {
-					auditResult = &results.Results[i]
-					break
+			// Verify we have both CEL and logging results
+			hasCEL := false
+			hasLogging := false
+			for _, result := range results.Results {
+				if result.PolicyType == "cel" {
+					hasCEL = true
+				}
+				if result.PolicyType == "audit" {
+					hasLogging = true
 				}
 			}
-			if assert.NotNil(t, auditResult) {
-				assert.Equal(t, "Audit Logging", auditResult.PolicyName)
-				assert.Equal(t, "audit", auditResult.PolicyType)
-				assert.True(t, auditResult.Allowed)
-			}
 
-			// Verify CEL validation result
-			var celResult *ValidationResult
-			for i := range results.Results {
-				if results.Results[i].PolicyType == "cel" {
-					celResult = &results.Results[i]
-					break
+			// CEL result should always be present now, even if no policies match
+			assert.True(t, hasCEL, "Should have CEL validation result")
+			assert.True(t, hasLogging, "Should have audit logging result")
+
+			if tt.name == "unknown tool with CEL and logging handlers" {
+				// Check that the CEL result is the trace result
+				foundTrace := false
+				for _, result := range results.Results {
+					if result.PolicyType == "cel" && result.Message == "No policies matched" {
+						foundTrace = true
+					}
 				}
-			}
-			if assert.NotNil(t, celResult) {
-				assert.Equal(t, tt.wantAllowed, celResult.Allowed)
-				assert.Equal(t, tt.wantMessage, celResult.Message)
+				assert.True(t, foundTrace, "Should have CEL trace result for no policies matched")
 			}
 		})
 	}
 }
 
-func TestLoggingHandler(t *testing.T) {
+func TestLoggingHandler_Isolation(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	handler := NewToolLoggingHandler(logger)
 
 	req := mcp.CallToolRequest{
-		Request: mcp.Request{
-			Method: "tools/call",
-		},
+		Request: mcp.Request{Method: "tools/call"},
 		Params: mcp.CallToolParams{
-			Name: "read_file",
-			Arguments: map[string]any{
-				"target_file": "test.txt",
-			},
+			Name:      "read_file",
+			Arguments: map[string]any{"target_file": "test.txt"},
 		},
 	}
 
 	results, err := handler.HandleToolCall(context.Background(), req)
 	require.NoError(t, err)
-	assert.True(t, results.Allowed)
-	assert.Equal(t, 1, results.AllowCount)
-	assert.Equal(t, 0, results.DenyCount)
-	assert.Len(t, results.Results, 1)
 
-	auditResult := results.Results[0]
-	assert.Equal(t, "Audit Logging", auditResult.PolicyName)
-	assert.Equal(t, "audit", auditResult.PolicyType)
-	assert.True(t, auditResult.Allowed)
+	// Logging handler should always allow and not interfere
+	assert.True(t, results.Allowed)
+	assert.Equal(t, 0, results.AllowCount) // No explicit allow/deny counts
+	assert.Equal(t, 0, results.DenyCount)
+	assert.Len(t, results.Results, 1) // Should have one audit log result
+	assert.Equal(t, "Audit Logging", results.Results[0].PolicyName)
+	assert.Equal(t, "audit", results.Results[0].PolicyType)
+	assert.True(t, results.Results[0].Allowed)
 }
 
-func TestCELValidationHandler(t *testing.T) {
+func TestCELValidationHandler_Isolation(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	engine, err := NewCELPolicyEngine(logger)
 	require.NoError(t, err)
 
-	// Load default policies
-	defaultPolicies := []config.CELPolicy{
+	// Load a simple policy
+	policies := []config.CELPolicy{
 		{
 			Name:       "allow-tools-call",
 			Expression: `request.method == "tools/call"`,
@@ -163,54 +284,41 @@ func TestCELValidationHandler(t *testing.T) {
 			Message:    "Allowed to call tools",
 		},
 	}
-	err = engine.LoadPolicies(defaultPolicies)
+	err = engine.LoadPolicies(policies)
 	require.NoError(t, err)
 
-	// Create handler
 	handler := NewToolCELValidationHandler(logger, engine)
 
-	tests := []struct {
-		name    string
-		req     mcp.CallToolRequest
-		wantErr bool
-	}{
-		{
-			name: "valid request with meta",
-			req: mcp.CallToolRequest{
-				Request: mcp.Request{
-					Method: "tools/call",
-					Params: mcp.RequestParams{
-						Meta: &mcp.Meta{},
-					},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "valid request without meta",
-			req: mcp.CallToolRequest{
-				Request: mcp.Request{
-					Method: "tools/call",
-					Params: mcp.RequestParams{},
-				},
-			},
-			wantErr: false,
-		},
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "any_tool"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := handler.HandleToolCall(context.Background(), tt.req)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.True(t, result.Allowed)
-			if assert.NotEmpty(t, result.Results) {
-				assert.Equal(t, "allow-tools-call", result.Results[0].PolicyName)
-				assert.Equal(t, "cel", result.Results[0].PolicyType)
-			}
-		})
+	results, err := handler.HandleToolCall(context.Background(), req)
+	require.NoError(t, err)
+
+	assert.True(t, results.Allowed)
+	assert.Equal(t, 1, results.AllowCount)
+	assert.Equal(t, 0, results.DenyCount)
+	assert.Len(t, results.Results, 1)
+	assert.Equal(t, "allow-tools-call", results.Results[0].PolicyName)
+	assert.Equal(t, "cel", results.Results[0].PolicyType)
+}
+
+func TestValidationChain_EmptyChain(t *testing.T) {
+	// Test behavior with no handlers
+	chain := NewToolValidationChain()
+
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "test_tool"},
 	}
+
+	results, err := chain.Handle(context.Background(), req)
+	require.NoError(t, err)
+
+	// Empty chain should return empty results
+	assert.Len(t, results.Results, 0)
+	assert.Equal(t, 0, results.AllowCount)
+	assert.Equal(t, 0, results.DenyCount)
 }

@@ -97,7 +97,7 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAllowed, results.Allowed)
 			assert.Equal(t, tt.wantMessage, results.Message)
-			// assert.NotEmpty(t, results.Results)
+			assert.NotEmpty(t, results.Results)
 
 			if len(results.Results) > 0 {
 				assert.Equal(t, tt.wantMessage, results.Results[0].Message)

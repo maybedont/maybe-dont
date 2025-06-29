@@ -21,6 +21,23 @@ func NewToolLoggingHandler(auditLogger *zap.Logger) *ToolLoggingHandler {
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
-	// Always allow, no validation needed. No need to log this either
-	return ValidationResults{}, nil
+	// Log the tool call for audit purposes
+	h.auditLogger.Info("Tool call audit log",
+		zap.String("method", req.Request.Method),
+		zap.String("tool_name", req.Params.Name),
+		zap.Any("arguments", req.Params.Arguments),
+	)
+
+	// Return audit result - always allows but provides audit trail
+	return ValidationResults{
+		Results: []ValidationResult{
+			{
+				PolicyName: "Audit Logging",
+				PolicyType: "audit",
+				Allowed:    true,
+				Message:    "Tool call logged for audit",
+			},
+		},
+		Allowed: true,
+	}, nil
 }

@@ -235,6 +235,12 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 	} else {
 		results.Allowed = true // Default to allow if no policies matched
 		results.Message = "No policies matched"
+		results.Results = append(results.Results, ValidationResult{
+			PolicyName: "CEL Policy Engine",
+			PolicyType: "cel",
+			Allowed:    true,
+			Message:    "No policies matched",
+		})
 	}
 
 	e.logger.Info("CEL policy evaluation complete",

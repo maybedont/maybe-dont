@@ -49,6 +49,11 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 	var finalResults ValidationResults
 	var finalError error
 
+	var foundDeny bool
+	var foundAllow bool
+	var denyMessage string
+	var allowMessage string
+
 	for _, handler := range c.handlers {
 		results, err := handler.HandleToolCall(ctx, req)
 		if err != nil {
@@ -63,6 +68,26 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.Results = append(finalResults.Results, results.Results...)
 		finalResults.AllowCount += results.AllowCount
 		finalResults.DenyCount += results.DenyCount
+
+		if !foundDeny && !results.Allowed && results.Message != "" {
+			denyMessage = results.Message
+			foundDeny = true
+		}
+		if !foundAllow && results.Allowed && results.Message != "" {
+			allowMessage = results.Message
+			foundAllow = true
+		}
+	}
+
+	// If any handler denied, overall Allowed is false
+	if foundDeny {
+		finalResults.Allowed = false
+		finalResults.Message = denyMessage
+	} else if foundAllow {
+		finalResults.Allowed = true
+		finalResults.Message = allowMessage
+	} else {
+		finalResults.Allowed = true
 	}
 
 	return finalResults, finalError
