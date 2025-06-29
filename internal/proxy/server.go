@@ -17,6 +17,8 @@ func (p *Proxy) initServer(ctx context.Context) error {
 		return p.initStdioServer(ctx)
 	case "sse":
 		return p.initSSEServer(ctx)
+	case "http":
+		return p.initHTTPServer(ctx)
 	default:
 		return fmt.Errorf("unsupported server type: %s", p.config.Server.Type)
 	}
@@ -134,6 +136,37 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 		<-ctx.Done()
 		if err := sseSrv.Shutdown(context.Background()); err != nil {
 			p.logger.Error("Error shutting down SSE server", zap.Error(err))
+		}
+	}()
+
+	return nil
+}
+
+func (p *Proxy) initHTTPServer(ctx context.Context) error {
+	srv, err := p.initMCPServer()
+	if err != nil {
+		return fmt.Errorf("failed to initialize MCP server: %w", err)
+	}
+
+	// Create HTTP server
+	httpSrv := server.NewStreamableHTTPServer(srv,
+		server.WithEndpointPath("/mcp"),
+	)
+
+	p.server = srv
+
+	// Start server in a goroutine
+	go func() {
+		if err := httpSrv.Start(p.config.Server.ListenAddr); err != nil {
+			p.logger.Error("Failed to start HTTP server", zap.Error(err))
+		}
+	}()
+
+	// Monitor context for cancellation
+	go func() {
+		<-ctx.Done()
+		if err := httpSrv.Shutdown(context.Background()); err != nil {
+			p.logger.Error("Error shutting down HTTP server", zap.Error(err))
 		}
 	}()
 
