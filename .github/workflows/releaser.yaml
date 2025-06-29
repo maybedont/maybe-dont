@@ -10,6 +10,7 @@ permissions:
   contents: write
   id-token: write
   packages: write
+  pull-requests: write
 
 jobs:
   release:
@@ -39,3 +40,17 @@ jobs:
           args: release --clean ${{ env.flags }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update website repository
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # Extract version from tag (remove 'v' prefix)
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "Running release script for version: $VERSION"
+          
+          # Set environment variables for the release script
+          export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          export VERSION="$VERSION"
+          export DIST_DIR="./dist"
+          
+          # Run the release script
+          ./scripts/release.sh
