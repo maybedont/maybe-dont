@@ -31,17 +31,18 @@ ai_validation:
 
 # Client configuration
 client:
+  # Github MCP Server
   type: http
   downstream_url: "https://api.githubcopilot.com/mcp/"
   # Auth header set via MCP_PROXY_CLIENT_HTTP_HEADERS_AUTHORIZATION
 
   # STDIO example:
-  #  # Transport type (stdio, sse, http)
-  #  type: stdio
-  #  # Command to execute (for stdio)
-  #  command: "./kubectl-ai"
-  #  # Command arguments
-  #  command_args: ["--mcp-server"]
+  ## Transport type (stdio, sse, http)
+  #type: stdio
+  ## Command to execute (for stdio)
+  #command: "./kubectl-ai"
+  ## Command arguments
+  #command_args: ["--mcp-server"]
 
 # Audit configuration
 audit:
