@@ -223,10 +223,25 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 
 		// Build user-friendly error message
 		var errorMessage string
-		if len(deniedMessages) > 0 && len(deniedPolicies) > 0 {
-			errorMessage = fmt.Sprintf("Request denied by policy '%s': %s", deniedPolicies[0], deniedMessages[0])
-		} else if len(deniedPolicies) > 0 {
-			errorMessage = fmt.Sprintf("Request denied by policy '%s'", deniedPolicies[0])
+		if len(deniedPolicies) > 0 {
+			if len(deniedPolicies) == 1 {
+				// Single policy failure
+				if len(deniedMessages) > 0 {
+					errorMessage = fmt.Sprintf("Request denied by policy '%s': %s", deniedPolicies[0], deniedMessages[0])
+				} else {
+					errorMessage = fmt.Sprintf("Request denied by policy '%s'", deniedPolicies[0])
+				}
+			} else {
+				// Multiple policy failures
+				errorMessage = fmt.Sprintf("Request denied by %d policies:", len(deniedPolicies))
+				for i, policyName := range deniedPolicies {
+					if i < len(deniedMessages) && deniedMessages[i] != "" {
+						errorMessage += fmt.Sprintf("\n- '%s': %s", policyName, deniedMessages[i])
+					} else {
+						errorMessage += fmt.Sprintf("\n- '%s'", policyName)
+					}
+				}
+			}
 		} else {
 			errorMessage = fmt.Sprintf("Request denied by %d policy(ies)", len(deniedPolicies))
 		}
