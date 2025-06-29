@@ -68,8 +68,8 @@ log_info "Copying release artifacts to ${VERSION_DIR}..."
 
 # Copy all tarball artifacts from the dist directory
 if [[ -d "$DIST_DIR" ]]; then
-    # Find all tarball files and copy them
-    find "$DIST_DIR" -name "*.tar.gz" -o -name "*.zip" | while read -r file; do
+    # Find all tarball, zip, and checksums.txt files and copy them
+    find "$DIST_DIR" \( -name "*.tar.gz" -o -name "*.zip" -o -name "*checksums.txt" \) | while read -r file; do
         filename=$(basename "$file")
         log_info "Copying $filename"
         cp "$file" "$VERSION_DIR/"
@@ -139,7 +139,7 @@ EOF
 
 # Add download links for each artifact
 if [[ -d "$VERSION_DIR" ]]; then
-    for file in "$VERSION_DIR"/*.tar.gz "$VERSION_DIR"/*.zip; do
+    for file in "$VERSION_DIR"/*.tar.gz "$VERSION_DIR"/*.zip "$VERSION_DIR"/*checksums.txt; do
         if [[ -f "$file" ]]; then
             filename=$(basename "$file")
             echo "        <li><a href=\"$filename\">$filename</a></li>" >> "${VERSION_DIR}/index.html"
@@ -193,7 +193,7 @@ PR_BODY="This PR adds the release artifacts for maybe-dont version ${VERSION}.
 - Generated download index page
 
 ## Artifacts included
-$(find "$VERSION_DIR" -name "*.tar.gz" -o -name "*.zip" | while read -r file; do
+$(find "$VERSION_DIR" -name "*.tar.gz" -o -name "*.zip" -o -name "*checksums.txt" | while read -r file; do
     echo "- $(basename "$file")"
 done)
 
