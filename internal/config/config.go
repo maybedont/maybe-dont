@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -152,6 +153,15 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 	// Set environment variable prefix
 	v.SetEnvPrefix("MCP_PROXY")
 	v.AutomaticEnv()
+
+	// Set up environment variable key mappings for nested map structures
+	// This allows environment variables to properly map to nested config fields
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Explicitly bind environment variables for nested map structures
+	// This is needed because Viper's automatic binding doesn't work well with nested maps
+	v.BindEnv("client.sse.headers.Authorization", "MCP_PROXY_CLIENT_SSE_HEADERS_AUTHORIZATION")
+	v.BindEnv("client.http.headers.Authorization", "MCP_PROXY_CLIENT_HTTP_HEADERS_AUTHORIZATION")
 
 	// Set config file name
 	v.SetConfigName("config")

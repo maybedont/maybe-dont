@@ -3,7 +3,7 @@
 # Server configuration
 server:
   # Server type (stdio, http, sse)
-  type: sse
+  type: http
   # Address to listen on (host:port)
   listen_addr: "127.0.0.1:8080"
   # Log level (debug, info, warn, error)
@@ -31,12 +31,17 @@ ai_validation:
 
 # Client configuration
 client:
-  # Transport type (stdio, sse, http)
-  type: stdio
-  # Command to execute (for stdio)
-  command: "./kubectl-ai"
-  # Command arguments
-  command_args: ["--mcp-server"]
+  type: http
+  downstream_url: "https://api.githubcopilot.com/mcp/"
+  # Auth header set via MCP_PROXY_CLIENT_HTTP_HEADERS_AUTHORIZATION
+
+  # STDIO example:
+  #  # Transport type (stdio, sse, http)
+  #  type: stdio
+  #  # Command to execute (for stdio)
+  #  command: "./kubectl-ai"
+  #  # Command arguments
+  #  command_args: ["--mcp-server"]
 
 # Audit configuration
 audit:
