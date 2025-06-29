@@ -32,7 +32,10 @@ archives:
 
 dockers:
   - image_templates:
-      - maybedont/maybe-dont
+      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}"
+      - "ghcr.io/maybedont/maybe-dont:latest"
 
 changelog:
   sort: asc
