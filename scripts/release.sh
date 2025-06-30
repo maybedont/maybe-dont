@@ -61,6 +61,7 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 log_info "Cloning website repository..."
 
 # Clone the website repository
+git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${WEBSITE_REPO}.git" "$TEMP_DIR"
 cd "$TEMP_DIR"
 
 # Check if Git LFS is available
