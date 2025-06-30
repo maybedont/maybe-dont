@@ -1,3 +1,11 @@
+## Unreleased
+
+### Fix
+
+- change listener to 0.0.0.0 for docker
+- audit log flag supersedes the config file
+- update base image to distroless so certs work
+
 ## v0.1.0 (2025-06-29)
 
 ### Feat
@@ -44,6 +52,17 @@
 ### Feat
 
 - use embed. change names
+
+### Fix
+
+- pass version info better
+- embed files
+- remove docker since it doesn't do podman
+
+## v0.0.1 (2025-06-08)
+
+### Feat
+
 - add a bunch of rules
 - ai calls are working
 - ai rules engine and first rule
@@ -57,9 +76,6 @@
 
 ### Fix
 
-- pass version info better
-- embed files
-- remove docker since it doesn't do podman
 - ci and docs stuff
 - turn AI back on
 - cel policies are logged
