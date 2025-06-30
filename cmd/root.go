@@ -6,6 +6,7 @@ import (
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
 
@@ -31,6 +32,14 @@ security controls for Model Context Protocol (MCP) communications. It acts as a 
 proxy between MCP clients and servers, enforcing security policies, validating requests, 
 and providing comprehensive audit logging.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// Bind command line flags to viper
+		if err := viper.BindPFlag("server.log_level", cmd.Flags().Lookup("log-level")); err != nil {
+			return fmt.Errorf("failed to bind log-level flag: %w", err)
+		}
+		if err := viper.BindPFlag("server.log_format", cmd.Flags().Lookup("log-format")); err != nil {
+			return fmt.Errorf("failed to bind log-format flag: %w", err)
+		}
+
 		var err error
 		cfg, err = config.LoadConfig(cfgFile, aiRules, celRules)
 		if err != nil {
