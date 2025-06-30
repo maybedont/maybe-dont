@@ -1,7 +1,8 @@
-## Unreleased
+## v0.1.1 (2025-06-29)
 
 ### Fix
 
+- revert changelog
 - change listener to 0.0.0.0 for docker
 - audit log flag supersedes the config file
 - update base image to distroless so certs work
