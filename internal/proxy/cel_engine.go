@@ -99,7 +99,6 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 		e.logger.Info("Loading CEL policy",
 			zap.String("name", policy.Name),
 			zap.String("action", policy.Action),
-			zap.String("expression", policy.Expression),
 		)
 
 		// Compile the expression

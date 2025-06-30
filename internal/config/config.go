@@ -148,7 +148,8 @@ func LoadAIPoliciesFromFile(path string) ([]AIPolicy, error) {
 
 // LoadConfig loads the configuration from all sources
 func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte) (*Config, error) {
-	v := viper.New()
+	// Use the global viper instance to ensure flag bindings work
+	v := viper.GetViper()
 
 	// Set environment variable prefix
 	v.SetEnvPrefix("MCP_PROXY")

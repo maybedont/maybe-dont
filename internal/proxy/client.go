@@ -122,7 +122,7 @@ func (p *Proxy) checkCapabilities(ctx context.Context) error {
 		}
 
 		p.capabilityDetails.Prompts = promptsResp.Prompts
-		p.logger.Info("Available prompts from MCP server",
+		p.logger.Debug("Available prompts from MCP server",
 			zap.Any("prompts", promptsResp.Prompts),
 		)
 	}
@@ -143,7 +143,7 @@ func (p *Proxy) checkCapabilities(ctx context.Context) error {
 		}
 
 		p.capabilityDetails.Resources = resourcesResp.Resources
-		p.logger.Info("Available resources from MCP server",
+		p.logger.Debug("Available resources from MCP server",
 			zap.Any("resources", resourcesResp.Resources),
 		)
 
@@ -163,7 +163,7 @@ func (p *Proxy) checkCapabilities(ctx context.Context) error {
 		}
 
 		p.capabilityDetails.Templates = templatesResp.ResourceTemplates
-		p.logger.Info("Available resource templates from MCP server",
+		p.logger.Debug("Available resource templates from MCP server",
 			zap.Any("templates", templatesResp.ResourceTemplates),
 		)
 	}
