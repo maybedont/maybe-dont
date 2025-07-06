@@ -5,3 +5,4 @@ update_changelog_on_bump = true
 annotated_tag = true
 major_version_zero = true
 version_provider = "scm"
+gpg_sign = true
