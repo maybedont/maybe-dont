@@ -205,6 +205,16 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 		return nil, fmt.Errorf("error unmarshaling config from %s: %w", v.ConfigFileUsed(), err)
 	}
 
+	// Set default server type to stdio if not configured
+	if config.Server.Type == "" {
+		config.Server.Type = ServerTypeSTDIO
+	}
+
+	// Set default listen address to 127.0.0.1 for non-stdio servers if not set
+	if config.Server.Type != ServerTypeSTDIO && config.Server.ListenAddr == "" {
+		config.Server.ListenAddr = "127.0.0.1"
+	}
+
 	// Override OpenAI API key from environment variable if set
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		config.AIPolicyValidation.APIKey = apiKey
@@ -263,8 +273,8 @@ func ValidateConfig(cfg *Config) error {
 	}
 
 	// Validate server configuration
-	if cfg.Server.ListenAddr == "" {
-		return fmt.Errorf("server.listen_addr is required")
+	if cfg.Server.Type != ServerTypeSTDIO && cfg.Server.ListenAddr == "" {
+		return fmt.Errorf("server.listen_addr is required for %s server type", cfg.Server.Type)
 	}
 
 	// Validate SSE server configuration if SSE type
