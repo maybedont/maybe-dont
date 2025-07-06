@@ -1,3 +1,9 @@
+## v0.1.2 (2025-07-05)
+
+### Fix
+
+- update goreleaser to wrap in directory
+
 ## v0.1.1 (2025-06-29)
 
 ### Fix
