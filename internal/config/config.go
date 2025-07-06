@@ -92,6 +92,7 @@ type Config struct {
 	// Logging configuration
 	Logging struct {
 		LogLevel string `mapstructure:"log_level"`
+		Path     string `mapstructure:"path"`
 	} `mapstructure:"logging"`
 }
 
@@ -338,9 +339,16 @@ func GetLogger(cfg *Config) (*zap.Logger, error) {
 	}
 	config.Level = zap.NewAtomicLevelAt(level)
 
-	// Ensure logs go to stdout
-	config.OutputPaths = []string{"stdout"}
-	config.ErrorOutputPaths = []string{"stderr"}
+	// Set output paths based on configuration
+	if cfg.Logging.Path != "" {
+		// Use configured log file path
+		config.OutputPaths = []string{cfg.Logging.Path}
+		config.ErrorOutputPaths = []string{cfg.Logging.Path}
+	} else {
+		// Default to stdout/stderr if no path configured
+		config.OutputPaths = []string{"stdout"}
+		config.ErrorOutputPaths = []string{"stderr"}
+	}
 
 	// Build the logger
 	logger, err := config.Build()
