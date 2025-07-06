@@ -16,7 +16,7 @@ var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Launch the MCP security gateway server",
 	Long: `Start the MCP security gateway server with the configured settings.
-The server will listen for MCP client connections and proxy them to the configured downstream server.`,
+The server will listen for MCP client connections and forward them to the configured downstream server.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		Logger.Info("Starting MCP security gateway")
 		// Create gateway instance
