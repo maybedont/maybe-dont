@@ -1,3 +1,9 @@
+## v0.1.6 (2025-07-06)
+
+### Fix
+
+- update config handling
+
 ## v0.1.5 (2025-07-06)
 
 ### Fix
