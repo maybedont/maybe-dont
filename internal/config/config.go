@@ -26,8 +26,6 @@ type Config struct {
 	Server struct {
 		Type       ServerType `mapstructure:"type"` // stdio, http, sse
 		ListenAddr string     `mapstructure:"listen_addr"`
-		LogLevel   string     `mapstructure:"log_level"`
-		LogFormat  string     `mapstructure:"log_format"`
 		SSE        struct {
 			TLS struct {
 				Enabled  bool   `mapstructure:"enabled"`
@@ -87,9 +85,14 @@ type Config struct {
 
 	// Audit configuration
 	Audit struct {
-		Path   string `mapstructure:"path"`
-		Format string `mapstructure:"format"` // json or text
+		Enabled bool   `mapstructure:"enabled"`
+		Path    string `mapstructure:"path"`
 	} `mapstructure:"audit"`
+
+	// Logging configuration
+	Logging struct {
+		LogLevel string `mapstructure:"log_level"`
+	} `mapstructure:"logging"`
 }
 
 // CELPolicy represents a single CEL policy rule
@@ -328,14 +331,10 @@ func ValidateConfig(cfg *Config) error {
 func GetLogger(cfg *Config) (*zap.Logger, error) {
 	var config zap.Config
 
-	if cfg.Server.LogFormat == "json" {
-		config = zap.NewProductionConfig()
-	} else {
-		config = zap.NewDevelopmentConfig()
-	}
+	config = zap.NewProductionConfig()
 
 	// Set log level
-	level, err := zapcore.ParseLevel(cfg.Server.LogLevel)
+	level, err := zapcore.ParseLevel(cfg.Logging.LogLevel)
 	if err != nil {
 		return nil, fmt.Errorf("invalid log level: %w", err)
 	}
@@ -359,11 +358,7 @@ func GetLogger(cfg *Config) (*zap.Logger, error) {
 func GetAuditLogger(cfg *Config) (*zap.Logger, error) {
 	var config zap.Config
 
-	if cfg.Audit.Format == "json" {
-		config = zap.NewProductionConfig()
-	} else {
-		config = zap.NewDevelopmentConfig()
-	}
+	config = zap.NewProductionConfig()
 
 	// Set log level to info for audit logs
 	config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)

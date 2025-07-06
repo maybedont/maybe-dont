@@ -4,13 +4,10 @@
 # Logging configuration
 logging:
   level: info  # debug, info, warn, error
-  format: json # json, console
+
 audit:
   enabled: true
-  level: info
-  format: json
-  output: file # stdout, stderr, file
-  path: ./audit.log
+  path: ./audit.log # filename, stderr, stdout
 
 # Client configuration (downstream MCP server)
 client:
@@ -31,10 +28,6 @@ server:
   type: http
   # Address to listen on (host:port)
   listen_addr: "0.0.0.0:8080"
-  # Log level (debug, info, warn, error)
-  log_level: "info"
-  # Log format (json or text)
-  log_format: "json"
 
 # Policy configuration
 policy_validation:
