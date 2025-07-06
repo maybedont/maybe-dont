@@ -33,7 +33,7 @@ archives:
     wrap_in_directory: true
     files:
       - README.md
-      - src: config.yaml
+      - src: gateway-config.yaml
         info:
           mode: 0644
       - LICENSE

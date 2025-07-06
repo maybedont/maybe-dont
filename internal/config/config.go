@@ -91,7 +91,7 @@ type Config struct {
 
 	// Logging configuration
 	Logging struct {
-		LogLevel string `mapstructure:"log_level"`
+		LogLevel string `mapstructure:"level"`
 		Path     string `mapstructure:"path"`
 	} `mapstructure:"logging"`
 }
@@ -172,31 +172,20 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 	}
 
 	// Set config file name
-	v.SetConfigName("config")
+	v.SetConfigName("gateway-config")
 	v.SetConfigType("yaml")
 
 	// Add config paths
 	if configPath != "" {
 		v.AddConfigPath(configPath)
+	} else {
+		v.AddConfigPath(".")
+		v.AddConfigPath("$HOME/.maybe-dont")
 	}
-	v.AddConfigPath(".")                  // Current directory
-	v.AddConfigPath("$HOME/.mcp-gateway") // User home
-	v.AddConfigPath("/etc/mcp-gateway")   // System-wide
 
 	// Read config file
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			// Try to read the file directly to get better error messages
-			if configPath != "" {
-				if data, readErr := os.ReadFile(configPath); readErr == nil {
-					if parseErr := yaml.Unmarshal(data, &Config{}); parseErr != nil {
-						return nil, fmt.Errorf("YAML parsing error in %s: %w", configPath, parseErr)
-					}
-				}
-			}
-			return nil, fmt.Errorf("error reading config file %s: %w", configPath, err)
-		}
-		// Config file not found, but that's okay - we'll use defaults
+		return nil, fmt.Errorf("error reading config from path %s: %w", configPath, err)
 	}
 
 	// Unmarshal config

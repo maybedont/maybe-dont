@@ -6,12 +6,11 @@ import (
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
 
 var (
-	cfgFile  string
+	cfgPath  string
 	cfg      *config.Config
 	Logger   *zap.Logger
 	aiRules  []byte
@@ -32,16 +31,8 @@ security controls for Model Context Protocol (MCP) communications. It acts as a 
 gateway between MCP clients and servers, enforcing security policies, validating requests, 
 and providing comprehensive audit logging.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// Bind command line flags to viper
-		if err := viper.BindPFlag("server.log_level", cmd.Flags().Lookup("log-level")); err != nil {
-			return fmt.Errorf("failed to bind log-level flag: %w", err)
-		}
-		if err := viper.BindPFlag("server.log_format", cmd.Flags().Lookup("log-format")); err != nil {
-			return fmt.Errorf("failed to bind log-format flag: %w", err)
-		}
-
 		var err error
-		cfg, err = config.LoadConfig(cfgFile, aiRules, celRules)
+		cfg, err = config.LoadConfig(cfgPath, aiRules, celRules)
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
@@ -78,7 +69,5 @@ func Execute(VERSION string, COMMIT string, DATE string, AIRules []byte, CELRule
 
 func init() {
 	// Global flags
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ./config.yaml)")
-	rootCmd.PersistentFlags().String("log-level", "debug", "log level (debug, info, warn, error)")
-	rootCmd.PersistentFlags().String("log-format", "json", "log format (json or text)")
+	rootCmd.PersistentFlags().StringVar(&cfgPath, "config-path", "", "Override the config directory (default is ./ or $HOME/.maybe-dont)")
 }
