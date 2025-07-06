@@ -16,15 +16,14 @@ audit:
 client:
   type: http # stdio, sse, http
   # For stdio:
-  # command: /path/to/mcp/server
-  # command_args: ["--config", "/path/to/config.json"]
-  
-  # For SSE/HTTP:
-  downstream_url: "http://localhost:3000"
-  headers:
-    Authorization: ""  # Will be set from environment variable
-  
-  # Auth header set via MCP_GATEWAY_CLIENT_HTTP_HEADERS_AUTHORIZATION
+  command: "uvx"
+  command_args: ["awslabs.aws-documentation-mcp-server@latest"]
+
+  ## For SSE/HTTP:
+  downstream_url: "https://api.githubcopilot.com/mcp/"
+    #  headers:
+    #    # Auth header set via MCP_GATEWAY_CLIENT_HTTP_HEADERS_AUTHORIZATION
+    #    Authorization: ""
 
 # Server configuration
 server:

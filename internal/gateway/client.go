@@ -24,6 +24,7 @@ func (p *Gateway) initDownstreamClient(ctx context.Context) error {
 }
 
 func (p *Gateway) initStdioClient(ctx context.Context) error {
+	p.logger.Debug("Initializing MCP client", zap.String("command", p.config.Client.Command), zap.Any("command_args", p.config.Client.CommandArgs))
 	cl, err := client.NewStdioMCPClient(p.config.Client.Command, nil, p.config.Client.CommandArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP client: %w", err)
@@ -34,6 +35,7 @@ func (p *Gateway) initStdioClient(ctx context.Context) error {
 }
 
 func (p *Gateway) initSSEClient(ctx context.Context) error {
+	p.logger.Debug("Initializing MCP client", zap.String("downstream_url", p.config.Client.DownstreamURL))
 	cl, err := client.NewSSEMCPClient(
 		p.config.Client.DownstreamURL,
 		client.WithHeaders(p.config.Client.SSEConfig.Headers),

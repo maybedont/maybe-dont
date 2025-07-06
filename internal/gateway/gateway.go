@@ -116,8 +116,8 @@ func (p *Gateway) Start(ctx context.Context) error {
 	defer p.mu.Unlock()
 
 	// Debug print the loaded config
-	if cfgBytes, err := json.MarshalIndent(p.config, "", "  "); err == nil {
-		p.logger.Debug("Loaded gateway config", zap.String("config", string(cfgBytes)))
+	if _, err := json.MarshalIndent(p.config, "", "  "); err == nil {
+		p.logger.Debug("Loaded gateway config")
 	} else {
 		p.logger.Warn("Failed to marshal config for debug print", zap.Error(err))
 	}
