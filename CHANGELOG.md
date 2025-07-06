@@ -1,3 +1,9 @@
+## v0.1.5 (2025-07-06)
+
+### Fix
+
+- default the server and listen address
+
 ## v0.1.4 (2025-07-06)
 
 ### Fix
