@@ -18,9 +18,9 @@ client:
 
   ## For SSE/HTTP:
   downstream_url: "https://api.githubcopilot.com/mcp/"
-    #  headers:
-    #    # Auth header set via MCP_GATEWAY_CLIENT_HTTP_HEADERS_AUTHORIZATION
-    #    Authorization: ""
+  # Auth header set via MCP_GATEWAY_CLIENT_HTTP_HEADERS_AUTHORIZATION
+  #headers:
+  #  Authorization: ""
 
 # Server configuration
 server:
