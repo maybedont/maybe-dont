@@ -31,7 +31,10 @@ archives:
       - goos: windows
         formats: [zip]
     wrap_in_directory: true
-
+    files:
+      - README.md
+      - config.yaml
+      - LICENSE
 dockers:
   - image_templates:
       - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}"
