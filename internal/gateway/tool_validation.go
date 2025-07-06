@@ -1,4 +1,4 @@
-package proxy
+package gateway
 
 import (
 	"context"
@@ -132,6 +132,6 @@ func (h *ToolAIValidationHandler) HandleToolCall(ctx context.Context, req mcp.Ca
 }
 
 // ValidateToolCall validates a tool call request
-func (p *Proxy) ValidateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+func (p *Gateway) ValidateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
 	return p.validationChain.Handle(ctx, req)
 }

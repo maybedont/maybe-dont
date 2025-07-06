@@ -1,4 +1,4 @@
-package proxy
+package gateway
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (p *Proxy) initDownstreamClient(ctx context.Context) error {
+func (p *Gateway) initDownstreamClient(ctx context.Context) error {
 	switch p.config.Client.Type {
 	case "stdio":
 		return p.initStdioClient(ctx)
@@ -23,7 +23,7 @@ func (p *Proxy) initDownstreamClient(ctx context.Context) error {
 	}
 }
 
-func (p *Proxy) initStdioClient(ctx context.Context) error {
+func (p *Gateway) initStdioClient(ctx context.Context) error {
 	cl, err := client.NewStdioMCPClient(p.config.Client.Command, nil, p.config.Client.CommandArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP client: %w", err)
@@ -33,7 +33,7 @@ func (p *Proxy) initStdioClient(ctx context.Context) error {
 	return p.checkCapabilities(ctx)
 }
 
-func (p *Proxy) initSSEClient(ctx context.Context) error {
+func (p *Gateway) initSSEClient(ctx context.Context) error {
 	cl, err := client.NewSSEMCPClient(
 		p.config.Client.DownstreamURL,
 		client.WithHeaders(p.config.Client.SSEConfig.Headers),
@@ -46,7 +46,7 @@ func (p *Proxy) initSSEClient(ctx context.Context) error {
 	return p.checkCapabilities(ctx)
 }
 
-func (p *Proxy) initHTTPClient(ctx context.Context) error {
+func (p *Gateway) initHTTPClient(ctx context.Context) error {
 	cl, err := client.NewStreamableHttpClient(
 		p.config.Client.DownstreamURL,
 		transport.WithHTTPHeaders(p.config.Client.HTTPConfig.Headers),
@@ -59,7 +59,7 @@ func (p *Proxy) initHTTPClient(ctx context.Context) error {
 	return p.checkCapabilities(ctx)
 }
 
-func (p *Proxy) checkCapabilities(ctx context.Context) error {
+func (p *Gateway) checkCapabilities(ctx context.Context) error {
 	req := &mcp.InitializeRequest{
 		Request: mcp.Request{
 			Method: "initialize",

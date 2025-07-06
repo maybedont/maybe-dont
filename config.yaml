@@ -1,4 +1,30 @@
-# MCP Security Proxy Configuration
+# MCP Security Gateway Configuration
+# This file configures the MCP security gateway service.
+
+# Logging configuration
+logging:
+  level: info  # debug, info, warn, error
+  format: json # json, console
+audit:
+  enabled: true
+  level: info
+  format: json
+  output: file # stdout, stderr, file
+  path: ./audit.log
+
+# Client configuration (downstream MCP server)
+client:
+  type: http # stdio, sse, http
+  # For stdio:
+  # command: /path/to/mcp/server
+  # command_args: ["--config", "/path/to/config.json"]
+  
+  # For SSE/HTTP:
+  downstream_url: "http://localhost:3000"
+  headers:
+    Authorization: ""  # Will be set from environment variable
+  
+  # Auth header set via MCP_GATEWAY_CLIENT_HTTP_HEADERS_AUTHORIZATION
 
 # Server configuration
 server:
@@ -28,33 +54,3 @@ ai_validation:
   model: "gpt-4o-mini"
   # Path to AI policy rules file (optional, uses embedded rules by default)
   # rules_file: "ai_rules.yaml"
-
-# Client configuration
-client:
-  # Github MCP Server
-  type: http
-  downstream_url: "https://api.githubcopilot.com/mcp/"
-  # Auth header set via MCP_PROXY_CLIENT_HTTP_HEADERS_AUTHORIZATION
-
-  # STDIO example:
-  ## Transport type (stdio, sse, http)
-  #type: stdio
-  ## Command to execute (for stdio)
-  #command: "./kubectl-ai"
-  ## Command arguments
-  #command_args: ["--mcp-server"]
-
-# Audit configuration
-audit:
-  # Audit log file path
-  # Options:
-  # - "stdout" - Write to standard output
-  # - "stderr" - Write to standard error
-  # - "audit.log" - Write to a file in current directory
-  # - "/var/log/maybe-dont/audit.log" - Write to a specific path
-  # - "/dev/null" - Disable audit logging
-  path: "audit.log"
-  # Audit log format (json or text)
-  # - "json" - Structured JSON format (recommended for production)
-  # - "text" - Human-readable text format
-  format: "json"

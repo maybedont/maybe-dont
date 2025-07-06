@@ -152,20 +152,19 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 	v := viper.GetViper()
 
 	// Set environment variable prefix
-	v.SetEnvPrefix("MCP_PROXY")
+	v.SetEnvPrefix("MCP_GATEWAY")
 	v.AutomaticEnv()
 
 	// Set up environment variable key mappings for nested map structures
 	// This allows environment variables to properly map to nested config fields
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	// Explicitly bind environment variables for nested map structures
-	// This is needed because Viper's automatic binding doesn't work well with nested maps
-	if err := v.BindEnv("client.sse.headers.Authorization", "MCP_PROXY_CLIENT_SSE_HEADERS_AUTHORIZATION"); err != nil {
-		return nil, fmt.Errorf("failed to bind SSE authorization environment variable: %w", err)
+	// Bind specific environment variables for headers
+	if err := v.BindEnv("client.sse.headers.Authorization", "MCP_GATEWAY_CLIENT_SSE_HEADERS_AUTHORIZATION"); err != nil {
+		return nil, fmt.Errorf("failed to bind SSE auth env var: %w", err)
 	}
-	if err := v.BindEnv("client.http.headers.Authorization", "MCP_PROXY_CLIENT_HTTP_HEADERS_AUTHORIZATION"); err != nil {
-		return nil, fmt.Errorf("failed to bind HTTP authorization environment variable: %w", err)
+	if err := v.BindEnv("client.http.headers.Authorization", "MCP_GATEWAY_CLIENT_HTTP_HEADERS_AUTHORIZATION"); err != nil {
+		return nil, fmt.Errorf("failed to bind HTTP auth env var: %w", err)
 	}
 
 	// Set config file name
@@ -176,9 +175,9 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 	if configPath != "" {
 		v.AddConfigPath(configPath)
 	}
-	v.AddConfigPath(".")                // Current directory
-	v.AddConfigPath("$HOME/.mcp-proxy") // User home
-	v.AddConfigPath("/etc/mcp-proxy")   // System-wide
+	v.AddConfigPath(".")                  // Current directory
+	v.AddConfigPath("$HOME/.mcp-gateway") // User home
+	v.AddConfigPath("/etc/mcp-gateway")   // System-wide
 
 	// Read config file
 	if err := v.ReadInConfig(); err != nil {
