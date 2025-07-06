@@ -107,7 +107,7 @@ func (p *Gateway) initStdioServer(ctx context.Context) error {
 		}
 	}()
 
-	p.logger.Info("STDIO server started", zap.String("listen_addr", p.config.Server.ListenAddr))
+	p.logger.Info("STDIO server started")
 
 	return nil
 }
