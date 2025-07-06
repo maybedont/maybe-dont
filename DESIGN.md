@@ -36,9 +36,9 @@ The implementation MUST use the following libraries:
 
 ```
 ┌─────────────────┐    ┌─────────────────────┐    ┌─────────────────┐
-│   MCP Client    │◄──►│  Security Gateway     │◄──►│   MCP Server    │
+│   MCP Client    │◄──►│  Security Gateway   │◄──►│   MCP Server    │
 │                 │    │                     │    │                 │
-│ (Unmodified)    │    │ • Authentication    │    │ (Any MCP impl) │
+│ (Unmodified)    │    │ • Authentication    │    │ (Any MCP impl)  │
 │                 │    │ • Authorization     │    │                 │
 │                 │    │ • Validation        │    │                 │
 │                 │    │ • Audit Logging     │    │                 │
