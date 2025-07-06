@@ -29,7 +29,7 @@ var rootCmd = &cobra.Command{
 	Short:         "Maybe Don't, an MCP Security Gateway - Enterprise-grade security controls for MCP communications",
 	Long: `MCP Security Gateway is a Go-based middleware service that provides enterprise-grade 
 security controls for Model Context Protocol (MCP) communications. It acts as a transparent
-proxy between MCP clients and servers, enforcing security policies, validating requests, 
+gateway between MCP clients and servers, enforcing security policies, validating requests, 
 and providing comprehensive audit logging.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Bind command line flags to viper

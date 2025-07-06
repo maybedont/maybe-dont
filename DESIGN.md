@@ -1,8 +1,8 @@
-# MCP Security Proxy Design Document
+# MCP Security Gateway Design Document
 
 ## Product Overview
 
-The MCP Security Proxy is a Go-based middleware service that provides enterprise-grade security controls for Model Context Protocol (MCP) communications. It acts as a transparent proxy between MCP clients and servers, enforcing security policies, validating requests, and providing comprehensive audit logging.
+The MCP Security Gateway is a Go-based middleware service that provides enterprise-grade security controls for Model Context Protocol (MCP) communications. It acts as a transparent gateway between MCP clients and servers, enforcing security policies, validating requests, and providing comprehensive audit logging.
 
 ### Core Value Proposition
 
@@ -36,7 +36,7 @@ The implementation MUST use the following libraries:
 
 ```
 ┌─────────────────┐    ┌─────────────────────┐    ┌─────────────────┐
-│   MCP Client    │◄──►│  Security Proxy     │◄──►│   MCP Server    │
+│   MCP Client    │◄──►│  Security Gateway     │◄──►│   MCP Server    │
 │                 │    │                     │    │                 │
 │ (Unmodified)    │    │ • Authentication    │    │ (Any MCP impl) │
 │                 │    │ • Authorization     │    │                 │
@@ -48,7 +48,7 @@ The implementation MUST use the following libraries:
 
 ### Configuration Management
 
-The proxy MUST support configuration through three mechanisms with the following precedence:
+The gateway MUST support configuration through three mechanisms with the following precedence:
 
 1. **Command-line flags** (highest priority)
 2. **Environment variables** (with `MCP_PROXY_` prefix)
@@ -57,18 +57,18 @@ The proxy MUST support configuration through three mechanisms with the following
 
 Configuration search paths:
 - Current directory: `./config.yaml`
-- User home: `~/.mcp-proxy/config.yaml`
-- System-wide: `/etc/mcp-proxy/config.yaml`
+- User home: `~/.mcp-gateway/config.yaml`
+- System-wide: `/etc/mcp-gateway/config.yaml`
 - Custom path via `--config` flag
 
 ### CLI Design Requirements
 
 #### Primary Commands
 
-- `mcp-security-proxy start` - Launch the proxy server
-- `mcp-security-proxy validate` - Validate configuration and compile CEL policies
-- `mcp-security-proxy version` - Display version and build information
-- `mcp-security-proxy test` - Test CEL policies against sample requests
+- `mcp-security-gateway start` - Launch the gateway server
+- `mcp-security-gateway validate` - Validate configuration and compile CEL policies
+- `mcp-security-gateway version` - Display version and build information
+- `mcp-security-gateway test` - Test CEL policies against sample requests
 
 #### Global Flags
 
@@ -86,17 +86,17 @@ Configuration search paths:
 
 #### Test Command
 
-The `test` command allows validation of CEL policies without running the proxy:
+The `test` command allows validation of CEL policies without running the gateway:
 
 ```bash
 # Test policies against a request file
-mcp-security-proxy test --config config.yaml --request request.json
+mcp-security-gateway test --config config.yaml --request request.json
 
 # Test policies interactively
-mcp-security-proxy test --config config.yaml --interactive
+mcp-security-gateway test --config config.yaml --interactive
 
 # Test with specific auth context
-mcp-security-proxy test --config config.yaml --auth-context '{"client_id": "test", "roles": ["user"]}'
+mcp-security-gateway test --config config.yaml --auth-context '{"client_id": "test", "roles": ["user"]}'
 ```
 
 The test command must:
@@ -117,8 +117,8 @@ All logs MUST be structured JSON by default with the following requirements:
 1. **Standard Fields** (always present):
    - `timestamp` - ISO8601 format
    - `level` - Log level
-   - `service` - Always "mcp-security-proxy"
-   - `version` - Proxy version
+   - `service` - Always "mcp-security-gateway"
+   - `version` - Gateway version
    - `request_id` - Unique request identifier
    - `client_id` - Authenticated client identifier
 
@@ -144,7 +144,7 @@ All logs MUST be structured JSON by default with the following requirements:
 
 #### Debug Mode Requirements
 
-When `log-level: debug`, the proxy MUST:
+When `log-level: debug`, the gateway MUST:
 - Log complete request/response payloads with sensitive data redacted
 - Include all validation decisions with reasoning
 - Show authentication/authorization flow
@@ -163,7 +163,7 @@ The logger MUST automatically redact:
 
 #### Authentication
 
-The proxy MUST support multiple authentication mechanisms:
+The gateway MUST support multiple authentication mechanisms:
 
 1. **API Key Authentication**
    - Header-based or query parameter
@@ -195,7 +195,7 @@ Role-based access control (RBAC) with:
 
 #### Policy Engine
 
-The proxy MUST use **Common Expression Language (CEL)** for policy rules, providing:
+The gateway MUST use **Common Expression Language (CEL)** for policy rules, providing:
 
 - **Expressive policies**: Write complex conditions in a familiar, type-safe language
 - **Performance**: CEL compiles to efficient evaluation programs
@@ -310,8 +310,8 @@ policies:
 ### Full Configuration Structure
 
 ```yaml
-# Proxy listener configuration
-proxy:
+# Gateway listener configuration
+gateway:
   listen:
     transport: stdio|sse    # http in Phase 2
     address: ":8080"       # For SSE (and HTTP in Phase 2)
@@ -481,7 +481,7 @@ audit:
 
 ### Enterprise Features
 
-1. **Multi-Tenancy**: Isolated proxy instances with shared infrastructure
+1. **Multi-Tenancy**: Isolated gateway instances with shared infrastructure
 2. **High Availability**: Active-active clustering with state synchronization
 3. **Compliance Modes**: Pre-configured policies for HIPAA, PCI, SOC2
 4. **Integration Ecosystem**: Plugins for SIEM, SOAR, and identity providers
@@ -490,7 +490,7 @@ audit:
 
 1. **Connection Pooling**: Reuse downstream connections
 2. **Request Caching**: Cache safe, idempotent operations
-3. **Zero-Copy Proxying**: Direct memory transfer for large payloads
+3. **Zero-Copy Gatewaying**: Direct memory transfer for large payloads
 4. **Hardware Acceleration**: Crypto operations offloading
 
 ## Success Metrics
@@ -498,14 +498,14 @@ audit:
 1. **Adoption**: Number of deployments and active users
 2. **Security**: Policy violations caught, attacks prevented
 3. **Performance**: P99 latency overhead below 10ms (including CEL evaluation)
-4. **Reliability**: 99.9% uptime for proxy service
+4. **Reliability**: 99.9% uptime for gateway service
 5. **Compliance**: Successful audits with complete trail
 6. **Policy Effectiveness**: Percentage of requests evaluated, false positive rate
 
 ## Development Priorities
 
 ### Phase 1 (MVP)
-- Core proxy functionality with STDIO and SSE transports
+- Core gateway functionality with STDIO and SSE transports
 - Basic authentication (API key)
 - CEL-based policy engine with common security rules
 - File path validation via CEL expressions
