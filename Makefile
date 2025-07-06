@@ -20,5 +20,7 @@ test:
 	$(GO) test -v ./...
 bump-version:
 	cz bump
+	git push
+	git push --tags
 snapshot:
 	goreleaser release --snapshot --skip=docker --clean
