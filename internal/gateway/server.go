@@ -1,4 +1,4 @@
-package proxy
+package gateway
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (p *Proxy) initServer(ctx context.Context) error {
+func (p *Gateway) initServer(ctx context.Context) error {
 	switch p.config.Server.Type {
 	case "stdio":
 		return p.initStdioServer(ctx)
@@ -25,7 +25,7 @@ func (p *Proxy) initServer(ctx context.Context) error {
 }
 
 // initMCPServer initializes the MCP server with common configuration and registers tools
-func (p *Proxy) initMCPServer() (*server.MCPServer, error) {
+func (p *Gateway) initMCPServer() (*server.MCPServer, error) {
 	opts := []server.ServerOption{
 		server.WithLogging(),
 		server.WithRecovery(),
@@ -86,7 +86,7 @@ func (p *Proxy) initMCPServer() (*server.MCPServer, error) {
 	return srv, nil
 }
 
-func (p *Proxy) initStdioServer(ctx context.Context) error {
+func (p *Gateway) initStdioServer(ctx context.Context) error {
 	srv, err := p.initMCPServer()
 	if err != nil {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
@@ -110,7 +110,7 @@ func (p *Proxy) initStdioServer(ctx context.Context) error {
 	return nil
 }
 
-func (p *Proxy) initSSEServer(ctx context.Context) error {
+func (p *Gateway) initSSEServer(ctx context.Context) error {
 	srv, err := p.initMCPServer()
 	if err != nil {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
@@ -142,7 +142,7 @@ func (p *Proxy) initSSEServer(ctx context.Context) error {
 	return nil
 }
 
-func (p *Proxy) initHTTPServer(ctx context.Context) error {
+func (p *Gateway) initHTTPServer(ctx context.Context) error {
 	srv, err := p.initMCPServer()
 	if err != nil {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
@@ -174,7 +174,7 @@ func (p *Proxy) initHTTPServer(ctx context.Context) error {
 }
 
 // Custom tool handler that handles PolicyDeniedError and returns proper MCP error responses
-func (p *Proxy) handleToolCallWithErrorHandling(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (p *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	result, err := p.HandleToolCall(ctx, req)
 	if err != nil {
 		// Check if it's a PolicyDeniedError

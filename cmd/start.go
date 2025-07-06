@@ -2,56 +2,55 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/maybedont/maybe-dont/internal/proxy"
+	"github.com/maybedont/maybe-dont/internal/gateway"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Launch the MCP security proxy server",
-	Long: `Start the MCP security proxy server with the configured settings.
-The server will begin listening for connections and enforcing security policies.`,
+	Short: "Launch the MCP security gateway server",
+	Long: `Start the MCP security gateway server with the configured settings.
+The server will listen for MCP client connections and proxy them to the configured downstream server.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		Logger.Info("Starting MCP security proxy")
-		// Create proxy instance
-		p, err := proxy.New(cfg, Logger)
+		Logger.Info("Starting MCP security gateway")
+		// Create gateway instance
+		p, err := gateway.New(cfg, Logger)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create gateway: %w", err)
 		}
 
-		// Create context that will be canceled on interrupt
+		// Create context for graceful shutdown
 		ctx, cancel := context.WithCancel(context.Background())
-		defer func() {
-			cancel()
-			_ = Logger.Sync()
-		}()
+		defer cancel()
 
-		// Handle OS signals
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		// Handle shutdown signals
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
 		go func() {
-			sig := <-sigCh
-			Logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
+			sig := <-sigChan
+			Logger.Info("Received shutdown signal", zap.String("signal", sig.String()))
 			cancel()
 		}()
 
-		// Start the proxy
+		// Start the gateway
 		if err := p.Start(ctx); err != nil {
-			return err
+			return fmt.Errorf("failed to start gateway: %w", err)
 		}
 
-		// Wait for context cancellation
+		// Wait for shutdown
 		<-ctx.Done()
+		Logger.Info("Shutting down gateway")
 
-		Logger.Info("Shutting down proxy")
+		// Stop the gateway
 		if err := p.Stop(); err != nil {
-			Logger.Error("Error during shutdown", zap.Error(err))
-			return err
+			return fmt.Errorf("failed to stop gateway: %w", err)
 		}
 
 		return nil

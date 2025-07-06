@@ -1,4 +1,4 @@
-package proxy
+package gateway
 
 import (
 	"context"
@@ -24,8 +24,8 @@ func (e *PolicyDeniedError) Error() string {
 	return e.Message
 }
 
-// Proxy represents an MCP security proxy instance
-type Proxy struct {
+// Gateway represents an MCP security gateway instance
+type Gateway struct {
 	logger       *zap.Logger
 	auditLogger  *zap.Logger
 	config       *config.Config
@@ -49,8 +49,8 @@ type Proxy struct {
 	aiPolicyEngine *AIPolicyEngine
 }
 
-// New creates a new proxy instance
-func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
+// New creates a new gateway instance
+func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 	// Create audit logger with its own configuration
 	auditLogger, err := config.GetAuditLogger(cfg)
 	if err != nil {
@@ -100,7 +100,7 @@ func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
 		logger.Info("AI policy validation is disabled")
 	}
 
-	return &Proxy{
+	return &Gateway{
 		logger:         logger,
 		auditLogger:    auditLogger,
 		config:         cfg,
@@ -110,14 +110,14 @@ func New(cfg *config.Config, logger *zap.Logger) (*Proxy, error) {
 	}, nil
 }
 
-// Start initializes and starts the proxy
-func (p *Proxy) Start(ctx context.Context) error {
+// Start initializes and starts the gateway
+func (p *Gateway) Start(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	// Debug print the loaded config
 	if cfgBytes, err := json.MarshalIndent(p.config, "", "  "); err == nil {
-		p.logger.Debug("Loaded proxy config", zap.String("config", string(cfgBytes)))
+		p.logger.Debug("Loaded gateway config", zap.String("config", string(cfgBytes)))
 	} else {
 		p.logger.Warn("Failed to marshal config for debug print", zap.Error(err))
 	}
@@ -154,12 +154,12 @@ func (p *Proxy) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the proxy
-func (p *Proxy) Stop() error {
+// Stop gracefully shuts down the gateway
+func (p *Gateway) Stop() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.logger.Info("Stopping proxy")
+	p.logger.Info("Stopping gateway")
 
 	// Close the stop channel to signal shutdown
 	close(p.stopChan)
@@ -175,7 +175,7 @@ func (p *Proxy) Stop() error {
 }
 
 // Tool handler function
-func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (p *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Create audit log entry
 	auditLog := map[string]interface{}{
 		"request": req,
@@ -302,12 +302,12 @@ func (p *Proxy) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*m
 }
 
 // Prompt handler function
-func (p *Proxy) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+func (p *Gateway) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	return p.client.GetPrompt(ctx, req)
 }
 
 // Resource handler function
-func (p *Proxy) HandleResourceCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+func (p *Gateway) HandleResourceCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 	result, err := p.client.ReadResource(ctx, req)
 	if err != nil {
 		return nil, err
@@ -316,7 +316,7 @@ func (p *Proxy) HandleResourceCall(ctx context.Context, req mcp.ReadResourceRequ
 }
 
 // Resource template handler function
-func (p *Proxy) HandleResourceTemplateCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+func (p *Gateway) HandleResourceTemplateCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 	result, err := p.client.ReadResource(ctx, req)
 	if err != nil {
 		return nil, err
