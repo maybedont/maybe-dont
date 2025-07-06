@@ -107,6 +107,8 @@ func (p *Gateway) initStdioServer(ctx context.Context) error {
 		}
 	}()
 
+	p.logger.Info("STDIO server started", zap.String("listen_addr", p.config.Server.ListenAddr))
+
 	return nil
 }
 
@@ -139,6 +141,8 @@ func (p *Gateway) initSSEServer(ctx context.Context) error {
 		}
 	}()
 
+	p.logger.Info("SSE server started", zap.String("listen_addr", p.config.Server.ListenAddr))
+
 	return nil
 }
 
@@ -161,6 +165,8 @@ func (p *Gateway) initHTTPServer(ctx context.Context) error {
 			p.logger.Error("Failed to start HTTP server", zap.Error(err))
 		}
 	}()
+
+	p.logger.Info("HTTP server started", zap.String("listen_addr", p.config.Server.ListenAddr))
 
 	// Monitor context for cancellation
 	go func() {

@@ -62,6 +62,7 @@ func (p *Gateway) initHTTPClient(ctx context.Context) error {
 }
 
 func (p *Gateway) checkCapabilities(ctx context.Context) error {
+	p.logger.Debug("Checking MCP server capabilities")
 	req := &mcp.InitializeRequest{
 		Request: mcp.Request{
 			Method: "initialize",
