@@ -1,3 +1,10 @@
+## v0.1.4 (2025-07-06)
+
+### Fix
+
+- allow sending logs to stderr only
+- logger for stdio didn't make sense
+
 ## v0.1.3 (2025-07-06)
 
 ### Fix

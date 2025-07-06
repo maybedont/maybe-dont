@@ -4,6 +4,7 @@
 # Logging configuration
 logging:
   level: info  # debug, info, warn, error
+  path: stderr # filename, stderr, stdout
 
 audit:
   enabled: true
@@ -25,7 +26,7 @@ client:
 # Server configuration
 server:
   # Server type (stdio, http, sse)
-  type: http
+  type: stdio
   # Address to listen on (host:port)
   listen_addr: "0.0.0.0:8080"
 
