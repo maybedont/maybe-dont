@@ -29,6 +29,7 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    wrap_in_directory: true
 
 dockers:
   - image_templates:
@@ -37,10 +38,4 @@ dockers:
       - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}"
       - "ghcr.io/maybedont/maybe-dont:latest"
 
-changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
 
