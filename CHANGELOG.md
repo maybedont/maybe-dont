@@ -1,3 +1,17 @@
+## v0.1.3 (2025-07-06)
+
+### Fix
+
+- linter errors
+- update logging config and remove unnecessary options
+
+### Refactor
+
+- add some info logging on start
+- more renaming
+- clean up a couple log lines and rename stuff
+- rename proxy to gateway
+
 ## v0.1.2 (2025-07-05)
 
 ### Fix
