@@ -329,9 +329,7 @@ func ValidateConfig(cfg *Config) error {
 
 // GetLogger creates a new logger based on the configuration
 func GetLogger(cfg *Config) (*zap.Logger, error) {
-	var config zap.Config
-
-	config = zap.NewProductionConfig()
+	config := zap.NewProductionConfig()
 
 	// Set log level
 	level, err := zapcore.ParseLevel(cfg.Logging.LogLevel)
@@ -356,9 +354,7 @@ func GetLogger(cfg *Config) (*zap.Logger, error) {
 
 // GetAuditLogger creates a new audit logger based on the configuration
 func GetAuditLogger(cfg *Config) (*zap.Logger, error) {
-	var config zap.Config
-
-	config = zap.NewProductionConfig()
+	config := zap.NewProductionConfig()
 
 	// Set log level to info for audit logs
 	config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
