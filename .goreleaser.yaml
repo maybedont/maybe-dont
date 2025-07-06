@@ -33,7 +33,9 @@ archives:
     wrap_in_directory: true
     files:
       - README.md
-      - config.yaml
+      - src: config.yaml
+        info:
+          mode: 0644
       - LICENSE
 dockers:
   - image_templates:
