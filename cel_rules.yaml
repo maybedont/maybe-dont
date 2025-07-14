@@ -1,16 +1,16 @@
 # Example CEL policy rules
 rules:
-- name: deny-kubectl-delete-namespace
-  description: Deny kubectl delete namespace
+- name: deny-github-delete-file
+  description: Deny github delete file
   expression: |-
     get(request, "method", "") == "tools/call" &&
-    get(request.params, "name", "") == "kubectl" &&
-    has(request.params, "arguments") &&
-    has(request.params.arguments, "command") &&
-    request.params.arguments.command.contains("delete") &&
-    (
-        request.params.arguments.command.contains("namespace") ||
-        request.params.arguments.command.contains("ns")
-    )
+    get(request.params, "name", "") == "github__delete_file"
   action: deny
-  message: Denied access to kubectl delete namespace
+  message: Denied access to github__delete_file
+- name: deny-github-delete-workflow-run-logs
+  description: Deny github__delete_workflow_run_logs
+  expression: |-
+    get(request, "method", "") == "tools/call" &&
+    get(request.params, "name", "") == "github__delete_workflow_run_logs"
+  action: deny
+  message: Denied access to github__delete_workflow_run_logs
