@@ -10,23 +10,23 @@ audit:
   enabled: true
   path: ./audit.log # filename, stderr, stdout
 
-# Client configuration (downstream MCP server)
-client:
-  type: http # stdio, sse, http
-  # For stdio:
-  command: "uvx"
-  command_args: ["awslabs.aws-documentation-mcp-server@latest"]
-
-  ## For SSE/HTTP:
-  downstream_url: "https://api.githubcopilot.com/mcp/"
-  # Auth header set via MCP_GATEWAY_CLIENT_HTTP_HEADERS_AUTHORIZATION
-  #headers:
-  #  Authorization: ""
+# Downstream MCP servers configuration
+downstream_mcp_servers:
+  github:
+    type: http # stdio, sse, http
+    url: "https://api.githubcopilot.com/mcp/"
+    http:
+      headers:
+        Authorization: "Bearer ${GITHUB_TOKEN}"
+  aws-docs:
+    type: stdio
+    command: "uvx"
+    args: ["awslabs.aws-documentation-mcp-server@latest"]
 
 # Server configuration
 server:
   # Server type (stdio, http, sse)
-  type: http
+  type: stdio
   # Address to listen on (host:port)
   listen_addr: "0.0.0.0:8080"
 

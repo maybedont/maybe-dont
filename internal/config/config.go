@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -69,19 +70,8 @@ type Config struct {
 		Rules     []AIPolicy `mapstructure:"rules"`
 	} `mapstructure:"ai_validation"`
 
-	// Client configuration
-	Client struct {
-		Type          string   `mapstructure:"type"` // stdio, sse, http
-		DownstreamURL string   `mapstructure:"downstream_url"`
-		Command       string   `mapstructure:"command"`
-		CommandArgs   []string `mapstructure:"command_args"`
-		SSEConfig     struct {
-			Headers map[string]string `mapstructure:"headers"`
-		} `mapstructure:"sse"`
-		HTTPConfig struct {
-			Headers map[string]string `mapstructure:"headers"`
-		} `mapstructure:"http"`
-	} `mapstructure:"client"`
+	// Downstream MCP servers configuration
+	DownstreamMCPServers map[string]ClientConfig `mapstructure:"downstream_mcp_servers"`
 
 	// Audit configuration
 	Audit struct {
@@ -94,6 +84,33 @@ type Config struct {
 		LogLevel string `mapstructure:"level"`
 		Path     string `mapstructure:"path"`
 	} `mapstructure:"logging"`
+}
+
+// ClientConfig represents configuration for a single MCP client
+type ClientConfig struct {
+	Type          string   `mapstructure:"type"` // stdio, sse, http
+	DownstreamURL string   `mapstructure:"downstream_url"`
+	URL           string   `mapstructure:"url"` // Alias for downstream_url
+	Command       string   `mapstructure:"command"`
+	CommandArgs   []string `mapstructure:"command_args"`
+	Args          []string `mapstructure:"args"` // Alias for command_args
+
+	// Initialization configuration for stdio clients
+	StartupTimeoutMs      int `mapstructure:"startup_timeout_ms"`     // Timeout for process startup (default: 30000ms)
+	InitializationRetries int `mapstructure:"initialization_retries"` // Number of retry attempts (default: 5)
+	RetryDelayMs          int `mapstructure:"retry_delay_ms"`         // Base delay between retries (default: 100ms)
+
+	// Capability discovery configuration
+	CapabilityDiscoveryDelayMs int `mapstructure:"capability_discovery_delay_ms"` // Delay before discovering capabilities (default: 1000ms for stdio, 0 for others)
+	CapabilityDiscoveryRetries int `mapstructure:"capability_discovery_retries"`  // Retries for empty capability lists (default: 3)
+	CapabilityRetryDelayMs     int `mapstructure:"capability_retry_delay_ms"`     // Delay between capability retries (default: 500ms)
+
+	SSEConfig struct {
+		Headers map[string]string `mapstructure:"headers"`
+	} `mapstructure:"sse"`
+	HTTPConfig struct {
+		Headers map[string]string `mapstructure:"headers"`
+	} `mapstructure:"http"`
 }
 
 // CELPolicy represents a single CEL policy rule
@@ -150,6 +167,74 @@ func LoadAIPoliciesFromFile(path string) ([]AIPolicy, error) {
 	return policies.Rules, nil
 }
 
+// expandEnvironmentVariables recursively expands environment variables in string fields
+// of a struct using os.ExpandEnv. This processes ${VAR} and $VAR syntax.
+func expandEnvironmentVariables(v reflect.Value) {
+	if !v.IsValid() || !v.CanSet() {
+		return
+	}
+
+	switch v.Kind() {
+	case reflect.String:
+		// Expand environment variables in string fields
+		expanded := os.ExpandEnv(v.String())
+		v.SetString(expanded)
+
+	case reflect.Struct:
+		// Recursively process struct fields
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Field(i)
+			if field.CanSet() {
+				expandEnvironmentVariables(field)
+			}
+		}
+
+	case reflect.Slice:
+		// Process slice elements
+		for i := 0; i < v.Len(); i++ {
+			expandEnvironmentVariables(v.Index(i))
+		}
+
+	case reflect.Map:
+		// Process map values
+		if v.Type().Elem().Kind() == reflect.String {
+			// Handle string maps (like headers)
+			for _, key := range v.MapKeys() {
+				val := v.MapIndex(key)
+				if val.IsValid() && val.Kind() == reflect.String {
+					expanded := os.ExpandEnv(val.String())
+					v.SetMapIndex(key, reflect.ValueOf(expanded))
+				}
+			}
+		} else {
+			// Handle maps with non-string values (like map[string]ClientConfig)
+			for _, key := range v.MapKeys() {
+				val := v.MapIndex(key)
+				if val.IsValid() {
+					// For struct values in maps, we need to create a new value
+					// since map elements are not addressable
+					elemCopy := reflect.New(val.Type()).Elem()
+					elemCopy.Set(val)
+					expandEnvironmentVariables(elemCopy)
+					v.SetMapIndex(key, elemCopy)
+				}
+			}
+		}
+
+	case reflect.Ptr:
+		// Dereference pointer and process
+		if !v.IsNil() {
+			expandEnvironmentVariables(v.Elem())
+		}
+
+	case reflect.Interface:
+		// Process interface values
+		if !v.IsNil() {
+			expandEnvironmentVariables(v.Elem())
+		}
+	}
+}
+
 // LoadConfig loads the configuration from all sources
 func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte) (*Config, error) {
 	// Use the global viper instance to ensure flag bindings work
@@ -162,14 +247,6 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 	// Set up environment variable key mappings for nested map structures
 	// This allows environment variables to properly map to nested config fields
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-
-	// Bind specific environment variables for headers
-	if err := v.BindEnv("client.sse.headers.Authorization", "MCP_GATEWAY_CLIENT_SSE_HEADERS_AUTHORIZATION"); err != nil {
-		return nil, fmt.Errorf("failed to bind SSE auth env var: %w", err)
-	}
-	if err := v.BindEnv("client.http.headers.Authorization", "MCP_GATEWAY_CLIENT_HTTP_HEADERS_AUTHORIZATION"); err != nil {
-		return nil, fmt.Errorf("failed to bind HTTP auth env var: %w", err)
-	}
 
 	// Set config file name
 	v.SetConfigName("gateway-config")
@@ -193,6 +270,9 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 	if err := v.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config from %s: %w", v.ConfigFileUsed(), err)
 	}
+
+	// Expand environment variables in all string fields
+	expandEnvironmentVariables(reflect.ValueOf(&config).Elem())
 
 	// Set default server type to stdio if not configured
 	if config.Server.Type == "" {
@@ -243,6 +323,48 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 		config.AIPolicyValidation.Rules = policies.Rules
 	}
 
+	// Normalize client configs - handle field aliases
+	for name, client := range config.DownstreamMCPServers {
+		// Handle URL alias
+		if client.URL != "" && client.DownstreamURL == "" {
+			client.DownstreamURL = client.URL
+		}
+		// Handle Args alias
+		if len(client.Args) > 0 && len(client.CommandArgs) == 0 {
+			client.CommandArgs = client.Args
+		}
+		config.DownstreamMCPServers[name] = client
+	}
+
+	// Set default values for client initialization configuration
+	for name, client := range config.DownstreamMCPServers {
+		if client.StartupTimeoutMs == 0 {
+			client.StartupTimeoutMs = 30000 // 30 seconds
+		}
+		if client.InitializationRetries == 0 {
+			client.InitializationRetries = 5
+		}
+		if client.RetryDelayMs == 0 {
+			client.RetryDelayMs = 100 // 100ms base delay
+		}
+
+		// Set default values for capability discovery
+		if client.CapabilityDiscoveryDelayMs == 0 {
+			if client.Type == "stdio" {
+				client.CapabilityDiscoveryDelayMs = 1000 // 1 second for stdio clients
+			} else {
+				client.CapabilityDiscoveryDelayMs = 0 // No delay for http/sse clients
+			}
+		}
+		if client.CapabilityDiscoveryRetries == 0 {
+			client.CapabilityDiscoveryRetries = 3
+		}
+		if client.CapabilityRetryDelayMs == 0 {
+			client.CapabilityRetryDelayMs = 500 // 500ms delay between capability retries
+		}
+		config.DownstreamMCPServers[name] = client
+	}
+
 	// Validate config
 	if err := ValidateConfig(&config); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
@@ -251,29 +373,31 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 	return &config, nil
 }
 
-// ValidateConfig validates the configuration
+// ValidateConfig validates the configuration and collects all errors
 func ValidateConfig(cfg *Config) error {
+	var errors []string
+
 	// Validate server type
 	switch cfg.Server.Type {
 	case ServerTypeSTDIO, ServerTypeHTTP, ServerTypeSSE:
 		// Valid server type
 	default:
-		return fmt.Errorf("invalid server type: %s", cfg.Server.Type)
+		errors = append(errors, fmt.Sprintf("invalid server type: %s", cfg.Server.Type))
 	}
 
 	// Validate server configuration
 	if cfg.Server.Type != ServerTypeSTDIO && cfg.Server.ListenAddr == "" {
-		return fmt.Errorf("server.listen_addr is required for %s server type", cfg.Server.Type)
+		errors = append(errors, fmt.Sprintf("server.listen_addr is required for %s server type", cfg.Server.Type))
 	}
 
 	// Validate SSE server configuration if SSE type
 	if cfg.Server.Type == ServerTypeSSE {
 		if cfg.Server.SSE.TLS.Enabled {
 			if cfg.Server.SSE.TLS.CertFile == "" {
-				return fmt.Errorf("server.sse.tls.cert_file is required when TLS is enabled")
+				errors = append(errors, "server.sse.tls.cert_file is required when TLS is enabled")
 			}
 			if cfg.Server.SSE.TLS.KeyFile == "" {
-				return fmt.Errorf("server.sse.tls.key_file is required when TLS is enabled")
+				errors = append(errors, "server.sse.tls.key_file is required when TLS is enabled")
 			}
 		}
 	}
@@ -282,46 +406,103 @@ func ValidateConfig(cfg *Config) error {
 	switch cfg.Auth.Type {
 	case "api_key":
 		if cfg.Auth.APIKey == "" {
-			return fmt.Errorf("auth.api_key is required when auth.type is api_key")
+			errors = append(errors, "auth.api_key is required when auth.type is api_key")
 		}
 	case "jwt":
 		if cfg.Auth.JWTConfig.JWKSUrl == "" {
-			return fmt.Errorf("auth.jwt.jwks_url is required when auth.type is jwt")
+			errors = append(errors, "auth.jwt.jwks_url is required when auth.type is jwt")
 		}
 	case "mtls":
 		if cfg.Auth.MTLSConfig.CAFile == "" {
-			return fmt.Errorf("auth.mtls.ca_file is required when auth.type is mtls")
+			errors = append(errors, "auth.mtls.ca_file is required when auth.type is mtls")
 		}
 	}
 
 	// Validate client configuration
-	switch cfg.Client.Type {
-	case "stdio":
-		if cfg.Client.Command == "" {
-			return fmt.Errorf("client.command is required when client.type is stdio")
+	if len(cfg.DownstreamMCPServers) == 0 {
+		errors = append(errors, "at least one downstream MCP server must be configured")
+	}
+
+	// Validate each client in the map
+	for name, client := range cfg.DownstreamMCPServers {
+		// Validate client type and required fields
+		switch client.Type {
+		case "stdio":
+			if client.Command == "" {
+				errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].command is required when type is stdio", name))
+			}
+		case "sse", "http":
+			if client.DownstreamURL == "" {
+				errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].downstream_url (or url) is required when type is %s", name, client.Type))
+			}
+		default:
+			errors = append(errors, fmt.Sprintf("invalid client type for downstream_mcp_servers[%s]: %s", name, client.Type))
 		}
-	case "sse", "http":
-		if cfg.Client.DownstreamURL == "" {
-			return fmt.Errorf("client.downstream_url is required when client.type is %s", cfg.Client.Type)
+
+		// Validate timeout/retry values
+		if client.StartupTimeoutMs < 0 {
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].startup_timeout_ms must be non-negative", name))
+		}
+		if client.StartupTimeoutMs > 300000 { // 5 minutes max
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].startup_timeout_ms must be less than 300000ms (5 minutes)", name))
+		}
+		if client.InitializationRetries < 0 {
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].initialization_retries must be non-negative", name))
+		}
+		if client.InitializationRetries > 10 {
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].initialization_retries must be less than 10", name))
+		}
+		if client.RetryDelayMs < 0 {
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].retry_delay_ms must be non-negative", name))
+		}
+		if client.RetryDelayMs > 10000 { // 10 seconds max
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].retry_delay_ms must be less than 10000ms (10 seconds)", name))
+		}
+		if client.CapabilityDiscoveryDelayMs < 0 {
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].capability_discovery_delay_ms must be non-negative", name))
+		}
+		if client.CapabilityDiscoveryDelayMs > 60000 { // 1 minute max
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].capability_discovery_delay_ms must be less than 60000ms (1 minute)", name))
+		}
+		if client.CapabilityDiscoveryRetries < 0 {
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].capability_discovery_retries must be non-negative", name))
+		}
+		if client.CapabilityDiscoveryRetries > 10 {
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].capability_discovery_retries must be less than 10", name))
+		}
+		if client.CapabilityRetryDelayMs < 0 {
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].capability_retry_delay_ms must be non-negative", name))
+		}
+		if client.CapabilityRetryDelayMs > 30000 { // 30 seconds max
+			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].capability_retry_delay_ms must be less than 30000ms (30 seconds)", name))
 		}
 	}
 
 	// Validate audit configuration
 	if cfg.Audit.Path == "" {
-		return fmt.Errorf("audit.path is required")
+		errors = append(errors, "audit.path is required")
 	}
 
 	// Validate AI validation configuration
 	if cfg.AIPolicyValidation.Enabled {
 		if cfg.AIPolicyValidation.APIKey == "" {
-			return fmt.Errorf("OPENAI_API_KEY environment variable is required when AI validation is enabled")
+			errors = append(errors, "OPENAI_API_KEY environment variable is required when AI validation is enabled")
 		}
 		if cfg.AIPolicyValidation.Endpoint == "" {
-			return fmt.Errorf("ai_validation.endpoint is required when AI validation is enabled")
+			errors = append(errors, "ai_validation.endpoint is required when AI validation is enabled")
 		}
 		if cfg.AIPolicyValidation.Model == "" {
-			return fmt.Errorf("ai_validation.model is required when AI validation is enabled")
+			errors = append(errors, "ai_validation.model is required when AI validation is enabled")
 		}
+	}
+
+	// Return collected errors
+	if len(errors) > 0 {
+		errMsg := fmt.Sprintf("configuration validation failed with %d error(s):\n", len(errors))
+		for i, err := range errors {
+			errMsg += fmt.Sprintf("  %d. %s\n", i+1, err)
+		}
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	return nil

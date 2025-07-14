@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/maybedont/maybe-dont/internal/config"
@@ -26,21 +25,13 @@ func (e *PolicyDeniedError) Error() string {
 
 // Gateway represents an MCP security gateway instance
 type Gateway struct {
-	logger       *zap.Logger
-	auditLogger  *zap.Logger
-	config       *config.Config
-	server       *server.MCPServer
-	client       *client.Client
-	mu           sync.RWMutex
-	capabilities *mcp.ServerCapabilities
-	stopChan     chan struct{}
-	// Detailed capability information
-	capabilityDetails struct {
-		Tools     []mcp.Tool
-		Prompts   []mcp.Prompt
-		Resources []mcp.Resource
-		Templates []mcp.ResourceTemplate
-	}
+	logger        *zap.Logger
+	auditLogger   *zap.Logger
+	config        *config.Config
+	server        *server.MCPServer
+	clientManager *ClientManager
+	mu            sync.RWMutex
+	stopChan      chan struct{}
 	// Validation chain for request processing
 	validationChain *ToolValidationChain
 	// CEL policy engine
@@ -100,11 +91,15 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 		logger.Info("AI policy validation is disabled")
 	}
 
+	// Create client manager
+	clientManager := NewClientManager(logger)
+
 	return &Gateway{
 		logger:         logger,
 		auditLogger:    auditLogger,
 		config:         cfg,
 		stopChan:       make(chan struct{}),
+		clientManager:  clientManager,
 		policyEngine:   policyEngine,
 		aiPolicyEngine: aiPolicyEngine,
 	}, nil
@@ -141,9 +136,10 @@ func (p *Gateway) Start(ctx context.Context) error {
 
 	p.validationChain = NewToolValidationChain(handlers...)
 
-	// Initialize downstream client based on transport type
-	if err := p.initDownstreamClient(ctx); err != nil {
-		return fmt.Errorf("failed to initialize downstream client: %w", err)
+	// Initialize all configured clients
+	if err := p.clientManager.InitializeClients(ctx, p.config.DownstreamMCPServers); err != nil {
+		p.logger.Error("Some clients failed to initialize", zap.Error(err))
+		// Continue startup even if some clients failed to initialize
 	}
 
 	// Initialize server based on server type
@@ -164,10 +160,10 @@ func (p *Gateway) Stop() error {
 	// Close the stop channel to signal shutdown
 	close(p.stopChan)
 
-	// Close the client if it exists
-	if p.client != nil {
-		if err := p.client.Close(); err != nil {
-			p.logger.Error("Error closing client", zap.Error(err))
+	// Close all clients
+	if p.clientManager != nil {
+		if err := p.clientManager.Close(); err != nil {
+			p.logger.Error("Error closing clients", zap.Error(err))
 		}
 	}
 
@@ -180,6 +176,16 @@ func (p *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	auditLog := map[string]interface{}{
 		"request": req,
 	}
+
+	// Ensure audit log is always written, even on panic
+	defer func() {
+		if r := recover(); r != nil {
+			auditLog["error"] = fmt.Sprintf("panic: %v", r)
+			auditLog["status"] = "panic"
+			p.auditLogger.Error("Tool call audit (panic)", zap.Any("audit", auditLog))
+			panic(r) // Re-raise the panic
+		}
+	}()
 
 	// Validate request through the chain
 	validationResults, err := p.ValidateToolCall(ctx, req)
@@ -208,50 +214,7 @@ func (p *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	// If validation failed, return structured error with user-friendly message
 	if !validationResults.Allowed {
-		// Create a user-friendly error message
-		var deniedPolicies []string
-		var deniedMessages []string
-
-		for _, result := range validationResults.Results {
-			if !result.Allowed && result.PolicyType != "audit" {
-				deniedPolicies = append(deniedPolicies, result.PolicyName)
-				if result.Message != "" {
-					deniedMessages = append(deniedMessages, result.Message)
-				}
-			}
-		}
-
-		// Build user-friendly error message
-		var errorMessage string
-		if len(deniedPolicies) > 0 {
-			if len(deniedPolicies) == 1 {
-				// Single policy failure
-				if len(deniedMessages) > 0 {
-					errorMessage = fmt.Sprintf("Request denied by policy '%s': %s", deniedPolicies[0], deniedMessages[0])
-				} else {
-					errorMessage = fmt.Sprintf("Request denied by policy '%s'", deniedPolicies[0])
-				}
-			} else {
-				// Multiple policy failures
-				errorMessage = fmt.Sprintf("Request denied by %d policies:", len(deniedPolicies))
-				for i, policyName := range deniedPolicies {
-					if i < len(deniedMessages) && deniedMessages[i] != "" {
-						errorMessage += fmt.Sprintf("\n- '%s': %s", policyName, deniedMessages[i])
-					} else {
-						errorMessage += fmt.Sprintf("\n- '%s'", policyName)
-					}
-				}
-			}
-		} else {
-			errorMessage = fmt.Sprintf("Request denied by %d policy(ies)", len(deniedPolicies))
-		}
-
-		// Create structured error data
-		errorData := map[string]interface{}{
-			"denied_policies": deniedPolicies,
-			"denied_count":    validationResults.DenyCount,
-			"tool_name":       req.Params.Name,
-		}
+		errorMessage, errorData := p.buildPolicyDeniedError(&validationResults, req.Params.Name)
 
 		auditLog["status"] = "denied"
 		p.auditLogger.Warn("Tool call audit", zap.Any("audit", auditLog))
@@ -264,11 +227,35 @@ func (p *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		}
 	}
 
-	// Call the tool
-	result, err := p.client.CallTool(ctx, req)
+	// Parse the prefixed tool name to get client name and original tool name
+	clientName, originalToolName, err := ParsePrefixedName(req.Params.Name)
+	if err != nil {
+		auditLog["error"] = err.Error()
+		auditLog["status"] = "invalid_tool_name"
+		p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
+		return nil, fmt.Errorf("invalid tool name format: %w", err)
+	}
+
+	// Get the appropriate client
+	clientInfo, err := p.clientManager.GetClient(clientName)
+	if err != nil {
+		auditLog["error"] = err.Error()
+		auditLog["status"] = "client_not_found"
+		p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
+		return nil, fmt.Errorf("client not found: %w", err)
+	}
+
+	// Create a new request with the original tool name
+	originalReq := req
+	originalReq.Params.Name = originalToolName
+
+	// Call the tool on the appropriate client
+	result, err := clientInfo.Client.CallTool(ctx, originalReq)
 	if err != nil {
 		auditLog["error"] = err.Error()
 		auditLog["status"] = "execution_error"
+		auditLog["client"] = clientName
+		auditLog["original_tool_name"] = originalToolName
 		p.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("tool call failed: %w", err)
 	}
@@ -301,25 +288,108 @@ func (p *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	return result, nil
 }
 
+// buildPolicyDeniedError creates a user-friendly error message and structured data for policy failures
+func (p *Gateway) buildPolicyDeniedError(validationResults *ValidationResults, toolName string) (string, map[string]interface{}) {
+	// Create a user-friendly error message
+	var deniedPolicies []string
+	var deniedMessages []string
+
+	for _, result := range validationResults.Results {
+		if !result.Allowed && result.PolicyType != "audit" {
+			deniedPolicies = append(deniedPolicies, result.PolicyName)
+			if result.Message != "" {
+				deniedMessages = append(deniedMessages, result.Message)
+			}
+		}
+	}
+
+	// Build user-friendly error message
+	var errorMessage string
+	if len(deniedPolicies) > 0 {
+		if len(deniedPolicies) == 1 {
+			// Single policy failure
+			if len(deniedMessages) > 0 {
+				errorMessage = fmt.Sprintf("Request denied by policy '%s': %s", deniedPolicies[0], deniedMessages[0])
+			} else {
+				errorMessage = fmt.Sprintf("Request denied by policy '%s'", deniedPolicies[0])
+			}
+		} else {
+			// Multiple policy failures
+			errorMessage = fmt.Sprintf("Request denied by %d policies:", len(deniedPolicies))
+			for i, policyName := range deniedPolicies {
+				if i < len(deniedMessages) && deniedMessages[i] != "" {
+					errorMessage += fmt.Sprintf("\n- '%s': %s", policyName, deniedMessages[i])
+				} else {
+					errorMessage += fmt.Sprintf("\n- '%s'", policyName)
+				}
+			}
+		}
+	} else {
+		errorMessage = fmt.Sprintf("Request denied by %d policy(ies)", len(deniedPolicies))
+	}
+
+	// Create structured error data
+	errorData := map[string]interface{}{
+		"denied_policies": deniedPolicies,
+		"denied_count":    validationResults.DenyCount,
+		"tool_name":       toolName,
+	}
+
+	return errorMessage, errorData
+}
+
 // Prompt handler function
 func (p *Gateway) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-	return p.client.GetPrompt(ctx, req)
+	// Parse the prefixed prompt name to get client name and original prompt name
+	clientName, originalPromptName, err := ParsePrefixedName(req.Params.Name)
+	if err != nil {
+		return nil, fmt.Errorf("invalid prompt name format: %w", err)
+	}
+
+	// Get the appropriate client
+	clientInfo, err := p.clientManager.GetClient(clientName)
+	if err != nil {
+		return nil, fmt.Errorf("client not found: %w", err)
+	}
+
+	// Create a new request with the original prompt name
+	originalReq := req
+	originalReq.Params.Name = originalPromptName
+
+	return clientInfo.Client.GetPrompt(ctx, originalReq)
+}
+
+// handleResourceRequest is a helper function that handles both resource and resource template requests
+func (p *Gateway) handleResourceRequest(ctx context.Context, req mcp.ReadResourceRequest, resourceType string) ([]mcp.ResourceContents, error) {
+	// Parse the prefixed URI to get client name and original URI
+	clientName, originalURI, err := ParsePrefixedName(req.Params.URI)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s URI format: %w", resourceType, err)
+	}
+
+	// Get the appropriate client
+	clientInfo, err := p.clientManager.GetClient(clientName)
+	if err != nil {
+		return nil, fmt.Errorf("client not found: %w", err)
+	}
+
+	// Create a new request with the original URI
+	originalReq := req
+	originalReq.Params.URI = originalURI
+
+	result, err := clientInfo.Client.ReadResource(ctx, originalReq)
+	if err != nil {
+		return nil, err
+	}
+	return result.Contents, nil
 }
 
 // Resource handler function
 func (p *Gateway) HandleResourceCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	result, err := p.client.ReadResource(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return result.Contents, nil
+	return p.handleResourceRequest(ctx, req, "resource")
 }
 
 // Resource template handler function
 func (p *Gateway) HandleResourceTemplateCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	result, err := p.client.ReadResource(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return result.Contents, nil
+	return p.handleResourceRequest(ctx, req, "resource template")
 }
