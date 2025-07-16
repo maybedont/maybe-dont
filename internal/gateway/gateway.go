@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/maybedont/maybe-dont/internal/auth"
 	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
@@ -47,6 +48,8 @@ type Gateway struct {
 	policyEngine *CELPolicyEngine
 	// AI policy engine
 	aiPolicyEngine *AIPolicyEngine
+	// Authentication manager
+	authManager *auth.Manager
 }
 
 // New creates a new gateway instance
@@ -100,6 +103,18 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 		logger.Info("AI policy validation is disabled")
 	}
 
+	// Initialize authentication manager if auth is enabled
+	var authManager *auth.Manager
+	if cfg.Auth.Type != "" && cfg.Auth.Type != "none" {
+		logger.Info("Initializing authentication manager", zap.String("auth_type", cfg.Auth.Type))
+		authManager, err = auth.NewManager(cfg, logger, auditLogger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create authentication manager: %w", err)
+		}
+	} else {
+		logger.Info("Authentication is disabled")
+	}
+
 	return &Gateway{
 		logger:         logger,
 		auditLogger:    auditLogger,
@@ -107,6 +122,7 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 		stopChan:       make(chan struct{}),
 		policyEngine:   policyEngine,
 		aiPolicyEngine: aiPolicyEngine,
+		authManager:    authManager,
 	}, nil
 }
 

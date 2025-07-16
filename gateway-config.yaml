@@ -1,5 +1,5 @@
-# MCP Security Gateway Configuration
-# This file configures the MCP security gateway service.
+# MCP Security Gateway Configuration with OAuth2 Authentication
+# This file configures the MCP security gateway service with OAuth2 authentication.
 
 # Logging configuration
 logging:
@@ -9,6 +9,97 @@ logging:
 audit:
   enabled: true
   path: ./audit.log # filename, stderr, stdout
+
+# Authentication configuration
+auth:
+  type: oauth2  # oauth2, jwt, api_key, mtls, none
+  oauth2:
+    enabled: true
+    session_timeout: "24h"
+    refresh_threshold: "5m"
+    
+    # OAuth2 providers configuration
+    providers:
+      google:
+        type: google
+        client_id: "your-google-client-id"
+        client_secret: "your-google-client-secret"
+        redirect_url: "http://localhost:8080/oauth/callback"
+        scopes:
+          - "openid"
+          - "profile"
+          - "email"
+      
+      github:
+        type: github
+        client_id: "your-github-client-id"
+        client_secret: "your-github-client-secret"
+        redirect_url: "http://localhost:8080/oauth/callback"
+        scopes:
+          - "user:email"
+      
+      custom:
+        type: custom
+        client_id: "your-custom-client-id"
+        client_secret: "your-custom-client-secret"
+        auth_url: "https://your-provider.com/oauth/authorize"
+        token_url: "https://your-provider.com/oauth/token"
+        user_info_url: "https://your-provider.com/oauth/userinfo"
+        redirect_url: "http://localhost:8080/oauth/callback"
+        scopes:
+          - "read"
+          - "write"
+    
+    # OAuth2 clients configuration
+    clients:
+      cli-client:
+        name: "CLI Client"
+        client_id: "cli-client"
+        redirect_uris:
+          - "http://localhost:8080/oauth/callback"
+          - "urn:ietf:wg:oauth:2.0:oob"  # For CLI/desktop apps
+        scopes:
+          - "read"
+          - "write"
+        public: true  # PKCE required
+        roles:
+          - "user"
+      
+      web-client:
+        name: "Web Application"
+        client_id: "web-client"
+        redirect_uris:
+          - "http://localhost:3000/callback"
+          - "https://your-app.com/callback"
+        scopes:
+          - "read"
+          - "write"
+          - "admin"
+        public: false
+        roles:
+          - "admin"
+    
+    # Token storage configuration
+    token_storage:
+      type: memory  # memory, redis, vault
+      config: {}
+
+  # JWT configuration for token signing
+  jwt:
+    issuer: "maybe-dont-gateway"
+    audience:
+      - "maybe-dont"
+    signing_key: "your-jwt-signing-key-change-this-in-production"
+
+# Secrets management configuration
+secrets:
+  type: memory  # memory, file, vault, aws_secrets_manager
+  config:
+    # For file type:
+    # path: "./secrets"
+    # For vault type:
+    # address: "https://vault.example.com"
+    # token: "vault-token"
 
 # Client configuration (downstream MCP server)
 client:
@@ -40,7 +131,7 @@ policy_validation:
 # AI validation configuration
 ai_validation:
   # Enable AI-powered tool validation
-  enabled: true
+  enabled: false
   # OpenAI-compatible API endpoint
   endpoint: "https://api.openai.com/v1/chat/completions"
   # Model to use for validation

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -156,6 +157,54 @@ func (p *Gateway) initHTTPServer(ctx context.Context) error {
 	httpSrv := server.NewStreamableHTTPServer(srv,
 		server.WithEndpointPath("/mcp"),
 	)
+
+	// Add OAuth endpoints if authentication is enabled
+	if p.authManager != nil && p.authManager.GetHandlers() != nil {
+		handlers := p.authManager.GetHandlers()
+		
+		// Create a custom HTTP server to add OAuth endpoints
+		mux := http.NewServeMux()
+		
+		// Add OAuth endpoints
+		mux.HandleFunc("/oauth/authorize", handlers.AuthorizeHandler)
+		mux.HandleFunc("/oauth/callback", handlers.CallbackHandler)
+		mux.HandleFunc("/oauth/token", handlers.TokenHandler)
+		mux.HandleFunc("/oauth/revoke", handlers.RevokeHandler)
+		mux.HandleFunc("/oauth/userinfo", handlers.UserInfoHandler)
+		
+		// Add MCP endpoint with optional authentication middleware
+		var mcpHandler http.Handler = httpSrv
+		if p.config.Auth.Type == "oauth2" {
+			mcpHandler = handlers.AuthMiddleware(mcpHandler)
+		}
+		mux.Handle("/mcp", mcpHandler)
+		
+		// Create custom HTTP server
+		customSrv := &http.Server{
+			Addr:    p.config.Server.ListenAddr,
+			Handler: mux,
+		}
+		
+		p.server = srv
+
+		// Start server in a goroutine
+		go func() {
+			p.logger.Info("HTTP server with OAuth endpoints started", zap.String("listen_addr", p.config.Server.ListenAddr))
+			if err := customSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				p.logger.Error("Failed to start HTTP server", zap.Error(err))
+			}
+		}()
+
+		// Monitor context for cancellation
+		go func() {
+			<-ctx.Done()
+			if err := customSrv.Shutdown(context.Background()); err != nil {
+				p.logger.Error("Error shutting down HTTP server", zap.Error(err))
+			}
+		}()
+		
+		return nil
+	}
 
 	p.server = srv
 

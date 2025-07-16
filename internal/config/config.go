@@ -37,20 +37,35 @@ type Config struct {
 
 	// Authentication configuration
 	Auth struct {
-		Type      string `mapstructure:"type"` // api_key, jwt, mtls
+		Type      string `mapstructure:"type"` // api_key, jwt, mtls, oauth2
 		APIKey    string `mapstructure:"api_key"`
 		JWTConfig struct {
 			JWKSUrl    string   `mapstructure:"jwks_url"`
 			Issuer     string   `mapstructure:"issuer"`
 			Audience   []string `mapstructure:"audience"`
 			ClaimRoles string   `mapstructure:"claim_roles"`
+			SigningKey string   `mapstructure:"signing_key"` // For signing our own JWTs
 		} `mapstructure:"jwt"`
 		MTLSConfig struct {
 			CAFile   string `mapstructure:"ca_file"`
 			CertFile string `mapstructure:"cert_file"`
 			KeyFile  string `mapstructure:"key_file"`
 		} `mapstructure:"mtls"`
+		OAuth2Config struct {
+			Enabled          bool                    `mapstructure:"enabled"`
+			Providers        map[string]OAuthProvider `mapstructure:"providers"`
+			Clients          map[string]OAuthClient   `mapstructure:"clients"`
+			TokenStorage     TokenStorageConfig       `mapstructure:"token_storage"`
+			SessionTimeout   string                   `mapstructure:"session_timeout"`   // Default: "24h"
+			RefreshThreshold string                   `mapstructure:"refresh_threshold"` // Default: "5m"
+		} `mapstructure:"oauth2"`
 	} `mapstructure:"auth"`
+
+	// Secrets management configuration
+	Secrets struct {
+		Type   string                 `mapstructure:"type"` // memory, file, vault, aws_secrets_manager
+		Config map[string]interface{} `mapstructure:"config"`
+	} `mapstructure:"secrets"`
 
 	// Policy configuration
 	PolicyValidation struct {
@@ -110,6 +125,33 @@ type AIPolicy struct {
 	Description string `mapstructure:"description"`
 	Prompt      string `mapstructure:"prompt"`
 	Message     string `mapstructure:"message"`
+}
+
+// OAuth2 configuration structures
+type OAuthProvider struct {
+	Type         string            `mapstructure:"type"` // google, github, custom
+	ClientID     string            `mapstructure:"client_id"`
+	ClientSecret string            `mapstructure:"client_secret"`
+	AuthURL      string            `mapstructure:"auth_url"`
+	TokenURL     string            `mapstructure:"token_url"`
+	UserInfoURL  string            `mapstructure:"user_info_url"`
+	Scopes       []string          `mapstructure:"scopes"`
+	RedirectURL  string            `mapstructure:"redirect_url"`
+	Metadata     map[string]string `mapstructure:"metadata"`
+}
+
+type OAuthClient struct {
+	Name         string   `mapstructure:"name"`
+	ClientID     string   `mapstructure:"client_id"`
+	RedirectURIs []string `mapstructure:"redirect_uris"`
+	Scopes       []string `mapstructure:"scopes"`
+	Public       bool     `mapstructure:"public"` // PKCE required for public clients
+	Roles        []string `mapstructure:"roles"`  // Default roles for this client
+}
+
+type TokenStorageConfig struct {
+	Type   string                 `mapstructure:"type"` // memory, redis, vault
+	Config map[string]interface{} `mapstructure:"config"`
 }
 
 // LoadPoliciesFromFile loads CEL policies from a file
@@ -285,12 +327,33 @@ func ValidateConfig(cfg *Config) error {
 			return fmt.Errorf("auth.api_key is required when auth.type is api_key")
 		}
 	case "jwt":
-		if cfg.Auth.JWTConfig.JWKSUrl == "" {
-			return fmt.Errorf("auth.jwt.jwks_url is required when auth.type is jwt")
+		if cfg.Auth.JWTConfig.JWKSUrl == "" && cfg.Auth.JWTConfig.SigningKey == "" {
+			return fmt.Errorf("auth.jwt.jwks_url or auth.jwt.signing_key is required when auth.type is jwt")
 		}
 	case "mtls":
 		if cfg.Auth.MTLSConfig.CAFile == "" {
 			return fmt.Errorf("auth.mtls.ca_file is required when auth.type is mtls")
+		}
+	case "oauth2":
+		if !cfg.Auth.OAuth2Config.Enabled {
+			return fmt.Errorf("auth.oauth2.enabled must be true when auth.type is oauth2")
+		}
+		if len(cfg.Auth.OAuth2Config.Providers) == 0 {
+			return fmt.Errorf("at least one OAuth2 provider must be configured")
+		}
+		// Validate each provider
+		for name, provider := range cfg.Auth.OAuth2Config.Providers {
+			if provider.ClientID == "" {
+				return fmt.Errorf("oauth2 provider %s: client_id is required", name)
+			}
+			if provider.ClientSecret == "" {
+				return fmt.Errorf("oauth2 provider %s: client_secret is required", name)
+			}
+			if provider.Type == "custom" {
+				if provider.AuthURL == "" || provider.TokenURL == "" {
+					return fmt.Errorf("oauth2 provider %s: auth_url and token_url are required for custom providers", name)
+				}
+			}
 		}
 	}
 
