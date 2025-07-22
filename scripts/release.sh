@@ -185,7 +185,7 @@ git commit -m "$COMMIT_MESSAGE"
 log_info "Pushing branch $BRANCH_NAME..."
 git push origin "$BRANCH_NAME"
 
-# Create pull request using GitHub CLI or curl
+# Create pull request using GitHub CLI
 log_info "Creating pull request..."
 
 PR_TITLE="Add maybe-dont ${VERSION_CLEAN} release artifacts"
@@ -204,71 +204,24 @@ done)
 
 This PR was automatically created by the release process."
 
-# Try to use GitHub CLI if available, otherwise use curl
-PR_NUMBER=""
-if command -v gh >/dev/null 2>&1; then
-    # Create PR and capture the PR number
-    PR_URL=$(gh pr create \
-        --title "$PR_TITLE" \
-        --body "$PR_BODY" \
-        --base "$WEBSITE_BRANCH" \
-        --head "$BRANCH_NAME" \
-        --repo "$WEBSITE_REPO")
+# Create PR and capture the PR number
+PR_URL=$(gh pr create \
+    --title "$PR_TITLE" \
+    --body "$PR_BODY" \
+    --base "$WEBSITE_BRANCH" \
+    --head "$BRANCH_NAME" \
+    --repo "$WEBSITE_REPO")
 
-    # Extract PR number from URL
-    PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]\+$')
+# Extract PR number from URL
+PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]\+$')
 
-    log_info "Pull request created: $PR_URL"
+log_info "Pull request created: $PR_URL"
 
-    # Merge the PR if requested
-    if [[ "$MERGE_PR" == "true" ]] && [[ -n "$PR_NUMBER" ]]; then
-        log_info "Merging pull request #$PR_NUMBER..."
-        gh pr merge "$PR_NUMBER" --repo "$WEBSITE_REPO" --squash --delete-branch
-        log_info "Pull request #$PR_NUMBER merged successfully!"
-    fi
-else
-    # Use curl to create PR
-    RESPONSE=$(curl -s -X POST \
-        -H "Authorization: token $GITHUB_TOKEN" \
-        -H "Accept: application/vnd.github.v3+json" \
-        "https://api.github.com/repos/$WEBSITE_REPO/pulls" \
-        -d "{
-            \"title\": \"$PR_TITLE\",
-            \"body\": \"$PR_BODY\",
-            \"head\": \"$BRANCH_NAME\",
-            \"base\": \"$WEBSITE_BRANCH\"
-        }")
-
-    # Extract PR number from response
-    PR_NUMBER=$(echo "$RESPONSE" | grep -o '"number":[0-9]\+' | cut -d':' -f2)
-
-    if [[ -n "$PR_NUMBER" ]]; then
-        log_info "Pull request created: #$PR_NUMBER"
-
-        # Merge the PR if requested
-        if [[ "$MERGE_PR" == "true" ]]; then
-            log_info "Merging pull request #$PR_NUMBER..."
-            curl -s -X PUT \
-                -H "Authorization: token $GITHUB_TOKEN" \
-                -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/$WEBSITE_REPO/pulls/$PR_NUMBER/merge" \
-                -d '{
-                    "commit_title": "'"$PR_TITLE"'",
-                    "merge_method": "squash"
-                }'
-
-            # Delete the branch after merging
-            curl -s -X DELETE \
-                -H "Authorization: token $GITHUB_TOKEN" \
-                -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/$WEBSITE_REPO/git/refs/heads/$BRANCH_NAME"
-
-            log_info "Pull request #$PR_NUMBER merged successfully!"
-        fi
-    else
-        log_error "Failed to create pull request"
-        exit 1
-    fi
+# Merge the PR if requested
+if [[ "$MERGE_PR" == "true" ]] && [[ -n "$PR_NUMBER" ]]; then
+    log_info "Merging pull request #$PR_NUMBER..."
+    gh pr merge "$PR_NUMBER" --repo "$WEBSITE_REPO" --squash --delete-branch
+    log_info "Pull request #$PR_NUMBER merged successfully!"
 fi
 
 log_info "Release process completed successfully!"
