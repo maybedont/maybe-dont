@@ -43,4 +43,40 @@ dockers:
       - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}"
       - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}"
       - "ghcr.io/maybedont/maybe-dont:latest"
+# .goreleaser.yaml
+npms:
+  - id: gateway
+    name: "@maybe-dont/gateway"
+    description: "The Maybe Don't AI Security Gateway"
+    homepage: https://maybedont.ai
 
+    # Keywords for the package.
+    keywords:
+      - ai
+      - security
+      - mcp
+
+    license: UNLICENSED
+    author: "Maybe Don't, Inc."
+    repository: ""
+
+    # URL to report bugs.
+    #
+    # Templates: allowed.
+    bugs: ""
+
+    # Additional files/globs you want to add to the package.
+    #
+    # Default: ["README*", "LICENSE*"]
+    # Templates: allowed.
+    #extra_files:
+    #  - glob: gateway-config.yaml
+
+    # Access level: public or restricted.
+    access: public
+
+    # Package format: tar, tgz, tar.gz, zip, or binary.
+    #
+    # Required: if more than one archive format is being used.
+    format: tgz
+    url_template: "https://maybedont.ai/download/{{ .Tag }}/{{ .ArtifactName }}"
