@@ -78,5 +78,5 @@ npms:
     # Package format: tar, tgz, tar.gz, zip, or binary.
     #
     # Required: if more than one archive format is being used.
-    format: tgz
+    format: tar.gz
     url_template: "https://maybedont.ai/download/{{ .Tag }}/{{ .ArtifactName }}"
