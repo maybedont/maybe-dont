@@ -40,6 +40,7 @@ jobs:
           args: release --clean ${{ env.flags }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
       - name: Update website repository
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
