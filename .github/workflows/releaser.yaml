@@ -58,4 +58,4 @@ jobs:
           export DIST_DIR="./dist"
 
           # Run the release script
-          ./scripts/release.sh
+          ./scripts/release.sh --merge
