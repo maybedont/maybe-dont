@@ -1,0 +1,20 @@
+{
+  "name": "gateway",
+  "version": "0.2.2",
+  "description": "The Maybe Don't AI Security Gateway",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "\"\""
+  },
+  "keywords": [
+    "mcp",
+    "ai",
+    "security"
+  ],
+  "author": "Maybe Don't, Inc.",
+  "license": "UNLICENSED"
+}
