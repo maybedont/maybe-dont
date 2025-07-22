@@ -61,8 +61,6 @@ npms:
     repository: ""
 
     # URL to report bugs.
-    #
-    # Templates: allowed.
     bugs: ""
 
     # Additional files/globs you want to add to the package.
@@ -72,11 +70,8 @@ npms:
     #extra_files:
     #  - glob: gateway-config.yaml
 
-    # Access level: public or restricted.
     access: public
 
     # Package format: tar, tgz, tar.gz, zip, or binary.
-    #
-    # Required: if more than one archive format is being used.
     format: tar.gz
     url_template: "https://maybedont.ai/download/{{ .Tag }}/{{ .ArtifactName }}"
