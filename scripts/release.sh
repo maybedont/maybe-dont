@@ -100,18 +100,21 @@ log_info "Updating version strings..."
 # Function to update version in a file
 update_version_in_file() {
     local file="$1"
-    local old_version="$2"
-    local new_version="$3"
-    
+    local old_version="$2"  # e.g., "v0.1.6"
+    local new_version="$3"  # e.g., "v0.2.0"
+
     if [[ -f "$file" ]]; then
         log_info "Updating version in $file"
-        # Escape special characters for sed
-        old_version_escaped=$(echo "$old_version" | sed 's/[[\.*^$()+?{|]/\\&/g')
-        new_version_escaped=$(echo "$new_version" | sed 's/[[\.*^$()+?{|]/\\&/g')
-        
-        # Use sed to replace the old version with the new one
-        # This handles various version formats (v1.2.3, 1.2.3, etc.)
-        sed -i "s/${old_version_escaped}/${new_version_escaped}/g" "$file"
+
+        # Remove 'v' prefix for bare version numbers
+        old_bare="${old_version#v}"
+        new_bare="${new_version#v}"
+
+        # Replace full version (with 'v' prefix)
+        sed -i "s/${old_version}/${new_version}/g" "$file"
+
+        # Replace bare version (without 'v' prefix)
+        sed -i "s/${old_bare}/${new_bare}/g" "$file"
     fi
 }
 
@@ -125,7 +128,7 @@ fi
 
 if [[ -n "$PREVIOUS_VERSION" ]]; then
     log_info "Previous version found: $PREVIOUS_VERSION"
-    
+
     # Update version in common files
     update_version_in_file "content/download.md" "$PREVIOUS_VERSION" "$VERSION_CLEAN"
 else
@@ -207,4 +210,4 @@ else
 fi
 
 log_info "Release process completed successfully!"
-log_info "Pull request created for version $VERSION_CLEAN" 
+log_info "Pull request created for version $VERSION_CLEAN"
