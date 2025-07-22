@@ -1,3 +1,19 @@
+## v0.3.0 (2025-07-21)
+
+### Feat
+
+- add merge option to release script
+
+### Refactor
+
+- remove curl fallback from release script
+
+## v0.2.2 (2025-07-21)
+
+## v0.2.3 (2025-07-21)
+
+## v0.2.1 (2025-07-21)
+
 ## v0.2.0 (2025-07-21)
 
 ### BREAKING CHANGE
