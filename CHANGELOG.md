@@ -1,3 +1,14 @@
+## v0.2.0 (2025-07-21)
+
+### BREAKING CHANGE
+
+- makes the config multi-client, requiring changes to
+older configurations.
+
+### Feat
+
+- Add multi-client support for connecting to multiple MCP servers
+
 ## v0.1.6 (2025-07-06)
 
 ### Fix
