@@ -1,5 +1,5 @@
 {
-  "name": "gateway",
+  "name": "maybe-dont/gateway",
   "version": "0.2.2",
   "description": "The Maybe Don't AI Security Gateway",
   "main": "index.js",
