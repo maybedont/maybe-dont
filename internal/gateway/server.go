@@ -23,28 +23,28 @@ func (w *zapLogWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func (p *Gateway) initServer(ctx context.Context) error {
-	switch p.config.Server.Type {
+func (g *Gateway) initServer(ctx context.Context) error {
+	switch g.config.Server.Type {
 	case "stdio":
-		return p.initStdioServer(ctx)
+		return g.initStdioServer(ctx)
 	case "sse":
-		return p.initSSEServer(ctx)
+		return g.initSSEServer(ctx)
 	case "http":
-		return p.initHTTPServer(ctx)
+		return g.initHTTPServer(ctx)
 	default:
-		return fmt.Errorf("unsupported server type: %s", p.config.Server.Type)
+		return fmt.Errorf("unsupported server type: %s", g.config.Server.Type)
 	}
 }
 
 // initMCPServer initializes the MCP server with common configuration and registers tools
-func (p *Gateway) initMCPServer() (*server.MCPServer, error) {
+func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	opts := []server.ServerOption{
 		server.WithLogging(),
 		server.WithRecovery(),
 	}
 
 	// Get all clients to determine combined capabilities
-	allClients := p.clientManager.GetAllClients()
+	allClients := g.clientManager.GetAllClients()
 
 	// Determine combined capabilities from all clients
 	hasTools := false
@@ -98,8 +98,8 @@ func (p *Gateway) initMCPServer() (*server.MCPServer, error) {
 		for _, tool := range clientInfo.Tools {
 			prefixedTool := tool
 			prefixedTool.Name = PrefixName(clientName, tool.Name)
-			srv.AddTool(prefixedTool, p.handleToolCallWithErrorHandling)
-			p.logger.Debug("Registered tool",
+			srv.AddTool(prefixedTool, g.handleToolCallWithErrorHandling)
+			g.logger.Debug("Registered tool",
 				zap.String("client", clientName),
 				zap.String("original_name", tool.Name),
 				zap.String("prefixed_name", prefixedTool.Name))
@@ -109,8 +109,8 @@ func (p *Gateway) initMCPServer() (*server.MCPServer, error) {
 		for _, prompt := range clientInfo.Prompts {
 			prefixedPrompt := prompt
 			prefixedPrompt.Name = PrefixName(clientName, prompt.Name)
-			srv.AddPrompt(prefixedPrompt, p.HandlePromptCall)
-			p.logger.Debug("Registered prompt",
+			srv.AddPrompt(prefixedPrompt, g.HandlePromptCall)
+			g.logger.Debug("Registered prompt",
 				zap.String("client", clientName),
 				zap.String("original_name", prompt.Name),
 				zap.String("prefixed_name", prefixedPrompt.Name))
@@ -120,8 +120,8 @@ func (p *Gateway) initMCPServer() (*server.MCPServer, error) {
 		for _, resource := range clientInfo.Resources {
 			prefixedResource := resource
 			prefixedResource.URI = PrefixName(clientName, resource.URI)
-			srv.AddResource(prefixedResource, p.HandleResourceCall)
-			p.logger.Debug("Registered resource",
+			srv.AddResource(prefixedResource, g.HandleResourceCall)
+			g.logger.Debug("Registered resource",
 				zap.String("client", clientName),
 				zap.String("original_uri", resource.URI),
 				zap.String("prefixed_uri", prefixedResource.URI))
@@ -137,7 +137,7 @@ func (p *Gateway) initMCPServer() (*server.MCPServer, error) {
 				// Create new URITemplate from prefixed raw string
 				newTemplate, err := uritemplate.New(prefixedRaw)
 				if err != nil {
-					p.logger.Error("Failed to create prefixed URI template",
+					g.logger.Error("Failed to create prefixed URI template",
 						zap.String("client", clientName),
 						zap.String("original", originalRaw),
 						zap.String("prefixed", prefixedRaw),
@@ -146,8 +146,8 @@ func (p *Gateway) initMCPServer() (*server.MCPServer, error) {
 				}
 				prefixedTemplate.URITemplate = &mcp.URITemplate{Template: newTemplate}
 			}
-			srv.AddResourceTemplate(prefixedTemplate, p.HandleResourceTemplateCall)
-			p.logger.Debug("Registered resource template",
+			srv.AddResourceTemplate(prefixedTemplate, g.HandleResourceTemplateCall)
+			g.logger.Debug("Registered resource template",
 				zap.String("client", clientName),
 				zap.String("original_template", func() string {
 					if template.URITemplate != nil {
@@ -167,8 +167,8 @@ func (p *Gateway) initMCPServer() (*server.MCPServer, error) {
 	return srv, nil
 }
 
-func (p *Gateway) initStdioServer(ctx context.Context) error {
-	srv, err := p.initMCPServer()
+func (g *Gateway) initStdioServer(ctx context.Context) error {
+	srv, err := g.initMCPServer()
 	if err != nil {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
@@ -177,10 +177,10 @@ func (p *Gateway) initStdioServer(ctx context.Context) error {
 	stdioSrv := server.NewStdioServer(srv)
 
 	// Create zap logger adapter for stdio server
-	zapWriter := &zapLogWriter{logger: p.logger}
+	zapWriter := &zapLogWriter{logger: g.logger}
 	stdioSrv.SetErrorLogger(log.New(zapWriter, "", 0))
 
-	p.server = srv
+	g.server = srv
 
 	// Create error channel for startup confirmation
 	errChan := make(chan error, 1)
@@ -189,7 +189,7 @@ func (p *Gateway) initStdioServer(ctx context.Context) error {
 	go func() {
 		defer close(errChan)
 		if err := stdioSrv.Listen(ctx, os.Stdin, os.Stdout); err != nil {
-			p.logger.Error("Failed to start STDIO server", zap.Error(err))
+			g.logger.Error("Failed to start STDIO server", zap.Error(err))
 			errChan <- err
 		}
 	}()
@@ -204,13 +204,13 @@ func (p *Gateway) initStdioServer(ctx context.Context) error {
 		// No immediate error, assume successful startup
 	}
 
-	p.logger.Info("STDIO server started")
+	g.logger.Info("STDIO server started")
 
 	return nil
 }
 
-func (p *Gateway) initSSEServer(ctx context.Context) error {
-	srv, err := p.initMCPServer()
+func (g *Gateway) initSSEServer(ctx context.Context) error {
+	srv, err := g.initMCPServer()
 	if err != nil {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
@@ -221,7 +221,7 @@ func (p *Gateway) initSSEServer(ctx context.Context) error {
 		server.WithMessageEndpoint("/message"),
 	)
 
-	p.server = srv
+	g.server = srv
 
 	// Create error channel for startup confirmation
 	errChan := make(chan error, 1)
@@ -229,8 +229,8 @@ func (p *Gateway) initSSEServer(ctx context.Context) error {
 	// Start server in a goroutine
 	go func() {
 		defer close(errChan)
-		if err := sseSrv.Start(p.config.Server.ListenAddr); err != nil {
-			p.logger.Error("Failed to start SSE server", zap.Error(err))
+		if err := sseSrv.Start(g.config.Server.ListenAddr); err != nil {
+			g.logger.Error("Failed to start SSE server", zap.Error(err))
 			errChan <- err
 		}
 	}()
@@ -242,7 +242,7 @@ func (p *Gateway) initSSEServer(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := sseSrv.Shutdown(shutdownCtx); err != nil {
-			p.logger.Error("Error shutting down SSE server", zap.Error(err))
+			g.logger.Error("Error shutting down SSE server", zap.Error(err))
 		}
 	}()
 
@@ -256,13 +256,13 @@ func (p *Gateway) initSSEServer(ctx context.Context) error {
 		// No immediate error, assume successful startup
 	}
 
-	p.logger.Info("SSE server started", zap.String("listen_addr", p.config.Server.ListenAddr))
+	g.logger.Info("SSE server started", zap.String("listen_addr", g.config.Server.ListenAddr))
 
 	return nil
 }
 
-func (p *Gateway) initHTTPServer(ctx context.Context) error {
-	srv, err := p.initMCPServer()
+func (g *Gateway) initHTTPServer(ctx context.Context) error {
+	srv, err := g.initMCPServer()
 	if err != nil {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
@@ -272,7 +272,7 @@ func (p *Gateway) initHTTPServer(ctx context.Context) error {
 		server.WithEndpointPath("/mcp"),
 	)
 
-	p.server = srv
+	g.server = srv
 
 	// Create error channel for startup confirmation
 	errChan := make(chan error, 1)
@@ -280,8 +280,8 @@ func (p *Gateway) initHTTPServer(ctx context.Context) error {
 	// Start server in a goroutine
 	go func() {
 		defer close(errChan)
-		if err := httpSrv.Start(p.config.Server.ListenAddr); err != nil {
-			p.logger.Error("Failed to start HTTP server", zap.Error(err))
+		if err := httpSrv.Start(g.config.Server.ListenAddr); err != nil {
+			g.logger.Error("Failed to start HTTP server", zap.Error(err))
 			errChan <- err
 		}
 	}()
@@ -293,7 +293,7 @@ func (p *Gateway) initHTTPServer(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-			p.logger.Error("Error shutting down HTTP server", zap.Error(err))
+			g.logger.Error("Error shutting down HTTP server", zap.Error(err))
 		}
 	}()
 
@@ -307,14 +307,14 @@ func (p *Gateway) initHTTPServer(ctx context.Context) error {
 		// No immediate error, assume successful startup
 	}
 
-	p.logger.Info("HTTP server started", zap.String("listen_addr", p.config.Server.ListenAddr))
+	g.logger.Info("HTTP server started", zap.String("listen_addr", g.config.Server.ListenAddr))
 
 	return nil
 }
 
 // Custom tool handler that handles PolicyDeniedError and returns proper MCP error responses
-func (p *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	result, err := p.HandleToolCall(ctx, req)
+func (g *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	result, err := g.HandleToolCall(ctx, req)
 	if err != nil {
 		// Check if it's a PolicyDeniedError
 		if policyErr, ok := err.(*PolicyDeniedError); ok {
