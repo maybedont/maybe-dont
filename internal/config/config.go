@@ -36,23 +36,6 @@ type Config struct {
 		} `mapstructure:"sse"`
 	} `mapstructure:"server"`
 
-	// Authentication configuration
-	Auth struct {
-		Type      string `mapstructure:"type"` // api_key, jwt, mtls
-		APIKey    string `mapstructure:"api_key"`
-		JWTConfig struct {
-			JWKSUrl    string   `mapstructure:"jwks_url"`
-			Issuer     string   `mapstructure:"issuer"`
-			Audience   []string `mapstructure:"audience"`
-			ClaimRoles string   `mapstructure:"claim_roles"`
-		} `mapstructure:"jwt"`
-		MTLSConfig struct {
-			CAFile   string `mapstructure:"ca_file"`
-			CertFile string `mapstructure:"cert_file"`
-			KeyFile  string `mapstructure:"key_file"`
-		} `mapstructure:"mtls"`
-	} `mapstructure:"auth"`
-
 	// Policy configuration
 	PolicyValidation struct {
 		Enabled   bool        `mapstructure:"enabled"`
@@ -399,22 +382,6 @@ func ValidateConfig(cfg *Config) error {
 			if cfg.Server.SSE.TLS.KeyFile == "" {
 				errors = append(errors, "server.sse.tls.key_file is required when TLS is enabled")
 			}
-		}
-	}
-
-	// Validate auth configuration
-	switch cfg.Auth.Type {
-	case "api_key":
-		if cfg.Auth.APIKey == "" {
-			errors = append(errors, "auth.api_key is required when auth.type is api_key")
-		}
-	case "jwt":
-		if cfg.Auth.JWTConfig.JWKSUrl == "" {
-			errors = append(errors, "auth.jwt.jwks_url is required when auth.type is jwt")
-		}
-	case "mtls":
-		if cfg.Auth.MTLSConfig.CAFile == "" {
-			errors = append(errors, "auth.mtls.ca_file is required when auth.type is mtls")
 		}
 	}
 
