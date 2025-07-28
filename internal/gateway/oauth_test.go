@@ -618,7 +618,7 @@ func TestWellKnownCORSMiddleware(t *testing.T) {
 			expectedCORSHeaders:  true,
 			expectedAllowedOrigin: "https://claude.ai",
 			expectedAllowMethods: "GET, OPTIONS",
-			expectedAllowHeaders: "Authorization, Content-Type",
+			expectedAllowHeaders: "Authorization, Content-Type, mcp-protocol-version",
 		},
 		{
 			name:                  "Wildcard origin allows all",
@@ -631,7 +631,7 @@ func TestWellKnownCORSMiddleware(t *testing.T) {
 			expectedCORSHeaders:  true,
 			expectedAllowedOrigin: "https://any-domain.com",
 			expectedAllowMethods: "GET, OPTIONS",
-			expectedAllowHeaders: "Authorization, Content-Type",
+			expectedAllowHeaders: "Authorization, Content-Type, mcp-protocol-version",
 		},
 		{
 			name:                "Disallowed origin - no headers",
@@ -654,7 +654,7 @@ func TestWellKnownCORSMiddleware(t *testing.T) {
 			expectedCORSHeaders:  true,
 			expectedAllowedOrigin: "https://claude.ai",
 			expectedAllowMethods: "GET, OPTIONS",
-			expectedAllowHeaders: "Authorization, Content-Type",
+			expectedAllowHeaders: "Authorization, Content-Type, mcp-protocol-version",
 			expectedMaxAge:      "86400",
 		},
 		{
@@ -678,7 +678,7 @@ func TestWellKnownCORSMiddleware(t *testing.T) {
 			expectedCORSHeaders:  true,
 			expectedAllowedOrigin: "https://mcp-inspector.com",
 			expectedAllowMethods: "GET, OPTIONS",
-			expectedAllowHeaders: "Authorization, Content-Type",
+			expectedAllowHeaders: "Authorization, Content-Type, mcp-protocol-version",
 		},
 		{
 			name:                "Empty origin header - no CORS headers",
