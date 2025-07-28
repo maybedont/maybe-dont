@@ -33,11 +33,9 @@ server:
     # Enable OAuth authentication
     enabled: false
     # OAuth authorization server URL
-    # authorization_server: "https://auth.example.com"
-    authorization_server: "https://dev-vkmwna850dvz1z8g.us.auth0.com"
+    authorization_server: "https://auth.example.com"
     # Token validation endpoint (optional, for future token introspection)
-    # token_validation_endpoint: "https://auth.example.com/token"
-    token_validation_endpoint: "https://dev-vkmwna850dvz1z8g.us.auth0.com/oauth/token"
+    token_validation_endpoint: "https://auth.example.com/token"
     # OAuth realm name (defaults to "mcp-server")
     realm: "mcp-server"
     # CORS configuration for .well-known endpoints
