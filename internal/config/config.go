@@ -27,6 +27,17 @@ type Config struct {
 	Server struct {
 		Type       ServerType `mapstructure:"type"` // stdio, http, sse
 		ListenAddr string     `mapstructure:"listen_addr"`
+		OAuth      struct {
+			Enabled                   bool   `mapstructure:"enabled"`
+			AuthorizationServer       string `mapstructure:"authorization_server"`
+			TokenValidationEndpoint   string `mapstructure:"token_validation_endpoint"`
+			Realm                     string `mapstructure:"realm"`
+			CORS struct {
+				Enabled        bool     `mapstructure:"enabled"`
+				AllowedOrigins []string `mapstructure:"allowed_origins"`
+				MaxAge         int      `mapstructure:"max_age"`
+			} `mapstructure:"cors"`
+		} `mapstructure:"oauth"`
 		SSE        struct {
 			TLS struct {
 				Enabled  bool   `mapstructure:"enabled"`
@@ -265,6 +276,16 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 	// Set default listen address to 127.0.0.1 for non-stdio servers if not set
 	if config.Server.Type != ServerTypeSTDIO && config.Server.ListenAddr == "" {
 		config.Server.ListenAddr = "127.0.0.1"
+	}
+
+	// Set default OAuth realm if not configured
+	if config.Server.OAuth.Enabled && config.Server.OAuth.Realm == "" {
+		config.Server.OAuth.Realm = "mcp-server"
+	}
+
+	// Set default CORS max age if not configured
+	if config.Server.OAuth.CORS.Enabled && config.Server.OAuth.CORS.MaxAge == 0 {
+		config.Server.OAuth.CORS.MaxAge = 86400 // 24 hours
 	}
 
 	// Override OpenAI API key from environment variable if set

@@ -29,6 +29,29 @@ server:
   type: stdio
   # Address to listen on (host:port)
   listen_addr: "0.0.0.0:8080"
+  oauth:
+    # Enable OAuth authentication
+    enabled: false
+    # OAuth authorization server URL
+    # authorization_server: "https://auth.example.com"
+    authorization_server: "https://dev-vkmwna850dvz1z8g.us.auth0.com"
+    # Token validation endpoint (optional, for future token introspection)
+    # token_validation_endpoint: "https://auth.example.com/token"
+    token_validation_endpoint: "https://dev-vkmwna850dvz1z8g.us.auth0.com/oauth/token"
+    # OAuth realm name (defaults to "mcp-server")
+    realm: "mcp-server"
+    # CORS configuration for .well-known endpoints
+    cors:
+      # Enable CORS headers for .well-known paths
+      enabled: true
+      # List of allowed origins (* for all, or specific domains)
+      allowed_origins:
+        - "*"  # Allow all origins (not recommended for production)
+        # - "https://claude.ai"
+        # - "https://mcp-inspector.com"
+        # - "http://localhost:6274"
+      # Max age for preflight cache in seconds (defaults to 86400 - 24 hours)
+      max_age: 86400
 
 # Policy configuration
 policy_validation:

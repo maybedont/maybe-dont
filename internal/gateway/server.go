@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -272,15 +273,38 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		server.WithEndpointPath("/mcp"),
 	)
 
+	// Create a custom multiplexer to handle both OAuth and MCP endpoints
+	mux := http.NewServeMux()
+
+	// Register OAuth 2.0 Protected Resource Metadata endpoints (unprotected)
+	// Both paths serve the same metadata, wrapped with CORS middleware
+	oauthMetadataHandler := g.wellKnownCORSMiddleware(http.HandlerFunc(g.handleOAuthMetadata))
+	mux.Handle("/.well-known/oauth-protected-resource", oauthMetadataHandler)
+	mux.Handle("/.well-known/oauth-protected-resource/mcp", oauthMetadataHandler) // MCP Inspector compatibility
+
+	// Apply OAuth middleware to the /mcp endpoint
+	protectedMCPHandler := g.oauthMiddleware(httpSrv)
+
+	// Register the protected MCP endpoint
+	mux.Handle("/mcp", protectedMCPHandler)
+
+	// Register the root handler without middleware
+	mux.Handle("/", httpSrv)
+
 	g.server = srv
 
 	// Create error channel for startup confirmation
 	errChan := make(chan error, 1)
 
-	// Start server in a goroutine
+	// Start server in a goroutine with our custom mux
 	go func() {
 		defer close(errChan)
-		if err := httpSrv.Start(g.config.Server.ListenAddr); err != nil {
+		httpServer := &http.Server{
+			Addr:    g.config.Server.ListenAddr,
+			Handler: mux,
+		}
+
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			g.logger.Error("Failed to start HTTP server", zap.Error(err))
 			errChan <- err
 		}

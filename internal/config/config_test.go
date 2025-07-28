@@ -41,7 +41,18 @@ func TestServerTypeValidation(t *testing.T) {
 				Server: struct {
 					Type       ServerType `mapstructure:"type"`
 					ListenAddr string     `mapstructure:"listen_addr"`
-					SSE        struct {
+					OAuth      struct {
+						Enabled                 bool   `mapstructure:"enabled"`
+						AuthorizationServer     string `mapstructure:"authorization_server"`
+						TokenValidationEndpoint string `mapstructure:"token_validation_endpoint"`
+						Realm                   string `mapstructure:"realm"`
+						CORS                    struct {
+							Enabled        bool     `mapstructure:"enabled"`
+							AllowedOrigins []string `mapstructure:"allowed_origins"`
+							MaxAge         int      `mapstructure:"max_age"`
+						} `mapstructure:"cors"`
+					} `mapstructure:"oauth"`
+					SSE struct {
 						TLS struct {
 							Enabled  bool   `mapstructure:"enabled"`
 							CertFile string `mapstructure:"cert_file"`
@@ -98,7 +109,18 @@ func TestListenAddrValidation(t *testing.T) {
 				Server: struct {
 					Type       ServerType `mapstructure:"type"`
 					ListenAddr string     `mapstructure:"listen_addr"`
-					SSE        struct {
+					OAuth      struct {
+						Enabled                 bool   `mapstructure:"enabled"`
+						AuthorizationServer     string `mapstructure:"authorization_server"`
+						TokenValidationEndpoint string `mapstructure:"token_validation_endpoint"`
+						Realm                   string `mapstructure:"realm"`
+						CORS                    struct {
+							Enabled        bool     `mapstructure:"enabled"`
+							AllowedOrigins []string `mapstructure:"allowed_origins"`
+							MaxAge         int      `mapstructure:"max_age"`
+						} `mapstructure:"cors"`
+					} `mapstructure:"oauth"`
+					SSE struct {
 						TLS struct {
 							Enabled  bool   `mapstructure:"enabled"`
 							CertFile string `mapstructure:"cert_file"`
@@ -235,7 +257,18 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 		Server: struct {
 			Type       ServerType `mapstructure:"type"`
 			ListenAddr string     `mapstructure:"listen_addr"`
-			SSE        struct {
+			OAuth      struct {
+				Enabled                 bool   `mapstructure:"enabled"`
+				AuthorizationServer     string `mapstructure:"authorization_server"`
+				TokenValidationEndpoint string `mapstructure:"token_validation_endpoint"`
+				Realm                   string `mapstructure:"realm"`
+				CORS                    struct {
+					Enabled        bool     `mapstructure:"enabled"`
+					AllowedOrigins []string `mapstructure:"allowed_origins"`
+					MaxAge         int      `mapstructure:"max_age"`
+				} `mapstructure:"cors"`
+			} `mapstructure:"oauth"`
+			SSE struct {
 				TLS struct {
 					Enabled  bool   `mapstructure:"enabled"`
 					CertFile string `mapstructure:"cert_file"`
@@ -249,16 +282,16 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 			"test1": {
 				Type: "stdio",
 				// Missing Command - Error 2
-				StartupTimeoutMs:      -1,     // Error 3: negative timeout
-				InitializationRetries: 20,     // Error 4: too many retries
-				RetryDelayMs:          -100,   // Error 5: negative retry delay
+				StartupTimeoutMs:      -1,   // Error 3: negative timeout
+				InitializationRetries: 20,   // Error 4: too many retries
+				RetryDelayMs:          -100, // Error 5: negative retry delay
 			},
 			"test2": {
 				Type: "http",
 				// Missing DownstreamURL - Error 6
-				CapabilityDiscoveryDelayMs: -1,      // Error 7: negative delay
-				CapabilityDiscoveryRetries: 15,      // Error 8: too many retries
-				CapabilityRetryDelayMs:     40000,   // Error 9: delay too large
+				CapabilityDiscoveryDelayMs: -1,    // Error 7: negative delay
+				CapabilityDiscoveryRetries: 15,    // Error 8: too many retries
+				CapabilityRetryDelayMs:     40000, // Error 9: delay too large
 			},
 		},
 		Audit: struct {
@@ -284,13 +317,13 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 
 	err := ValidateConfig(config)
 	require.Error(t, err)
-	
+
 	// Check that the error message contains all expected errors
 	errMsg := err.Error()
-	
+
 	// Check for multiple errors reported
 	require.Contains(t, errMsg, "14 error(s)")
-	
+
 	// Check for specific errors
 	require.Contains(t, errMsg, "invalid server type: invalid-type")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test1].command is required")
@@ -313,7 +346,18 @@ func TestValidateConfigSuccess(t *testing.T) {
 		Server: struct {
 			Type       ServerType `mapstructure:"type"`
 			ListenAddr string     `mapstructure:"listen_addr"`
-			SSE        struct {
+			OAuth      struct {
+				Enabled                 bool   `mapstructure:"enabled"`
+				AuthorizationServer     string `mapstructure:"authorization_server"`
+				TokenValidationEndpoint string `mapstructure:"token_validation_endpoint"`
+				Realm                   string `mapstructure:"realm"`
+				CORS                    struct {
+					Enabled        bool     `mapstructure:"enabled"`
+					AllowedOrigins []string `mapstructure:"allowed_origins"`
+					MaxAge         int      `mapstructure:"max_age"`
+				} `mapstructure:"cors"`
+			} `mapstructure:"oauth"`
+			SSE struct {
 				TLS struct {
 					Enabled  bool   `mapstructure:"enabled"`
 					CertFile string `mapstructure:"cert_file"`
