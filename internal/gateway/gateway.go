@@ -266,6 +266,9 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	// Add validation summary to the result metadata
 	if result.Meta == nil {
+		result.Meta = &mcp.Meta{}
+	}
+	if result.Meta.AdditionalFields == nil {
 		result.Meta.AdditionalFields = make(map[string]interface{})
 	}
 

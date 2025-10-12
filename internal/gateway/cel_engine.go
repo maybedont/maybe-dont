@@ -138,13 +138,21 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 	)
 
 	// Create evaluation context with proper structure
+	// Handle nil Meta by converting to empty map for CEL evaluation
+	var meta interface{}
+	if req.Request.Params.Meta != nil {
+		meta = req.Request.Params.Meta
+	} else {
+		meta = map[string]interface{}{}
+	}
+
 	vars := map[string]interface{}{
 		"request": map[string]interface{}{
 			"method": req.Method,
 			"params": map[string]interface{}{
 				"name":      req.Params.Name,
 				"arguments": req.Params.Arguments,
-				"meta":      req.Request.Params.Meta,
+				"meta":      meta,
 			},
 		},
 	}

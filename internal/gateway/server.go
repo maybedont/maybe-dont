@@ -323,6 +323,9 @@ func (g *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.C
 
 			// Add structured error data to the result
 			if errorResult.Meta == nil {
+				errorResult.Meta = &mcp.Meta{}
+			}
+			if errorResult.Meta.AdditionalFields == nil {
 				errorResult.Meta.AdditionalFields = make(map[string]interface{})
 			}
 			errorResult.Meta.AdditionalFields["error_code"] = -32600 // Invalid Request

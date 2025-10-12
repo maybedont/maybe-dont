@@ -49,6 +49,9 @@ func TestPolicyDeniedError_ErrorHandler(t *testing.T) {
 			errorResult := mcp.NewToolResultError(policyErr.Message)
 
 			// Add structured error data to the result
+			if errorResult.Meta == nil {
+				errorResult.Meta = &mcp.Meta{}
+			}
 			if errorResult.Meta.AdditionalFields == nil {
 				errorResult.Meta.AdditionalFields = make(map[string]interface{})
 			}
@@ -117,6 +120,9 @@ func TestPolicyDeniedError_MultiplePolicies(t *testing.T) {
 			errorResult := mcp.NewToolResultError(policyErr.Message)
 
 			// Add structured error data to the result
+			if errorResult.Meta == nil {
+				errorResult.Meta = &mcp.Meta{}
+			}
 			if errorResult.Meta.AdditionalFields == nil {
 				errorResult.Meta.AdditionalFields = make(map[string]interface{})
 			}
