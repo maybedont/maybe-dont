@@ -49,11 +49,11 @@ func TestPolicyDeniedError_ErrorHandler(t *testing.T) {
 			errorResult := mcp.NewToolResultError(policyErr.Message)
 
 			// Add structured error data to the result
-			if errorResult.Meta == nil {
-				errorResult.Meta = make(map[string]interface{})
+			if errorResult.Meta.AdditionalFields == nil {
+				errorResult.Meta.AdditionalFields = make(map[string]interface{})
 			}
-			errorResult.Meta["error_code"] = -32600 // Invalid Request
-			errorResult.Meta["error_data"] = policyErr.Data
+			errorResult.Meta.AdditionalFields["error_code"] = -32600 // Invalid Request
+			errorResult.Meta.AdditionalFields["error_data"] = policyErr.Data
 
 			return errorResult
 		}
@@ -78,11 +78,11 @@ func TestPolicyDeniedError_ErrorHandler(t *testing.T) {
 	assert.Contains(t, textContent.Text, "delete_file is not allowed", "Should include the policy message")
 
 	// Check that the error code is set correctly
-	assert.NotNil(t, result.Meta, "Result should have metadata")
-	assert.Equal(t, -32600, result.Meta["error_code"], "Error code should be -32600 (Invalid Request)")
+	assert.NotNil(t, result.Meta.AdditionalFields, "Result should have Meta.additionalFields")
+	assert.Equal(t, -32600, result.Meta.AdditionalFields["error_code"], "Error code should be -32600 (Invalid Request)")
 
 	// Check that error data is included
-	errorData, ok := result.Meta["error_data"].(map[string]interface{})
+	errorData, ok := result.Meta.AdditionalFields["error_data"].(map[string]interface{})
 	require.True(t, ok, "Error data should be a map")
 	assert.Equal(t, "delete_file", errorData["tool_name"], "Should include tool name in error data")
 	assert.Equal(t, 1, errorData["denied_count"], "Should include denied count")
@@ -117,11 +117,11 @@ func TestPolicyDeniedError_MultiplePolicies(t *testing.T) {
 			errorResult := mcp.NewToolResultError(policyErr.Message)
 
 			// Add structured error data to the result
-			if errorResult.Meta == nil {
-				errorResult.Meta = make(map[string]interface{})
+			if errorResult.Meta.AdditionalFields == nil {
+				errorResult.Meta.AdditionalFields = make(map[string]interface{})
 			}
-			errorResult.Meta["error_code"] = -32600 // Invalid Request
-			errorResult.Meta["error_data"] = policyErr.Data
+			errorResult.Meta.AdditionalFields["error_code"] = -32600 // Invalid Request
+			errorResult.Meta.AdditionalFields["error_data"] = policyErr.Data
 
 			return errorResult
 		}
@@ -147,11 +147,11 @@ func TestPolicyDeniedError_MultiplePolicies(t *testing.T) {
 	assert.Contains(t, textContent.Text, "Cannot delete system files", "Should include second policy message")
 
 	// Check that the error code is set correctly
-	assert.NotNil(t, result.Meta, "Result should have metadata")
-	assert.Equal(t, -32600, result.Meta["error_code"], "Error code should be -32600 (Invalid Request)")
+	assert.NotNil(t, result.Meta.AdditionalFields, "Result should have metadata")
+	assert.Equal(t, -32600, result.Meta.AdditionalFields["error_code"], "Error code should be -32600 (Invalid Request)")
 
 	// Check that error data is included
-	errorData, ok := result.Meta["error_data"].(map[string]interface{})
+	errorData, ok := result.Meta.AdditionalFields["error_data"].(map[string]interface{})
 	require.True(t, ok, "Error data should be a map")
 	assert.Equal(t, "delete_file", errorData["tool_name"], "Should include tool name in error data")
 	assert.Equal(t, 2, errorData["denied_count"], "Should include denied count")
