@@ -10,14 +10,16 @@ import (
 )
 
 var (
-	cfgPath  string
-	cfg      *config.Config
-	Logger   *zap.Logger
-	aiRules  []byte
-	celRules []byte
-	version  string
-	commit   string
-	date     string
+	cfgPath             string
+	cfg                 *config.Config
+	Logger              *zap.Logger
+	aiRules             []byte
+	celRules            []byte
+	aiResponseRules     []byte
+	celResponseRules    []byte
+	version             string
+	commit              string
+	date                string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -32,7 +34,7 @@ gateway between MCP clients and servers, enforcing security policies, validating
 and providing comprehensive audit logging.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		var err error
-		cfg, err = config.LoadConfig(cfgPath, aiRules, celRules)
+		cfg, err = config.LoadConfig(cfgPath, aiRules, celRules, aiResponseRules, celResponseRules)
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
@@ -55,9 +57,11 @@ and providing comprehensive audit logging.`,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
-func Execute(VERSION string, COMMIT string, DATE string, AIRules []byte, CELRules []byte) {
+func Execute(VERSION string, COMMIT string, DATE string, AIRules []byte, CELRules []byte, AIResponseRules []byte, CELResponseRules []byte) {
 	aiRules = AIRules
 	celRules = CELRules
+	aiResponseRules = AIResponseRules
+	celResponseRules = CELResponseRules
 	version = VERSION
 	commit = COMMIT
 	date = DATE

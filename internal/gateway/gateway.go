@@ -38,6 +38,12 @@ type Gateway struct {
 	policyEngine *CELPolicyEngine
 	// AI policy engine
 	aiPolicyEngine *AIPolicyEngine
+	// Response validation chain
+	responseValidationChain *ResponseValidationChain
+	// CEL response policy engine
+	responsePolicyEngine *CELResponsePolicyEngine
+	// AI response policy engine
+	aiResponsePolicyEngine *AIResponsePolicyEngine
 }
 
 // New creates a new gateway instance
@@ -91,17 +97,62 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 		logger.Info("AI policy validation is disabled")
 	}
 
+	// Initialize response validation engines
+	var responsePolicyEngine *CELResponsePolicyEngine
+	var aiResponsePolicyEngine *AIResponsePolicyEngine
+
+	// Initialize CEL response policy engine only if enabled
+	if cfg.ResponseValidation.Enabled {
+		logger.Info("Initializing CEL response policy engine")
+		responsePolicyEngine, err = NewCELResponsePolicyEngine(logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CEL response policy engine: %w", err)
+		}
+
+		// Load policies from configuration
+		if err := responsePolicyEngine.LoadPolicies(cfg.ResponseValidation.Rules); err != nil {
+			return nil, fmt.Errorf("failed to load CEL response policies: %w", err)
+		}
+	} else {
+		logger.Info("CEL response validation is disabled")
+	}
+
+	// Initialize AI response policy engine only if enabled
+	if cfg.AIResponseValidation.Enabled {
+		logger.Info("Initializing AI response policy engine")
+		aiResponsePolicyEngine = &AIResponsePolicyEngine{
+			endpoint: cfg.AIPolicyValidation.Endpoint,
+			model:    cfg.AIPolicyValidation.Model,
+			apiKey:   cfg.AIPolicyValidation.APIKey,
+		}
+
+		// Create AI response policy engine
+		err = InitAIResponsePolicyEngine(logger, aiResponsePolicyEngine)
+		if err != nil {
+			return nil, fmt.Errorf("failed to init AI response policy engine: %w", err)
+		}
+
+		// Load policies from configuration
+		if err := aiResponsePolicyEngine.LoadPolicies(cfg.AIResponseValidation.Rules); err != nil {
+			return nil, fmt.Errorf("failed to load AI response policies: %w", err)
+		}
+	} else {
+		logger.Info("AI response validation is disabled")
+	}
+
 	// Create client manager
 	clientManager := NewClientManager(logger)
 
 	return &Gateway{
-		logger:         logger,
-		auditLogger:    auditLogger,
-		config:         cfg,
-		stopChan:       make(chan struct{}),
-		clientManager:  clientManager,
-		policyEngine:   policyEngine,
-		aiPolicyEngine: aiPolicyEngine,
+		logger:                 logger,
+		auditLogger:            auditLogger,
+		config:                 cfg,
+		stopChan:               make(chan struct{}),
+		clientManager:          clientManager,
+		policyEngine:           policyEngine,
+		aiPolicyEngine:         aiPolicyEngine,
+		responsePolicyEngine:   responsePolicyEngine,
+		aiResponsePolicyEngine: aiResponsePolicyEngine,
 	}, nil
 }
 
@@ -135,6 +186,25 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 
 	g.validationChain = NewToolValidationChain(handlers...)
+
+	// Initialize response validation chain
+	responseHandlers := []ResponseValidationHandler{
+		NewResponseLoggingHandler(g.auditLogger),
+	}
+
+	// Add CEL response validation handler if enabled
+	if g.config.ResponseValidation.Enabled && g.responsePolicyEngine != nil {
+		g.logger.Info("Adding CEL response validation handler to chain")
+		responseHandlers = append(responseHandlers, NewResponseCELValidationHandler(g.logger, g.responsePolicyEngine))
+	}
+
+	// Add AI response validation handler if enabled
+	if g.config.AIResponseValidation.Enabled && g.aiResponsePolicyEngine != nil {
+		g.logger.Info("Adding AI response validation handler to chain")
+		responseHandlers = append(responseHandlers, NewResponseAIValidationHandler(g.logger, g.aiResponsePolicyEngine))
+	}
+
+	g.responseValidationChain = NewResponseValidationChain(g.logger, responseHandlers...)
 
 	// Initialize all configured clients
 	if err := g.clientManager.InitializeClients(ctx, g.config.DownstreamMCPServers); err != nil {
@@ -258,6 +328,62 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		auditLog["original_tool_name"] = originalToolName
 		g.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("tool call failed: %w", err)
+	}
+
+	// Validate response through the response validation chain
+	if g.responseValidationChain != nil {
+		responseValidationResults, err := g.responseValidationChain.Handle(ctx, req, result)
+		if err != nil {
+			g.logger.Error("Response validation error", zap.Error(err))
+			// Continue even if response validation has errors
+		}
+
+		// Add response validation results to audit log
+		auditLog["response_validation"] = responseValidationResults
+
+		// If response validation denied the response, return error
+		if !responseValidationResults.Allowed {
+			auditLog["status"] = "response_denied"
+			g.auditLogger.Warn("Tool call audit - response denied", zap.Any("audit", auditLog))
+
+			return nil, fmt.Errorf("response denied by policy: %s", responseValidationResults.Message)
+		}
+
+		// If response was redacted, update the result
+		if responseValidationResults.RedactedContent != nil {
+			// Update the first text content item with redacted content
+			if len(result.Content) > 0 {
+				for i := range result.Content {
+					if textContent, ok := result.Content[i].(mcp.TextContent); ok {
+						textContent.Text = *responseValidationResults.RedactedContent
+						result.Content[i] = textContent
+						break
+					}
+				}
+			}
+			auditLog["redacted"] = true
+		}
+
+		// Add response validation summary to metadata
+		if result.Meta == nil {
+			result.Meta = &mcp.Meta{}
+		}
+		if result.Meta.AdditionalFields == nil {
+			result.Meta.AdditionalFields = make(map[string]interface{})
+		}
+
+		// Create a summary of response validations
+		responseValidationSummary := make(map[string]string)
+		for _, v := range responseValidationResults.Results {
+			if v.PolicyType != "audit" {
+				if v.Allowed {
+					responseValidationSummary[v.PolicyName] = "passed"
+				} else {
+					responseValidationSummary[v.PolicyName] = "failed"
+				}
+			}
+		}
+		result.Meta.AdditionalFields["response_validation_summary"] = responseValidationSummary
 	}
 
 	// Add execution result to audit log
