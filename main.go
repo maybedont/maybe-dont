@@ -19,8 +19,14 @@ var (
 
 	//go:embed cel_rules.yaml
 	celRules []byte
+
+	//go:embed ai_response_rules.yaml
+	aiResponseRules []byte
+
+	//go:embed cel_response_rules.yaml
+	celResponseRules []byte
 )
 
 func main() {
-	cmd.Execute(version, commit, date, aiRules, celRules)
+	cmd.Execute(version, commit, date, aiRules, celRules, aiResponseRules, celResponseRules)
 }

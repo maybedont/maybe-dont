@@ -47,3 +47,20 @@ ai_validation:
   model: "gpt-4o-mini"
   # Path to AI policy rules file (optional, uses embedded rules by default)
   # rules_file: "ai_rules.yaml"
+
+# Response validation configuration
+# These policies validate and filter tool call RESPONSES before returning to the client
+response_validation:
+  # Enable CEL-based response validation
+  enabled: false
+  # Path to CEL response policy rules file
+  rules_file: "cel_response_rules.yaml"
+
+# AI response validation configuration
+# Uses AI to detect and filter sensitive information in responses
+ai_response_validation:
+  # Enable AI-powered response validation
+  enabled: false
+  # Path to AI response policy rules file
+  rules_file: "ai_response_rules.yaml"
+  # Note: Uses the same endpoint and model as ai_validation above
