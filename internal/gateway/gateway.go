@@ -266,7 +266,10 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	// Add validation summary to the result metadata
 	if result.Meta == nil {
-		result.Meta = make(map[string]interface{})
+		result.Meta = &mcp.Meta{}
+	}
+	if result.Meta.AdditionalFields == nil {
+		result.Meta.AdditionalFields = make(map[string]interface{})
 	}
 
 	// Create a summary of all validations
@@ -280,7 +283,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 			}
 		}
 	}
-	result.Meta["validation_summary"] = validationSummary
+	result.Meta.AdditionalFields["validation_summary"] = validationSummary
 
 	// Log the complete audit entry
 	g.auditLogger.Info("Tool call audit", zap.Any("audit", auditLog))
