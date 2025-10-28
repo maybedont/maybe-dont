@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
 
@@ -36,17 +37,15 @@ type ResponseValidationHandler interface {
 
 // ResponseValidationChain implements a chain of response validation handlers
 type ResponseValidationChain struct {
-	handlers  []ResponseValidationHandler
-	logger    *zap.Logger
-	ctxLogger *ContextLogger
+	handlers []ResponseValidationHandler
+	logger   *config.SessionLogger
 }
 
 // NewResponseValidationChain creates a new response validation chain
-func NewResponseValidationChain(logger *zap.Logger, handlers ...ResponseValidationHandler) *ResponseValidationChain {
+func NewResponseValidationChain(logger *config.SessionLogger, handlers ...ResponseValidationHandler) *ResponseValidationChain {
 	return &ResponseValidationChain{
-		handlers:  handlers,
-		logger:    logger,
-		ctxLogger: NewContextLogger(logger),
+		handlers: handlers,
+		logger:   logger,
 	}
 }
 
@@ -61,7 +60,7 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 	for _, handler := range c.handlers {
 		results, err := handler.HandleResponse(ctx, req, currentResult)
 		if err != nil {
-			c.ctxLogger.Error(ctx, "Response validation handler error",
+			c.logger.Error(ctx, "Response validation handler error",
 				zap.Error(err),
 			)
 			// Continue processing other handlers

@@ -25,15 +25,14 @@ type CELResponsePolicy struct {
 
 // CELResponsePolicyEngine handles CEL policy evaluation for responses
 type CELResponsePolicyEngine struct {
-	logger    *zap.Logger
-	ctxLogger *ContextLogger
-	env       *cel.Env
-	policies  []CELResponsePolicy
-	mu        sync.RWMutex
+	logger   *config.SessionLogger
+	env      *cel.Env
+	policies []CELResponsePolicy
+	mu       sync.RWMutex
 }
 
 // NewCELResponsePolicyEngine creates a new CEL response policy engine
-func NewCELResponsePolicyEngine(logger *zap.Logger) (*CELResponsePolicyEngine, error) {
+func NewCELResponsePolicyEngine(ctx context.Context, logger *config.SessionLogger) (*CELResponsePolicyEngine, error) {
 	// Create CEL environment with custom functions
 	env, err := cel.NewEnv(
 		cel.Variable("request", cel.DynType),
@@ -44,10 +43,9 @@ func NewCELResponsePolicyEngine(logger *zap.Logger) (*CELResponsePolicyEngine, e
 	}
 
 	return &CELResponsePolicyEngine{
-		logger:    logger,
-		ctxLogger: NewContextLogger(logger),
-		env:       env,
-		policies:  make([]CELResponsePolicy, 0),
+		logger:   logger,
+		env:      env,
+		policies: make([]CELResponsePolicy, 0),
 	}, nil
 }
 
@@ -56,11 +54,11 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePoli
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info("Loading CEL response policies", zap.Int("count", len(policies)))
+	e.logger.Info(context.Background(), "Loading CEL response policies", zap.Int("count", len(policies)))
 
 	// Validate and compile each policy
 	for _, policy := range policies {
-		e.logger.Info("Loading CEL response policy",
+		e.logger.Info(context.Background(), "Loading CEL response policy",
 			zap.String("name", policy.Name),
 			zap.String("action", policy.Action),
 		)
@@ -88,7 +86,7 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePoli
 		})
 	}
 
-	e.logger.Info("Loaded CEL response policies", zap.Int("count", len(e.policies)))
+	e.logger.Info(context.Background(), "Loaded CEL response policies", zap.Int("count", len(e.policies)))
 	return nil
 }
 
@@ -97,7 +95,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	e.ctxLogger.Info(ctx, "Evaluating response with CEL policies",
+	e.logger.Info(ctx, "Evaluating response with CEL policies",
 		zap.String("tool", req.Params.Name),
 		zap.Int("policy_count", len(e.policies)),
 	)
@@ -126,7 +124,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
-		e.ctxLogger.Debug(ctx, "Evaluating CEL response policy",
+		e.logger.Debug(ctx, "Evaluating CEL response policy",
 			zap.String("name", policy.Name),
 			zap.String("action", policy.Action),
 			zap.String("expression", policy.Expression),
@@ -156,7 +154,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			return ResponseValidationResults{}, fmt.Errorf("response policy %s did not return a boolean", policy.Name)
 		}
 
-		e.ctxLogger.Debug(ctx, "CEL response policy evaluation result",
+		e.logger.Debug(ctx, "CEL response policy evaluation result",
 			zap.String("name", policy.Name),
 			zap.Bool("matched", matched),
 			zap.String("action", policy.Action),
@@ -222,7 +220,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		}
 	}
 
-	e.ctxLogger.Info(ctx, "CEL response policy evaluation complete",
+	e.logger.Info(ctx, "CEL response policy evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.Int("deny_count", results.DenyCount),
@@ -301,7 +299,7 @@ func (e *CELResponsePolicyEngine) applyRedaction(content, pattern, replacement s
 	// Compile and apply regex
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		e.logger.Error("Failed to compile redaction pattern",
+		e.logger.Error(context.Background(), "Failed to compile redaction pattern",
 			zap.String("pattern", pattern),
 			zap.Error(err),
 		)
@@ -313,12 +311,12 @@ func (e *CELResponsePolicyEngine) applyRedaction(content, pattern, replacement s
 
 // ResponseCELValidationHandler handles CEL response validation
 type ResponseCELValidationHandler struct {
-	logger *zap.Logger
+	logger *config.SessionLogger
 	engine *CELResponsePolicyEngine
 }
 
 // NewResponseCELValidationHandler creates a new CEL response validation handler
-func NewResponseCELValidationHandler(logger *zap.Logger, engine *CELResponsePolicyEngine) *ResponseCELValidationHandler {
+func NewResponseCELValidationHandler(logger *config.SessionLogger, engine *CELResponsePolicyEngine) *ResponseCELValidationHandler {
 	return &ResponseCELValidationHandler{
 		logger: logger,
 		engine: engine,

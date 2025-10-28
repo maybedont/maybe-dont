@@ -25,20 +25,18 @@ type AIResponsePolicy struct {
 
 // AIResponsePolicyEngine handles AI policy evaluation for responses
 type AIResponsePolicyEngine struct {
-	logger    *zap.Logger
-	ctxLogger *ContextLogger
-	policies  []AIResponsePolicy
-	mu        sync.RWMutex
-	endpoint  string
-	model     string
-	apiKey    string
-	client    *openai.Client
+	logger   *config.SessionLogger
+	policies []AIResponsePolicy
+	mu       sync.RWMutex
+	endpoint string
+	model    string
+	apiKey   string
+	client   *openai.Client
 }
 
 // InitAIResponsePolicyEngine initializes the AI response policy engine
-func InitAIResponsePolicyEngine(logger *zap.Logger, engine *AIResponsePolicyEngine) error {
+func InitAIResponsePolicyEngine(ctx context.Context, logger *config.SessionLogger, engine *AIResponsePolicyEngine) error {
 	engine.logger = logger
-	engine.ctxLogger = NewContextLogger(logger)
 	client := openai.NewClient(
 		option.WithAPIKey(engine.apiKey),
 	)
@@ -51,7 +49,7 @@ func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info("Loading AI response policies", zap.Int("count", len(policies)))
+	e.logger.Info(context.Background(), "Loading AI response policies", zap.Int("count", len(policies)))
 
 	// Validate each policy
 	for _, policy := range policies {
@@ -70,7 +68,7 @@ func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy
 		})
 	}
 
-	e.logger.Info("Loaded AI response policies", zap.Int("count", len(e.policies)))
+	e.logger.Info(context.Background(), "Loaded AI response policies", zap.Int("count", len(e.policies)))
 	return nil
 }
 
@@ -86,7 +84,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	e.ctxLogger.Info(ctx, "Evaluating response with AI policies",
+	e.logger.Info(ctx, "Evaluating response with AI policies",
 		zap.String("tool", req.Params.Name),
 		zap.Int("policy_count", len(e.policies)),
 	)
@@ -199,7 +197,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	for i := 0; i < len(e.policies); i++ {
 		result := <-resultChan
 		if result.err != nil {
-			e.ctxLogger.Error(ctx, "Response policy evaluation failed",
+			e.logger.Error(ctx, "Response policy evaluation failed",
 				zap.String("policy", result.result.PolicyName),
 				zap.Error(result.err),
 			)
@@ -237,7 +235,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		results.Message = "No AI response policies matched"
 	}
 
-	e.ctxLogger.Info(ctx, "Response evaluation complete",
+	e.logger.Info(ctx, "Response evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.Int("deny_count", results.DenyCount),
@@ -274,12 +272,12 @@ func (e *AIResponsePolicyEngine) formatResponseForAI(result *mcp.CallToolResult)
 
 // ResponseAIValidationHandler handles AI response validation
 type ResponseAIValidationHandler struct {
-	logger *zap.Logger
+	logger *config.SessionLogger
 	engine *AIResponsePolicyEngine
 }
 
 // NewResponseAIValidationHandler creates a new AI response validation handler
-func NewResponseAIValidationHandler(logger *zap.Logger, engine *AIResponsePolicyEngine) *ResponseAIValidationHandler {
+func NewResponseAIValidationHandler(logger *config.SessionLogger, engine *AIResponsePolicyEngine) *ResponseAIValidationHandler {
 	return &ResponseAIValidationHandler{
 		logger: logger,
 		engine: engine,

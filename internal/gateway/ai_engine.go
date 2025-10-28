@@ -25,21 +25,19 @@ type AIPolicy struct {
 
 // AIPolicyEngine handles AI policy evaluation
 type AIPolicyEngine struct {
-	logger    *zap.Logger
-	ctxLogger *ContextLogger
-	policies  []AIPolicy
-	mu        sync.RWMutex
-	endpoint  string
-	model     string
-	apiKey    string
-	client    *openai.Client
+	logger   *config.SessionLogger
+	policies []AIPolicy
+	mu       sync.RWMutex
+	endpoint string
+	model    string
+	apiKey   string
+	client   *openai.Client
 }
 
 // NewAIPolicyEngine creates a new AI policy engine
-func InitAIPolicyEngine(logger *zap.Logger, engine *AIPolicyEngine) error {
+func InitAIPolicyEngine(ctx context.Context, logger *config.SessionLogger, engine *AIPolicyEngine) error {
 	// Set the logger
 	engine.logger = logger
-	engine.ctxLogger = NewContextLogger(logger)
 
 	client := openai.NewClient(
 		option.WithAPIKey(engine.apiKey),
@@ -179,7 +177,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	for i := 0; i < len(e.policies); i++ {
 		result := <-resultChan
 		if result.err != nil {
-			e.ctxLogger.Error(ctx, "Policy evaluation failed",
+			e.logger.Error(ctx, "Policy evaluation failed",
 				zap.String("policy", result.result.PolicyName),
 				zap.Error(result.err),
 			)
@@ -204,7 +202,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		results.Message = "No policies matched"
 	}
 
-	e.ctxLogger.Info(ctx, "Tool call evaluation complete",
+	e.logger.Info(ctx, "Tool call evaluation complete",
 		zap.Any("results", results),
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),

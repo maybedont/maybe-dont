@@ -25,9 +25,8 @@ func (e *PolicyDeniedError) Error() string {
 
 // Gateway represents an MCP security gateway instance
 type Gateway struct {
-	logger        *zap.Logger
-	ctxLogger     *ContextLogger
-	auditLogger   *zap.Logger
+	logger        *config.SessionLogger
+	auditLogger   *config.SessionLogger
 	config        *config.Config
 	server        *server.MCPServer
 	clientManager *ClientManager
@@ -48,7 +47,7 @@ type Gateway struct {
 }
 
 // New creates a new gateway instance
-func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
+func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger) (*Gateway, error) {
 	// Create audit logger with its own configuration
 	auditLogger, err := config.GetAuditLogger(cfg)
 	if err != nil {
@@ -61,8 +60,8 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 
 	// Initialize CEL policy engine only if enabled
 	if cfg.PolicyValidation.Enabled {
-		logger.Info("Initializing CEL policy engine")
-		policyEngine, err = NewCELPolicyEngine(logger)
+		logger.Info(ctx, "Initializing CEL policy engine")
+		policyEngine, err = NewCELPolicyEngine(ctx, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create CEL policy engine: %w", err)
 		}
@@ -72,12 +71,12 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 			return nil, fmt.Errorf("failed to load CEL policies: %w", err)
 		}
 	} else {
-		logger.Info("CEL policy validation is disabled")
+		logger.Info(ctx, "CEL policy validation is disabled")
 	}
 
 	// Initialize AI policy engine only if enabled
 	if cfg.AIPolicyValidation.Enabled {
-		logger.Info("Initializing AI policy engine")
+		logger.Info(ctx, "Initializing AI policy engine")
 		aiPolicyEngine = &AIPolicyEngine{
 			endpoint: cfg.AIPolicyValidation.Endpoint,
 			model:    cfg.AIPolicyValidation.Model,
@@ -85,7 +84,7 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 		}
 
 		// Create AI policy engine
-		err = InitAIPolicyEngine(logger, aiPolicyEngine)
+		err = InitAIPolicyEngine(ctx, logger, aiPolicyEngine)
 		if err != nil {
 			return nil, fmt.Errorf("failed to init AI policy engine: %w", err)
 		}
@@ -95,7 +94,7 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 			return nil, fmt.Errorf("failed to load AI policies: %w", err)
 		}
 	} else {
-		logger.Info("AI policy validation is disabled")
+		logger.Info(ctx, "AI policy validation is disabled")
 	}
 
 	// Initialize response validation engines
@@ -104,8 +103,8 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 
 	// Initialize CEL response policy engine only if enabled
 	if cfg.ResponseValidation.Enabled {
-		logger.Info("Initializing CEL response policy engine")
-		responsePolicyEngine, err = NewCELResponsePolicyEngine(logger)
+		logger.Info(ctx, "Initializing CEL response policy engine")
+		responsePolicyEngine, err = NewCELResponsePolicyEngine(ctx, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create CEL response policy engine: %w", err)
 		}
@@ -115,12 +114,12 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 			return nil, fmt.Errorf("failed to load CEL response policies: %w", err)
 		}
 	} else {
-		logger.Info("CEL response validation is disabled")
+		logger.Info(ctx, "CEL response validation is disabled")
 	}
 
 	// Initialize AI response policy engine only if enabled
 	if cfg.AIResponseValidation.Enabled {
-		logger.Info("Initializing AI response policy engine")
+		logger.Info(ctx, "Initializing AI response policy engine")
 		aiResponsePolicyEngine = &AIResponsePolicyEngine{
 			endpoint: cfg.AIPolicyValidation.Endpoint,
 			model:    cfg.AIPolicyValidation.Model,
@@ -128,7 +127,7 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 		}
 
 		// Create AI response policy engine
-		err = InitAIResponsePolicyEngine(logger, aiResponsePolicyEngine)
+		err = InitAIResponsePolicyEngine(ctx, logger, aiResponsePolicyEngine)
 		if err != nil {
 			return nil, fmt.Errorf("failed to init AI response policy engine: %w", err)
 		}
@@ -138,18 +137,14 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 			return nil, fmt.Errorf("failed to load AI response policies: %w", err)
 		}
 	} else {
-		logger.Info("AI response validation is disabled")
+		logger.Info(ctx, "AI response validation is disabled")
 	}
 
 	// Create client manager
-	clientManager := NewClientManager(logger)
-
-	// Create context-aware logger
-	ctxLogger := NewContextLogger(logger)
+	clientManager := NewClientManager(ctx, logger)
 
 	return &Gateway{
 		logger:                 logger,
-		ctxLogger:              ctxLogger,
 		auditLogger:            auditLogger,
 		config:                 cfg,
 		stopChan:               make(chan struct{}),
@@ -168,9 +163,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Debug print the loaded config
 	if _, err := json.MarshalIndent(g.config, "", "  "); err == nil {
-		g.ctxLogger.Debug(ctx, "Loaded gateway config")
+		g.logger.Debug(ctx, "Loaded gateway config")
 	} else {
-		g.logger.Warn("Failed to marshal config for debug print", zap.Error(err))
+		g.logger.Warn(ctx, "Failed to marshal config for debug print", zap.Error(err))
 	}
 
 	// Initialize validation chain with required handlers
@@ -180,13 +175,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Add CEL validation handler if enabled
 	if g.config.PolicyValidation.Enabled && g.policyEngine != nil {
-		g.logger.Info("Adding CEL validation handler to chain")
+		g.logger.Info(ctx, "Adding CEL validation handler to chain")
 		handlers = append(handlers, NewToolCELValidationHandler(g.logger, g.policyEngine))
 	}
 
 	// Add AI validation handler if enabled
 	if g.config.AIPolicyValidation.Enabled && g.aiPolicyEngine != nil {
-		g.logger.Info("Adding AI validation handler to chain")
+		g.logger.Info(ctx, "Adding AI validation handler to chain")
 		handlers = append(handlers, NewToolAIValidationHandler(g.logger, g.aiPolicyEngine))
 	}
 
@@ -199,13 +194,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Add CEL response validation handler if enabled
 	if g.config.ResponseValidation.Enabled && g.responsePolicyEngine != nil {
-		g.logger.Info("Adding CEL response validation handler to chain")
+		g.logger.Info(ctx, "Adding CEL response validation handler to chain")
 		responseHandlers = append(responseHandlers, NewResponseCELValidationHandler(g.logger, g.responsePolicyEngine))
 	}
 
 	// Add AI response validation handler if enabled
 	if g.config.AIResponseValidation.Enabled && g.aiResponsePolicyEngine != nil {
-		g.logger.Info("Adding AI response validation handler to chain")
+		g.logger.Info(ctx, "Adding AI response validation handler to chain")
 		responseHandlers = append(responseHandlers, NewResponseAIValidationHandler(g.logger, g.aiResponsePolicyEngine))
 	}
 
@@ -213,7 +208,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Initialize all configured clients
 	if err := g.clientManager.InitializeClients(ctx, g.config.DownstreamMCPServers); err != nil {
-		g.logger.Error("Some clients failed to initialize", zap.Error(err))
+		g.logger.Error(ctx, "Some clients failed to initialize", zap.Error(err))
 		// Continue startup even if some clients failed to initialize
 	}
 
@@ -226,11 +221,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 }
 
 // Stop gracefully shuts down the gateway
-func (g *Gateway) Stop() error {
+func (g *Gateway) Stop(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.logger.Info("Stopping gateway")
+	g.logger.Info(ctx, "Stopping gateway")
 
 	// Close the stop channel to signal shutdown
 	close(g.stopChan)
@@ -238,7 +233,7 @@ func (g *Gateway) Stop() error {
 	// Close all clients
 	if g.clientManager != nil {
 		if err := g.clientManager.Close(); err != nil {
-			g.logger.Error("Error closing clients", zap.Error(err))
+			g.logger.Error(ctx, "Error closing clients", zap.Error(err))
 		}
 	}
 
@@ -247,13 +242,9 @@ func (g *Gateway) Stop() error {
 
 // Tool handler function
 func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Extract sessionID from context
-	sessionID, _ := GetSessionID(ctx)
-
 	// Create audit log entry
 	auditLog := map[string]interface{}{
-		"session_id": sessionID,
-		"request":    req,
+		"request": req,
 	}
 
 	// Ensure audit log is always written, even on panic
@@ -261,7 +252,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		if r := recover(); r != nil {
 			auditLog["error"] = fmt.Sprintf("panic: %v", r)
 			auditLog["status"] = "panic"
-			g.auditLogger.Error("Tool call audit (panic)", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
+			g.auditLogger.Error(ctx, "Tool call audit (panic)", zap.Any("audit", auditLog))
 			panic(r) // Re-raise the panic
 		}
 	}()
@@ -271,10 +262,10 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if err != nil {
 		auditLog["error"] = err.Error()
 		auditLog["status"] = "validation_error"
-		g.auditLogger.Error("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
+		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("request validation failed: %v", err)
 	}
-	g.ctxLogger.Debug(ctx, "Validation results", zap.Any("validationResults", validationResults))
+	g.logger.Debug(ctx, "Validation results", zap.Any("validationResults", validationResults))
 
 	if validationResults.DenyCount > 0 {
 		validationResults.Allowed = false
@@ -296,7 +287,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		errorMessage, errorData := g.buildPolicyDeniedError(&validationResults, req.Params.Name)
 
 		auditLog["status"] = "denied"
-		g.auditLogger.Warn("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
+		g.auditLogger.Warn(ctx, "Tool call audit", zap.Any("audit", auditLog))
 
 		// Return error with proper MCP error code (-32600 for Invalid Request)
 		// Note: We'll need to handle this error code in the server layer
@@ -311,7 +302,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if err != nil {
 		auditLog["error"] = err.Error()
 		auditLog["status"] = "invalid_tool_name"
-		g.auditLogger.Error("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
+		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("invalid tool name format: %w", err)
 	}
 
@@ -320,7 +311,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if err != nil {
 		auditLog["error"] = err.Error()
 		auditLog["status"] = "client_not_found"
-		g.auditLogger.Error("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
+		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("client not found: %w", err)
 	}
 
@@ -335,7 +326,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		auditLog["status"] = "execution_error"
 		auditLog["client"] = clientName
 		auditLog["original_tool_name"] = originalToolName
-		g.auditLogger.Error("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
+		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("tool call failed: %w", err)
 	}
 
@@ -343,7 +334,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if g.responseValidationChain != nil {
 		responseValidationResults, err := g.responseValidationChain.Handle(ctx, req, result)
 		if err != nil {
-			g.logger.Error("Response validation error", zap.String("session_id", sessionID), zap.Error(err))
+			g.logger.Error(ctx, "Response validation error", zap.Error(err))
 			// Continue even if response validation has errors
 		}
 
@@ -353,7 +344,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		// If response validation denied the response, return error
 		if !responseValidationResults.Allowed {
 			auditLog["status"] = "response_denied"
-			g.auditLogger.Warn("Tool call audit - response denied", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
+			g.auditLogger.Warn(ctx, "Tool call audit - response denied", zap.Any("audit", auditLog))
 
 			return nil, fmt.Errorf("response denied by policy: %s", responseValidationResults.Message)
 		}
@@ -421,7 +412,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	result.Meta.AdditionalFields["validation_summary"] = validationSummary
 
 	// Log the complete audit entry
-	g.auditLogger.Info("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
+	g.auditLogger.Info(ctx, "Tool call audit", zap.Any("audit", auditLog))
 
 	return result, nil
 }

@@ -629,8 +629,8 @@ func ValidateConfig(cfg *Config) error {
 	return nil
 }
 
-// GetLogger creates a new logger based on the configuration
-func GetLogger(cfg *Config) (*zap.Logger, error) {
+// GetLogger creates a new session-aware logger based on the configuration
+func GetLogger(cfg *Config) (*SessionLogger, error) {
 	config := zap.NewProductionConfig()
 
 	// Set log level
@@ -657,12 +657,13 @@ func GetLogger(cfg *Config) (*zap.Logger, error) {
 		return nil, fmt.Errorf("failed to build logger: %w", err)
 	}
 
-	// Add logger type designation
-	return logger.With(zap.String("logger", "application")), nil
+	// Add logger type designation and wrap in SessionLogger
+	zapLogger := logger.With(zap.String("logger", "application"))
+	return NewSessionLogger(zapLogger), nil
 }
 
-// GetAuditLogger creates a new audit logger based on the configuration
-func GetAuditLogger(cfg *Config) (*zap.Logger, error) {
+// GetAuditLogger creates a new session-aware audit logger based on the configuration
+func GetAuditLogger(cfg *Config) (*SessionLogger, error) {
 	config := zap.NewProductionConfig()
 
 	// Set log level to info for audit logs
@@ -678,6 +679,7 @@ func GetAuditLogger(cfg *Config) (*zap.Logger, error) {
 		return nil, fmt.Errorf("failed to build audit logger: %w", err)
 	}
 
-	// Add logger type designation
-	return logger.With(zap.String("logger", "audit")), nil
+	// Add logger type designation and wrap in SessionLogger
+	zapLogger := logger.With(zap.String("logger", "audit"))
+	return NewSessionLogger(zapLogger), nil
 }

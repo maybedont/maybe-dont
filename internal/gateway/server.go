@@ -42,25 +42,25 @@ func (g *Gateway) handleInitializeRequest(ctx context.Context, id any, req *mcp.
 	// Extract session ID from context
 	sessionID, hasSessionID := GetSessionID(ctx)
 	if !hasSessionID {
-		g.logger.Warn("No session ID found in context for initialize request")
+		g.logger.Warn(ctx, "No session ID found in context for initialize request")
 		return
 	}
 
-	g.logger.Info("Handling initialize request", zap.String("session_id", sessionID))
+	g.logger.Info(ctx, "Handling initialize request", zap.String("session_id", sessionID))
 
 	// Get list of clients that require lazy initialization
 	lazyClients := g.clientManager.GetLazyInitClients()
 
 	// If there are lazy init clients, check their capabilities synchronously
 	if len(lazyClients) > 0 {
-		g.logger.Info("Checking capabilities for lazy init clients",
+		g.logger.Info(ctx, "Checking capabilities for lazy init clients",
 			zap.String("session_id", sessionID),
 			zap.Int("client_count", len(lazyClients)))
 
 		for _, clientName := range lazyClients {
 			clientInfo, err := g.clientManager.CheckCapabilitiesForSession(ctx, clientName, sessionID)
 			if err != nil {
-				g.logger.Error("Failed to check capabilities for client",
+				g.logger.Error(ctx, "Failed to check capabilities for client",
 					zap.String("client", clientName),
 					zap.String("session_id", sessionID),
 					zap.Error(err))
@@ -79,7 +79,7 @@ func (g *Gateway) handleInitializeRequest(ctx context.Context, id any, req *mcp.
 			g.registerClientPrompts(ctx, clientName, clientInfo)
 			g.registerClientResources(ctx, clientName, clientInfo)
 
-			g.logger.Info("Dynamically registered client capabilities",
+			g.logger.Info(ctx, "Dynamically registered client capabilities",
 				zap.String("client", clientName),
 				zap.String("session_id", sessionID))
 		}
@@ -92,7 +92,7 @@ func (g *Gateway) registerClientTools(ctx context.Context, clientName string, cl
 		prefixedTool := tool
 		prefixedTool.Name = PrefixName(clientName, tool.Name)
 		g.server.AddTool(prefixedTool, g.handleToolCallWithErrorHandling)
-		g.ctxLogger.Debug(ctx, "Registered tool",
+		g.logger.Debug(ctx, "Registered tool",
 			zap.String("client", clientName),
 			zap.String("original_name", tool.Name),
 			zap.String("prefixed_name", prefixedTool.Name))
@@ -105,7 +105,7 @@ func (g *Gateway) registerClientPrompts(ctx context.Context, clientName string, 
 		prefixedPrompt := prompt
 		prefixedPrompt.Name = PrefixName(clientName, prompt.Name)
 		g.server.AddPrompt(prefixedPrompt, g.HandlePromptCall)
-		g.ctxLogger.Debug(ctx, "Registered prompt",
+		g.logger.Debug(ctx, "Registered prompt",
 			zap.String("client", clientName),
 			zap.String("original_name", prompt.Name),
 			zap.String("prefixed_name", prefixedPrompt.Name))
@@ -118,7 +118,7 @@ func (g *Gateway) registerClientResources(ctx context.Context, clientName string
 		prefixedResource := resource
 		prefixedResource.URI = PrefixName(clientName, resource.URI)
 		g.server.AddResource(prefixedResource, g.HandleResourceCall)
-		g.ctxLogger.Debug(ctx, "Registered resource",
+		g.logger.Debug(ctx, "Registered resource",
 			zap.String("client", clientName),
 			zap.String("original_uri", resource.URI),
 			zap.String("prefixed_uri", prefixedResource.URI))
@@ -133,7 +133,7 @@ func (g *Gateway) registerClientResources(ctx context.Context, clientName string
 			// Create new URITemplate from prefixed raw string
 			newTemplate, err := uritemplate.New(prefixedRaw)
 			if err != nil {
-				g.logger.Error("Failed to create prefixed URI template",
+				g.logger.Error(ctx, "Failed to create prefixed URI template",
 					zap.String("client", clientName),
 					zap.String("original", originalRaw),
 					zap.String("prefixed", prefixedRaw),
@@ -143,7 +143,7 @@ func (g *Gateway) registerClientResources(ctx context.Context, clientName string
 			prefixedTemplate.URITemplate = &mcp.URITemplate{Template: newTemplate}
 		}
 		g.server.AddResourceTemplate(prefixedTemplate, g.HandleResourceTemplateCall)
-		g.ctxLogger.Debug(ctx, "Registered resource template",
+		g.logger.Debug(ctx, "Registered resource template",
 			zap.String("client", clientName))
 	}
 }
@@ -216,7 +216,7 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	for clientName, clientInfo := range allClients {
 		// Skip lazy init clients - their capabilities will be loaded and registered per-session
 		if clientInfo.RequiresLazyInit {
-			g.ctxLogger.Debug(ctx, "Skipping registration for lazy init client",
+			g.logger.Debug(ctx, "Skipping registration for lazy init client",
 				zap.String("client", clientName))
 			continue
 		}
@@ -239,7 +239,7 @@ func (g *Gateway) initStdioServer(ctx context.Context) error {
 	stdioSrv := server.NewStdioServer(srv)
 
 	// Create zap logger adapter for stdio server
-	zapWriter := &zapLogWriter{logger: g.logger}
+	zapWriter := &zapLogWriter{logger: g.logger.Logger()}
 	stdioSrv.SetErrorLogger(log.New(zapWriter, "", 0))
 
 	g.server = srv
@@ -251,7 +251,7 @@ func (g *Gateway) initStdioServer(ctx context.Context) error {
 	go func() {
 		defer close(errChan)
 		if err := stdioSrv.Listen(ctx, os.Stdin, os.Stdout); err != nil {
-			g.logger.Error("Failed to start STDIO server", zap.Error(err))
+			g.logger.Error(ctx, "Failed to start STDIO server", zap.Error(err))
 			errChan <- err
 		}
 	}()
@@ -266,7 +266,7 @@ func (g *Gateway) initStdioServer(ctx context.Context) error {
 		// No immediate error, assume successful startup
 	}
 
-	g.logger.Info("STDIO server started")
+	g.logger.Info(ctx, "STDIO server started")
 
 	return nil
 }
@@ -293,7 +293,7 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 	go func() {
 		defer close(errChan)
 		if err := sseSrv.Start(g.config.Server.ListenAddr); err != nil {
-			g.logger.Error("Failed to start SSE server", zap.Error(err))
+			g.logger.Error(context.Background(), "Failed to start SSE server", zap.Error(err))
 			errChan <- err
 		}
 	}()
@@ -305,7 +305,7 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := sseSrv.Shutdown(shutdownCtx); err != nil {
-			g.logger.Error("Error shutting down SSE server", zap.Error(err))
+			g.logger.Error(shutdownCtx, "Error shutting down SSE server", zap.Error(err))
 		}
 	}()
 
@@ -319,7 +319,7 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		// No immediate error, assume successful startup
 	}
 
-	g.logger.Info("SSE server started", zap.String("listen_addr", g.config.Server.ListenAddr))
+	g.logger.Info(ctx, "SSE server started", zap.String("listen_addr", g.config.Server.ListenAddr))
 
 	return nil
 }
@@ -345,7 +345,7 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 	go func() {
 		defer close(errChan)
 		if err := httpSrv.Start(g.config.Server.ListenAddr); err != nil {
-			g.logger.Error("Failed to start HTTP server", zap.Error(err))
+			g.logger.Error(context.Background(), "Failed to start HTTP server", zap.Error(err))
 			errChan <- err
 		}
 	}()
@@ -357,7 +357,7 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-			g.logger.Error("Error shutting down HTTP server", zap.Error(err))
+			g.logger.Error(shutdownCtx, "Error shutting down HTTP server", zap.Error(err))
 		}
 	}()
 
@@ -371,7 +371,7 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		// No immediate error, assume successful startup
 	}
 
-	g.logger.Info("HTTP server started", zap.String("listen_addr", g.config.Server.ListenAddr))
+	g.logger.Info(ctx, "HTTP server started", zap.String("listen_addr", g.config.Server.ListenAddr))
 
 	return nil
 }
@@ -414,7 +414,7 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 		var err error
 		sessionID, err = GenerateSessionID()
 		if err != nil {
-			g.logger.Error("Failed to generate session ID", zap.Error(err))
+			g.logger.Error(context.Background(), "Failed to generate session ID", zap.Error(err))
 			sessionID = "unknown"
 		}
 	}
@@ -423,9 +423,9 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 	ctx = WithSessionID(ctx, sessionID)
 
 	if r.Header.Get("X-Session-ID") == "" {
-		g.ctxLogger.Debug(ctx, "Generated new session ID")
+		g.logger.Debug(ctx, "Generated new session ID")
 	} else {
-		g.ctxLogger.Debug(ctx, "Using existing session ID")
+		g.logger.Debug(ctx, "Using existing session ID")
 	}
 
 	// Create credentials storage
@@ -455,7 +455,7 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 			// Store credential using target_header as key
 			clientCreds.SetHeader(mapping.TargetHeader, headerValue)
 
-			g.ctxLogger.Debug(ctx, "Extracted credential from header",
+			g.logger.Debug(ctx, "Extracted credential from header",
 				zap.String("source_header", mapping.SourceHeader),
 				zap.String("client", clientName),
 				zap.String("target_header", mapping.TargetHeader))

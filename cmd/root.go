@@ -1,18 +1,18 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 )
 
 var (
 	cfgPath             string
 	cfg                 *config.Config
-	Logger              *zap.Logger
+	Logger              *config.SessionLogger
 	aiRules             []byte
 	celRules            []byte
 	aiResponseRules     []byte
@@ -47,7 +47,7 @@ and providing comprehensive audit logging.`,
 		if err != nil {
 			return fmt.Errorf("failed to create logger: %w", err)
 		}
-		Logger.Debug("Logger created")
+		Logger.Debug(context.Background(), "Logger created")
 
 		return nil
 	},

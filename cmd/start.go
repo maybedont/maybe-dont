@@ -18,16 +18,16 @@ var startCmd = &cobra.Command{
 	Long: `Start the MCP security gateway server with the configured settings.
 The server will listen for MCP client connections and forward them to the configured downstream server.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		Logger.Info("Starting MCP security gateway")
-		// Create gateway instance
-		p, err := gateway.New(cfg, Logger)
-		if err != nil {
-			return fmt.Errorf("failed to create gateway: %w", err)
-		}
-
 		// Create context for graceful shutdown
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+
+		Logger.Info(ctx, "Starting MCP security gateway")
+		// Create gateway instance
+		p, err := gateway.New(ctx, cfg, Logger)
+		if err != nil {
+			return fmt.Errorf("failed to create gateway: %w", err)
+		}
 
 		// Handle shutdown signals
 		sigChan := make(chan os.Signal, 1)
@@ -35,7 +35,8 @@ The server will listen for MCP client connections and forward them to the config
 
 		go func() {
 			sig := <-sigChan
-			Logger.Info("Received shutdown signal", zap.String("signal", sig.String()))
+			// Create a new context for shutdown logging since the main ctx will be cancelled
+			Logger.Info(context.Background(), "Received shutdown signal", zap.String("signal", sig.String()))
 			cancel()
 		}()
 
@@ -46,10 +47,12 @@ The server will listen for MCP client connections and forward them to the config
 
 		// Wait for shutdown
 		<-ctx.Done()
-		Logger.Info("Shutting down gateway")
+		// Create a new context for shutdown logging
+		shutdownCtx := context.Background()
+		Logger.Info(shutdownCtx, "Shutting down gateway")
 
 		// Stop the gateway
-		if err := p.Stop(); err != nil {
+		if err := p.Stop(shutdownCtx); err != nil {
 			return fmt.Errorf("failed to stop gateway: %w", err)
 		}
 
