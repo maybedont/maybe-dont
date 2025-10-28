@@ -25,10 +25,11 @@ type CELPolicy struct {
 
 // CELPolicyEngine handles CEL policy evaluation
 type CELPolicyEngine struct {
-	logger   *zap.Logger
-	env      *cel.Env
-	policies []CELPolicy
-	mu       sync.RWMutex
+	logger    *zap.Logger
+	ctxLogger *ContextLogger
+	env       *cel.Env
+	policies  []CELPolicy
+	mu        sync.RWMutex
 }
 
 // NewCELPolicyEngine creates a new CEL policy engine
@@ -82,9 +83,10 @@ func NewCELPolicyEngine(logger *zap.Logger) (*CELPolicyEngine, error) {
 	}
 
 	return &CELPolicyEngine{
-		logger:   logger,
-		env:      env,
-		policies: make([]CELPolicy, 0),
+		logger:    logger,
+		ctxLogger: NewContextLogger(logger),
+		env:       env,
+		policies:  make([]CELPolicy, 0),
 	}, nil
 }
 
@@ -172,8 +174,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
-		e.logger.Debug("Evaluating CEL policy",
-			zap.String("session_id", sessionID),
+		e.ctxLogger.Debug(ctx, "Evaluating CEL policy",
 			zap.String("name", policy.Name),
 			zap.String("action", policy.Action),
 			zap.String("expression", policy.Expression),
@@ -203,8 +204,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 			return ValidationResults{}, fmt.Errorf("policy %s did not return a boolean", policy.Name)
 		}
 
-		e.logger.Debug("CEL policy evaluation result",
-			zap.String("session_id", sessionID),
+		e.ctxLogger.Debug(ctx, "CEL policy evaluation result",
 			zap.String("name", policy.Name),
 			zap.Bool("result", result),
 			zap.String("action", policy.Action),
