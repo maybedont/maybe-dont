@@ -4,27 +4,26 @@ import (
 	"context"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
 
 // LoggingHandler logs tool call request details
 type ToolLoggingHandler struct {
-	auditLogger *zap.Logger
-	ctxLogger   *ContextLogger
+	auditLogger *config.SessionLogger
 }
 
 // NewLoggingHandler creates a new logging handler
-func NewToolLoggingHandler(auditLogger *zap.Logger) *ToolLoggingHandler {
+func NewToolLoggingHandler(auditLogger *config.SessionLogger) *ToolLoggingHandler {
 	return &ToolLoggingHandler{
 		auditLogger: auditLogger,
-		ctxLogger:   NewContextLogger(auditLogger),
 	}
 }
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
 	// Log the tool call for audit purposes
-	h.ctxLogger.Info(ctx, "Tool call audit log",
+	h.auditLogger.Info(ctx, "Tool call audit log",
 		zap.String("method", req.Method),
 		zap.String("tool_name", req.Params.Name),
 		zap.Any("arguments", req.Params.Arguments),

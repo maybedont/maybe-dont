@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"go.uber.org/zap"
+	"github.com/maybedont/maybe-dont/internal/config"
 )
 
 // ValidationResult represents the result of a single validation check
@@ -95,12 +95,12 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 
 // ToolCELValidationHandler handles CEL policy validation
 type ToolCELValidationHandler struct {
-	logger *zap.Logger
+	logger *config.SessionLogger
 	engine *CELPolicyEngine
 }
 
 // NewToolCELValidationHandler creates a new CEL validation handler
-func NewToolCELValidationHandler(logger *zap.Logger, engine *CELPolicyEngine) *ToolCELValidationHandler {
+func NewToolCELValidationHandler(logger *config.SessionLogger, engine *CELPolicyEngine) *ToolCELValidationHandler {
 	return &ToolCELValidationHandler{
 		logger: logger,
 		engine: engine,
@@ -114,12 +114,12 @@ func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.C
 
 // ToolAIValidationHandler handles AI policy validation
 type ToolAIValidationHandler struct {
-	logger *zap.Logger
+	logger *config.SessionLogger
 	engine *AIPolicyEngine
 }
 
 // NewToolAIValidationHandler creates a new AI validation handler
-func NewToolAIValidationHandler(logger *zap.Logger, engine *AIPolicyEngine) *ToolAIValidationHandler {
+func NewToolAIValidationHandler(logger *config.SessionLogger, engine *AIPolicyEngine) *ToolAIValidationHandler {
 	return &ToolAIValidationHandler{
 		logger: logger,
 		engine: engine,

@@ -25,15 +25,14 @@ type CELPolicy struct {
 
 // CELPolicyEngine handles CEL policy evaluation
 type CELPolicyEngine struct {
-	logger    *zap.Logger
-	ctxLogger *ContextLogger
-	env       *cel.Env
-	policies  []CELPolicy
-	mu        sync.RWMutex
+	logger   *config.SessionLogger
+	env      *cel.Env
+	policies []CELPolicy
+	mu       sync.RWMutex
 }
 
 // NewCELPolicyEngine creates a new CEL policy engine
-func NewCELPolicyEngine(logger *zap.Logger) (*CELPolicyEngine, error) {
+func NewCELPolicyEngine(ctx context.Context, logger *config.SessionLogger) (*CELPolicyEngine, error) {
 	// Create CEL environment with custom functions and safe field access
 	env, err := cel.NewEnv(
 		cel.Variable("request", cel.DynType),
@@ -83,10 +82,9 @@ func NewCELPolicyEngine(logger *zap.Logger) (*CELPolicyEngine, error) {
 	}
 
 	return &CELPolicyEngine{
-		logger:    logger,
-		ctxLogger: NewContextLogger(logger),
-		env:       env,
-		policies:  make([]CELPolicy, 0),
+		logger:   logger,
+		env:      env,
+		policies: make([]CELPolicy, 0),
 	}, nil
 }
 
@@ -95,11 +93,11 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info("Loading CEL policies", zap.Int("count", len(policies)))
+	e.logger.Info(context.Background(), "Loading CEL policies", zap.Int("count", len(policies)))
 
 	// Validate and compile each policy
 	for _, policy := range policies {
-		e.logger.Info("Loading CEL policy",
+		e.logger.Info(context.Background(), "Loading CEL policy",
 			zap.String("name", policy.Name),
 			zap.String("action", policy.Action),
 		)
@@ -125,7 +123,7 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 		})
 	}
 
-	e.logger.Info("Loaded CEL policies", zap.Int("count", len(e.policies)))
+	e.logger.Info(context.Background(), "Loaded CEL policies", zap.Int("count", len(e.policies)))
 	return nil
 }
 
@@ -134,7 +132,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	e.ctxLogger.Info(ctx, "Evaluating tool call with CEL policies",
+	e.logger.Info(ctx, "Evaluating tool call with CEL policies",
 		zap.String("tool", req.Params.Name),
 		zap.Any("arguments", req.Params.Arguments),
 		zap.Int("policy_count", len(e.policies)),
@@ -170,7 +168,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
-		e.ctxLogger.Debug(ctx, "Evaluating CEL policy",
+		e.logger.Debug(ctx, "Evaluating CEL policy",
 			zap.String("name", policy.Name),
 			zap.String("action", policy.Action),
 			zap.String("expression", policy.Expression),
@@ -200,7 +198,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 			return ValidationResults{}, fmt.Errorf("policy %s did not return a boolean", policy.Name)
 		}
 
-		e.ctxLogger.Debug(ctx, "CEL policy evaluation result",
+		e.logger.Debug(ctx, "CEL policy evaluation result",
 			zap.String("name", policy.Name),
 			zap.Bool("result", result),
 			zap.String("action", policy.Action),
@@ -252,7 +250,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 		})
 	}
 
-	e.ctxLogger.Info(ctx, "CEL policy evaluation complete",
+	e.logger.Info(ctx, "CEL policy evaluation complete",
 		zap.Any("results", results),
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),

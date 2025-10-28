@@ -39,17 +39,15 @@ type ClientManager struct {
 	clients        map[string]*ClientInfo
 	sessionManager *SessionManager
 	mu             sync.RWMutex
-	logger         *zap.Logger
-	ctxLogger      *ContextLogger
+	logger         *config.SessionLogger
 }
 
 // NewClientManager creates a new client manager
-func NewClientManager(logger *zap.Logger) *ClientManager {
+func NewClientManager(ctx context.Context, logger *config.SessionLogger) *ClientManager {
 	return &ClientManager{
 		clients:        make(map[string]*ClientInfo),
 		sessionManager: NewSessionManager(),
 		logger:         logger,
-		ctxLogger:      NewContextLogger(logger),
 	}
 }
 
@@ -61,7 +59,7 @@ func (cm *ClientManager) InitializeClients(ctx context.Context, configs map[stri
 		if err := cm.InitializeClient(ctx, name, cfg); err != nil {
 			errMsg := fmt.Sprintf("failed to initialize client %s: %v", name, err)
 			errors = append(errors, errMsg)
-			cm.logger.Error("Client initialization failed",
+			cm.logger.Error(ctx, "Client initialization failed",
 				zap.String("client", name),
 				zap.Error(err))
 		}
@@ -100,13 +98,13 @@ func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg 
 
 	switch cfg.Type {
 	case "stdio":
-		cm.ctxLogger.Debug(ctx, "Initializing STDIO MCP client",
+		cm.logger.Debug(ctx, "Initializing STDIO MCP client",
 			zap.String("name", name),
 			zap.String("command", cfg.Command),
 			zap.Any("command_args", cfg.CommandArgs))
 		cl, err = client.NewStdioMCPClient(cfg.Command, nil, cfg.CommandArgs...)
 	case "sse":
-		cm.ctxLogger.Debug(ctx, "Initializing SSE MCP client",
+		cm.logger.Debug(ctx, "Initializing SSE MCP client",
 			zap.String("name", name),
 			zap.String("downstream_url", cfg.DownstreamURL))
 
@@ -122,14 +120,14 @@ func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg 
 		if cfg.Auth.PassThrough.Enabled {
 			headerFunc := cm.createAuthHeaderFunc(name, cfg)
 			sseOpts = append(sseOpts, client.WithHeaderFunc(headerFunc))
-			cm.logger.Info("Enabled pass-through auth for SSE client",
+			cm.logger.Info(ctx, "Enabled pass-through auth for SSE client",
 				zap.String("client", name),
 				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
 		}
 
 		cl, err = client.NewSSEMCPClient(cfg.DownstreamURL, sseOpts...)
 	case "http":
-		cm.ctxLogger.Debug(ctx, "Initializing HTTP MCP client",
+		cm.logger.Debug(ctx, "Initializing HTTP MCP client",
 			zap.String("name", name),
 			zap.String("downstream_url", cfg.DownstreamURL))
 
@@ -145,7 +143,7 @@ func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg 
 		if cfg.Auth.PassThrough.Enabled {
 			headerFunc := cm.createAuthHeaderFunc(name, cfg)
 			httpOpts = append(httpOpts, transport.WithHTTPHeaderFunc(headerFunc))
-			cm.logger.Info("Enabled pass-through auth for HTTP client",
+			cm.logger.Info(ctx, "Enabled pass-through auth for HTTP client",
 				zap.String("client", name),
 				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
 		}
@@ -165,7 +163,7 @@ func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg 
 	if cfg.Auth.PassThrough.Enabled {
 		clientInfo.RequiresLazyInit = true
 		cm.clients[name] = clientInfo
-		cm.logger.Info("Initialized MCP client with lazy initialization",
+		cm.logger.Info(ctx, "Initialized MCP client with lazy initialization",
 			zap.String("name", name),
 			zap.Bool("pass_through_auth", true))
 		return nil
@@ -174,7 +172,7 @@ func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg 
 	// Check capabilities immediately for non-pass-through clients
 	if err := cm.checkCapabilities(ctx, clientInfo); err != nil {
 		if closeErr := cl.Close(); closeErr != nil {
-			cm.logger.Error("failed to close client after capability check error",
+			cm.logger.Error(ctx, "failed to close client after capability check error",
 				zap.String("name", name),
 				zap.Error(closeErr))
 		}
@@ -182,14 +180,14 @@ func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg 
 	}
 
 	cm.clients[name] = clientInfo
-	cm.logger.Info("Initialized MCP client", zap.String("name", name))
+	cm.logger.Info(ctx, "Initialized MCP client", zap.String("name", name))
 
 	return nil
 }
 
 // checkCapabilities checks and stores client capabilities
 func (cm *ClientManager) checkCapabilities(ctx context.Context, clientInfo *ClientInfo) error {
-	cm.ctxLogger.Debug(ctx, "Checking MCP server capabilities", zap.String("client", clientInfo.Name))
+	cm.logger.Debug(ctx, "Checking MCP server capabilities", zap.String("client", clientInfo.Name))
 
 	req := &mcp.InitializeRequest{
 		Request: mcp.Request{
@@ -224,7 +222,7 @@ func (cm *ClientManager) checkCapabilities(ctx context.Context, clientInfo *Clie
 	}
 
 	clientInfo.Capabilities = &resp.Capabilities
-	cm.ctxLogger.Debug(ctx, "MCP server capabilities",
+	cm.logger.Debug(ctx, "MCP server capabilities",
 		zap.String("client", clientInfo.Name),
 		zap.Any("capabilities", resp.Capabilities),
 	)
@@ -232,7 +230,7 @@ func (cm *ClientManager) checkCapabilities(ctx context.Context, clientInfo *Clie
 	// Apply capability discovery delay if configured
 	if clientInfo.Config.CapabilityDiscoveryDelayMs > 0 {
 		delay := time.Duration(clientInfo.Config.CapabilityDiscoveryDelayMs) * time.Millisecond
-		cm.ctxLogger.Debug(ctx, "Waiting before capability discovery",
+		cm.logger.Debug(ctx, "Waiting before capability discovery",
 			zap.String("client", clientInfo.Name),
 			zap.Duration("delay", delay),
 		)
@@ -266,13 +264,13 @@ func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, client
 
 	// Check if capabilities already loaded for this session
 	if cm.sessionManager.HasClientCapabilities(sessionID, clientName) {
-		cm.ctxLogger.Debug(ctx, "Capabilities already loaded for session",
+		cm.logger.Debug(ctx, "Capabilities already loaded for session",
 			zap.String("client", clientName))
 		// Return nil to indicate already loaded
 		return nil, nil
 	}
 
-	cm.logger.Info("Checking capabilities for session",
+	cm.logger.Info(ctx, "Checking capabilities for session",
 		zap.String("session_id", sessionID),
 		zap.String("client", clientName))
 
@@ -291,7 +289,7 @@ func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, client
 	// Store capabilities in session manager
 	cm.sessionManager.SetClientCapabilities(sessionID, clientName, sessionClientInfo.Capabilities)
 
-	cm.logger.Info("Successfully loaded capabilities for session",
+	cm.logger.Info(ctx, "Successfully loaded capabilities for session",
 		zap.String("session_id", sessionID),
 		zap.String("client", clientName),
 		zap.Int("tools", len(sessionClientInfo.Tools)),
@@ -324,7 +322,7 @@ func (cm *ClientManager) discoverCapabilities(ctx context.Context, clientInfo *C
 			return fmt.Errorf("failed to discover tools: %w", err)
 		}
 		clientInfo.Tools = tools
-		cm.ctxLogger.Debug(ctx, "Tool discovery completed",
+		cm.logger.Debug(ctx, "Tool discovery completed",
 			zap.String("client", clientInfo.Name),
 			zap.Int("tools_count", len(tools)),
 		)
@@ -361,7 +359,7 @@ func (cm *ClientManager) discoverCapabilities(ctx context.Context, clientInfo *C
 // retryWithDelay executes a function with retry logic
 func retryWithDelay[T any](
 	ctx context.Context,
-	ctxLogger *ContextLogger,
+	logger *config.SessionLogger,
 	clientInfo *ClientInfo,
 	operation string,
 	fn func() (T, error),
@@ -372,7 +370,7 @@ func retryWithDelay[T any](
 	retryDelay := time.Duration(cfg.CapabilityRetryDelayMs) * time.Millisecond
 
 	// Log the start of the operation
-	ctxLogger.Debug(ctx, "Starting "+operation+" with retry logic",
+	logger.Debug(ctx, "Starting "+operation+" with retry logic",
 		zap.String("client", clientInfo.Name),
 		zap.Int("max_retries", maxRetries),
 		zap.Duration("retry_delay", retryDelay),
@@ -386,7 +384,7 @@ func retryWithDelay[T any](
 			lastErr = err
 			if operation == "tool discovery" {
 				titleCaser := cases.Title(language.English)
-				ctxLogger.Debug(ctx, titleCaser.String(operation)+" attempt failed",
+				logger.Debug(ctx, titleCaser.String(operation)+" attempt failed",
 					zap.String("client", clientInfo.Name),
 					zap.Int("attempt", attempt+1),
 					zap.Error(err),
@@ -397,7 +395,7 @@ func retryWithDelay[T any](
 			if validateResult != nil && !validateResult(result, attempt) {
 				// Special case for tools: log and potentially retry
 				if operation == "tool discovery" {
-					ctxLogger.Debug(ctx, "Tool discovery returned empty list, retrying",
+					logger.Debug(ctx, "Tool discovery returned empty list, retrying",
 						zap.String("client", clientInfo.Name),
 						zap.Int("attempt", attempt+1),
 					)
@@ -407,7 +405,7 @@ func retryWithDelay[T any](
 				if operation == "tool discovery" {
 					// Use title case for operation name
 					titleCaser := cases.Title(language.English)
-					ctxLogger.Debug(ctx, titleCaser.String(operation)+" successful",
+					logger.Debug(ctx, titleCaser.String(operation)+" successful",
 						zap.String("client", clientInfo.Name),
 						zap.Int("attempt", attempt+1),
 					)
@@ -435,7 +433,7 @@ func retryWithDelay[T any](
 
 // discoverToolsWithRetry discovers tools with retry logic for stdio clients
 func (cm *ClientManager) discoverToolsWithRetry(ctx context.Context, clientInfo *ClientInfo) ([]mcp.Tool, error) {
-	return retryWithDelay(ctx, cm.ctxLogger, clientInfo, "tool discovery",
+	return retryWithDelay(ctx, cm.logger, clientInfo, "tool discovery",
 		func() ([]mcp.Tool, error) {
 			toolsReq := &mcp.ListToolsRequest{
 				PaginatedRequest: mcp.PaginatedRequest{
@@ -455,7 +453,7 @@ func (cm *ClientManager) discoverToolsWithRetry(ctx context.Context, clientInfo 
 			// Validate: continue if we have tools OR if this is the last attempt
 			if len(tools) > 0 || attempt == clientInfo.Config.CapabilityDiscoveryRetries {
 				// Log success with tool count
-				cm.ctxLogger.Debug(ctx, "Tool discovery successful",
+				cm.logger.Debug(ctx, "Tool discovery successful",
 					zap.String("client", clientInfo.Name),
 					zap.Int("attempt", attempt+1),
 					zap.Int("tools_count", len(tools)),
@@ -469,7 +467,7 @@ func (cm *ClientManager) discoverToolsWithRetry(ctx context.Context, clientInfo 
 
 // discoverPromptsWithRetry discovers prompts with retry logic for stdio clients
 func (cm *ClientManager) discoverPromptsWithRetry(ctx context.Context, clientInfo *ClientInfo) ([]mcp.Prompt, error) {
-	return retryWithDelay(ctx, cm.ctxLogger, clientInfo, "prompt discovery",
+	return retryWithDelay(ctx, cm.logger, clientInfo, "prompt discovery",
 		func() ([]mcp.Prompt, error) {
 			promptsReq := &mcp.ListPromptsRequest{
 				PaginatedRequest: mcp.PaginatedRequest{
@@ -491,7 +489,7 @@ func (cm *ClientManager) discoverPromptsWithRetry(ctx context.Context, clientInf
 
 // discoverResourcesWithRetry discovers resources with retry logic for stdio clients
 func (cm *ClientManager) discoverResourcesWithRetry(ctx context.Context, clientInfo *ClientInfo) ([]mcp.Resource, error) {
-	return retryWithDelay(ctx, cm.ctxLogger, clientInfo, "resource discovery",
+	return retryWithDelay(ctx, cm.logger, clientInfo, "resource discovery",
 		func() ([]mcp.Resource, error) {
 			resourcesReq := &mcp.ListResourcesRequest{
 				PaginatedRequest: mcp.PaginatedRequest{
@@ -513,7 +511,7 @@ func (cm *ClientManager) discoverResourcesWithRetry(ctx context.Context, clientI
 
 // discoverResourceTemplatesWithRetry discovers resource templates with retry logic for stdio clients
 func (cm *ClientManager) discoverResourceTemplatesWithRetry(ctx context.Context, clientInfo *ClientInfo) ([]mcp.ResourceTemplate, error) {
-	return retryWithDelay(ctx, cm.ctxLogger, clientInfo, "resource template discovery",
+	return retryWithDelay(ctx, cm.logger, clientInfo, "resource template discovery",
 		func() ([]mcp.ResourceTemplate, error) {
 			templatesReq := &mcp.ListResourceTemplatesRequest{
 				PaginatedRequest: mcp.PaginatedRequest{
@@ -540,7 +538,7 @@ func (cm *ClientManager) initializeWithRetry(ctx context.Context, clientInfo *Cl
 	baseDelay := time.Duration(cfg.RetryDelayMs) * time.Millisecond
 	timeout := time.Duration(cfg.StartupTimeoutMs) * time.Millisecond
 
-	cm.ctxLogger.Debug(ctx, "Starting MCP initialization with retry logic",
+	cm.logger.Debug(ctx, "Starting MCP initialization with retry logic",
 		zap.String("client", clientInfo.Name),
 		zap.Int("max_retries", maxRetries),
 		zap.Duration("base_delay", baseDelay),
@@ -555,12 +553,12 @@ func (cm *ClientManager) initializeWithRetry(ctx context.Context, clientInfo *Cl
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Log attempt
 		if attempt == 0 {
-			cm.ctxLogger.Debug(timeoutCtx, "Attempting MCP initialization",
+			cm.logger.Debug(timeoutCtx, "Attempting MCP initialization",
 				zap.String("client", clientInfo.Name),
 				zap.Int("attempt", attempt+1),
 			)
 		} else {
-			cm.ctxLogger.Debug(timeoutCtx, "Retrying MCP initialization",
+			cm.logger.Debug(timeoutCtx, "Retrying MCP initialization",
 				zap.String("client", clientInfo.Name),
 				zap.Int("attempt", attempt+1),
 				zap.Int("max_attempts", maxRetries+1),
@@ -570,7 +568,7 @@ func (cm *ClientManager) initializeWithRetry(ctx context.Context, clientInfo *Cl
 		// Attempt initialization
 		resp, err := clientInfo.Client.Initialize(timeoutCtx, *req)
 		if err == nil {
-			cm.ctxLogger.Debug(timeoutCtx, "MCP initialization successful",
+			cm.logger.Debug(timeoutCtx, "MCP initialization successful",
 				zap.String("client", clientInfo.Name),
 				zap.Int("attempt", attempt+1),
 			)
@@ -581,7 +579,7 @@ func (cm *ClientManager) initializeWithRetry(ctx context.Context, clientInfo *Cl
 
 		// Check if we've exhausted all retries
 		if attempt == maxRetries {
-			cm.logger.Error("MCP initialization failed after all retries",
+			cm.logger.Error(timeoutCtx, "MCP initialization failed after all retries",
 				zap.String("client", clientInfo.Name),
 				zap.Int("attempts", attempt+1),
 				zap.Error(err),
@@ -591,7 +589,7 @@ func (cm *ClientManager) initializeWithRetry(ctx context.Context, clientInfo *Cl
 
 		// Check if context was cancelled (timeout)
 		if timeoutCtx.Err() != nil {
-			cm.logger.Error("MCP initialization timed out",
+			cm.logger.Error(timeoutCtx, "MCP initialization timed out",
 				zap.String("client", clientInfo.Name),
 				zap.Duration("timeout", timeout),
 				zap.Error(timeoutCtx.Err()),
@@ -602,7 +600,7 @@ func (cm *ClientManager) initializeWithRetry(ctx context.Context, clientInfo *Cl
 		// Calculate exponential backoff delay (with max cap of 2 seconds)
 		delay := min(baseDelay*time.Duration(1<<uint(attempt)), 2*time.Second)
 
-		cm.ctxLogger.Debug(timeoutCtx, "Waiting before retry",
+		cm.logger.Debug(timeoutCtx, "Waiting before retry",
 			zap.String("client", clientInfo.Name),
 			zap.Duration("delay", delay),
 			zap.Error(err),
@@ -686,7 +684,7 @@ func (cm *ClientManager) createAuthHeaderFunc(clientName string, cfg config.Clie
 		// Get client credentials from context
 		clientCreds, ok := GetServiceCredentials(ctx, clientName)
 		if !ok {
-			cm.ctxLogger.Debug(ctx, "No credentials found for client in context",
+			cm.logger.Debug(ctx, "No credentials found for client in context",
 				zap.String("client", clientName))
 			return headers
 		}
@@ -696,7 +694,7 @@ func (cm *ClientManager) createAuthHeaderFunc(clientName string, cfg config.Clie
 			// Get credential value from context (keyed by target_header)
 			value, ok := clientCreds.GetHeader(mapping.TargetHeader)
 			if !ok {
-				cm.ctxLogger.Debug(ctx, "Missing credential for header mapping",
+				cm.logger.Debug(ctx, "Missing credential for header mapping",
 					zap.String("client", clientName),
 					zap.String("target_header", mapping.TargetHeader))
 				continue
@@ -706,7 +704,7 @@ func (cm *ClientManager) createAuthHeaderFunc(clientName string, cfg config.Clie
 			headerValue := formatCredentialValue(mapping.Format, value)
 			headers[mapping.TargetHeader] = headerValue
 
-			cm.ctxLogger.Debug(ctx, "Injected auth header for downstream",
+			cm.logger.Debug(ctx, "Injected auth header for downstream",
 				zap.String("client", clientName),
 				zap.String("target_header", mapping.TargetHeader))
 		}
