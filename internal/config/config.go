@@ -64,6 +64,20 @@ type Config struct {
 		Rules     []AIPolicy `mapstructure:"rules"`
 	} `mapstructure:"ai_validation"`
 
+	// Response validation configuration
+	ResponseValidation struct {
+		Enabled   bool                `mapstructure:"enabled"`
+		RulesFile string              `mapstructure:"rules_file"`
+		Rules     []CELResponsePolicy `mapstructure:"rules"`
+	} `mapstructure:"response_validation"`
+
+	// AI response validation configuration
+	AIResponseValidation struct {
+		Enabled   bool                `mapstructure:"enabled"`
+		RulesFile string              `mapstructure:"rules_file"`
+		Rules     []AIResponsePolicy  `mapstructure:"rules"`
+	} `mapstructure:"ai_response_validation"`
+
 	// Downstream MCP servers configuration
 	DownstreamMCPServers map[string]ClientConfig `mapstructure:"downstream_mcp_servers"`
 
@@ -123,6 +137,26 @@ type AIPolicy struct {
 	Message     string `mapstructure:"message"`
 }
 
+// CELResponsePolicy represents a single CEL response policy rule
+type CELResponsePolicy struct {
+	Name                 string `mapstructure:"name"`
+	Description          string `mapstructure:"description"`
+	Expression           string `mapstructure:"expression"`
+	Action               string `mapstructure:"action"` // allow, deny, or redact
+	Message              string `mapstructure:"message"`
+	RedactionPattern     string `mapstructure:"redaction_pattern"`
+	RedactionReplacement string `mapstructure:"redaction_replacement"`
+}
+
+// AIResponsePolicy represents a single AI response policy rule
+type AIResponsePolicy struct {
+	Name        string `mapstructure:"name"`
+	Description string `mapstructure:"description"`
+	Prompt      string `mapstructure:"prompt"`
+	Action      string `mapstructure:"action"` // allow, deny, or redact
+	Message     string `mapstructure:"message"`
+}
+
 // LoadPoliciesFromFile loads CEL policies from a file
 func LoadCELPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
 	if rulesFile == "" {
@@ -156,6 +190,44 @@ func LoadAIPoliciesFromFile(path string) ([]AIPolicy, error) {
 	}
 	if err := yaml.Unmarshal(data, &policies); err != nil {
 		return nil, fmt.Errorf("error unmarshaling AI policies: %w", err)
+	}
+
+	return policies.Rules, nil
+}
+
+// LoadCELResponsePoliciesFromFile loads CEL response policies from a file
+func LoadCELResponsePoliciesFromFile(rulesFile string) ([]CELResponsePolicy, error) {
+	if rulesFile == "" {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(rulesFile)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response rules file: %w", err)
+	}
+
+	var policies struct {
+		Rules []CELResponsePolicy `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal(data, &policies); err != nil {
+		return nil, fmt.Errorf("error unmarshaling response rules: %w", err)
+	}
+
+	return policies.Rules, nil
+}
+
+// LoadAIResponsePoliciesFromFile loads AI response policies from a file
+func LoadAIResponsePoliciesFromFile(path string) ([]AIResponsePolicy, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("error reading AI response policies file: %w", err)
+	}
+
+	var policies struct {
+		Rules []AIResponsePolicy `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal(data, &policies); err != nil {
+		return nil, fmt.Errorf("error unmarshaling AI response policies: %w", err)
 	}
 
 	return policies.Rules, nil
@@ -230,7 +302,7 @@ func expandEnvironmentVariables(v reflect.Value) {
 }
 
 // LoadConfig loads the configuration from all sources
-func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte) (*Config, error) {
+func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte, defaultAIResponseRules []byte, defaultCELResponseRules []byte) (*Config, error) {
 	// Use the global viper instance to ensure flag bindings work
 	v := viper.GetViper()
 
@@ -325,6 +397,40 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 			return nil, fmt.Errorf("error unmarshaling default AI rules: %w", err)
 		}
 		config.AIPolicyValidation.Rules = policies.Rules
+	}
+
+	// Load response policies from rules file if specified, otherwise use embedded rules
+	if config.ResponseValidation.RulesFile != "" {
+		responsePolicies, err := LoadCELResponsePoliciesFromFile(config.ResponseValidation.RulesFile)
+		if err != nil {
+			return nil, fmt.Errorf("error loading response policies from file: %w", err)
+		}
+		config.ResponseValidation.Rules = responsePolicies
+	} else if defaultCELResponseRules != nil {
+		var policies struct {
+			Rules []CELResponsePolicy `yaml:"rules"`
+		}
+		if err := yaml.Unmarshal(defaultCELResponseRules, &policies); err != nil {
+			return nil, fmt.Errorf("error unmarshaling default CEL response rules: %w", err)
+		}
+		config.ResponseValidation.Rules = policies.Rules
+	}
+
+	// Load AI response policies from rules file if specified, otherwise use embedded rules
+	if config.AIResponseValidation.RulesFile != "" {
+		aiResponsePolicies, err := LoadAIResponsePoliciesFromFile(config.AIResponseValidation.RulesFile)
+		if err != nil {
+			return nil, fmt.Errorf("error loading AI response policies from file: %w", err)
+		}
+		config.AIResponseValidation.Rules = aiResponsePolicies
+	} else if defaultAIResponseRules != nil {
+		var policies struct {
+			Rules []AIResponsePolicy `yaml:"rules"`
+		}
+		if err := yaml.Unmarshal(defaultAIResponseRules, &policies); err != nil {
+			return nil, fmt.Errorf("error unmarshaling default AI response rules: %w", err)
+		}
+		config.AIResponseValidation.Rules = policies.Rules
 	}
 
 	// Normalize client configs - handle field aliases

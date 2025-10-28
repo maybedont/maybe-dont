@@ -1,0 +1,123 @@
+# Example AI response policy rules
+# These rules use AI to validate and filter tool call responses
+
+rules:
+  # Example: Detect and redact PII in responses
+  - name: detect-pii-in-response
+    description: Detect and redact personally identifiable information in responses
+    action: redact
+    prompt: |-
+      ANALYZE: Does this response contain PII (personally identifiable information)?
+
+      Look for: email addresses, phone numbers, social security numbers, physical addresses,
+      credit card numbers, passport numbers, driver's license numbers, or other identifying information.
+
+      Response content: %s
+
+      If PII is found:
+      - Set "allowed" to true (we'll redact, not block)
+      - Provide the response with PII replaced by [PII_REDACTED]
+      - Explain what was redacted in the message
+
+      If no PII is found:
+      - Set "allowed" to true
+      - Leave "redacted_content" empty or null
+      - Set message to "No PII detected"
+
+      Return ONLY JSON in this exact format:
+      {
+        "allowed": true/false,
+        "message": "explanation of what was found/redacted",
+        "redacted_content": "sanitized version with [PII_REDACTED] replacing sensitive data (only if PII found)"
+      }
+    message: PII detected and redacted from response
+
+  # Example: Detect credential leakage in responses
+  - name: detect-credential-leakage
+    description: Detect if response contains credentials or secrets
+    action: deny
+    prompt: |-
+      ANALYZE: Does this response contain credentials, API keys, passwords, or secrets?
+
+      Look for patterns like:
+      - API keys (alphanumeric strings that look like tokens)
+      - Passwords in configuration files or environment dumps
+      - Private keys or certificates
+      - OAuth tokens
+      - Database connection strings with credentials
+      - AWS/GCP/Azure access keys
+
+      Response content: %s
+
+      If credentials are found:
+      - Set "allowed" to false (BLOCK the response)
+      - Explain what type of credential was detected
+
+      If no credentials are found:
+      - Set "allowed" to true
+      - Set message to "No credentials detected"
+
+      Return ONLY JSON: { "allowed": true/false, "message": "explanation" }
+    message: Credential leakage detected in response
+
+  # Example: Detect and redact internal system paths
+  - name: redact-internal-paths
+    description: Redact internal file system paths from responses
+    action: redact
+    prompt: |-
+      ANALYZE: Does this response contain internal file system paths that should be redacted?
+
+      Look for absolute paths like:
+      - /home/username/...
+      - /Users/username/...
+      - C:\Users\username\...
+      - /var/lib/...
+      - Internal application paths
+
+      Response content: %s
+
+      If internal paths are found:
+      - Set "allowed" to true
+      - Provide redacted content with paths replaced by [PATH_REDACTED]
+      - Explain what was redacted
+
+      If no sensitive paths are found:
+      - Set "allowed" to true
+      - Leave "redacted_content" empty
+      - Set message to "No sensitive paths detected"
+
+      Return ONLY JSON:
+      {
+        "allowed": true,
+        "message": "explanation",
+        "redacted_content": "version with paths redacted (only if paths found)"
+      }
+    message: Internal paths redacted from response
+
+  # Example: Detect sensitive business data
+  - name: detect-sensitive-business-data
+    description: Detect and block responses containing sensitive business information
+    action: deny
+    prompt: |-
+      ANALYZE: Does this response contain sensitive business information that should not be shared?
+
+      Look for:
+      - Financial data (revenue, costs, margins)
+      - Strategic plans or roadmaps
+      - Customer lists or customer data
+      - Proprietary algorithms or trade secrets
+      - Confidential meeting notes
+      - Internal employee information
+
+      Response content: %s
+
+      If sensitive business data is found:
+      - Set "allowed" to false
+      - Explain what type of sensitive data was detected
+
+      If no sensitive data is found:
+      - Set "allowed" to true
+      - Set message to "No sensitive business data detected"
+
+      Return ONLY JSON: { "allowed": true/false, "message": "explanation" }
+    message: Sensitive business data detected in response

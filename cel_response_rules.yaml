@@ -1,0 +1,64 @@
+# Example CEL response policy rules
+# These rules validate and filter tool call responses
+
+rules:
+  # Example: Redact sensitive file content
+  - name: redact-passwd-content
+    description: Redact content from /etc/passwd file responses
+    expression: |-
+      size(response.content) > 0 &&
+      response.content[0].type == "text" &&
+      response.content[0].text.contains("/etc/passwd")
+    action: redact
+    message: Sensitive system file content redacted
+    redaction_pattern: ".*"
+    redaction_replacement: "[REDACTED: System file content removed by policy]"
+
+  # Example: Block responses containing credential patterns
+  - name: block-credential-exposure
+    description: Block responses that appear to contain credentials
+    expression: |-
+      size(response.content) > 0 &&
+      response.content[0].type == "text" &&
+      (response.content[0].text.matches("(?i)password\\s*[:=]\\s*\\S+") ||
+       response.content[0].text.matches("(?i)api[_-]?key\\s*[:=]\\s*\\S+") ||
+       response.content[0].text.matches("(?i)secret\\s*[:=]\\s*\\S+"))
+    action: deny
+    message: Response contains credential data
+
+  # Example: Redact email addresses from responses
+  - name: redact-email-addresses
+    description: Redact email addresses from response content
+    expression: |-
+      size(response.content) > 0 &&
+      response.content[0].type == "text" &&
+      response.content[0].text.matches("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
+    action: redact
+    message: Email addresses redacted from response
+    redaction_pattern: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    redaction_replacement: "[EMAIL_REDACTED]"
+
+  # Example: Block error responses containing stack traces
+  - name: block-stack-traces
+    description: Block responses containing detailed stack traces
+    expression: |-
+      response.isError == true &&
+      size(response.content) > 0 &&
+      response.content[0].type == "text" &&
+      (response.content[0].text.contains("Traceback") ||
+       response.content[0].text.contains("at Object.") ||
+       response.content[0].text.contains(".java:"))
+    action: deny
+    message: Stack trace information blocked
+
+  # Example: Redact IP addresses from responses
+  - name: redact-ip-addresses
+    description: Redact IPv4 addresses from response content
+    expression: |-
+      size(response.content) > 0 &&
+      response.content[0].type == "text" &&
+      response.content[0].text.matches("\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b")
+    action: redact
+    message: IP addresses redacted from response
+    redaction_pattern: "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b"
+    redaction_replacement: "[IP_REDACTED]"
