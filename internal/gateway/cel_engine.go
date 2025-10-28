@@ -134,11 +134,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	// Extract sessionID from context
-	sessionID, _ := GetSessionID(ctx)
-
-	e.logger.Info("Evaluating tool call with CEL policies",
-		zap.String("session_id", sessionID),
+	e.ctxLogger.Info(ctx, "Evaluating tool call with CEL policies",
 		zap.String("tool", req.Params.Name),
 		zap.Any("arguments", req.Params.Arguments),
 		zap.Int("policy_count", len(e.policies)),
@@ -256,8 +252,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 		})
 	}
 
-	e.logger.Info("CEL policy evaluation complete",
-		zap.String("session_id", sessionID),
+	e.ctxLogger.Info(ctx, "CEL policy evaluation complete",
 		zap.Any("results", results),
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),

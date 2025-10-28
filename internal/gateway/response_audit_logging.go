@@ -10,23 +10,21 @@ import (
 // ResponseLoggingHandler logs response details for audit purposes
 type ResponseLoggingHandler struct {
 	auditLogger *zap.Logger
+	ctxLogger   *ContextLogger
 }
 
 // NewResponseLoggingHandler creates a new response logging handler
 func NewResponseLoggingHandler(auditLogger *zap.Logger) *ResponseLoggingHandler {
 	return &ResponseLoggingHandler{
 		auditLogger: auditLogger,
+		ctxLogger:   NewContextLogger(auditLogger),
 	}
 }
 
 // HandleResponse implements ResponseValidationHandler
 func (h *ResponseLoggingHandler) HandleResponse(ctx context.Context, req mcp.CallToolRequest, result *mcp.CallToolResult) (ResponseValidationResults, error) {
-	// Extract sessionID from context
-	sessionID, _ := GetSessionID(ctx)
-
 	// Log the response for audit purposes
-	h.auditLogger.Info("Response audit log",
-		zap.String("session_id", sessionID),
+	h.ctxLogger.Info(ctx, "Response audit log",
 		zap.String("tool_name", req.Params.Name),
 		zap.Bool("is_error", result.IsError),
 		zap.Int("content_items", len(result.Content)),
