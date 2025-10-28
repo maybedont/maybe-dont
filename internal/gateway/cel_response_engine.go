@@ -95,7 +95,11 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	// Extract sessionID from context
+	sessionID, _ := GetSessionID(ctx)
+
 	e.logger.Info("Evaluating response with CEL policies",
+		zap.String("session_id", sessionID),
 		zap.String("tool", req.Params.Name),
 		zap.Int("policy_count", len(e.policies)),
 	)
@@ -125,6 +129,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
 		e.logger.Debug("Evaluating CEL response policy",
+			zap.String("session_id", sessionID),
 			zap.String("name", policy.Name),
 			zap.String("action", policy.Action),
 			zap.String("expression", policy.Expression),
@@ -155,6 +160,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		}
 
 		e.logger.Debug("CEL response policy evaluation result",
+			zap.String("session_id", sessionID),
 			zap.String("name", policy.Name),
 			zap.Bool("matched", matched),
 			zap.String("action", policy.Action),
@@ -221,6 +227,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	}
 
 	e.logger.Info("CEL response policy evaluation complete",
+		zap.String("session_id", sessionID),
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.Int("deny_count", results.DenyCount),

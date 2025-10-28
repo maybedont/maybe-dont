@@ -242,9 +242,13 @@ func (g *Gateway) Stop() error {
 
 // Tool handler function
 func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Extract sessionID from context
+	sessionID, _ := GetSessionID(ctx)
+
 	// Create audit log entry
 	auditLog := map[string]interface{}{
-		"request": req,
+		"session_id": sessionID,
+		"request":    req,
 	}
 
 	// Ensure audit log is always written, even on panic
@@ -252,7 +256,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		if r := recover(); r != nil {
 			auditLog["error"] = fmt.Sprintf("panic: %v", r)
 			auditLog["status"] = "panic"
-			g.auditLogger.Error("Tool call audit (panic)", zap.Any("audit", auditLog))
+			g.auditLogger.Error("Tool call audit (panic)", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
 			panic(r) // Re-raise the panic
 		}
 	}()
@@ -262,10 +266,10 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if err != nil {
 		auditLog["error"] = err.Error()
 		auditLog["status"] = "validation_error"
-		g.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
+		g.auditLogger.Error("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("request validation failed: %v", err)
 	}
-	g.logger.Debug("Validation results", zap.Any("validationResults", validationResults))
+	g.logger.Debug("Validation results", zap.String("session_id", sessionID), zap.Any("validationResults", validationResults))
 
 	if validationResults.DenyCount > 0 {
 		validationResults.Allowed = false
@@ -287,7 +291,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		errorMessage, errorData := g.buildPolicyDeniedError(&validationResults, req.Params.Name)
 
 		auditLog["status"] = "denied"
-		g.auditLogger.Warn("Tool call audit", zap.Any("audit", auditLog))
+		g.auditLogger.Warn("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
 
 		// Return error with proper MCP error code (-32600 for Invalid Request)
 		// Note: We'll need to handle this error code in the server layer
@@ -302,7 +306,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if err != nil {
 		auditLog["error"] = err.Error()
 		auditLog["status"] = "invalid_tool_name"
-		g.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
+		g.auditLogger.Error("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("invalid tool name format: %w", err)
 	}
 
@@ -311,7 +315,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if err != nil {
 		auditLog["error"] = err.Error()
 		auditLog["status"] = "client_not_found"
-		g.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
+		g.auditLogger.Error("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("client not found: %w", err)
 	}
 
@@ -326,7 +330,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		auditLog["status"] = "execution_error"
 		auditLog["client"] = clientName
 		auditLog["original_tool_name"] = originalToolName
-		g.auditLogger.Error("Tool call audit", zap.Any("audit", auditLog))
+		g.auditLogger.Error("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("tool call failed: %w", err)
 	}
 
@@ -334,7 +338,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if g.responseValidationChain != nil {
 		responseValidationResults, err := g.responseValidationChain.Handle(ctx, req, result)
 		if err != nil {
-			g.logger.Error("Response validation error", zap.Error(err))
+			g.logger.Error("Response validation error", zap.String("session_id", sessionID), zap.Error(err))
 			// Continue even if response validation has errors
 		}
 
@@ -344,7 +348,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		// If response validation denied the response, return error
 		if !responseValidationResults.Allowed {
 			auditLog["status"] = "response_denied"
-			g.auditLogger.Warn("Tool call audit - response denied", zap.Any("audit", auditLog))
+			g.auditLogger.Warn("Tool call audit - response denied", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
 
 			return nil, fmt.Errorf("response denied by policy: %s", responseValidationResults.Message)
 		}
@@ -412,7 +416,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	result.Meta.AdditionalFields["validation_summary"] = validationSummary
 
 	// Log the complete audit entry
-	g.auditLogger.Info("Tool call audit", zap.Any("audit", auditLog))
+	g.auditLogger.Info("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
 
 	return result, nil
 }

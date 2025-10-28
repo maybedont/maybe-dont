@@ -21,8 +21,12 @@ func NewToolLoggingHandler(auditLogger *zap.Logger) *ToolLoggingHandler {
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+	// Extract sessionID from context
+	sessionID, _ := GetSessionID(ctx)
+
 	// Log the tool call for audit purposes
 	h.auditLogger.Info("Tool call audit log",
+		zap.String("session_id", sessionID),
 		zap.String("method", req.Method),
 		zap.String("tool_name", req.Params.Name),
 		zap.Any("arguments", req.Params.Arguments),

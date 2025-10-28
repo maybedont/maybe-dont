@@ -265,15 +265,15 @@ func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, client
 	// Check if capabilities already loaded for this session
 	if cm.sessionManager.HasClientCapabilities(sessionID, clientName) {
 		cm.logger.Debug("Capabilities already loaded for session",
-			zap.String("client", clientName),
-			zap.String("session", sessionID))
+			zap.String("session_id", sessionID),
+			zap.String("client", clientName))
 		// Return nil to indicate already loaded
 		return nil, nil
 	}
 
 	cm.logger.Info("Checking capabilities for session",
-		zap.String("client", clientName),
-		zap.String("session", sessionID))
+		zap.String("session_id", sessionID),
+		zap.String("client", clientName))
 
 	// Use a temporary ClientInfo to avoid modifying the shared instance
 	sessionClientInfo := &ClientInfo{
@@ -291,8 +291,8 @@ func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, client
 	cm.sessionManager.SetClientCapabilities(sessionID, clientName, sessionClientInfo.Capabilities)
 
 	cm.logger.Info("Successfully loaded capabilities for session",
+		zap.String("session_id", sessionID),
 		zap.String("client", clientName),
-		zap.String("session", sessionID),
 		zap.Int("tools", len(sessionClientInfo.Tools)),
 		zap.Int("prompts", len(sessionClientInfo.Prompts)),
 		zap.Int("resources", len(sessionClientInfo.Resources)))

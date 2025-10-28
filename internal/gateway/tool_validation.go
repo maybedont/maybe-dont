@@ -109,7 +109,7 @@ func NewToolCELValidationHandler(logger *zap.Logger, engine *CELPolicyEngine) *T
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
-	return h.engine.EvaluateToolCall(req)
+	return h.engine.EvaluateToolCall(ctx, req)
 }
 
 // ToolAIValidationHandler handles AI policy validation

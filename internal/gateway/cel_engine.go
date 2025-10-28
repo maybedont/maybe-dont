@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -127,11 +128,15 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 }
 
 // Evaluate evaluates a tool call request against all policies
-func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationResults, error) {
+func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	// Extract sessionID from context
+	sessionID, _ := GetSessionID(ctx)
+
 	e.logger.Info("Evaluating tool call with CEL policies",
+		zap.String("session_id", sessionID),
 		zap.String("tool", req.Params.Name),
 		zap.Any("arguments", req.Params.Arguments),
 		zap.Int("policy_count", len(e.policies)),
@@ -168,6 +173,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
 		e.logger.Debug("Evaluating CEL policy",
+			zap.String("session_id", sessionID),
 			zap.String("name", policy.Name),
 			zap.String("action", policy.Action),
 			zap.String("expression", policy.Expression),
@@ -198,6 +204,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 		}
 
 		e.logger.Debug("CEL policy evaluation result",
+			zap.String("session_id", sessionID),
 			zap.String("name", policy.Name),
 			zap.Bool("result", result),
 			zap.String("action", policy.Action),
@@ -250,6 +257,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(req mcp.CallToolRequest) (ValidationR
 	}
 
 	e.logger.Info("CEL policy evaluation complete",
+		zap.String("session_id", sessionID),
 		zap.Any("results", results),
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),

@@ -50,6 +50,9 @@ func NewResponseValidationChain(logger *zap.Logger, handlers ...ResponseValidati
 
 // Handle processes a response through the validation chain
 func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRequest, result *mcp.CallToolResult) (ResponseValidationResults, error) {
+	// Extract sessionID from context
+	sessionID, _ := GetSessionID(ctx)
+
 	var finalResults ResponseValidationResults
 	finalResults.Results = make([]ResponseValidationResult, 0)
 	finalResults.Allowed = true // Default to allowed
@@ -60,6 +63,7 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 		results, err := handler.HandleResponse(ctx, req, currentResult)
 		if err != nil {
 			c.logger.Error("Response validation handler error",
+				zap.String("session_id", sessionID),
 				zap.Error(err),
 			)
 			// Continue processing other handlers
