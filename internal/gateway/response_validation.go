@@ -36,23 +36,22 @@ type ResponseValidationHandler interface {
 
 // ResponseValidationChain implements a chain of response validation handlers
 type ResponseValidationChain struct {
-	handlers []ResponseValidationHandler
-	logger   *zap.Logger
+	handlers  []ResponseValidationHandler
+	logger    *zap.Logger
+	ctxLogger *ContextLogger
 }
 
 // NewResponseValidationChain creates a new response validation chain
 func NewResponseValidationChain(logger *zap.Logger, handlers ...ResponseValidationHandler) *ResponseValidationChain {
 	return &ResponseValidationChain{
-		handlers: handlers,
-		logger:   logger,
+		handlers:  handlers,
+		logger:    logger,
+		ctxLogger: NewContextLogger(logger),
 	}
 }
 
 // Handle processes a response through the validation chain
 func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRequest, result *mcp.CallToolResult) (ResponseValidationResults, error) {
-	// Extract sessionID from context
-	sessionID, _ := GetSessionID(ctx)
-
 	var finalResults ResponseValidationResults
 	finalResults.Results = make([]ResponseValidationResult, 0)
 	finalResults.Allowed = true // Default to allowed
@@ -62,8 +61,7 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 	for _, handler := range c.handlers {
 		results, err := handler.HandleResponse(ctx, req, currentResult)
 		if err != nil {
-			c.logger.Error("Response validation handler error",
-				zap.String("session_id", sessionID),
+			c.ctxLogger.Error(ctx, "Response validation handler error",
 				zap.Error(err),
 			)
 			// Continue processing other handlers

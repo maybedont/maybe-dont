@@ -10,23 +10,21 @@ import (
 // LoggingHandler logs tool call request details
 type ToolLoggingHandler struct {
 	auditLogger *zap.Logger
+	ctxLogger   *ContextLogger
 }
 
 // NewLoggingHandler creates a new logging handler
 func NewToolLoggingHandler(auditLogger *zap.Logger) *ToolLoggingHandler {
 	return &ToolLoggingHandler{
 		auditLogger: auditLogger,
+		ctxLogger:   NewContextLogger(auditLogger),
 	}
 }
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
-	// Extract sessionID from context
-	sessionID, _ := GetSessionID(ctx)
-
 	// Log the tool call for audit purposes
-	h.auditLogger.Info("Tool call audit log",
-		zap.String("session_id", sessionID),
+	h.ctxLogger.Info(ctx, "Tool call audit log",
 		zap.String("method", req.Method),
 		zap.String("tool_name", req.Params.Name),
 		zap.Any("arguments", req.Params.Arguments),

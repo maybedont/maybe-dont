@@ -97,11 +97,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	// Extract sessionID from context
-	sessionID, _ := GetSessionID(ctx)
-
-	e.logger.Info("Evaluating response with CEL policies",
-		zap.String("session_id", sessionID),
+	e.ctxLogger.Info(ctx, "Evaluating response with CEL policies",
 		zap.String("tool", req.Params.Name),
 		zap.Int("policy_count", len(e.policies)),
 	)
@@ -226,8 +222,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		}
 	}
 
-	e.logger.Info("CEL response policy evaluation complete",
-		zap.String("session_id", sessionID),
+	e.ctxLogger.Info(ctx, "CEL response policy evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.Int("deny_count", results.DenyCount),

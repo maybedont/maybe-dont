@@ -25,18 +25,20 @@ type AIResponsePolicy struct {
 
 // AIResponsePolicyEngine handles AI policy evaluation for responses
 type AIResponsePolicyEngine struct {
-	logger   *zap.Logger
-	policies []AIResponsePolicy
-	mu       sync.RWMutex
-	endpoint string
-	model    string
-	apiKey   string
-	client   *openai.Client
+	logger    *zap.Logger
+	ctxLogger *ContextLogger
+	policies  []AIResponsePolicy
+	mu        sync.RWMutex
+	endpoint  string
+	model     string
+	apiKey    string
+	client    *openai.Client
 }
 
 // InitAIResponsePolicyEngine initializes the AI response policy engine
 func InitAIResponsePolicyEngine(logger *zap.Logger, engine *AIResponsePolicyEngine) error {
 	engine.logger = logger
+	engine.ctxLogger = NewContextLogger(logger)
 	client := openai.NewClient(
 		option.WithAPIKey(engine.apiKey),
 	)
@@ -84,11 +86,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	// Extract sessionID from context
-	sessionID, _ := GetSessionID(ctx)
-
-	e.logger.Info("Evaluating response with AI policies",
-		zap.String("session_id", sessionID),
+	e.ctxLogger.Info(ctx, "Evaluating response with AI policies",
 		zap.String("tool", req.Params.Name),
 		zap.Int("policy_count", len(e.policies)),
 	)
@@ -201,8 +199,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	for i := 0; i < len(e.policies); i++ {
 		result := <-resultChan
 		if result.err != nil {
-			e.logger.Error("Response policy evaluation failed",
-				zap.String("session_id", sessionID),
+			e.ctxLogger.Error(ctx, "Response policy evaluation failed",
 				zap.String("policy", result.result.PolicyName),
 				zap.Error(result.err),
 			)
@@ -240,8 +237,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		results.Message = "No AI response policies matched"
 	}
 
-	e.logger.Info("Response evaluation complete",
-		zap.String("session_id", sessionID),
+	e.ctxLogger.Info(ctx, "Response evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.Int("deny_count", results.DenyCount),
