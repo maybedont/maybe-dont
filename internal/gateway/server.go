@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -36,11 +37,127 @@ func (g *Gateway) initServer(ctx context.Context) error {
 	}
 }
 
+// handleInitializeRequest handles the initialize request and performs lazy capability loading
+func (g *Gateway) handleInitializeRequest(ctx context.Context, id any, req *mcp.InitializeRequest) {
+	// Extract session ID from context
+	sessionID, hasSessionID := GetSessionID(ctx)
+	if !hasSessionID {
+		g.logger.Warn("No session ID found in context for initialize request")
+		return
+	}
+
+	g.logger.Info("Handling initialize request", zap.String("session_id", sessionID))
+
+	// Get list of clients that require lazy initialization
+	lazyClients := g.clientManager.GetLazyInitClients()
+
+	// If there are lazy init clients, check their capabilities synchronously
+	if len(lazyClients) > 0 {
+		g.logger.Info("Checking capabilities for lazy init clients",
+			zap.String("session_id", sessionID),
+			zap.Int("client_count", len(lazyClients)))
+
+		for _, clientName := range lazyClients {
+			clientInfo, err := g.clientManager.CheckCapabilitiesForSession(ctx, clientName, sessionID)
+			if err != nil {
+				g.logger.Error("Failed to check capabilities for client",
+					zap.String("client", clientName),
+					zap.String("session_id", sessionID),
+					zap.Error(err))
+				// Note: We can't return an error from this hook, but the error will be
+				// reflected when the client tries to use tools that failed to initialize
+				continue
+			}
+
+			// clientInfo will be nil if capabilities were already loaded
+			if clientInfo == nil {
+				continue
+			}
+
+			// Dynamically register tools for this client
+			g.registerClientTools(clientName, clientInfo)
+			g.registerClientPrompts(clientName, clientInfo)
+			g.registerClientResources(clientName, clientInfo)
+
+			g.logger.Info("Dynamically registered client capabilities",
+				zap.String("client", clientName),
+				zap.String("session_id", sessionID))
+		}
+	}
+}
+
+// registerClientTools registers all tools from a client with prefixed names
+func (g *Gateway) registerClientTools(clientName string, clientInfo *ClientInfo) {
+	for _, tool := range clientInfo.Tools {
+		prefixedTool := tool
+		prefixedTool.Name = PrefixName(clientName, tool.Name)
+		g.server.AddTool(prefixedTool, g.handleToolCallWithErrorHandling)
+		g.logger.Debug("Registered tool",
+			zap.String("client", clientName),
+			zap.String("original_name", tool.Name),
+			zap.String("prefixed_name", prefixedTool.Name))
+	}
+}
+
+// registerClientPrompts registers all prompts from a client with prefixed names
+func (g *Gateway) registerClientPrompts(clientName string, clientInfo *ClientInfo) {
+	for _, prompt := range clientInfo.Prompts {
+		prefixedPrompt := prompt
+		prefixedPrompt.Name = PrefixName(clientName, prompt.Name)
+		g.server.AddPrompt(prefixedPrompt, g.HandlePromptCall)
+		g.logger.Debug("Registered prompt",
+			zap.String("client", clientName),
+			zap.String("original_name", prompt.Name),
+			zap.String("prefixed_name", prefixedPrompt.Name))
+	}
+}
+
+// registerClientResources registers all resources and templates from a client with prefixed names
+func (g *Gateway) registerClientResources(clientName string, clientInfo *ClientInfo) {
+	for _, resource := range clientInfo.Resources {
+		prefixedResource := resource
+		prefixedResource.URI = PrefixName(clientName, resource.URI)
+		g.server.AddResource(prefixedResource, g.HandleResourceCall)
+		g.logger.Debug("Registered resource",
+			zap.String("client", clientName),
+			zap.String("original_uri", resource.URI),
+			zap.String("prefixed_uri", prefixedResource.URI))
+	}
+
+	for _, template := range clientInfo.Templates {
+		prefixedTemplate := template
+		if template.URITemplate != nil {
+			originalRaw := template.URITemplate.Raw()
+			prefixedRaw := PrefixName(clientName, originalRaw)
+
+			// Create new URITemplate from prefixed raw string
+			newTemplate, err := uritemplate.New(prefixedRaw)
+			if err != nil {
+				g.logger.Error("Failed to create prefixed URI template",
+					zap.String("client", clientName),
+					zap.String("original", originalRaw),
+					zap.String("prefixed", prefixedRaw),
+					zap.Error(err))
+				continue
+			}
+			prefixedTemplate.URITemplate = &mcp.URITemplate{Template: newTemplate}
+		}
+		g.server.AddResourceTemplate(prefixedTemplate, g.HandleResourceTemplateCall)
+		g.logger.Debug("Registered resource template",
+			zap.String("client", clientName))
+	}
+}
+
 // initMCPServer initializes the MCP server with common configuration and registers tools
 func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
+	// Create hooks for initialize request handling
+	hooks := &server.Hooks{}
+	hooks.AddBeforeInitialize(g.handleInitializeRequest)
+
 	opts := []server.ServerOption{
 		server.WithLogging(),
 		server.WithRecovery(),
+		server.WithHooks(hooks),
 	}
 
 	// Get all clients to determine combined capabilities
@@ -91,77 +208,21 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	}
 
 	srv := server.NewMCPServer("maybe-dont", "0.0.1", opts...)
+	g.server = srv
 
-	// Register tools/prompts/resources from all clients with prefixed names
+	// Register tools/prompts/resources from non-lazy clients
+	// Lazy clients will be registered dynamically when a session initializes
 	for clientName, clientInfo := range allClients {
-		// Register tools
-		for _, tool := range clientInfo.Tools {
-			prefixedTool := tool
-			prefixedTool.Name = PrefixName(clientName, tool.Name)
-			srv.AddTool(prefixedTool, g.handleToolCallWithErrorHandling)
-			g.logger.Debug("Registered tool",
-				zap.String("client", clientName),
-				zap.String("original_name", tool.Name),
-				zap.String("prefixed_name", prefixedTool.Name))
+		// Skip lazy init clients - their capabilities will be loaded and registered per-session
+		if clientInfo.RequiresLazyInit {
+			g.logger.Debug("Skipping registration for lazy init client",
+				zap.String("client", clientName))
+			continue
 		}
 
-		// Register prompts
-		for _, prompt := range clientInfo.Prompts {
-			prefixedPrompt := prompt
-			prefixedPrompt.Name = PrefixName(clientName, prompt.Name)
-			srv.AddPrompt(prefixedPrompt, g.HandlePromptCall)
-			g.logger.Debug("Registered prompt",
-				zap.String("client", clientName),
-				zap.String("original_name", prompt.Name),
-				zap.String("prefixed_name", prefixedPrompt.Name))
-		}
-
-		// Register resources
-		for _, resource := range clientInfo.Resources {
-			prefixedResource := resource
-			prefixedResource.URI = PrefixName(clientName, resource.URI)
-			srv.AddResource(prefixedResource, g.HandleResourceCall)
-			g.logger.Debug("Registered resource",
-				zap.String("client", clientName),
-				zap.String("original_uri", resource.URI),
-				zap.String("prefixed_uri", prefixedResource.URI))
-		}
-
-		// Register resource templates
-		for _, template := range clientInfo.Templates {
-			prefixedTemplate := template
-			if template.URITemplate != nil {
-				originalRaw := template.URITemplate.Raw()
-				prefixedRaw := PrefixName(clientName, originalRaw)
-
-				// Create new URITemplate from prefixed raw string
-				newTemplate, err := uritemplate.New(prefixedRaw)
-				if err != nil {
-					g.logger.Error("Failed to create prefixed URI template",
-						zap.String("client", clientName),
-						zap.String("original", originalRaw),
-						zap.String("prefixed", prefixedRaw),
-						zap.Error(err))
-					continue
-				}
-				prefixedTemplate.URITemplate = &mcp.URITemplate{Template: newTemplate}
-			}
-			srv.AddResourceTemplate(prefixedTemplate, g.HandleResourceTemplateCall)
-			g.logger.Debug("Registered resource template",
-				zap.String("client", clientName),
-				zap.String("original_template", func() string {
-					if template.URITemplate != nil {
-						return template.URITemplate.Raw()
-					}
-					return ""
-				}()),
-				zap.String("prefixed_template", func() string {
-					if prefixedTemplate.URITemplate != nil {
-						return prefixedTemplate.URITemplate.Raw()
-					}
-					return ""
-				}()))
-		}
+		g.registerClientTools(clientName, clientInfo)
+		g.registerClientPrompts(clientName, clientInfo)
+		g.registerClientResources(clientName, clientInfo)
 	}
 
 	return srv, nil
@@ -215,10 +276,11 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
 
-	// Create SSE server
+	// Create SSE server with auth extraction context function
 	sseSrv := server.NewSSEServer(srv,
 		server.WithSSEEndpoint("/sse"),
 		server.WithMessageEndpoint("/message"),
+		server.WithSSEContextFunc(g.extractAuthFromRequest),
 	)
 
 	g.server = srv
@@ -267,9 +329,10 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
 
-	// Create HTTP server
+	// Create HTTP server with auth extraction context function
 	httpSrv := server.NewStreamableHTTPServer(srv,
 		server.WithEndpointPath("/mcp"),
+		server.WithHTTPContextFunc(g.extractAuthFromRequest),
 	)
 
 	g.server = srv
@@ -337,4 +400,70 @@ func (g *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.C
 		return nil, err
 	}
 	return result, nil
+}
+
+// extractAuthFromRequest extracts authentication credentials from HTTP request headers
+// and stores them in context for pass-through authentication. It also generates a session ID
+// for tracking capabilities per session.
+func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) context.Context {
+	// Generate or extract session ID
+	sessionID := r.Header.Get("X-Session-ID")
+	if sessionID == "" {
+		// Generate new session ID if not provided
+		var err error
+		sessionID, err = GenerateSessionID()
+		if err != nil {
+			g.logger.Error("Failed to generate session ID", zap.Error(err))
+			sessionID = "unknown"
+		}
+		g.logger.Debug("Generated new session ID", zap.String("session_id", sessionID))
+	} else {
+		g.logger.Debug("Using existing session ID", zap.String("session_id", sessionID))
+	}
+
+	// Store session ID in context
+	ctx = WithSessionID(ctx, sessionID)
+
+	// Create credentials storage
+	serviceCreds := NewServiceCredentials()
+
+	// Extract credentials from client pass-through configurations
+	for clientName, clientConfig := range g.config.DownstreamMCPServers {
+		// Skip if pass-through is not enabled
+		if !clientConfig.Auth.PassThrough.Enabled {
+			continue
+		}
+
+		var clientCreds *ClientCredentials
+
+		// Extract credentials from configured header mappings
+		for _, mapping := range clientConfig.Auth.PassThrough.Headers {
+			headerValue := r.Header.Get(mapping.SourceHeader)
+			if headerValue == "" {
+				continue
+			}
+
+			// Initialize client credentials if needed
+			if clientCreds == nil {
+				clientCreds = NewClientCredentials()
+			}
+
+			// Store credential using target_header as key
+			clientCreds.SetHeader(mapping.TargetHeader, headerValue)
+
+			g.logger.Debug("Extracted credential from header",
+				zap.String("source_header", mapping.SourceHeader),
+				zap.String("client", clientName),
+				zap.String("target_header", mapping.TargetHeader),
+				zap.String("session_id", sessionID))
+		}
+
+		// Only store client credentials if we extracted any
+		if clientCreds != nil {
+			serviceCreds.SetClient(clientName, clientCreds)
+		}
+	}
+
+	// Store credentials in context
+	return WithServiceCredentials(ctx, serviceCreds)
 }
