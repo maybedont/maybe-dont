@@ -36,23 +36,6 @@ type Config struct {
 		} `mapstructure:"sse"`
 	} `mapstructure:"server"`
 
-	// Authentication configuration
-	Auth struct {
-		Type      string `mapstructure:"type"` // api_key, jwt, mtls
-		APIKey    string `mapstructure:"api_key"`
-		JWTConfig struct {
-			JWKSUrl    string   `mapstructure:"jwks_url"`
-			Issuer     string   `mapstructure:"issuer"`
-			Audience   []string `mapstructure:"audience"`
-			ClaimRoles string   `mapstructure:"claim_roles"`
-		} `mapstructure:"jwt"`
-		MTLSConfig struct {
-			CAFile   string `mapstructure:"ca_file"`
-			CertFile string `mapstructure:"cert_file"`
-			KeyFile  string `mapstructure:"key_file"`
-		} `mapstructure:"mtls"`
-	} `mapstructure:"auth"`
-
 	// Policy configuration
 	PolicyValidation struct {
 		Enabled   bool        `mapstructure:"enabled"`
@@ -125,6 +108,23 @@ type ClientConfig struct {
 	HTTPConfig struct {
 		Headers map[string]string `mapstructure:"headers"`
 	} `mapstructure:"http"`
+
+	// Pass-through authentication configuration
+	Auth struct {
+		PassThrough struct {
+			Enabled bool `mapstructure:"enabled"`
+
+			// HTTP/SSE: List of header mappings
+			Headers []CredentialMapping `mapstructure:"headers"`
+		} `mapstructure:"pass_through"`
+	} `mapstructure:"auth"`
+}
+
+// CredentialMapping defines how to map a credential from incoming headers to downstream
+type CredentialMapping struct {
+	SourceHeader string `mapstructure:"source_header"` // Incoming HTTP header name to extract credential from (e.g., "X-GitHub-Token")
+	TargetHeader string `mapstructure:"target_header"` // Downstream HTTP header name (e.g., "Authorization"). Also used as session storage key.
+	Format       string `mapstructure:"format"`        // Optional. Template for value formatting. Use {value} placeholder. Default: "{value}" (raw value passthrough). Examples: "Bearer {value}", "sha256={value}"
 }
 
 // CELPolicy represents a single CEL policy rule
@@ -508,22 +508,6 @@ func ValidateConfig(cfg *Config) error {
 		}
 	}
 
-	// Validate auth configuration
-	switch cfg.Auth.Type {
-	case "api_key":
-		if cfg.Auth.APIKey == "" {
-			errors = append(errors, "auth.api_key is required when auth.type is api_key")
-		}
-	case "jwt":
-		if cfg.Auth.JWTConfig.JWKSUrl == "" {
-			errors = append(errors, "auth.jwt.jwks_url is required when auth.type is jwt")
-		}
-	case "mtls":
-		if cfg.Auth.MTLSConfig.CAFile == "" {
-			errors = append(errors, "auth.mtls.ca_file is required when auth.type is mtls")
-		}
-	}
-
 	// Validate client configuration
 	if len(cfg.DownstreamMCPServers) == 0 {
 		errors = append(errors, "at least one downstream MCP server must be configured")
@@ -581,6 +565,37 @@ func ValidateConfig(cfg *Config) error {
 		}
 		if client.CapabilityRetryDelayMs > 30000 { // 30 seconds max
 			errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].capability_retry_delay_ms must be less than 30000ms (30 seconds)", name))
+		}
+
+		// Validate pass-through auth configuration
+		if client.Auth.PassThrough.Enabled {
+			// Only HTTP/SSE transports support pass-through auth
+			if client.Type == "http" || client.Type == "sse" {
+				// HTTP/SSE requires header mappings
+				if len(client.Auth.PassThrough.Headers) == 0 {
+					errors = append(errors,
+						fmt.Sprintf("downstream_mcp_servers[%s]: pass_through enabled but no headers configured for %s transport",
+							name, client.Type))
+				}
+
+				// Validate each header mapping
+				for i, mapping := range client.Auth.PassThrough.Headers {
+					if mapping.SourceHeader == "" {
+						errors = append(errors,
+							fmt.Sprintf("downstream_mcp_servers[%s].auth.pass_through.headers[%d]: source_header is required",
+								name, i))
+					}
+					if mapping.TargetHeader == "" {
+						errors = append(errors,
+							fmt.Sprintf("downstream_mcp_servers[%s].auth.pass_through.headers[%d]: target_header is required",
+								name, i))
+					}
+				}
+			} else {
+				errors = append(errors,
+					fmt.Sprintf("downstream_mcp_servers[%s]: pass_through auth is only supported for http and sse transports, not %s",
+						name, client.Type))
+			}
 		}
 	}
 

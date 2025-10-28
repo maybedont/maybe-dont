@@ -1,5 +1,9 @@
 # MCP Security Gateway Configuration
 # This file configures the MCP security gateway service.
+#
+# Pass-Through Authentication:
+# Extract credentials from incoming request headers and forward to downstream servers.
+# Enable per-client via auth.pass_through config with header mappings.
 
 # Logging configuration
 logging:
@@ -12,12 +16,28 @@ audit:
 
 # Downstream MCP servers configuration
 downstream_mcp_servers:
+  # Example 1: Static credentials (traditional approach)
   github:
     type: http # stdio, sse, http
     url: "https://api.githubcopilot.com/mcp/"
     http:
       headers:
         Authorization: "Bearer ${GITHUB_TOKEN}"
+
+  # Example 2: Pass-through authentication
+  # Extracts credentials from incoming request headers and forwards to downstream
+  # github-passthrough:
+  #   type: http
+  #   url: "https://api.githubcopilot.com/mcp/"
+  #   auth:
+  #     pass_through:
+  #       enabled: true
+  #       headers:
+  #         - source_header: "X-GitHub-Token"  # Extract from incoming request
+  #           target_header: "Authorization"   # Forward to downstream
+  #           format: "Bearer {value}"         # Optional formatting (default: raw value)
+
+  # Example 3: STDIO server (pass-through only works with HTTP/SSE)
   aws-docs:
     type: stdio
     command: "uvx"

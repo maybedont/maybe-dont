@@ -24,6 +24,9 @@ type ClientInfo struct {
 	Client       *client.Client
 	Config       config.ClientConfig
 	Capabilities *mcp.ServerCapabilities
+	// RequiresLazyInit indicates if capabilities should be checked per-session
+	// This is true for clients with pass-through auth enabled
+	RequiresLazyInit bool
 	// Detailed capability information
 	Tools     []mcp.Tool
 	Prompts   []mcp.Prompt
@@ -33,16 +36,18 @@ type ClientInfo struct {
 
 // ClientManager manages multiple MCP client instances
 type ClientManager struct {
-	clients map[string]*ClientInfo
-	mu      sync.RWMutex
-	logger  *zap.Logger
+	clients        map[string]*ClientInfo
+	sessionManager *SessionManager
+	mu             sync.RWMutex
+	logger         *zap.Logger
 }
 
 // NewClientManager creates a new client manager
 func NewClientManager(logger *zap.Logger) *ClientManager {
 	return &ClientManager{
-		clients: make(map[string]*ClientInfo),
-		logger:  logger,
+		clients:        make(map[string]*ClientInfo),
+		sessionManager: NewSessionManager(),
+		logger:         logger,
 	}
 }
 
@@ -102,18 +107,48 @@ func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg 
 		cm.logger.Debug("Initializing SSE MCP client",
 			zap.String("name", name),
 			zap.String("downstream_url", cfg.DownstreamURL))
-		cl, err = client.NewSSEMCPClient(
-			cfg.DownstreamURL,
-			client.WithHeaders(cfg.SSEConfig.Headers),
-		)
+
+		// Build SSE client options
+		sseOpts := []transport.ClientOption{}
+
+		// Add static headers if configured
+		if len(cfg.SSEConfig.Headers) > 0 {
+			sseOpts = append(sseOpts, client.WithHeaders(cfg.SSEConfig.Headers))
+		}
+
+		// Add dynamic auth headers if pass-through is enabled
+		if cfg.Auth.PassThrough.Enabled {
+			headerFunc := cm.createAuthHeaderFunc(name, cfg)
+			sseOpts = append(sseOpts, client.WithHeaderFunc(headerFunc))
+			cm.logger.Info("Enabled pass-through auth for SSE client",
+				zap.String("client", name),
+				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
+		}
+
+		cl, err = client.NewSSEMCPClient(cfg.DownstreamURL, sseOpts...)
 	case "http":
 		cm.logger.Debug("Initializing HTTP MCP client",
 			zap.String("name", name),
 			zap.String("downstream_url", cfg.DownstreamURL))
-		cl, err = client.NewStreamableHttpClient(
-			cfg.DownstreamURL,
-			transport.WithHTTPHeaders(cfg.HTTPConfig.Headers),
-		)
+
+		// Build HTTP client options
+		httpOpts := []transport.StreamableHTTPCOption{}
+
+		// Add static headers if configured
+		if len(cfg.HTTPConfig.Headers) > 0 {
+			httpOpts = append(httpOpts, transport.WithHTTPHeaders(cfg.HTTPConfig.Headers))
+		}
+
+		// Add dynamic auth headers if pass-through is enabled
+		if cfg.Auth.PassThrough.Enabled {
+			headerFunc := cm.createAuthHeaderFunc(name, cfg)
+			httpOpts = append(httpOpts, transport.WithHTTPHeaderFunc(headerFunc))
+			cm.logger.Info("Enabled pass-through auth for HTTP client",
+				zap.String("client", name),
+				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
+		}
+
+		cl, err = client.NewStreamableHttpClient(cfg.DownstreamURL, httpOpts...)
 	default:
 		return fmt.Errorf("unsupported transport type: %s", cfg.Type)
 	}
@@ -124,7 +159,17 @@ func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg 
 
 	clientInfo.Client = cl
 
-	// Check capabilities
+	// For pass-through auth clients, defer capability check until first session
+	if cfg.Auth.PassThrough.Enabled {
+		clientInfo.RequiresLazyInit = true
+		cm.clients[name] = clientInfo
+		cm.logger.Info("Initialized MCP client with lazy initialization",
+			zap.String("name", name),
+			zap.Bool("pass_through_auth", true))
+		return nil
+	}
+
+	// Check capabilities immediately for non-pass-through clients
 	if err := cm.checkCapabilities(ctx, clientInfo); err != nil {
 		if closeErr := cl.Close(); closeErr != nil {
 			cm.logger.Error("failed to close client after capability check error",
@@ -203,6 +248,70 @@ func (cm *ClientManager) checkCapabilities(ctx context.Context, clientInfo *Clie
 	}
 
 	return nil
+}
+
+// CheckCapabilitiesForSession checks capabilities for a client in a specific session
+// This is used for lazy initialization of pass-through auth clients
+// Returns the ClientInfo with loaded capabilities
+func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, clientName, sessionID string) (*ClientInfo, error) {
+	cm.mu.RLock()
+	clientInfo, exists := cm.clients[clientName]
+	cm.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("client %s not found", clientName)
+	}
+
+	// Check if capabilities already loaded for this session
+	if cm.sessionManager.HasClientCapabilities(sessionID, clientName) {
+		cm.logger.Debug("Capabilities already loaded for session",
+			zap.String("client", clientName),
+			zap.String("session", sessionID))
+		// Return nil to indicate already loaded
+		return nil, nil
+	}
+
+	cm.logger.Info("Checking capabilities for session",
+		zap.String("client", clientName),
+		zap.String("session", sessionID))
+
+	// Use a temporary ClientInfo to avoid modifying the shared instance
+	sessionClientInfo := &ClientInfo{
+		Name:   clientInfo.Name,
+		Client: clientInfo.Client,
+		Config: clientInfo.Config,
+	}
+
+	// Check capabilities with the session context (which contains credentials)
+	if err := cm.checkCapabilities(ctx, sessionClientInfo); err != nil {
+		return nil, fmt.Errorf("failed to check capabilities for session: %w", err)
+	}
+
+	// Store capabilities in session manager
+	cm.sessionManager.SetClientCapabilities(sessionID, clientName, sessionClientInfo.Capabilities)
+
+	cm.logger.Info("Successfully loaded capabilities for session",
+		zap.String("client", clientName),
+		zap.String("session", sessionID),
+		zap.Int("tools", len(sessionClientInfo.Tools)),
+		zap.Int("prompts", len(sessionClientInfo.Prompts)),
+		zap.Int("resources", len(sessionClientInfo.Resources)))
+
+	return sessionClientInfo, nil
+}
+
+// GetLazyInitClients returns a list of client names that require lazy initialization
+func (cm *ClientManager) GetLazyInitClients() []string {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	var lazyClients []string
+	for name, info := range cm.clients {
+		if info.RequiresLazyInit {
+			lazyClients = append(lazyClients, name)
+		}
+	}
+	return lazyClients
 }
 
 // discoverCapabilities discovers tools, prompts, and resources with retry logic
@@ -565,4 +674,53 @@ func ParsePrefixedName(prefixedName string) (clientName, originalName string, er
 // PrefixName creates a prefixed name from client name and original name
 func PrefixName(clientName, originalName string) string {
 	return fmt.Sprintf("%s__%s", clientName, originalName)
+}
+
+// createAuthHeaderFunc creates a header function for pass-through authentication
+// This function will be called on each HTTP/SSE request to inject user credentials from context
+func (cm *ClientManager) createAuthHeaderFunc(clientName string, cfg config.ClientConfig) transport.HTTPHeaderFunc {
+	return func(ctx context.Context) map[string]string {
+		headers := make(map[string]string)
+
+		// Get client credentials from context
+		clientCreds, ok := GetServiceCredentials(ctx, clientName)
+		if !ok {
+			cm.logger.Debug("No credentials found for client in context",
+				zap.String("client", clientName))
+			return headers
+		}
+
+		// Apply each header mapping
+		for _, mapping := range cfg.Auth.PassThrough.Headers {
+			// Get credential value from context (keyed by target_header)
+			value, ok := clientCreds.GetHeader(mapping.TargetHeader)
+			if !ok {
+				cm.logger.Debug("Missing credential for header mapping",
+					zap.String("client", clientName),
+					zap.String("target_header", mapping.TargetHeader))
+				continue
+			}
+
+			// Format value using template
+			headerValue := formatCredentialValue(mapping.Format, value)
+			headers[mapping.TargetHeader] = headerValue
+
+			cm.logger.Debug("Injected auth header for downstream",
+				zap.String("client", clientName),
+				zap.String("target_header", mapping.TargetHeader))
+		}
+
+		return headers
+	}
+}
+
+// formatCredentialValue formats a credential value using a template
+// Template can use {value} as a placeholder.
+// If template is empty, returns raw value (default behavior for simple passthrough).
+// Examples: "Bearer {value}", "sha256={value}", "" (raw value)
+func formatCredentialValue(template string, value string) string {
+	if template == "" {
+		return value // Default: raw value passthrough
+	}
+	return strings.ReplaceAll(template, "{value}", value)
 }
