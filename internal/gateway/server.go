@@ -75,9 +75,9 @@ func (g *Gateway) handleInitializeRequest(ctx context.Context, id any, req *mcp.
 			}
 
 			// Dynamically register tools for this client
-			g.registerClientTools(clientName, clientInfo)
-			g.registerClientPrompts(clientName, clientInfo)
-			g.registerClientResources(clientName, clientInfo)
+			g.registerClientTools(ctx, clientName, clientInfo)
+			g.registerClientPrompts(ctx, clientName, clientInfo)
+			g.registerClientResources(ctx, clientName, clientInfo)
 
 			g.logger.Info("Dynamically registered client capabilities",
 				zap.String("client", clientName),
@@ -87,12 +87,12 @@ func (g *Gateway) handleInitializeRequest(ctx context.Context, id any, req *mcp.
 }
 
 // registerClientTools registers all tools from a client with prefixed names
-func (g *Gateway) registerClientTools(clientName string, clientInfo *ClientInfo) {
+func (g *Gateway) registerClientTools(ctx context.Context, clientName string, clientInfo *ClientInfo) {
 	for _, tool := range clientInfo.Tools {
 		prefixedTool := tool
 		prefixedTool.Name = PrefixName(clientName, tool.Name)
 		g.server.AddTool(prefixedTool, g.handleToolCallWithErrorHandling)
-		g.logger.Debug("Registered tool",
+		g.ctxLogger.Debug(ctx, "Registered tool",
 			zap.String("client", clientName),
 			zap.String("original_name", tool.Name),
 			zap.String("prefixed_name", prefixedTool.Name))
@@ -100,12 +100,12 @@ func (g *Gateway) registerClientTools(clientName string, clientInfo *ClientInfo)
 }
 
 // registerClientPrompts registers all prompts from a client with prefixed names
-func (g *Gateway) registerClientPrompts(clientName string, clientInfo *ClientInfo) {
+func (g *Gateway) registerClientPrompts(ctx context.Context, clientName string, clientInfo *ClientInfo) {
 	for _, prompt := range clientInfo.Prompts {
 		prefixedPrompt := prompt
 		prefixedPrompt.Name = PrefixName(clientName, prompt.Name)
 		g.server.AddPrompt(prefixedPrompt, g.HandlePromptCall)
-		g.logger.Debug("Registered prompt",
+		g.ctxLogger.Debug(ctx, "Registered prompt",
 			zap.String("client", clientName),
 			zap.String("original_name", prompt.Name),
 			zap.String("prefixed_name", prefixedPrompt.Name))
@@ -113,12 +113,12 @@ func (g *Gateway) registerClientPrompts(clientName string, clientInfo *ClientInf
 }
 
 // registerClientResources registers all resources and templates from a client with prefixed names
-func (g *Gateway) registerClientResources(clientName string, clientInfo *ClientInfo) {
+func (g *Gateway) registerClientResources(ctx context.Context, clientName string, clientInfo *ClientInfo) {
 	for _, resource := range clientInfo.Resources {
 		prefixedResource := resource
 		prefixedResource.URI = PrefixName(clientName, resource.URI)
 		g.server.AddResource(prefixedResource, g.HandleResourceCall)
-		g.logger.Debug("Registered resource",
+		g.ctxLogger.Debug(ctx, "Registered resource",
 			zap.String("client", clientName),
 			zap.String("original_uri", resource.URI),
 			zap.String("prefixed_uri", prefixedResource.URI))
@@ -143,7 +143,7 @@ func (g *Gateway) registerClientResources(clientName string, clientInfo *ClientI
 			prefixedTemplate.URITemplate = &mcp.URITemplate{Template: newTemplate}
 		}
 		g.server.AddResourceTemplate(prefixedTemplate, g.HandleResourceTemplateCall)
-		g.logger.Debug("Registered resource template",
+		g.ctxLogger.Debug(ctx, "Registered resource template",
 			zap.String("client", clientName))
 	}
 }
@@ -212,17 +212,18 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 
 	// Register tools/prompts/resources from non-lazy clients
 	// Lazy clients will be registered dynamically when a session initializes
+	ctx := context.Background()
 	for clientName, clientInfo := range allClients {
 		// Skip lazy init clients - their capabilities will be loaded and registered per-session
 		if clientInfo.RequiresLazyInit {
-			g.logger.Debug("Skipping registration for lazy init client",
+			g.ctxLogger.Debug(ctx, "Skipping registration for lazy init client",
 				zap.String("client", clientName))
 			continue
 		}
 
-		g.registerClientTools(clientName, clientInfo)
-		g.registerClientPrompts(clientName, clientInfo)
-		g.registerClientResources(clientName, clientInfo)
+		g.registerClientTools(ctx, clientName, clientInfo)
+		g.registerClientPrompts(ctx, clientName, clientInfo)
+		g.registerClientResources(ctx, clientName, clientInfo)
 	}
 
 	return srv, nil
@@ -416,13 +417,16 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 			g.logger.Error("Failed to generate session ID", zap.Error(err))
 			sessionID = "unknown"
 		}
-		g.logger.Debug("Generated new session ID", zap.String("session_id", sessionID))
-	} else {
-		g.logger.Debug("Using existing session ID", zap.String("session_id", sessionID))
 	}
 
-	// Store session ID in context
+	// Store session ID in context first so it can be used in logging
 	ctx = WithSessionID(ctx, sessionID)
+
+	if r.Header.Get("X-Session-ID") == "" {
+		g.ctxLogger.Debug(ctx, "Generated new session ID")
+	} else {
+		g.ctxLogger.Debug(ctx, "Using existing session ID")
+	}
 
 	// Create credentials storage
 	serviceCreds := NewServiceCredentials()
@@ -451,11 +455,10 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 			// Store credential using target_header as key
 			clientCreds.SetHeader(mapping.TargetHeader, headerValue)
 
-			g.logger.Debug("Extracted credential from header",
+			g.ctxLogger.Debug(ctx, "Extracted credential from header",
 				zap.String("source_header", mapping.SourceHeader),
 				zap.String("client", clientName),
-				zap.String("target_header", mapping.TargetHeader),
-				zap.String("session_id", sessionID))
+				zap.String("target_header", mapping.TargetHeader))
 		}
 
 		// Only store client credentials if we extracted any

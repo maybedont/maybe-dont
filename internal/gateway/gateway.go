@@ -26,6 +26,7 @@ func (e *PolicyDeniedError) Error() string {
 // Gateway represents an MCP security gateway instance
 type Gateway struct {
 	logger        *zap.Logger
+	ctxLogger     *ContextLogger
 	auditLogger   *zap.Logger
 	config        *config.Config
 	server        *server.MCPServer
@@ -143,8 +144,12 @@ func New(cfg *config.Config, logger *zap.Logger) (*Gateway, error) {
 	// Create client manager
 	clientManager := NewClientManager(logger)
 
+	// Create context-aware logger
+	ctxLogger := NewContextLogger(logger)
+
 	return &Gateway{
 		logger:                 logger,
+		ctxLogger:              ctxLogger,
 		auditLogger:            auditLogger,
 		config:                 cfg,
 		stopChan:               make(chan struct{}),
@@ -163,7 +168,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// Debug print the loaded config
 	if _, err := json.MarshalIndent(g.config, "", "  "); err == nil {
-		g.logger.Debug("Loaded gateway config")
+		g.ctxLogger.Debug(ctx, "Loaded gateway config")
 	} else {
 		g.logger.Warn("Failed to marshal config for debug print", zap.Error(err))
 	}
@@ -269,7 +274,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		g.auditLogger.Error("Tool call audit", zap.String("session_id", sessionID), zap.Any("audit", auditLog))
 		return nil, fmt.Errorf("request validation failed: %v", err)
 	}
-	g.logger.Debug("Validation results", zap.String("session_id", sessionID), zap.Any("validationResults", validationResults))
+	g.ctxLogger.Debug(ctx, "Validation results", zap.Any("validationResults", validationResults))
 
 	if validationResults.DenyCount > 0 {
 		validationResults.Allowed = false
