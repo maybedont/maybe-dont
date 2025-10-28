@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -93,7 +94,7 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, err := engine.EvaluateToolCall(tt.req)
+			results, err := engine.EvaluateToolCall(context.Background(), tt.req)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAllowed, results.Allowed)
 			assert.Equal(t, tt.wantMessage, results.Message)

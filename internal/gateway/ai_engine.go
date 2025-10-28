@@ -76,6 +76,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	// Extract sessionID from context
+	sessionID, _ := GetSessionID(ctx)
+
 	// Track all policy evaluations
 	var results ValidationResults
 	results.Results = make([]ValidationResult, 0)
@@ -178,6 +181,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		result := <-resultChan
 		if result.err != nil {
 			e.logger.Error("Policy evaluation failed",
+				zap.String("session_id", sessionID),
 				zap.String("policy", result.result.PolicyName),
 				zap.Error(result.err),
 			)
@@ -203,6 +207,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	}
 
 	e.logger.Info("Tool call evaluation complete",
+		zap.String("session_id", sessionID),
 		zap.Any("results", results),
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),

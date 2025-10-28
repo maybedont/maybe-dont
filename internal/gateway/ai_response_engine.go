@@ -84,7 +84,11 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	// Extract sessionID from context
+	sessionID, _ := GetSessionID(ctx)
+
 	e.logger.Info("Evaluating response with AI policies",
+		zap.String("session_id", sessionID),
 		zap.String("tool", req.Params.Name),
 		zap.Int("policy_count", len(e.policies)),
 	)
@@ -198,6 +202,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		result := <-resultChan
 		if result.err != nil {
 			e.logger.Error("Response policy evaluation failed",
+				zap.String("session_id", sessionID),
 				zap.String("policy", result.result.PolicyName),
 				zap.Error(result.err),
 			)
@@ -236,6 +241,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	}
 
 	e.logger.Info("Response evaluation complete",
+		zap.String("session_id", sessionID),
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.Int("deny_count", results.DenyCount),
