@@ -2,3 +2,4 @@ maybe-dont
 dist/
 kubectl-ai
 audit.log
+.maybedont-metrics

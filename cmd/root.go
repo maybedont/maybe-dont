@@ -6,13 +6,16 @@ import (
 	"os"
 
 	"github.com/maybedont/maybe-dont/internal/config"
+	"github.com/maybedont/maybe-dont/internal/metrics"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
 
 var (
 	cfgPath             string
 	cfg                 *config.Config
 	Logger              *config.SessionLogger
+	MetricsCollector    *metrics.Collector
 	aiRules             []byte
 	celRules            []byte
 	aiResponseRules     []byte
@@ -20,6 +23,8 @@ var (
 	version             string
 	commit              string
 	date                string
+	metricsDataset      string
+	metricsAPIToken     string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -49,6 +54,32 @@ and providing comprehensive audit logging.`,
 		}
 		Logger.Debug(context.Background(), "Logger created")
 
+		// Initialize metrics collector if metrics are configured at build time
+		if metricsDataset != "" && metricsAPIToken != "" {
+			MetricsCollector, err = metrics.NewCollector(
+				version,
+				metricsDataset,
+				metricsAPIToken,
+				Logger.GetZapLogger(),
+			)
+			if err != nil {
+				Logger.Warn(context.Background(), "Failed to initialize metrics collector", zap.Error(err))
+				// Don't fail startup if metrics initialization fails
+			} else {
+				// Set rule usage flags based on config
+				MetricsCollector.SetRuleUsage(
+					cfg.AIPolicyValidation.Enabled,
+					cfg.PolicyValidation.Enabled,
+					cfg.AIResponseValidation.Enabled,
+					cfg.ResponseValidation.Enabled,
+				)
+				// Set MCP server count
+				MetricsCollector.SetMCPServerCount(len(cfg.DownstreamMCPServers))
+			}
+		} else {
+			Logger.Info(context.Background(), "Metrics collection disabled: not configured at build time")
+		}
+
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -57,7 +88,7 @@ and providing comprehensive audit logging.`,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
-func Execute(VERSION string, COMMIT string, DATE string, AIRules []byte, CELRules []byte, AIResponseRules []byte, CELResponseRules []byte) {
+func Execute(VERSION string, COMMIT string, DATE string, METRICS_DATASET string, METRICS_API_TOKEN string, AIRules []byte, CELRules []byte, AIResponseRules []byte, CELResponseRules []byte) {
 	aiRules = AIRules
 	celRules = CELRules
 	aiResponseRules = AIResponseRules
@@ -65,6 +96,8 @@ func Execute(VERSION string, COMMIT string, DATE string, AIRules []byte, CELRule
 	version = VERSION
 	commit = COMMIT
 	date = DATE
+	metricsDataset = METRICS_DATASET
+	metricsAPIToken = METRICS_API_TOKEN
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

@@ -18,7 +18,7 @@ type SessionCapabilities struct {
 // SessionManager manages client sessions and their capabilities
 type SessionManager struct {
 	mu       sync.RWMutex
-	sessions map[string]*SessionCapabilities // sessionID -> capabilities
+	sessions map[string]*SessionCapabilities // requestID -> capabilities
 }
 
 // NewSessionManager creates a new session manager
@@ -28,8 +28,8 @@ func NewSessionManager() *SessionManager {
 	}
 }
 
-// GenerateSessionID creates a new unique session ID
-func GenerateSessionID() (string, error) {
+// GenerateRequestID creates a new unique request ID
+func GenerateRequestID() (string, error) {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
@@ -38,46 +38,46 @@ func GenerateSessionID() (string, error) {
 }
 
 // CreateSession creates a new session with empty capabilities
-func (sm *SessionManager) CreateSession(sessionID string) {
+func (sm *SessionManager) CreateSession(requestID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	sm.sessions[sessionID] = &SessionCapabilities{
+	sm.sessions[requestID] = &SessionCapabilities{
 		Capabilities: make(map[string]*mcp.ServerCapabilities),
 	}
 }
 
 // GetSessionCapabilities retrieves capabilities for a session
-func (sm *SessionManager) GetSessionCapabilities(sessionID string) (*SessionCapabilities, bool) {
+func (sm *SessionManager) GetSessionCapabilities(requestID string) (*SessionCapabilities, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	caps, ok := sm.sessions[sessionID]
+	caps, ok := sm.sessions[requestID]
 	return caps, ok
 }
 
 // SetClientCapabilities stores capabilities for a specific client in a session
-func (sm *SessionManager) SetClientCapabilities(sessionID, clientName string, capabilities *mcp.ServerCapabilities) {
+func (sm *SessionManager) SetClientCapabilities(requestID, clientName string, capabilities *mcp.ServerCapabilities) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	session, ok := sm.sessions[sessionID]
+	session, ok := sm.sessions[requestID]
 	if !ok {
 		session = &SessionCapabilities{
 			Capabilities: make(map[string]*mcp.ServerCapabilities),
 		}
-		sm.sessions[sessionID] = session
+		sm.sessions[requestID] = session
 	}
 
 	session.Capabilities[clientName] = capabilities
 }
 
 // GetClientCapabilities retrieves capabilities for a specific client in a session
-func (sm *SessionManager) GetClientCapabilities(sessionID, clientName string) (*mcp.ServerCapabilities, bool) {
+func (sm *SessionManager) GetClientCapabilities(requestID, clientName string) (*mcp.ServerCapabilities, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	session, ok := sm.sessions[sessionID]
+	session, ok := sm.sessions[requestID]
 	if !ok {
 		return nil, false
 	}
@@ -87,26 +87,26 @@ func (sm *SessionManager) GetClientCapabilities(sessionID, clientName string) (*
 }
 
 // HasClientCapabilities checks if capabilities have been loaded for a client in a session
-func (sm *SessionManager) HasClientCapabilities(sessionID, clientName string) bool {
-	_, ok := sm.GetClientCapabilities(sessionID, clientName)
+func (sm *SessionManager) HasClientCapabilities(requestID, clientName string) bool {
+	_, ok := sm.GetClientCapabilities(requestID, clientName)
 	return ok
 }
 
 // DeleteSession removes a session and all its capabilities
-func (sm *SessionManager) DeleteSession(sessionID string) {
+func (sm *SessionManager) DeleteSession(requestID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	delete(sm.sessions, sessionID)
+	delete(sm.sessions, requestID)
 }
 
-// GetSessionID extracts or creates a session ID from context
-func GetSessionID(ctx context.Context) (string, bool) {
-	sessionID, ok := ctx.Value(SessionIDKey).(string)
-	return sessionID, ok
+// GetRequestID extracts or creates a request ID from context
+func GetRequestID(ctx context.Context) (string, bool) {
+	requestID, ok := ctx.Value(RequestIDKey).(string)
+	return requestID, ok
 }
 
-// WithSessionID adds a session ID to the context
-func WithSessionID(ctx context.Context, sessionID string) context.Context {
-	return context.WithValue(ctx, SessionIDKey, sessionID)
+// WithRequestID adds a request ID to the context
+func WithRequestID(ctx context.Context, requestID string) context.Context {
+	return context.WithValue(ctx, RequestIDKey, requestID)
 }

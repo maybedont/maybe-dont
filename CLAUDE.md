@@ -97,7 +97,47 @@ The project uses Go's standard testing framework with testify for assertions. Ke
 
 Key environment variables for configuration:
 - `OPENAI_API_KEY` - OpenAI API key for AI validation (overrides config file setting)
+- `MAYBEDONT_METRICS_OPTOUT` - Set to any value to disable anonymous usage metrics collection
 - Environment variables follow the pattern: `MCP_GATEWAY_{CONFIG_PATH}` where CONFIG_PATH uses underscores
+
+## Anonymous Usage Metrics
+
+The gateway collects anonymous usage metrics to help improve the product. **No personal data or sensitive information is ever collected or transmitted.**
+
+### What is Collected
+
+The following anonymized metrics are collected:
+- **Installation ID**: A randomly generated unique identifier (32-character hex string) that is created on first run and persisted locally
+- **Version**: The version of the gateway binary
+- **Tool Invocations**: Count of tool calls processed by the gateway
+- **Gateway Starts**: Number of times the gateway has been started
+- **MCP Server Count**: Number of configured downstream MCP servers
+- **Rule Usage Flags**: Boolean flags indicating if AI rules, CEL rules, AI response rules, and CEL response rules are enabled
+
+### How It Works
+
+- Metrics are stored locally in `~/.maybe-dont/.maybedont-metrics` (or `./.maybedont-metrics` if home directory is unavailable)
+- Metrics are reported once per day (24-hour interval) to Axiom if configured
+- Reporting is done via HTTPS POST to `https://api.axiom.co/v1/datasets/{dataset_name}/ingest`
+- The gateway continues to function normally even if metrics reporting fails
+
+### Opting Out
+
+To disable metrics collection entirely, set the `MAYBEDONT_METRICS_OPTOUT` environment variable:
+
+```bash
+export MAYBEDONT_METRICS_OPTOUT=1
+./maybe-dont start
+```
+
+When opted out:
+- No installation ID is generated
+- No metrics are tracked or stored
+- No network requests are made for metrics reporting
+
+### Configuration
+
+Metrics configuration is built into the binary at compile time and cannot be modified by users. This ensures consistent metrics collection across all installations.
 
 ## Environment Variable Substitution
 

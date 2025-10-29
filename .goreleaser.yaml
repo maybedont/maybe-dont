@@ -7,6 +7,10 @@ before:
     # you may remove this if you don't need go generate
     - go generate ./...
 
+upx:
+  - enabled: true
+    compress: best
+
 builds:
   - env:
       - CGO_ENABLED=0
@@ -14,6 +18,16 @@ builds:
       - linux
       - windows
       - darwin
+    gobinary: garble
+    command: "-literals"
+    flags: [ "-tiny", "-seed=random", "build"]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+      - -X main.metricsDataset={{.Env.METRICS_DATASET}}
+      - -X main.metricsAPIToken={{.Env.METRICS_API_TOKEN}}
 
 archives:
   - formats: [tar.gz]

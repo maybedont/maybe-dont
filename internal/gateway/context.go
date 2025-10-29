@@ -1,6 +1,10 @@
 package gateway
 
-import "context"
+import (
+	"context"
+
+	"github.com/maybedont/maybe-dont/internal/config"
+)
 
 // contextKey is a custom type for context keys to avoid collisions
 type contextKey string
@@ -9,11 +13,12 @@ const (
 	// ServiceCredentialsKey stores per-client credentials extracted from request headers
 	// Value type: *ServiceCredentials
 	ServiceCredentialsKey contextKey = "service_credentials"
-
-	// SessionIDKey stores the session ID for tracking capabilities per session
-	// Value type: string
-	SessionIDKey contextKey = "session_id"
 )
+
+// RequestIDKey stores the request ID for tracking capabilities per session
+// Value type: string
+// Note: We use the same key as config.RequestIDKey to ensure consistency across packages
+var RequestIDKey = config.RequestIDKey
 
 // ServiceCredentials stores authentication credentials for all downstream MCP clients.
 // It maps client names to their respective credential sets.
