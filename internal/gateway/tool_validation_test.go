@@ -134,9 +134,10 @@ func TestValidationChain_ErrorHandling(t *testing.T) {
 
 func TestValidationChain_RealHandlers(t *testing.T) {
 	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
 
 	// Create CEL engine with simple policies
-	celEngine, err := NewCELPolicyEngine(logger)
+	celEngine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 	require.NoError(t, err)
 
 	policies := []config.CELPolicy{
@@ -159,8 +160,8 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 
 	// Create validation chain with real handlers
 	chain := NewToolValidationChain(
-		NewToolCELValidationHandler(logger, celEngine),
-		NewToolLoggingHandler(logger),
+		NewToolCELValidationHandler(sessionLogger, celEngine),
+		NewToolLoggingHandler(sessionLogger),
 	)
 
 	tests := []struct {
@@ -247,7 +248,8 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 
 func TestLoggingHandler_Isolation(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	handler := NewToolLoggingHandler(logger)
+	sessionLogger := config.NewSessionLogger(logger)
+	handler := NewToolLoggingHandler(sessionLogger)
 
 	req := mcp.CallToolRequest{
 		Request: mcp.Request{Method: "tools/call"},
@@ -272,7 +274,8 @@ func TestLoggingHandler_Isolation(t *testing.T) {
 
 func TestCELValidationHandler_Isolation(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	engine, err := NewCELPolicyEngine(logger)
+	sessionLogger := config.NewSessionLogger(logger)
+	engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 	require.NoError(t, err)
 
 	// Load a simple policy
@@ -287,7 +290,7 @@ func TestCELValidationHandler_Isolation(t *testing.T) {
 	err = engine.LoadPolicies(policies)
 	require.NoError(t, err)
 
-	handler := NewToolCELValidationHandler(logger, engine)
+	handler := NewToolCELValidationHandler(sessionLogger, engine)
 
 	req := mcp.CallToolRequest{
 		Request: mcp.Request{Method: "tools/call"},
