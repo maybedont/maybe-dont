@@ -13,6 +13,7 @@ import (
 
 func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 	logger := zap.NewNop()
+	sessionLogger := config.NewSessionLogger(logger)
 
 	tests := []struct {
 		name           string
@@ -121,7 +122,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine, err := NewCELResponsePolicyEngine(logger)
+			engine, err := NewCELResponsePolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
 			err = engine.LoadPolicies(tt.policies)
@@ -143,6 +144,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 
 func TestCELResponsePolicyEngine_Redaction(t *testing.T) {
 	logger := zap.NewNop()
+	sessionLogger := config.NewSessionLogger(logger)
 
 	tests := []struct {
 		name              string
@@ -172,7 +174,7 @@ func TestCELResponsePolicyEngine_Redaction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			engine, err := NewCELResponsePolicyEngine(logger)
+			engine, err := NewCELResponsePolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
 			redacted := engine.applyRedaction(tt.content, tt.pattern, tt.replacement)

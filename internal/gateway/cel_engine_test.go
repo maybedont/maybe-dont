@@ -13,7 +13,8 @@ import (
 
 func TestCELPolicyEngine_Evaluate(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	engine, err := NewCELPolicyEngine(logger)
+	sessionLogger := config.NewSessionLogger(logger)
+	engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 	require.NoError(t, err)
 
 	policies := []config.CELPolicy{
