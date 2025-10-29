@@ -1,3 +1,25 @@
+## v0.4.0 (2025-10-28)
+
+### Feat
+
+- log sessionId
+- add pass-through authentication infrastructure
+- add response validation
+
+### Fix
+
+- lint and build
+- clean up logging
+- clean up logging
+- loggni with context
+
+## v0.3.2 (2025-10-12)
+
+### Fix
+
+- handle meta properly
+- update libs
+
 ## v0.3.1 (2025-07-21)
 
 ### Fix
