@@ -39,14 +39,14 @@ func (g *Gateway) initServer(ctx context.Context) error {
 
 // handleInitializeRequest handles the initialize request and performs lazy capability loading
 func (g *Gateway) handleInitializeRequest(ctx context.Context, id any, req *mcp.InitializeRequest) {
-	// Extract session ID from context
-	sessionID, hasSessionID := GetSessionID(ctx)
-	if !hasSessionID {
-		g.logger.Warn(ctx, "No session ID found in context for initialize request")
+	// Extract request ID from context
+	requestID, hasRequestID := GetRequestID(ctx)
+	if !hasRequestID {
+		g.logger.Warn(ctx, "No request ID found in context for initialize request")
 		return
 	}
 
-	g.logger.Info(ctx, "Handling initialize request", zap.String("session_id", sessionID))
+	g.logger.Info(ctx, "Handling initialize request", zap.String("request_id", requestID))
 
 	// Get list of clients that require lazy initialization
 	lazyClients := g.clientManager.GetLazyInitClients()
@@ -54,15 +54,15 @@ func (g *Gateway) handleInitializeRequest(ctx context.Context, id any, req *mcp.
 	// If there are lazy init clients, check their capabilities synchronously
 	if len(lazyClients) > 0 {
 		g.logger.Info(ctx, "Checking capabilities for lazy init clients",
-			zap.String("session_id", sessionID),
+			zap.String("request_id", requestID),
 			zap.Int("client_count", len(lazyClients)))
 
 		for _, clientName := range lazyClients {
-			clientInfo, err := g.clientManager.CheckCapabilitiesForSession(ctx, clientName, sessionID)
+			clientInfo, err := g.clientManager.CheckCapabilitiesForSession(ctx, clientName, requestID)
 			if err != nil {
 				g.logger.Error(ctx, "Failed to check capabilities for client",
 					zap.String("client", clientName),
-					zap.String("session_id", sessionID),
+					zap.String("request_id", requestID),
 					zap.Error(err))
 				// Note: We can't return an error from this hook, but the error will be
 				// reflected when the client tries to use tools that failed to initialize
@@ -81,7 +81,7 @@ func (g *Gateway) handleInitializeRequest(ctx context.Context, id any, req *mcp.
 
 			g.logger.Info(ctx, "Dynamically registered client capabilities",
 				zap.String("client", clientName),
-				zap.String("session_id", sessionID))
+				zap.String("request_id", requestID))
 		}
 	}
 }
@@ -404,28 +404,33 @@ func (g *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.C
 }
 
 // extractAuthFromRequest extracts authentication credentials from HTTP request headers
-// and stores them in context for pass-through authentication. It also generates a session ID
+// and stores them in context for pass-through authentication. It also generates a request ID
 // for tracking capabilities per session.
 func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) context.Context {
-	// Generate or extract session ID
-	sessionID := r.Header.Get("X-Session-ID")
-	if sessionID == "" {
-		// Generate new session ID if not provided
+	// Generate or extract request ID
+	requestID := r.Header.Get("X-Request-ID")
+	if requestID == "" {
+		// Generate new request ID if not provided
 		var err error
-		sessionID, err = GenerateSessionID()
+		requestID, err = GenerateRequestID()
 		if err != nil {
-			g.logger.Error(context.Background(), "Failed to generate session ID", zap.Error(err))
-			sessionID = "unknown"
+			g.logger.Error(context.Background(), "Failed to generate request ID", zap.Error(err))
+			requestID = "unknown"
 		}
 	}
 
-	// Store session ID in context first so it can be used in logging
-	ctx = WithSessionID(ctx, sessionID)
+	// Record the session in metrics
+	if g.metricsCollector != nil {
+		g.metricsCollector.RecordRequest(requestID)
+	}
 
-	if r.Header.Get("X-Session-ID") == "" {
-		g.logger.Debug(ctx, "Generated new session ID")
+	// Store request ID in context first so it can be used in logging
+	ctx = WithRequestID(ctx, requestID)
+
+	if r.Header.Get("X-Request-ID") == "" {
+		g.logger.Debug(ctx, "Generated new request ID")
 	} else {
-		g.logger.Debug(ctx, "Using existing session ID")
+		g.logger.Debug(ctx, "Using existing request ID")
 	}
 
 	// Create credentials storage

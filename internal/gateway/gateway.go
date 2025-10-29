@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/maybedont/maybe-dont/internal/config"
+	"github.com/maybedont/maybe-dont/internal/metrics"
 	"go.uber.org/zap"
 )
 
@@ -25,13 +26,14 @@ func (e *PolicyDeniedError) Error() string {
 
 // Gateway represents an MCP security gateway instance
 type Gateway struct {
-	logger        *config.SessionLogger
-	auditLogger   *config.SessionLogger
-	config        *config.Config
-	server        *server.MCPServer
-	clientManager *ClientManager
-	mu            sync.RWMutex
-	stopChan      chan struct{}
+	logger                  *config.SessionLogger
+	auditLogger             *config.SessionLogger
+	config                  *config.Config
+	server                  *server.MCPServer
+	clientManager           *ClientManager
+	mu                      sync.RWMutex
+	stopChan                chan struct{}
+	metricsCollector        *metrics.Collector
 	// Validation chain for request processing
 	validationChain *ToolValidationChain
 	// CEL policy engine
@@ -220,6 +222,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 	return nil
 }
 
+// SetMetricsCollector sets the metrics collector for tracking usage
+func (g *Gateway) SetMetricsCollector(collector *metrics.Collector) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.metricsCollector = collector
+}
+
 // Stop gracefully shuts down the gateway
 func (g *Gateway) Stop(ctx context.Context) error {
 	g.mu.Lock()
@@ -242,6 +251,11 @@ func (g *Gateway) Stop(ctx context.Context) error {
 
 // Tool handler function
 func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Track tool invocation in metrics
+	if g.metricsCollector != nil {
+		g.metricsCollector.IncrementToolInvocations()
+	}
+
 	// Create audit log entry
 	auditLog := map[string]interface{}{
 		"request": req,

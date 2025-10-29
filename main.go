@@ -13,6 +13,10 @@ var (
 	commit = "n/a"
 	// date is set during build
 	date = "n/a"
+	// metricsDataset is set during build (default Axiom dataset for metrics)
+	metricsDataset = ""
+	// metricsAPIToken is set during build (default Axiom API token for metrics)
+	metricsAPIToken = ""
 
 	//go:embed ai_rules.yaml
 	aiRules []byte
@@ -28,5 +32,5 @@ var (
 )
 
 func main() {
-	cmd.Execute(version, commit, date, aiRules, celRules, aiResponseRules, celResponseRules)
+	cmd.Execute(version, commit, date, metricsDataset, metricsAPIToken, aiRules, celRules, aiResponseRules, celResponseRules)
 }

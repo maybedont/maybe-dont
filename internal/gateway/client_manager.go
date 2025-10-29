@@ -253,7 +253,7 @@ func (cm *ClientManager) checkCapabilities(ctx context.Context, clientInfo *Clie
 // CheckCapabilitiesForSession checks capabilities for a client in a specific session
 // This is used for lazy initialization of pass-through auth clients
 // Returns the ClientInfo with loaded capabilities
-func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, clientName, sessionID string) (*ClientInfo, error) {
+func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, clientName, requestID string) (*ClientInfo, error) {
 	cm.mu.RLock()
 	clientInfo, exists := cm.clients[clientName]
 	cm.mu.RUnlock()
@@ -263,7 +263,7 @@ func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, client
 	}
 
 	// Check if capabilities already loaded for this session
-	if cm.sessionManager.HasClientCapabilities(sessionID, clientName) {
+	if cm.sessionManager.HasClientCapabilities(requestID, clientName) {
 		cm.logger.Debug(ctx, "Capabilities already loaded for session",
 			zap.String("client", clientName))
 		// Return nil to indicate already loaded
@@ -271,7 +271,7 @@ func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, client
 	}
 
 	cm.logger.Info(ctx, "Checking capabilities for session",
-		zap.String("session_id", sessionID),
+		zap.String("request_id", requestID),
 		zap.String("client", clientName))
 
 	// Use a temporary ClientInfo to avoid modifying the shared instance
@@ -287,10 +287,10 @@ func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, client
 	}
 
 	// Store capabilities in session manager
-	cm.sessionManager.SetClientCapabilities(sessionID, clientName, sessionClientInfo.Capabilities)
+	cm.sessionManager.SetClientCapabilities(requestID, clientName, sessionClientInfo.Capabilities)
 
 	cm.logger.Info(ctx, "Successfully loaded capabilities for session",
-		zap.String("session_id", sessionID),
+		zap.String("request_id", requestID),
 		zap.String("client", clientName),
 		zap.Int("tools", len(sessionClientInfo.Tools)),
 		zap.Int("prompts", len(sessionClientInfo.Prompts)),

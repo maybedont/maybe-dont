@@ -23,10 +23,25 @@ The server will listen for MCP client connections and forward them to the config
 		defer cancel()
 
 		Logger.Info(ctx, "Starting MCP security gateway")
+
+		// Increment gateway starts metric and report immediately
+		if MetricsCollector != nil {
+			MetricsCollector.IncrementGatewayStarts()
+			// Always send metrics on gateway start
+			if err := MetricsCollector.Report(ctx); err != nil {
+				Logger.Warn(ctx, "Failed to report metrics on gateway start", zap.Error(err))
+			}
+		}
+
 		// Create gateway instance
 		p, err := gateway.New(ctx, cfg, Logger)
 		if err != nil {
 			return fmt.Errorf("failed to create gateway: %w", err)
+		}
+
+		// Pass metrics collector to gateway
+		if MetricsCollector != nil {
+			p.SetMetricsCollector(MetricsCollector)
 		}
 
 		// Handle shutdown signals
@@ -50,6 +65,13 @@ The server will listen for MCP client connections and forward them to the config
 		// Create a new context for shutdown logging
 		shutdownCtx := context.Background()
 		Logger.Info(shutdownCtx, "Shutting down gateway")
+
+		// Close metrics collector before shutdown (stops background flush and performs final flush)
+		if MetricsCollector != nil {
+			if err := MetricsCollector.Close(); err != nil {
+				Logger.Warn(shutdownCtx, "Failed to close metrics collector on shutdown", zap.Error(err))
+			}
+		}
 
 		// Stop the gateway
 		if err := p.Stop(shutdownCtx); err != nil {
