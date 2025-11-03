@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -239,6 +240,19 @@ func LoadAIResponsePoliciesFromFile(path string) ([]AIResponsePolicy, error) {
 	return policies.Rules, nil
 }
 
+// resolveRulesFilePath resolves a rules file path relative to the config directory
+// If the path is empty or absolute, it returns the path as-is
+// If the path is relative, it joins it with the config directory
+func resolveRulesFilePath(rulesFile, configDir string) string {
+	if rulesFile == "" {
+		return ""
+	}
+	if filepath.IsAbs(rulesFile) {
+		return rulesFile
+	}
+	return filepath.Join(configDir, rulesFile)
+}
+
 // expandEnvironmentVariables recursively expands environment variables in string fields
 // of a struct using os.ExpandEnv. This processes ${VAR} and $VAR syntax.
 func expandEnvironmentVariables(v reflect.Value) {
@@ -337,6 +351,9 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 		return nil, fmt.Errorf("error reading config from path %s: %w", configPath, err)
 	}
 
+	// Get the directory containing the config file for resolving relative rules file paths
+	configFileDir := filepath.Dir(v.ConfigFileUsed())
+
 	// Unmarshal config
 	var config Config
 	if err := v.Unmarshal(&config); err != nil {
@@ -363,7 +380,8 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 
 	// Load policies from rules file if specified, otherwise use embedded rules
 	if config.PolicyValidation.RulesFile != "" {
-		policies, err := LoadCELPoliciesFromFile(config.PolicyValidation.RulesFile)
+		resolvedPath := resolveRulesFilePath(config.PolicyValidation.RulesFile, configFileDir)
+		policies, err := LoadCELPoliciesFromFile(resolvedPath)
 		if err != nil {
 			return nil, fmt.Errorf("error loading policies from file: %w", err)
 		}
@@ -380,7 +398,8 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 
 	// Load AI policies from rules file if specified, otherwise use embedded rules
 	if config.AIPolicyValidation.RulesFile != "" {
-		aiPolicies, err := LoadAIPoliciesFromFile(config.AIPolicyValidation.RulesFile)
+		resolvedPath := resolveRulesFilePath(config.AIPolicyValidation.RulesFile, configFileDir)
+		aiPolicies, err := LoadAIPoliciesFromFile(resolvedPath)
 		if err != nil {
 			return nil, fmt.Errorf("error loading AI policies from file: %w", err)
 		}
@@ -397,7 +416,8 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 
 	// Load response policies from rules file if specified, otherwise use embedded rules
 	if config.ResponseValidation.RulesFile != "" {
-		responsePolicies, err := LoadCELResponsePoliciesFromFile(config.ResponseValidation.RulesFile)
+		resolvedPath := resolveRulesFilePath(config.ResponseValidation.RulesFile, configFileDir)
+		responsePolicies, err := LoadCELResponsePoliciesFromFile(resolvedPath)
 		if err != nil {
 			return nil, fmt.Errorf("error loading response policies from file: %w", err)
 		}
@@ -414,7 +434,8 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 
 	// Load AI response policies from rules file if specified, otherwise use embedded rules
 	if config.AIResponseValidation.RulesFile != "" {
-		aiResponsePolicies, err := LoadAIResponsePoliciesFromFile(config.AIResponseValidation.RulesFile)
+		resolvedPath := resolveRulesFilePath(config.AIResponseValidation.RulesFile, configFileDir)
+		aiResponsePolicies, err := LoadAIResponsePoliciesFromFile(resolvedPath)
 		if err != nil {
 			return nil, fmt.Errorf("error loading AI response policies from file: %w", err)
 		}
