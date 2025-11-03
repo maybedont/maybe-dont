@@ -31,6 +31,8 @@ jobs:
         with:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
+      - name: Install garble
+        run: go install mvdan.cc/garble@latest
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
