@@ -18,7 +18,7 @@ builds:
       - linux
       - windows
       - darwin
-    gobinary: garble
+    tool: garble
     command: "-literals"
     flags: [ "-tiny", "-seed=random", "build"]
     ldflags:
