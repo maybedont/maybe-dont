@@ -1,3 +1,9 @@
+## v0.5.1 (2025-11-03)
+
+### Fix
+
+- fix rules paths to be relative to config path
+
 ## v0.5.0 (2025-11-03)
 
 ### Feat
