@@ -23,8 +23,7 @@ var (
 	version             string
 	commit              string
 	date                string
-	metricsDataset      string
-	metricsAPIToken     string
+	metricsConfig       metrics.Config
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -55,11 +54,10 @@ and providing comprehensive audit logging.`,
 		Logger.Debug(context.Background(), "Logger created")
 
 		// Initialize metrics collector if metrics are configured at build time
-		if metricsDataset != "" && metricsAPIToken != "" {
+		if metricsConfig.Dataset != "" && metricsConfig.APIToken != "" {
 			MetricsCollector, err = metrics.NewCollector(
 				version,
-				metricsDataset,
-				metricsAPIToken,
+				metricsConfig,
 				Logger.GetZapLogger(),
 			)
 			if err != nil {
@@ -88,7 +86,7 @@ and providing comprehensive audit logging.`,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
-func Execute(VERSION string, COMMIT string, DATE string, METRICS_DATASET string, METRICS_API_TOKEN string, AIRules []byte, CELRules []byte, AIResponseRules []byte, CELResponseRules []byte) {
+func Execute(VERSION string, COMMIT string, DATE string, metricsCfg metrics.Config, AIRules []byte, CELRules []byte, AIResponseRules []byte, CELResponseRules []byte) {
 	aiRules = AIRules
 	celRules = CELRules
 	aiResponseRules = AIResponseRules
@@ -96,8 +94,7 @@ func Execute(VERSION string, COMMIT string, DATE string, METRICS_DATASET string,
 	version = VERSION
 	commit = COMMIT
 	date = DATE
-	metricsDataset = METRICS_DATASET
-	metricsAPIToken = METRICS_API_TOKEN
+	metricsConfig = metricsCfg
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

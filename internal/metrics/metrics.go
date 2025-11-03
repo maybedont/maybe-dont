@@ -30,6 +30,14 @@ const (
 	AxiomIngestURL = "https://api.axiom.co/v1/datasets"
 )
 
+// Config holds the configuration for metrics collection
+type Config struct {
+	// Dataset is the Axiom dataset name to send metrics to
+	Dataset string
+	// APIToken is the Axiom API token for authentication
+	APIToken string
+}
+
 // Collector manages anonymous usage metrics collection
 type Collector struct {
 	mu                 sync.RWMutex
@@ -88,7 +96,7 @@ type MetricsPayload struct {
 }
 
 // NewCollector creates a new metrics collector
-func NewCollector(version string, datasetName string, apiToken string, logger *zap.Logger) (*Collector, error) {
+func NewCollector(version string, cfg Config, logger *zap.Logger) (*Collector, error) {
 	// Check if user has opted out
 	optedOut := os.Getenv("MAYBEDONT_METRICS_OPTOUT") != ""
 
@@ -110,8 +118,8 @@ func NewCollector(version string, datasetName string, apiToken string, logger *z
 		version:           version,
 		reportingInterval: DefaultReportingInterval,
 		flushInterval:     DefaultFlushInterval,
-		datasetName:       datasetName,
-		apiToken:          apiToken,
+		datasetName:       cfg.Dataset,
+		apiToken:          cfg.APIToken,
 		optedOut:          optedOut,
 		configFilePath:    configFilePath,
 		stateFilePath:     stateFilePath,
