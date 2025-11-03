@@ -4,6 +4,7 @@ import (
 	_ "embed"
 
 	"github.com/maybedont/maybe-dont/cmd"
+	"github.com/maybedont/maybe-dont/internal/metrics"
 )
 
 var (
@@ -32,5 +33,11 @@ var (
 )
 
 func main() {
-	cmd.Execute(version, commit, date, metricsDataset, metricsAPIToken, aiRules, celRules, aiResponseRules, celResponseRules)
+	// Create metrics configuration from build-time variables
+	metricsCfg := metrics.Config{
+		Dataset:  metricsDataset,
+		APIToken: metricsAPIToken,
+	}
+
+	cmd.Execute(version, commit, date, metricsCfg, aiRules, celRules, aiResponseRules, celResponseRules)
 }

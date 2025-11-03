@@ -18,6 +18,10 @@ import (
 
 func TestNewCollector(t *testing.T) {
 	logger := zap.NewNop()
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
 
 	t.Run("creates collector with new installation ID", func(t *testing.T) {
 		// Use temp directory for state file
@@ -26,7 +30,7 @@ func TestNewCollector(t *testing.T) {
 		os.Setenv("HOME", tmpDir)
 		defer os.Setenv("HOME", originalHome)
 
-		c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+		c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 		require.NotNil(t, c)
 		defer c.Close()
@@ -45,7 +49,7 @@ func TestNewCollector(t *testing.T) {
 		os.Setenv("MAYBEDONT_METRICS_OPTOUT", "1")
 		defer os.Unsetenv("MAYBEDONT_METRICS_OPTOUT")
 
-		c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+		c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 		assert.True(t, c.optedOut)
 	})
@@ -57,13 +61,13 @@ func TestNewCollector(t *testing.T) {
 		defer os.Setenv("HOME", originalHome)
 
 		// Create first collector
-		c1, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+		c1, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 		id1 := c1.installationID
 		c1.Close()
 
 		// Create second collector - should have same ID
-		c2, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+		c2, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 		defer c2.Close()
 		id2 := c2.installationID
@@ -79,7 +83,12 @@ func TestIncrementToolInvocations(t *testing.T) {
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", originalHome)
 
-	c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -97,7 +106,12 @@ func TestIncrementGatewayStarts(t *testing.T) {
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", originalHome)
 
-	c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -115,7 +129,12 @@ func TestSetMCPServerCount(t *testing.T) {
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", originalHome)
 
-	c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -130,7 +149,12 @@ func TestSetRuleUsage(t *testing.T) {
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", originalHome)
 
-	c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -150,7 +174,12 @@ func TestShouldReport(t *testing.T) {
 		os.Setenv("HOME", tmpDir)
 		defer os.Setenv("HOME", originalHome)
 
-		c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+		cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 		defer c.Close()
 
@@ -164,7 +193,12 @@ func TestShouldReport(t *testing.T) {
 		os.Setenv("HOME", tmpDir)
 		defer os.Setenv("HOME", originalHome)
 
-		c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+		cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 		defer c.Close()
 
@@ -186,7 +220,12 @@ func TestShouldReport(t *testing.T) {
 		os.Setenv("MAYBEDONT_METRICS_OPTOUT", "1")
 		defer os.Unsetenv("MAYBEDONT_METRICS_OPTOUT")
 
-		c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+		cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 
 		assert.False(t, c.ShouldReport())
@@ -216,7 +255,12 @@ func TestReport(t *testing.T) {
 		os.Setenv("HOME", tmpDir)
 		defer os.Setenv("HOME", originalHome)
 
-		c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+		cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 
 		// Set some metrics
@@ -278,7 +322,12 @@ func TestReport(t *testing.T) {
 		os.Setenv("MAYBEDONT_METRICS_OPTOUT", "1")
 		defer os.Unsetenv("MAYBEDONT_METRICS_OPTOUT")
 
-		c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+		cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 
 		err = c.Report(context.Background())
@@ -291,7 +340,12 @@ func TestReport(t *testing.T) {
 		os.Setenv("HOME", tmpDir)
 		defer os.Setenv("HOME", originalHome)
 
-		c, err := NewCollector("v1.0.0", "", "", logger)
+		cfg := Config{
+			Dataset:  "",
+			APIToken: "",
+		}
+
+		c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 
 		err = c.Report(context.Background())
@@ -307,7 +361,12 @@ func TestStatePersistence(t *testing.T) {
 	defer os.Setenv("HOME", originalHome)
 
 	// Create first collector and set some metrics
-	c1, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c1, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	c1.IncrementToolInvocations()
 	c1.IncrementToolInvocations()
@@ -318,7 +377,7 @@ func TestStatePersistence(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create second collector - should load the state
-	c2, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	c2, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	defer c2.Close()
 
@@ -337,7 +396,12 @@ func TestOptedOutDoesNotTrack(t *testing.T) {
 	os.Setenv("MAYBEDONT_METRICS_OPTOUT", "1")
 	defer os.Unsetenv("MAYBEDONT_METRICS_OPTOUT")
 
-	c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 
 	// Try to increment metrics
@@ -363,7 +427,12 @@ func TestBackgroundFlush(t *testing.T) {
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", originalHome)
 
-	c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	defer c.Close()
 
@@ -378,7 +447,7 @@ func TestBackgroundFlush(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Load state from disk
-	c2, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	c2, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	defer c2.Close()
 
@@ -394,7 +463,12 @@ func TestClose(t *testing.T) {
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", originalHome)
 
-	c, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 
 	// Increment some metrics
@@ -406,7 +480,7 @@ func TestClose(t *testing.T) {
 	require.NoError(t, err)
 
 	// Load state from disk
-	c2, err := NewCollector("v1.0.0", "test-dataset", "test-token", logger)
+	c2, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	defer c2.Close()
 
