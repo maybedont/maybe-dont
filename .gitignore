@@ -3,3 +3,4 @@ dist/
 kubectl-ai
 audit.log
 .maybedont-metrics
+build
