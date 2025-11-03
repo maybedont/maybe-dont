@@ -1,3 +1,13 @@
+## v0.5.0 (2025-11-03)
+
+### Feat
+
+- add metrics collection
+
+### Fix
+
+- use garble without const
+
 ## v0.4.0 (2025-10-28)
 
 ### Feat
