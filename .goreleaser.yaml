@@ -50,6 +50,9 @@ archives:
       - src: gateway-config.yaml
         info:
           mode: 0644
+      - src: "*.rules.yaml"
+        info:
+          mode: 0644
       - LICENSE
 dockers:
   - image_templates:
@@ -77,13 +80,13 @@ npms:
     # URL to report bugs.
     bugs: ""
 
-    # Additional files/globs you want to add to the package.
-    #
-    # Default: ["README*", "LICENSE*"]
-    # Templates: allowed.
-    extra_files:
-      - glob: "gateway-config.yaml"
-      - glob: "*.rules.yaml"
+      ## Additional files/globs you want to add to the package.
+      ##
+      ## Default: ["README*", "LICENSE*"]
+      ## Templates: allowed.
+      #extra_files:
+      #  - glob: "gateway-config.yaml"
+      #  - glob: "*.rules.yaml"
 
     access: public
 
