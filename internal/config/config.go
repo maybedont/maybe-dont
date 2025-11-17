@@ -322,7 +322,7 @@ func expandEnvironmentVariables(v reflect.Value) {
 }
 
 // LoadConfig loads the configuration from all sources
-func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte, defaultAIResponseRules []byte, defaultCELResponseRules []byte) (*Config, error) {
+func LoadConfig(configPath string) (*Config, error) {
 	// Use the global viper instance to ensure flag bindings work
 	v := viper.GetViper()
 
@@ -378,76 +378,56 @@ func LoadConfig(configPath string, defaultAIRules []byte, defaultCELRules []byte
 		config.AIPolicyValidation.APIKey = apiKey
 	}
 
-	// Load policies from rules file if specified, otherwise use embedded rules
-	if config.PolicyValidation.RulesFile != "" {
+	// Load CEL request policies from rules file
+	if config.PolicyValidation.Enabled {
+		if config.PolicyValidation.RulesFile == "" {
+			return nil, fmt.Errorf("policy_validation is enabled but rules_file is not specified")
+		}
 		resolvedPath := resolveRulesFilePath(config.PolicyValidation.RulesFile, configFileDir)
 		policies, err := LoadCELPoliciesFromFile(resolvedPath)
 		if err != nil {
-			return nil, fmt.Errorf("error loading policies from file: %w", err)
+			return nil, fmt.Errorf("error loading CEL policies from file: %w", err)
 		}
 		config.PolicyValidation.Rules = policies
-	} else if defaultCELRules != nil {
-		var policies struct {
-			Rules []CELPolicy `yaml:"rules"`
-		}
-		if err := yaml.Unmarshal(defaultCELRules, &policies); err != nil {
-			return nil, fmt.Errorf("error unmarshaling default CEL rules: %w", err)
-		}
-		config.PolicyValidation.Rules = policies.Rules
 	}
 
-	// Load AI policies from rules file if specified, otherwise use embedded rules
-	if config.AIPolicyValidation.RulesFile != "" {
+	// Load AI request policies from rules file
+	if config.AIPolicyValidation.Enabled {
+		if config.AIPolicyValidation.RulesFile == "" {
+			return nil, fmt.Errorf("ai_validation is enabled but rules_file is not specified")
+		}
 		resolvedPath := resolveRulesFilePath(config.AIPolicyValidation.RulesFile, configFileDir)
 		aiPolicies, err := LoadAIPoliciesFromFile(resolvedPath)
 		if err != nil {
 			return nil, fmt.Errorf("error loading AI policies from file: %w", err)
 		}
 		config.AIPolicyValidation.Rules = aiPolicies
-	} else if defaultAIRules != nil {
-		var policies struct {
-			Rules []AIPolicy `yaml:"rules"`
-		}
-		if err := yaml.Unmarshal(defaultAIRules, &policies); err != nil {
-			return nil, fmt.Errorf("error unmarshaling default AI rules: %w", err)
-		}
-		config.AIPolicyValidation.Rules = policies.Rules
 	}
 
-	// Load response policies from rules file if specified, otherwise use embedded rules
-	if config.ResponseValidation.RulesFile != "" {
+	// Load CEL response policies from rules file
+	if config.ResponseValidation.Enabled {
+		if config.ResponseValidation.RulesFile == "" {
+			return nil, fmt.Errorf("response_validation is enabled but rules_file is not specified")
+		}
 		resolvedPath := resolveRulesFilePath(config.ResponseValidation.RulesFile, configFileDir)
 		responsePolicies, err := LoadCELResponsePoliciesFromFile(resolvedPath)
 		if err != nil {
-			return nil, fmt.Errorf("error loading response policies from file: %w", err)
+			return nil, fmt.Errorf("error loading CEL response policies from file: %w", err)
 		}
 		config.ResponseValidation.Rules = responsePolicies
-	} else if defaultCELResponseRules != nil {
-		var policies struct {
-			Rules []CELResponsePolicy `yaml:"rules"`
-		}
-		if err := yaml.Unmarshal(defaultCELResponseRules, &policies); err != nil {
-			return nil, fmt.Errorf("error unmarshaling default CEL response rules: %w", err)
-		}
-		config.ResponseValidation.Rules = policies.Rules
 	}
 
-	// Load AI response policies from rules file if specified, otherwise use embedded rules
-	if config.AIResponseValidation.RulesFile != "" {
+	// Load AI response policies from rules file
+	if config.AIResponseValidation.Enabled {
+		if config.AIResponseValidation.RulesFile == "" {
+			return nil, fmt.Errorf("ai_response_validation is enabled but rules_file is not specified")
+		}
 		resolvedPath := resolveRulesFilePath(config.AIResponseValidation.RulesFile, configFileDir)
 		aiResponsePolicies, err := LoadAIResponsePoliciesFromFile(resolvedPath)
 		if err != nil {
 			return nil, fmt.Errorf("error loading AI response policies from file: %w", err)
 		}
 		config.AIResponseValidation.Rules = aiResponsePolicies
-	} else if defaultAIResponseRules != nil {
-		var policies struct {
-			Rules []AIResponsePolicy `yaml:"rules"`
-		}
-		if err := yaml.Unmarshal(defaultAIResponseRules, &policies); err != nil {
-			return nil, fmt.Errorf("error unmarshaling default AI response rules: %w", err)
-		}
-		config.AIResponseValidation.Rules = policies.Rules
 	}
 
 	// Normalize client configs - handle field aliases

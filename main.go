@@ -1,8 +1,6 @@
 package main
 
 import (
-	_ "embed"
-
 	"github.com/maybedont/maybe-dont/cmd"
 	"github.com/maybedont/maybe-dont/internal/metrics"
 )
@@ -18,18 +16,6 @@ var (
 	metricsDataset = ""
 	// metricsAPIToken is set during build (default Axiom API token for metrics)
 	metricsAPIToken = ""
-
-	//go:embed ai_rules.yaml
-	aiRules []byte
-
-	//go:embed cel_rules.yaml
-	celRules []byte
-
-	//go:embed ai_response_rules.yaml
-	aiResponseRules []byte
-
-	//go:embed cel_response_rules.yaml
-	celResponseRules []byte
 )
 
 func main() {
@@ -39,5 +25,5 @@ func main() {
 		APIToken: metricsAPIToken,
 	}
 
-	cmd.Execute(version, commit, date, metricsCfg, aiRules, celRules, aiResponseRules, celResponseRules)
+	cmd.Execute(version, commit, date, metricsCfg)
 }

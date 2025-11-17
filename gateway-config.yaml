@@ -43,8 +43,8 @@ server:
 policy_validation:
   # Enable CEL-based tool validation
   enabled: true
-  # Path to CEL policy rules file (optional, uses embedded rules by default)
-  # rules_file: "cel_rules.yaml"
+  # Path to CEL policy rules file (required when enabled)
+  rules_file: "cel.rules.yaml"
 
 # AI validation configuration
 ai_validation:
@@ -54,22 +54,22 @@ ai_validation:
   endpoint: "https://api.openai.com/v1/chat/completions"
   # Model to use for validation
   model: "gpt-4o-mini"
-  # Path to AI policy rules file (optional, uses embedded rules by default)
-  # rules_file: "ai_rules.yaml"
+  # Path to AI policy rules file (required when enabled)
+  rules_file: "ai.rules.yaml"
 
 # Response validation configuration
 # These policies validate and filter tool call RESPONSES before returning to the client
 response_validation:
   # Enable CEL-based response validation
   enabled: false
-  # Path to CEL response policy rules file
-  rules_file: "cel_response_rules.yaml"
+  # Path to CEL response policy rules file (required when enabled)
+  rules_file: "cel_response.rules.yaml"
 
 # AI response validation configuration
 # Uses AI to detect and filter sensitive information in responses
 ai_response_validation:
   # Enable AI-powered response validation
   enabled: false
-  # Path to AI response policy rules file
-  rules_file: "ai_response_rules.yaml"
+  # Path to AI response policy rules file (required when enabled)
+  rules_file: "ai_response.rules.yaml"
   # Note: Uses the same endpoint and model as ai_validation above

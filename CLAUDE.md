@@ -55,15 +55,17 @@ The gateway supports multiple MCP transport types per client:
 
 ### Configuration Hierarchy
 Configuration is loaded in this order (later overrides earlier):
-1. Embedded defaults
-2. YAML config file (`gateway-config.yaml`)
-3. Environment variables (prefix: `MCP_GATEWAY_`)
-4. Command-line flags
+1. YAML config file (`gateway-config.yaml`)
+2. Environment variables (prefix: `MCP_GATEWAY_`)
+3. Command-line flags
 
 ### Security Rules
-- **CEL Rules**: Embedded in binary, can be overridden via `cel_rules.yaml`
-- **AI Rules**: Embedded in binary, can be overridden via `ai_rules.yaml`
+- **CEL Rules**: Loaded from external `cel.rules.yaml` file when `policy_validation` is enabled
+- **AI Rules**: Loaded from external `ai.rules.yaml` file when `ai_validation` is enabled
+- **CEL Response Rules**: Loaded from external `cel_response.rules.yaml` file when `response_validation` is enabled
+- **AI Response Rules**: Loaded from external `ai_response.rules.yaml` file when `ai_response_validation` is enabled
 - **Multi-Client Validation**: Policies can target specific clients using name prefixes
+- **Required When Enabled**: Rules files must be specified in config when their corresponding validation feature is enabled
 
 ## Important Development Notes
 
