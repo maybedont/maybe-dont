@@ -81,8 +81,9 @@ npms:
     #
     # Default: ["README*", "LICENSE*"]
     # Templates: allowed.
-    #extra_files:
-    #  - glob: gateway-config.yaml
+    extra_files:
+      - glob: gateway-config.yaml
+      - glob: *.rules.yaml
 
     access: public
 
