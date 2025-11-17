@@ -15,7 +15,7 @@ METRICS_API_TOKEN ?= $(shell echo $$METRICS_API_TOKEN)
 all: build
 
 build:
-	garble -literals -tiny -seed=random build -ldflags "-X 'main.version=dev' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)' -X 'main.metricsDataset=$(METRICS_DATASET)' -X 'main.metricsAPIToken=$(METRICS_API_TOKEN)'" -o $(BINARY_NAME) ./
+	$(GO) build -ldflags "-X 'main.version=dev' -X 'main.commit=$(COMMIT)' -X 'main.date=$(DATE)' -X 'main.metricsDataset=$(METRICS_DATASET)' -X 'main.metricsAPIToken=$(METRICS_API_TOKEN)'" -o $(BINARY_NAME) ./
 
 clean:
 	rm -f $(BINARY_NAME)

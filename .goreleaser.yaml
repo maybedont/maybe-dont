@@ -18,9 +18,6 @@ builds:
       - linux
       - windows
       - darwin
-    tool: garble
-    command: "-literals"
-    flags: [ "-tiny", "-seed=random", "build"]
     ldflags:
       - -s -w
       - -X main.version={{.Version}}

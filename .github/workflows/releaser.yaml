@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: large
+    runs-on: ubuntu-latest
     env:
       flags: ""
     steps:
@@ -31,8 +31,6 @@ jobs:
         with:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
-      - name: Install garble
-        run: go install mvdan.cc/garble@latest
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
