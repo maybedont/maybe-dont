@@ -35,7 +35,7 @@ downstream_mcp_servers:
 # Server configuration
 server:
   # Server type (stdio, http, sse)
-  type: stdio
+  type: http
   # Address to listen on (host:port)
   listen_addr: "0.0.0.0:8080"
 
