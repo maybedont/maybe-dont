@@ -52,11 +52,49 @@ archives:
           mode: 0644
       - LICENSE
 dockers:
+  # AMD64 image
   - image_templates:
-      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}"
-      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}"
-      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}"
-      - "ghcr.io/maybedont/maybe-dont:latest"
+      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:latest-amd64"
+    use: buildx
+    goos: linux
+    goarch: amd64
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--build-arg=BUILDPLATFORM=linux/amd64"
+
+  # ARM64 image
+  - image_templates:
+      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}-arm64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}-arm64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}-arm64"
+      - "ghcr.io/maybedont/maybe-dont:latest-arm64"
+    use: buildx
+    goos: linux
+    goarch: arm64
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--build-arg=BUILDPLATFORM=linux/arm64"
+
+docker_manifests:
+  - name_template: "ghcr.io/maybedont/maybe-dont:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/maybedont/maybe-dont:v{{ .Major }}"
+    image_templates:
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}-arm64"
+  - name_template: "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}"
+    image_templates:
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}-arm64"
+  - name_template: "ghcr.io/maybedont/maybe-dont:latest"
+    image_templates:
+      - "ghcr.io/maybedont/maybe-dont:latest-amd64"
+      - "ghcr.io/maybedont/maybe-dont:latest-arm64"
 # .goreleaser.yaml
 #npms:
 #  - id: gateway
