@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Used for testing the Docker image locally. This will build a linux Docker image
+# using the correct architecture containing the correct Go binary as well.
+
 ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
 IMG="local/maybe-dont"
 
@@ -16,10 +19,10 @@ docker buildx build --platform=linux/${ARCH} -t ${IMG}:dev .
 exit_code=$?
 if [ $exit_code -eq 0 ] ; then
     docker image rm "${IMG}:tmp" &>/dev/null
-    # We return a success code in case `rmi` failed, the :tmp image may not exist.
+    # We return a success code in case remove failed, the :tmp image may not exist.
     true
 else
-    # The build command failed, restore the original image tag.
+    # Move :tmp back to :dev so we don't delete the last good dev image.
     docker tag "${IMG}:tmp" "${IMG}:dev" &>/dev/null
     exit $exit_code
 fi
