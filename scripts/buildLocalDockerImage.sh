@@ -29,7 +29,7 @@ echo "Build docker image using --platform=linux/${TARGET_ARCH} named ${IMG}:dev"
 # If the image already exists, move it to :tmp
 docker tag "${IMG}:dev" "${IMG}:tmp" &>/dev/null
 
-docker buildx build --platform=linux/${DOCKER_ARCH} -t ${IMG}:dev .
+docker buildx build --platform=linux/${TARGET_ARCH} -t ${IMG}:dev .
 exit_code=$?
 if [ $exit_code -eq 0 ] ; then
     docker image rm "${IMG}:tmp" &>/dev/null
