@@ -1,37 +1,3 @@
-## v0.6.0 (2025-12-09)
-
-### Feat
-
-- add multi-architecture Docker image support
-
-## v0.5.8 (2025-11-17)
-
-### Fix
-
-- default to http
-
-## v0.5.7 (2025-11-16)
-
-## v0.5.6 (2025-11-16)
-
-### Fix
-
-- speed up build by removing garble
-
-## v0.5.5 (2025-11-16)
-
-## v0.5.4 (2025-11-16)
-
-## v0.5.3 (2025-11-16)
-
-## v0.5.2 (2025-11-16)
-
-### Fix
-
-- clarify config loading
-- update gateway config for happy path
-- bundle the rules into distribution
-
 ## v0.5.1 (2025-11-03)
 
 ### Fix
