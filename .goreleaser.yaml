@@ -110,7 +110,7 @@ docker_manifests:
 #    name: "@maybe-dont/gateway"
 #    description: "The Maybe Don't AI Security Gateway"
 #    homepage: https://maybedont.ai
-#Wh
+#
 #    # Keywords for the package.
 #    keywords:
 #      - ai

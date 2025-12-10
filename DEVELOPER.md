@@ -7,8 +7,18 @@ We should start automating this, but for now here are a few things you may need 
 You'll need to ensure you have some tools configured. 
 
 - `go` (duh)
-- `golangci-lint` - for linting 
+- `golangci-lint` - for linting
+- `goreleaser` for running `make snapshot`
 - `cz` for running `make bump-version`
+
+## Shell configuration
+
+`.zshrc` or similar
+
+```
+export METRICS_DATASET=maybedont_dev_dataset_name
+export METRICS_API_TOKEN=maybedont_dev_dataset_api_token
+```
 
 ## Testing
 
