@@ -5,3 +5,4 @@ audit.log
 .maybedont-metrics
 build
 .vscode
+.idea
