@@ -10,9 +10,9 @@ RUN apt-get update \
 
 # Create a non-root group and user
 RUN mkdir -p /usr/local/maybedont \
-  && chown maybedont:maybedont /usr/local/maybedont \
   && groupadd -g 999 maybedont \
-  && useradd -u 999 -d /usr/local/maybedont -m -g maybedont maybedont
+  && useradd -u 999 -d /usr/local/maybedont -m -g maybedont maybedont \
+  && chown maybedont:maybedont /usr/local/maybedont
 
 COPY --chown=maybedont:maybedont maybe-dont /usr/local/maybedont/
 
