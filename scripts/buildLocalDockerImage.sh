@@ -1,20 +1,18 @@
 #!/bin/bash
 
-# Used for testing the Docker image locally. This will build a linux Docker image
-# using the correct architecture containing the correct Go binary as well.
+# Used for testing the Docker image locally.
+# This will build a linux binary and docker image, using the current system architecture.
 
-ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
+SYSTEM_ARCH=$(uname -m | tr '[:upper:]' '[:lower:]')
 IMG="local/maybe-dont"
 
 # Map uname -m output to Go GOARCH values
-case "$ARCH" in
+case "$SYSTEM_ARCH" in
   x86_64)
-    GOARCH=amd64
-    DOCKER_ARCH=amd64
+    TARGET_ARCH=amd64
     ;;
   aarch64|arm64)
-    GOARCH=arm64
-    DOCKER_ARCH=arm64
+    TARGET_ARCH=arm64
     ;;
   *)
     echo "Unsupported architecture: $ARCH"
@@ -24,9 +22,9 @@ esac
 
 # Build a linux binary for the current architecture
 make clean
-GOOS=linux GOARCH=${GOARCH} make build
+GOOS=linux GOARCH=${TARGET_ARCH} make build
 
-echo "Build docker image using --platform=linux/${DOCKER_ARCH} named ${IMG}:dev"
+echo "Build docker image using --platform=linux/${TARGET_ARCH} named ${IMG}:dev"
 
 # If the image already exists, move it to :tmp
 docker tag "${IMG}:dev" "${IMG}:tmp" &>/dev/null
