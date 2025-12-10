@@ -1,3 +1,14 @@
+## v0.7.0 (2025-12-10)
+
+### Feat
+
+- add individual SHA256 checksum files for release archives
+
+### Fix
+
+- improve Dockerfile build order and simplify build script
+- correct multi-arch Docker build issues
+
 ## v0.6.0 (2025-12-09)
 
 ### Feat
