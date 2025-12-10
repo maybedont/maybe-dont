@@ -63,7 +63,7 @@ dockers:
     goarch: amd64
     build_flag_templates:
       - "--platform=linux/amd64"
-      - "--build-arg=BUILDPLATFORM=linux/amd64"
+      - "--build-arg=TARGETPLATFORM=linux/amd64"
 
   # ARM64 image
   - image_templates:
@@ -76,7 +76,7 @@ dockers:
     goarch: arm64
     build_flag_templates:
       - "--platform=linux/arm64"
-      - "--build-arg=BUILDPLATFORM=linux/arm64"
+      - "--build-arg=TARGETPLATFORM=linux/arm64"
 
 docker_manifests:
   - name_template: "ghcr.io/maybedont/maybe-dont:{{ .Tag }}"
