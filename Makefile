@@ -26,9 +26,11 @@ lint:
 test:
 	$(GO) test -v ./...
 
+# Note to test, call 'cz bump --dry-run', this will provide the tag and change log to stdout.
 bump-version:
 	cz bump
 	git push
 	git push --tags
+
 snapshot:
 	goreleaser release --snapshot --skip=docker --clean
