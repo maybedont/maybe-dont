@@ -33,7 +33,7 @@ docker buildx build --platform=linux/${TARGET_ARCH} -t ${IMG}:dev .
 exit_code=$?
 if [ $exit_code -eq 0 ] ; then
     docker image rm "${IMG}:tmp" &>/dev/null
-     echo ""
+    echo ""
     echo "Build complete. Kick the tires by running: "
     echo ""
     echo " > docker run -p 8080:8080 ${IMG}:dev"

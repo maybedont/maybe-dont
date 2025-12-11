@@ -1,3 +1,9 @@
+## v0.7.1 (2025-12-10)
+
+### Fix
+
+- release script missing sha256 files and docs version update
+
 ## v0.7.0 (2025-12-10)
 
 ### Feat
