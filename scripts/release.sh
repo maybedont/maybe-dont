@@ -101,8 +101,8 @@ log_info "Copying release artifacts to ${VERSION_DIR}..."
 
 # Copy all tarball artifacts from the dist directory
 if [[ -d "$ORIGINAL_DIST_DIR" ]]; then
-    # Find all tarball, zip, and checksums.txt files and copy them
-    find "$ORIGINAL_DIST_DIR" \( -name "*.tar.gz" -o -name "*.zip" -o -name "*checksums.txt" \) | while read -r file; do
+    # Find all tarball, zip, individual checksums, and checksums.txt files and copy them
+    find "$ORIGINAL_DIST_DIR" \( -name "*.tar.gz" -o -name "*.zip" -name "*.sha256" -o -name "*checksums.txt" \) | while read -r file; do
         filename=$(basename "$file")
         log_info "Copying $filename"
         cp "$file" "$VERSION_DIR/"
@@ -148,6 +148,7 @@ if [[ -n "$PREVIOUS_VERSION" ]]; then
 
     # Update version in common files
     update_version_in_file "content/download.md" "$PREVIOUS_VERSION" "$VERSION_CLEAN"
+    update_version_in_file "content/docs/_index.md" "$PREVIOUS_VERSION" "$VERSION_CLEAN"
 else
     log_warn "No previous version found, skipping version string updates"
 fi
