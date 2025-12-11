@@ -1,3 +1,9 @@
+## v0.7.2 (2025-12-11)
+
+### Fix
+
+- Correct publishing of the .sha256 checksum files.
+
 ## v0.7.1 (2025-12-10)
 
 ### Fix
