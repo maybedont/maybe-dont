@@ -26,14 +26,14 @@ func (e *PolicyDeniedError) Error() string {
 
 // Gateway represents an MCP security gateway instance
 type Gateway struct {
-	logger                  *config.SessionLogger
-	auditLogger             *config.SessionLogger
-	config                  *config.Config
-	server                  *server.MCPServer
-	clientManager           *ClientManager
-	mu                      sync.RWMutex
-	stopChan                chan struct{}
-	metricsCollector        *metrics.Collector
+	logger           *config.SessionLogger
+	auditLogger      *config.SessionLogger
+	config           *config.Config
+	server           *server.MCPServer
+	clientManager    *ClientManager
+	mu               sync.RWMutex
+	stopChan         chan struct{}
+	metricsCollector *metrics.Collector
 	// Validation chain for request processing
 	validationChain *ToolValidationChain
 	// CEL policy engine
@@ -46,6 +46,8 @@ type Gateway struct {
 	responsePolicyEngine *CELResponsePolicyEngine
 	// AI response policy engine
 	aiResponsePolicyEngine *AIResponsePolicyEngine
+	// Native tools handler
+	nativeToolsHandler *NativeToolsHandler
 }
 
 // New creates a new gateway instance
@@ -145,6 +147,9 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger) 
 	// Create client manager
 	clientManager := NewClientManager(ctx, logger)
 
+	// Create native tools handler
+	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, auditLogger)
+
 	return &Gateway{
 		logger:                 logger,
 		auditLogger:            auditLogger,
@@ -155,6 +160,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger) 
 		aiPolicyEngine:         aiPolicyEngine,
 		responsePolicyEngine:   responsePolicyEngine,
 		aiResponsePolicyEngine: aiResponsePolicyEngine,
+		nativeToolsHandler:     nativeToolsHandler,
 	}, nil
 }
 
@@ -254,6 +260,12 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	// Track tool invocation in metrics
 	if g.metricsCollector != nil {
 		g.metricsCollector.IncrementToolInvocations()
+	}
+
+	// Check if this is a native gateway tool
+	if IsNativeTool(req.Params.Name) {
+		g.logger.Debug(ctx, "Routing to native tool handler", zap.String("tool", req.Params.Name))
+		return g.nativeToolsHandler.HandleToolCall(ctx, req)
 	}
 
 	// Create audit log entry

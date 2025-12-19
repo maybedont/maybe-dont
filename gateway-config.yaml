@@ -23,7 +23,7 @@ downstream_mcp_servers:
       pass_through:
         enabled: true
         headers:
-          - source_header: X-Github-Token
+          - source_header: "X-GitHub-Token"
             target_header: "Authorization"
             format: "Bearer {value}"
 
@@ -73,3 +73,34 @@ ai_response_validation:
   # Path to AI response policy rules file (required when enabled)
   rules_file: "ai_response.rules.yaml"
   # Note: Uses the same endpoint and model as ai_validation above
+
+# Native gateway tools configuration
+# These tools are implemented directly in the gateway for introspection
+native_tools:
+  # Enable native gateway tools
+  enabled: true
+
+  # Audit log access tool configuration
+  audit_log:
+    # Enable the maybedont__get_audit_log tool
+    enabled: true
+    # Maximum number of log entries to return (default: 1000)
+    max_entries: 1000
+    # Maximum file size to read in bytes (default: 10MB)
+    max_file_size_bytes: 10485760
+
+  # Audit report generation tool configuration
+  audit_report:
+    # Enable the maybedont__generate_audit_report tool
+    enabled: true
+    # AI endpoint to use (defaults to ai_validation endpoint if not specified)
+    # endpoint: "https://api.openai.com/v1/chat/completions"
+    # Model to use (defaults to ai_validation model if not specified)
+    # model: "gpt-4o-mini"
+    # API key (defaults to ai_validation api_key / OPENAI_API_KEY if not specified)
+    # api_key: ""
+    # Maximum entries to include in report generation (default: 500)
+    max_entries_for_report: 500
+    # Custom system prompt for report generation (optional - has sensible default)
+    # system_prompt: |
+    #   You are an AI security analyst reviewing MCP gateway audit logs...

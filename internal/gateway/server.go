@@ -170,6 +170,14 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	hasSubscribe := false
 	hasListChanged := false
 
+	// Check if native tools are enabled (they contribute to hasTools)
+	if g.config.NativeTools.Enabled {
+		nativeTools := g.nativeToolsHandler.GetTools()
+		if len(nativeTools) > 0 {
+			hasTools = true
+		}
+	}
+
 	for _, clientInfo := range allClients {
 		if clientInfo.Capabilities != nil {
 			if clientInfo.Capabilities.Tools != nil {
@@ -224,6 +232,15 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 		g.registerClientTools(ctx, clientName, clientInfo)
 		g.registerClientPrompts(ctx, clientName, clientInfo)
 		g.registerClientResources(ctx, clientName, clientInfo)
+	}
+
+	// Register native gateway tools
+	if g.config.NativeTools.Enabled {
+		nativeTools := g.nativeToolsHandler.GetTools()
+		for _, tool := range nativeTools {
+			g.server.AddTool(tool, g.handleToolCallWithErrorHandling)
+			g.logger.Info(ctx, "Registered native tool", zap.String("name", tool.Name))
+		}
 	}
 
 	return srv, nil
