@@ -63,9 +63,9 @@ type Config struct {
 
 	// AI response validation configuration
 	AIResponseValidation struct {
-		Enabled   bool                `mapstructure:"enabled"`
-		RulesFile string              `mapstructure:"rules_file"`
-		Rules     []AIResponsePolicy  `mapstructure:"rules"`
+		Enabled   bool               `mapstructure:"enabled"`
+		RulesFile string             `mapstructure:"rules_file"`
+		Rules     []AIResponsePolicy `mapstructure:"rules"`
 	} `mapstructure:"ai_response_validation"`
 
 	// Downstream MCP servers configuration
@@ -82,6 +82,26 @@ type Config struct {
 		LogLevel string `mapstructure:"level"`
 		Path     string `mapstructure:"path"`
 	} `mapstructure:"logging"`
+
+	// NativeTools configuration for gateway-native tools
+	NativeTools struct {
+		Enabled bool `mapstructure:"enabled"`
+
+		AuditLog struct {
+			Enabled          bool  `mapstructure:"enabled"`
+			MaxEntries       int   `mapstructure:"max_entries"`
+			MaxFileSizeBytes int64 `mapstructure:"max_file_size_bytes"`
+		} `mapstructure:"audit_log"`
+
+		AuditReport struct {
+			Enabled             bool   `mapstructure:"enabled"`
+			Endpoint            string `mapstructure:"endpoint"`
+			Model               string `mapstructure:"model"`
+			APIKey              string `mapstructure:"api_key"`
+			MaxEntriesForReport int    `mapstructure:"max_entries_for_report"`
+			SystemPrompt        string `mapstructure:"system_prompt"`
+		} `mapstructure:"audit_report"`
+	} `mapstructure:"native_tools"`
 }
 
 // ClientConfig represents configuration for a single MCP client
@@ -373,14 +393,51 @@ func LoadConfig(configPath string) (*Config, error) {
 		config.Server.ListenAddr = "127.0.0.1"
 	}
 
+	// TODO : Seems like this environment variable should be configurable.
 	// Override OpenAI API key from environment variable if set
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		config.AIPolicyValidation.APIKey = apiKey
 	}
 
+	// Set default values for native tools configuration
+	if config.NativeTools.AuditLog.MaxEntries == 0 {
+		config.NativeTools.AuditLog.MaxEntries = 1000
+	}
+	if config.NativeTools.AuditLog.MaxFileSizeBytes == 0 {
+		config.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024 // 10MB
+	}
+	if config.NativeTools.AuditReport.MaxEntriesForReport == 0 {
+		config.NativeTools.AuditReport.MaxEntriesForReport = 500
+	}
+	// Inherit AI settings from ai_validation if not specified
+	if config.NativeTools.AuditReport.Endpoint == "" {
+		config.NativeTools.AuditReport.Endpoint = config.AIPolicyValidation.Endpoint
+	}
+	if config.NativeTools.AuditReport.Model == "" {
+		config.NativeTools.AuditReport.Model = config.AIPolicyValidation.Model
+	}
+	if config.NativeTools.AuditReport.APIKey == "" {
+		config.NativeTools.AuditReport.APIKey = config.AIPolicyValidation.APIKey
+	}
+	if config.NativeTools.AuditReport.SystemPrompt == "" {
+		config.NativeTools.AuditReport.SystemPrompt = `You are an AI security analyst reviewing MCP gateway audit logs.
+Analyze the tool calls, validation results, and patterns to provide insights on:
+- Security concerns or policy violations
+- Usage patterns and anomalies
+- Recommendations for policy improvements
+
+When reporting concerns, prioritize them by potential business impact:
+1. HIGH: Direct monetary loss, data breach, regulatory violations, service outages
+2. MEDIUM: Reputational damage, customer trust erosion, operational inefficiencies
+3. LOW: Minor policy deviations, informational findings, optimization opportunities
+
+For each concern, estimate the potential impact category and explain the reasoning.`
+	}
+
 	// Load CEL request policies from rules file
 	if config.PolicyValidation.Enabled {
 		if config.PolicyValidation.RulesFile == "" {
+			// TODO : Note that the docs say this is optional and we have default rules?
 			return nil, fmt.Errorf("policy_validation is enabled but rules_file is not specified")
 		}
 		resolvedPath := resolveRulesFilePath(config.PolicyValidation.RulesFile, configFileDir)
