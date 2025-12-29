@@ -29,6 +29,7 @@ type Gateway struct {
 	logger           *config.SessionLogger
 	auditLogger      *config.SessionLogger
 	config           *config.Config
+	version          string
 	server           *server.MCPServer
 	clientManager    *ClientManager
 	mu               sync.RWMutex
@@ -51,7 +52,7 @@ type Gateway struct {
 }
 
 // New creates a new gateway instance
-func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger) (*Gateway, error) {
+func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, version string) (*Gateway, error) {
 	// Create audit logger with its own configuration
 	auditLogger, err := config.GetAuditLogger(cfg)
 	if err != nil {
@@ -154,6 +155,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger) 
 		logger:                 logger,
 		auditLogger:            auditLogger,
 		config:                 cfg,
+		version:                version,
 		stopChan:               make(chan struct{}),
 		clientManager:          clientManager,
 		policyEngine:           policyEngine,
