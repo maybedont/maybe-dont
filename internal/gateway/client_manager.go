@@ -53,12 +53,12 @@ func NewClientManager(ctx context.Context, logger *config.SessionLogger) *Client
 
 // InitializeClients initializes all configured clients from a map and collects any errors
 func (cm *ClientManager) InitializeClients(ctx context.Context, configs map[string]config.ClientConfig) error {
-	var errors []string
+	var errs []string
 
 	for name, cfg := range configs {
 		if err := cm.InitializeClient(ctx, name, cfg); err != nil {
 			errMsg := fmt.Sprintf("failed to initialize client %s: %v", name, err)
-			errors = append(errors, errMsg)
+			errs = append(errs, errMsg)
 			cm.logger.Error(ctx, "Client initialization failed",
 				zap.String("client", name),
 				zap.Error(err))
@@ -66,9 +66,9 @@ func (cm *ClientManager) InitializeClients(ctx context.Context, configs map[stri
 	}
 
 	// Return collected errors if any
-	if len(errors) > 0 {
-		errMsg := fmt.Sprintf("failed to initialize %d client(s):\n", len(errors))
-		for i, err := range errors {
+	if len(errs) > 0 {
+		errMsg := fmt.Sprintf("failed to initialize %d client(s):\n", len(errs))
+		for i, err := range errs {
 			errMsg += fmt.Sprintf("  %d. %s\n", i+1, err)
 		}
 		return fmt.Errorf("%s", errMsg)
@@ -623,12 +623,12 @@ func (cm *ClientManager) GetClient(name string) (*ClientInfo, error) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
-	client, exists := cm.clients[name]
+	result, exists := cm.clients[name]
 	if !exists {
 		return nil, fmt.Errorf("client not found: %s", name)
 	}
 
-	return client, nil
+	return result, nil
 }
 
 // GetAllClients returns all client information

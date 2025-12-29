@@ -215,7 +215,7 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 		opts = append(opts, server.WithResourceCapabilities(hasSubscribe, hasListChanged))
 	}
 
-	srv := server.NewMCPServer("maybe-dont", "0.0.1", opts...)
+	srv := server.NewMCPServer("maybe-dont", g.version, opts...)
 	g.server = srv
 
 	// Register tools/prompts/resources from non-lazy clients
