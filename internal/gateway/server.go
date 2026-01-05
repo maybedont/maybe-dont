@@ -114,7 +114,6 @@ func (g *Gateway) onSessionUnregister(ctx context.Context, session server.Client
 	g.logger.Info(ctx, "Downstream clients closed for session", zap.String("session_id", sessionID))
 }
 
-
 // initMCPServer initializes the MCP server with common configuration and registers tools
 func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	ctx := context.Background()
@@ -527,6 +526,10 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 // extractClientIP extracts the client IP address from an HTTP request.
 // It checks X-Forwarded-For and X-Real-IP headers first (for proxied requests),
 // then falls back to RemoteAddr.
+// Note that we do not currently know if any proxies are trusted. If any proxy is un-trusted
+// it means the X-* headers could be modified or spoofed. This value should be used for informational
+// purposes only. If we end up needing it for security purposes, ideally we would add a configuration
+// to indicate what proxies are trusted by IP, or IP range using CIDR notation.
 func extractClientIP(r *http.Request) string {
 	// Check X-Forwarded-For header (may contain multiple IPs, take the first)
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
