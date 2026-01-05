@@ -94,7 +94,7 @@ native_tools:
     # endpoint: "https://api.openai.com/v1/chat/completions"
     # Model to use (defaults to ai_validation model if not specified)
     # model: "gpt-4o-mini"
-    # API key (defaults to ai_validation api_key / OPENAI_API_KEY if not specified)
+    # API key (defaults to ai_validation api_key if not specified)
     # api_key: ""
     # Maximum entries to include in report generation (default: 500)
     max_entries_for_report: 500
