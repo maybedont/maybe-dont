@@ -71,7 +71,7 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePoli
 
 		// Validate action
 		if policy.Action != "allow" && policy.Action != "deny" && policy.Action != "redact" {
-			return fmt.Errorf("invalid action %s for response policy %s", policy.Action, policy.Name)
+			return fmt.Errorf("invalid action '%s' for response policy %s: must be 'allow', 'deny', or 'redact'", policy.Action, policy.Name)
 		}
 
 		// Store the compiled policy

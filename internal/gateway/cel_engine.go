@@ -110,7 +110,7 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 
 		// Validate action
 		if policy.Action != "allow" && policy.Action != "deny" {
-			return fmt.Errorf("invalid action %s for policy %s", policy.Action, policy.Name)
+			return fmt.Errorf("invalid action '%s' for policy %s: must be 'allow' or 'deny'", policy.Action, policy.Name)
 		}
 
 		// Store the compiled policy
