@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -470,8 +469,12 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 	// Store request ID in context first so it can be used in logging
 	ctx = WithRequestID(ctx, requestID)
 
-	// Extract and store client IP address
-	clientIP := extractClientIP(r)
+	// Extract and store client IP address using trusted proxy configuration
+	clientIP := g.trustedProxyChecker.ExtractClientIP(
+		r.Header.Get("X-Forwarded-For"),
+		r.Header.Get("X-Real-IP"),
+		r.RemoteAddr,
+	)
 	ctx = WithClientIP(ctx, clientIP)
 
 	if r.Header.Get("X-Request-ID") == "" {
@@ -521,42 +524,4 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 
 	// Store credentials in context
 	return WithServiceCredentials(ctx, serviceCreds)
-}
-
-// extractClientIP extracts the client IP address from an HTTP request.
-// It checks X-Forwarded-For and X-Real-IP headers first (for proxied requests),
-// then falls back to RemoteAddr.
-// Note that we do not currently know if any proxies are trusted. If any proxy is un-trusted
-// it means the X-* headers could be modified or spoofed. This value should be used for informational
-// purposes only. If we end up needing it for security purposes, ideally we would add a configuration
-// to indicate what proxies are trusted by IP, or IP range using CIDR notation.
-func extractClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header (may contain multiple IPs, take the first)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For can be a comma-separated list: client, proxy1, proxy2
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
-		}
-	}
-
-	// Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-
-	// Fall back to RemoteAddr (host:port format)
-	// Remove the port if present
-	addr := r.RemoteAddr
-	if colonIdx := strings.LastIndex(addr, ":"); colonIdx != -1 {
-		// Check if this is an IPv6 address with brackets
-		if bracketIdx := strings.LastIndex(addr, "]"); bracketIdx != -1 && bracketIdx > colonIdx {
-			// IPv6 with port: [::1]:8080 -> [::1]
-			return addr[:colonIdx]
-		}
-		// IPv4 or IPv6 without brackets
-		return addr[:colonIdx]
-	}
-
-	return addr
 }

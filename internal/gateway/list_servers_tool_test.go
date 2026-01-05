@@ -398,6 +398,52 @@ func TestListDownstreamServers_SessionToolsMergedWithGlobal(t *testing.T) {
 	assert.Contains(t, github.Tools, "get_file_contents")
 }
 
+func TestListDownstreamServers_NoServersConfigured(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+
+	cfg := &config.Config{}
+	cfg.NativeTools.Enabled = true
+	cfg.NativeTools.ListServers.Enabled = true
+
+	handler := NewNativeToolsHandler(cfg, logger, logger)
+
+	// Set up mock providers with empty configs
+	handler.SetClientConfigProvider(&mockClientConfigProvider{
+		configs: map[string]config.ClientConfig{}, // No servers configured
+	})
+
+	handler.SetToolsProvider(&mockToolsProvider{
+		tools: []string{}, // No tools registered
+	})
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = ToolListDownstreamServers
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := handler.handleListDownstreamServers(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.IsError)
+
+	// Parse response
+	var response ListDownstreamServersResponse
+	content := result.Content[0]
+	textContent, ok := mcp.AsTextContent(content)
+	require.True(t, ok)
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	// Verify response indicates no servers
+	assert.Equal(t, 0, response.TotalServers)
+	assert.Equal(t, 0, response.TotalTools)
+	assert.Empty(t, response.Servers)
+
+	// Verify helpful message is included
+	assert.NotEmpty(t, response.Message, "Response should include a message when no servers are configured")
+	assert.Contains(t, response.Message, "No downstream MCP servers")
+}
+
 // withMockSession creates a context with a mock session ID for testing.
 // This uses a test-specific context key that GetSessionIDFromContext checks.
 func withMockSession(ctx context.Context, sessionID string) context.Context {

@@ -49,6 +49,8 @@ type Gateway struct {
 	aiResponsePolicyEngine *AIResponsePolicyEngine
 	// Native tools handler
 	nativeToolsHandler *NativeToolsHandler
+	// Trusted proxy checker for extracting client IPs
+	trustedProxyChecker *TrustedProxyChecker
 }
 
 // New creates a new gateway instance
@@ -154,6 +156,15 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	// Wire up the client config provider for native tools
 	nativeToolsHandler.SetClientConfigProvider(clientManager)
 
+	// Create trusted proxy checker for client IP extraction
+	trustedProxyChecker := NewTrustedProxyChecker(cfg.Server.TrustedProxies)
+	if trustedProxyChecker.TrustAll() {
+		logger.Debug(ctx, "Trusted proxy checker configured to trust all proxies (default)")
+	} else {
+		logger.Info(ctx, "Trusted proxy checker configured with specific trusted proxies",
+			zap.Int("count", len(cfg.Server.TrustedProxies)))
+	}
+
 	return &Gateway{
 		logger:                 logger,
 		auditLogger:            auditLogger,
@@ -166,6 +177,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		responsePolicyEngine:   responsePolicyEngine,
 		aiResponsePolicyEngine: aiResponsePolicyEngine,
 		nativeToolsHandler:     nativeToolsHandler,
+		trustedProxyChecker:    trustedProxyChecker,
 	}, nil
 }
 

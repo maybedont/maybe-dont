@@ -26,6 +26,7 @@ type ListDownstreamServersResponse struct {
 	Servers      []DownstreamServerInfo `json:"servers"`
 	TotalServers int                    `json:"total_servers"`
 	TotalTools   int                    `json:"total_tools"`
+	Message      string                 `json:"message,omitempty"`
 }
 
 // getListDownstreamServersToolDefinition returns the MCP tool definition for list_downstream_servers
@@ -167,6 +168,11 @@ func (h *NativeToolsHandler) handleListDownstreamServers(ctx context.Context, re
 		Servers:      servers,
 		TotalServers: len(servers),
 		TotalTools:   totalTools,
+	}
+
+	// Add helpful message when no servers are configured
+	if len(servers) == 0 {
+		response.Message = "No downstream MCP servers are configured. Add servers to the 'downstream_mcp_servers' section of your configuration file."
 	}
 
 	// Marshal response to JSON

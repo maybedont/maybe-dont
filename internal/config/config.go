@@ -35,6 +35,13 @@ type Config struct {
 				KeyFile  string `mapstructure:"key_file"`
 			} `mapstructure:"tls"`
 		} `mapstructure:"sse"`
+		// TrustedProxies is a list of IP addresses, IPv6 addresses, or CIDR blocks
+		// that are trusted to provide accurate X-Forwarded-For headers.
+		// When configured, only the rightmost IP in X-Forwarded-For that is NOT a trusted proxy
+		// will be used as the client IP (this is the most secure approach).
+		// If empty or not set, all proxies are trusted and the leftmost (first) IP is used.
+		// Examples: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1", "fc00::/7"]
+		TrustedProxies []string `mapstructure:"trusted_proxies"`
 	} `mapstructure:"server"`
 
 	// Policy configuration
