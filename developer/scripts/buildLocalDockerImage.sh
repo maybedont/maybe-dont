@@ -38,6 +38,10 @@ if [ $exit_code -eq 0 ] ; then
     echo ""
     echo " > docker run -p 8080:8080 ${IMG}:dev"
     echo ""
+    echo "Or by using the standard developer start script: "
+    echo ""
+    echo " > ./developer/scripts/startLocalDockerImage.sh"
+    echo ""
     # We return a success code in case remove failed, the :tmp image may not exist.
     true
 else
