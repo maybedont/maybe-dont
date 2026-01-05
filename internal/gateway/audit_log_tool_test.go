@@ -19,7 +19,6 @@ func TestGetAuditLog_FileDoesNotExist(t *testing.T) {
 
 	// Create a config pointing to a non-existent file
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024 // 10MB
@@ -65,7 +64,6 @@ func TestGetAuditLog_EmptyFile(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
@@ -108,7 +106,6 @@ func TestGetAuditLog_FileWithOnlyWhitespace(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
@@ -159,7 +156,6 @@ func TestGetAuditLog_WithValidEntries(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
@@ -208,7 +204,6 @@ not valid json at all
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
@@ -242,7 +237,6 @@ func TestGetAuditLog_StderrPath(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
@@ -270,7 +264,6 @@ func TestGetAuditLog_StdoutPath(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
@@ -304,7 +297,6 @@ func TestGetAuditLog_FileTooLarge(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 // Only 10 bytes allowed
@@ -349,7 +341,6 @@ func TestGetAuditLog_WithFiltering(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024

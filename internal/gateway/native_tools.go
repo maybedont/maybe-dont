@@ -14,7 +14,6 @@ const (
 	// NativeToolPrefix is the prefix for all native gateway tools
 	NativeToolPrefix = "maybedont__"
 
-	// Tool names
 	ToolGetAuditLog           = "maybedont__get_audit_log"
 	ToolGenerateAuditReport   = "maybedont__generate_audit_report"
 	ToolListDownstreamServers = "maybedont__list_downstream_servers"
@@ -93,10 +92,6 @@ func IsNativeTool(toolName string) bool {
 // GetTools returns the list of native tools to register
 func (h *NativeToolsHandler) GetTools() []mcp.Tool {
 	var tools []mcp.Tool
-
-	if !h.config.NativeTools.Enabled {
-		return tools
-	}
 
 	if h.config.NativeTools.AuditLog.Enabled {
 		tools = append(tools, h.getAuditLogToolDefinition())

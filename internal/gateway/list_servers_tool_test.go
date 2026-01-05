@@ -35,7 +35,6 @@ func TestListDownstreamServers_BasicResponse(t *testing.T) {
 
 	// Create handler with mock providers
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListServers.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)
@@ -119,7 +118,6 @@ func TestListDownstreamServers_IncludeTools(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListServers.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)
@@ -172,7 +170,6 @@ func TestListDownstreamServers_NoToolsDiscovered(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListServers.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)
@@ -217,7 +214,6 @@ func TestListDownstreamServers_NoProviderError(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListServers.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)
@@ -238,7 +234,6 @@ func TestListDownstreamServers_SessionSpecificTools(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListServers.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)
@@ -336,7 +331,6 @@ func TestListDownstreamServers_SessionToolsMergedWithGlobal(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListServers.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)
@@ -403,7 +397,6 @@ func TestListDownstreamServers_NoServersConfigured(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListServers.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)

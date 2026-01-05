@@ -139,15 +139,11 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	hasTools := false
 	hasPrompts := false
 	hasResources := false
-	hasSubscribe := false
-	hasListChanged := true // Support dynamic updates
 
 	// Check native tools
-	if g.config.NativeTools.Enabled {
-		nativeTools := g.nativeToolsHandler.GetTools()
-		if len(nativeTools) > 0 {
-			hasTools = true
-		}
+	nativeTools := g.nativeToolsHandler.GetTools()
+	if len(nativeTools) > 0 {
+		hasTools = true
 	}
 
 	// Check discovered capabilities
@@ -174,25 +170,22 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 
 	// Add capabilities
 	if hasTools {
-		opts = append(opts, server.WithToolCapabilities(hasListChanged))
+		opts = append(opts, server.WithToolCapabilities(true))
 	}
 	if hasPrompts {
-		opts = append(opts, server.WithPromptCapabilities(hasListChanged))
+		opts = append(opts, server.WithPromptCapabilities(true))
 	}
 	if hasResources {
-		opts = append(opts, server.WithResourceCapabilities(hasSubscribe, hasListChanged))
+		opts = append(opts, server.WithResourceCapabilities(false, true))
 	}
 
 	srv := server.NewMCPServer("maybe-dont", g.version, opts...)
 	g.server = srv
 
 	// Register native gateway tools
-	if g.config.NativeTools.Enabled {
-		nativeTools := g.nativeToolsHandler.GetTools()
-		for _, tool := range nativeTools {
-			g.server.AddTool(tool, g.handleToolCallWithErrorHandling)
-			g.logger.Info(ctx, "Registered native tool", zap.String("name", tool.Name))
-		}
+	for _, tool := range nativeTools {
+		g.server.AddTool(tool, g.handleToolCallWithErrorHandling)
+		g.logger.Info(ctx, "Registered native tool", zap.String("name", tool.Name))
 	}
 
 	// Register discovered tools/prompts/resources from downstream clients

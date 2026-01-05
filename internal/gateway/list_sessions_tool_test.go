@@ -13,8 +13,8 @@ import (
 
 // mockSessionProvider implements SessionProvider for testing
 type mockSessionProvider struct {
-	sessions     []SessionInfo
-	clientTools  map[string][]SessionClientTools // sessionID -> client tools
+	sessions    []SessionInfo
+	clientTools map[string][]SessionClientTools // sessionID -> client tools
 }
 
 func (m *mockSessionProvider) GetActiveSessions() []SessionInfo {
@@ -34,7 +34,6 @@ func TestListSessions_BasicResponse(t *testing.T) {
 
 	// Create handler with mock providers
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListSessions.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)
@@ -92,7 +91,6 @@ func TestListSessions_EmptyResponse(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListSessions.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)
@@ -127,7 +125,6 @@ func TestListSessions_NoProviderError(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListSessions.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)
@@ -147,7 +144,6 @@ func TestListSessions_SortedBySessionID(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	cfg.NativeTools.Enabled = true
 	cfg.NativeTools.ListSessions.Enabled = true
 
 	handler := NewNativeToolsHandler(cfg, logger, logger)

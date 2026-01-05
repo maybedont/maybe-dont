@@ -92,8 +92,6 @@ type Config struct {
 
 	// NativeTools configuration for gateway-native tools
 	NativeTools struct {
-		Enabled bool `mapstructure:"enabled"`
-
 		AuditLog struct {
 			Enabled          bool  `mapstructure:"enabled"`
 			MaxEntries       int   `mapstructure:"max_entries"`
@@ -362,7 +360,7 @@ func LoadConfig(configPath string) (*Config, error) {
 	v := viper.GetViper()
 
 	// Set environment variable prefix
-	v.SetEnvPrefix("MCP_GATEWAY")
+	v.SetEnvPrefix("MAYBE_DONT")
 	v.AutomaticEnv()
 
 	// Set up environment variable key mappings for nested map structures
@@ -380,6 +378,12 @@ func LoadConfig(configPath string) (*Config, error) {
 		v.AddConfigPath(".")
 		v.AddConfigPath("$HOME/.maybe-dont")
 	}
+
+	// Set defaults before reading config
+	v.SetDefault("native_tools.audit_log.enabled", true)
+	v.SetDefault("native_tools.audit_report.enabled", true)
+	v.SetDefault("native_tools.list_servers.enabled", true)
+	v.SetDefault("native_tools.list_sessions.enabled", true)
 
 	// Read config file
 	if err := v.ReadInConfig(); err != nil {

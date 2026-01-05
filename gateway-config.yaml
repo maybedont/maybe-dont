@@ -77,12 +77,9 @@ ai_response_validation:
 # Native gateway tools configuration
 # These tools are implemented directly in the gateway for introspection
 native_tools:
-  # Enable native gateway tools
-  enabled: true
-
   # Audit log access tool configuration
   audit_log:
-    # Enable the maybedont__get_audit_log tool
+    # Enable the maybedont__get_audit_log tool (default: true)
     enabled: true
     # Maximum number of log entries to return (default: 1000)
     max_entries: 1000
@@ -91,7 +88,7 @@ native_tools:
 
   # Audit report generation tool configuration
   audit_report:
-    # Enable the maybedont__generate_audit_report tool
+    # Enable the maybedont__generate_audit_report tool (default: true)
     enabled: true
     # AI endpoint to use (defaults to ai_validation endpoint if not specified)
     # endpoint: "https://api.openai.com/v1/chat/completions"
@@ -107,10 +104,10 @@ native_tools:
 
   # List downstream servers tool configuration
   list_servers:
-    # Enable the maybedont__list_downstream_servers tool
+    # Enable the maybedont__list_downstream_servers tool (default: true)
     enabled: true
 
   # List active sessions tool configuration
   list_sessions:
-    # Enable the maybedont__list_sessions tool
+    # Enable the maybedont__list_sessions tool (default: true)
     enabled: true

@@ -56,7 +56,7 @@ The gateway supports multiple MCP transport types per client:
 ### Configuration Hierarchy
 Configuration is loaded in this order (later overrides earlier):
 1. YAML config file (`gateway-config.yaml`)
-2. Environment variables (prefix: `MCP_GATEWAY_`)
+2. Environment variables (prefix: `MAYBE_DONT_`)
 3. Command-line flags
 
 ### Security Rules
@@ -100,7 +100,7 @@ The project uses Go's standard testing framework with testify for assertions. Ke
 Key environment variables for configuration:
 - `OPENAI_API_KEY` - OpenAI API key for AI validation (overrides config file setting)
 - `MAYBEDONT_METRICS_OPTOUT` - Set to any value to disable anonymous usage metrics collection
-- Environment variables follow the pattern: `MCP_GATEWAY_{CONFIG_PATH}` where CONFIG_PATH uses underscores
+- Environment variables follow the pattern: `MAYBE_DONT_{CONFIG_PATH}` where CONFIG_PATH uses underscores
 
 ## Anonymous Usage Metrics
 
