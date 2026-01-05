@@ -13,12 +13,27 @@ const (
 	// ServiceCredentialsKey stores per-client credentials extracted from request headers
 	// Value type: *ServiceCredentials
 	ServiceCredentialsKey contextKey = "service_credentials"
+
+	// ClientIPKey stores the IP address of the upstream client
+	// Value type: string
+	ClientIPKey contextKey = "client_ip"
 )
 
 // RequestIDKey stores the request ID for tracking capabilities per session
 // Value type: string
 // Note: We use the same key as config.RequestIDKey to ensure consistency across packages
 var RequestIDKey = config.RequestIDKey
+
+// WithClientIP adds the client IP address to the context
+func WithClientIP(ctx context.Context, ip string) context.Context {
+	return context.WithValue(ctx, ClientIPKey, ip)
+}
+
+// GetClientIP retrieves the client IP address from the context
+func GetClientIP(ctx context.Context) (string, bool) {
+	ip, ok := ctx.Value(ClientIPKey).(string)
+	return ip, ok
+}
 
 // ServiceCredentials stores authentication credentials for all downstream MCP clients.
 // It maps client names to their respective credential sets.

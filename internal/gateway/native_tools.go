@@ -15,15 +15,50 @@ const (
 	NativeToolPrefix = "maybedont__"
 
 	// Tool names
-	ToolGetAuditLog         = "maybedont__get_audit_log"
-	ToolGenerateAuditReport = "maybedont__generate_audit_report"
+	ToolGetAuditLog           = "maybedont__get_audit_log"
+	ToolGenerateAuditReport   = "maybedont__generate_audit_report"
+	ToolListDownstreamServers = "maybedont__list_downstream_servers"
+	ToolListSessions          = "maybedont__list_sessions"
 )
+
+// ClientConfigProvider provides access to downstream client configurations
+type ClientConfigProvider interface {
+	GetClientConfigs() map[string]config.ClientConfig
+}
+
+// RegisteredToolsProvider provides access to registered tools on the MCP server
+type RegisteredToolsProvider interface {
+	ListRegisteredTools() []string
+}
+
+// SessionInfo contains information about an active session
+type SessionInfo struct {
+	SessionID       string   `json:"session_id"`
+	ClientIP        string   `json:"client_ip,omitempty"`
+	DownstreamNames []string `json:"downstream_clients"`
+}
+
+// SessionClientTools contains tool names for a session's downstream clients
+type SessionClientTools struct {
+	ClientName string   `json:"client_name"`
+	Tools      []string `json:"tools"`
+}
+
+// SessionProvider provides access to active session information
+type SessionProvider interface {
+	GetActiveSessions() []SessionInfo
+	// GetSessionClientTools returns the tools discovered for each client in a session
+	GetSessionClientTools(sessionID string) []SessionClientTools
+}
 
 // NativeToolsHandler handles native gateway tools
 type NativeToolsHandler struct {
-	config      *config.Config
-	logger      *config.SessionLogger
-	auditLogger *config.SessionLogger
+	config               *config.Config
+	logger               *config.SessionLogger
+	auditLogger          *config.SessionLogger
+	clientConfigProvider ClientConfigProvider
+	toolsProvider        RegisteredToolsProvider
+	sessionProvider      SessionProvider
 }
 
 // NewNativeToolsHandler creates a new native tools handler
@@ -33,6 +68,21 @@ func NewNativeToolsHandler(cfg *config.Config, logger, auditLogger *config.Sessi
 		logger:      logger,
 		auditLogger: auditLogger,
 	}
+}
+
+// SetClientConfigProvider sets the provider for client configurations
+func (h *NativeToolsHandler) SetClientConfigProvider(provider ClientConfigProvider) {
+	h.clientConfigProvider = provider
+}
+
+// SetToolsProvider sets the provider for registered tools
+func (h *NativeToolsHandler) SetToolsProvider(provider RegisteredToolsProvider) {
+	h.toolsProvider = provider
+}
+
+// SetSessionProvider sets the provider for session information
+func (h *NativeToolsHandler) SetSessionProvider(provider SessionProvider) {
+	h.sessionProvider = provider
 }
 
 // IsNativeTool checks if a tool name is a native gateway tool
@@ -56,6 +106,14 @@ func (h *NativeToolsHandler) GetTools() []mcp.Tool {
 		tools = append(tools, h.getAuditReportToolDefinition())
 	}
 
+	if h.config.NativeTools.ListServers.Enabled {
+		tools = append(tools, h.getListDownstreamServersToolDefinition())
+	}
+
+	if h.config.NativeTools.ListSessions.Enabled {
+		tools = append(tools, h.getListSessionsToolDefinition())
+	}
+
 	return tools
 }
 
@@ -68,6 +126,10 @@ func (h *NativeToolsHandler) HandleToolCall(ctx context.Context, req mcp.CallToo
 		return h.handleGetAuditLog(ctx, req)
 	case ToolGenerateAuditReport:
 		return h.handleGenerateAuditReport(ctx, req)
+	case ToolListDownstreamServers:
+		return h.handleListDownstreamServers(ctx, req)
+	case ToolListSessions:
+		return h.handleListSessions(ctx, req)
 	default:
 		return nil, fmt.Errorf("unknown native tool: %s", req.Params.Name)
 	}

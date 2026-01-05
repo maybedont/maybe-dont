@@ -1,5 +1,4 @@
-ARG TARGETPLATFORM
-FROM --platform=$TARGETPLATFORM debian:12-slim
+FROM debian:12-slim
 
 # Update image and install ca-certificates
 RUN apt-get update \

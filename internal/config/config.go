@@ -101,6 +101,14 @@ type Config struct {
 			MaxEntriesForReport int    `mapstructure:"max_entries_for_report"`
 			SystemPrompt        string `mapstructure:"system_prompt"`
 		} `mapstructure:"audit_report"`
+
+		ListServers struct {
+			Enabled bool `mapstructure:"enabled"`
+		} `mapstructure:"list_servers"`
+
+		ListSessions struct {
+			Enabled bool `mapstructure:"enabled"`
+		} `mapstructure:"list_sessions"`
 	} `mapstructure:"native_tools"`
 }
 

@@ -151,6 +151,9 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	// Create native tools handler
 	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, auditLogger)
 
+	// Wire up the client config provider for native tools
+	nativeToolsHandler.SetClientConfigProvider(clientManager)
+
 	return &Gateway{
 		logger:                 logger,
 		auditLogger:            auditLogger,
@@ -227,6 +230,12 @@ func (g *Gateway) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize server: %w", err)
 	}
 
+	// Wire up the tools provider now that the server is initialized
+	g.nativeToolsHandler.SetToolsProvider(g)
+
+	// Wire up the session provider for native tools
+	g.nativeToolsHandler.SetSessionProvider(g.clientManager)
+
 	return nil
 }
 
@@ -235,6 +244,19 @@ func (g *Gateway) SetMetricsCollector(collector *metrics.Collector) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.metricsCollector = collector
+}
+
+// ListRegisteredTools returns the names of all registered tools on the MCP server
+func (g *Gateway) ListRegisteredTools() []string {
+	if g.server == nil {
+		return nil
+	}
+	tools := g.server.ListTools()
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	return names
 }
 
 // Stop gracefully shuts down the gateway
@@ -247,9 +269,9 @@ func (g *Gateway) Stop(ctx context.Context) error {
 	// Close the stop channel to signal shutdown
 	close(g.stopChan)
 
-	// Close all clients
+	// Close all session clients
 	if g.clientManager != nil {
-		if err := g.clientManager.Close(); err != nil {
+		if err := g.clientManager.Close(ctx); err != nil {
 			g.logger.Error(ctx, "Error closing clients", zap.Error(err))
 		}
 	}
@@ -334,13 +356,22 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		return nil, fmt.Errorf("invalid tool name format: %w", err)
 	}
 
-	// Get the appropriate client
-	clientInfo, err := g.clientManager.GetClient(clientName)
+	// Get session ID from context
+	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	if !hasSession {
+		auditLog["error"] = "no session ID in context"
+		auditLog["status"] = "no_session"
+		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
+		return nil, fmt.Errorf("no session ID in context")
+	}
+
+	// Get the appropriate client for this session
+	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
 	if err != nil {
 		auditLog["error"] = err.Error()
 		auditLog["status"] = "client_not_found"
 		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
-		return nil, fmt.Errorf("client not found: %w", err)
+		return nil, fmt.Errorf("client not found for session: %w", err)
 	}
 
 	// Create a new request with the original tool name
@@ -503,10 +534,16 @@ func (g *Gateway) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest
 		return nil, fmt.Errorf("invalid prompt name format: %w", err)
 	}
 
-	// Get the appropriate client
-	clientInfo, err := g.clientManager.GetClient(clientName)
+	// Get session ID from context
+	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	if !hasSession {
+		return nil, fmt.Errorf("no session ID in context")
+	}
+
+	// Get the appropriate client for this session
+	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
 	if err != nil {
-		return nil, fmt.Errorf("client not found: %w", err)
+		return nil, fmt.Errorf("client not found for session: %w", err)
 	}
 
 	// Create a new request with the original prompt name
@@ -524,10 +561,16 @@ func (g *Gateway) handleResourceRequest(ctx context.Context, req mcp.ReadResourc
 		return nil, fmt.Errorf("invalid %s URI format: %w", resourceType, err)
 	}
 
-	// Get the appropriate client
-	clientInfo, err := g.clientManager.GetClient(clientName)
+	// Get session ID from context
+	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	if !hasSession {
+		return nil, fmt.Errorf("no session ID in context")
+	}
+
+	// Get the appropriate client for this session
+	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
 	if err != nil {
-		return nil, fmt.Errorf("client not found: %w", err)
+		return nil, fmt.Errorf("client not found for session: %w", err)
 	}
 
 	// Create a new request with the original URI

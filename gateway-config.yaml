@@ -104,3 +104,13 @@ native_tools:
     # Custom system prompt for report generation (optional - has sensible default)
     # system_prompt: |
     #   You are an AI security analyst reviewing MCP gateway audit logs...
+
+  # List downstream servers tool configuration
+  list_servers:
+    # Enable the maybedont__list_downstream_servers tool
+    enabled: true
+
+  # List active sessions tool configuration
+  list_sessions:
+    # Enable the maybedont__list_sessions tool
+    enabled: true

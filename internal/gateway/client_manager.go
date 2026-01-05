@@ -2,9 +2,7 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -18,25 +16,13 @@ import (
 	"golang.org/x/text/language"
 )
 
-// ClientInfo holds a client instance and its metadata
-type ClientInfo struct {
-	Name         string
-	Client       *client.Client
-	Config       config.ClientConfig
-	Capabilities *mcp.ServerCapabilities
-	// RequiresLazyInit indicates if capabilities should be checked per-session
-	// This is true for clients with pass-through auth enabled
-	RequiresLazyInit bool
-	// Detailed capability information
-	Tools     []mcp.Tool
-	Prompts   []mcp.Prompt
-	Resources []mcp.Resource
-	Templates []mcp.ResourceTemplate
-}
 
 // ClientManager manages multiple MCP client instances
 type ClientManager struct {
-	clients        map[string]*ClientInfo
+	// clientConfigs stores the configuration for each downstream client
+	// These are used as templates to create per-session clients
+	clientConfigs map[string]config.ClientConfig
+	// sessionManager manages per-session downstream client instances
 	sessionManager *SessionManager
 	mu             sync.RWMutex
 	logger         *config.SessionLogger
@@ -45,49 +31,185 @@ type ClientManager struct {
 // NewClientManager creates a new client manager
 func NewClientManager(ctx context.Context, logger *config.SessionLogger) *ClientManager {
 	return &ClientManager{
-		clients:        make(map[string]*ClientInfo),
-		sessionManager: NewSessionManager(),
+		clientConfigs:  make(map[string]config.ClientConfig),
+		sessionManager: NewSessionManager(logger),
 		logger:         logger,
 	}
 }
 
-// InitializeClients initializes all configured clients from a map and collects any errors
+// InitializeClients stores client configurations for later per-session instantiation
 func (cm *ClientManager) InitializeClients(ctx context.Context, configs map[string]config.ClientConfig) error {
-	var errs []string
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
 
 	for name, cfg := range configs {
-		if err := cm.InitializeClient(ctx, name, cfg); err != nil {
-			errMsg := fmt.Sprintf("failed to initialize client %s: %v", name, err)
-			errs = append(errs, errMsg)
-			cm.logger.Error(ctx, "Client initialization failed",
-				zap.String("client", name),
-				zap.Error(err))
-		}
-	}
-
-	// Return collected errors if any
-	if len(errs) > 0 {
-		errMsg := fmt.Sprintf("failed to initialize %d client(s):\n", len(errs))
-		for i, err := range errs {
-			errMsg += fmt.Sprintf("  %d. %s\n", i+1, err)
-		}
-		return fmt.Errorf("%s", errMsg)
+		cm.clientConfigs[name] = cfg
+		cm.logger.Info(ctx, "Registered client configuration",
+			zap.String("name", name),
+			zap.String("type", cfg.Type))
 	}
 
 	return nil
 }
 
-// InitializeClient initializes a single client
-func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg config.ClientConfig) error {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+// DiscoveredCapabilities holds the discovered tools, prompts, and resources from all clients
+type DiscoveredCapabilities struct {
+	Tools     map[string][]mcp.Tool             // clientName -> tools
+	Prompts   map[string][]mcp.Prompt           // clientName -> prompts
+	Resources map[string][]mcp.Resource         // clientName -> resources
+	Templates map[string][]mcp.ResourceTemplate // clientName -> templates
+}
 
-	// Check if client already exists
-	if _, exists := cm.clients[name]; exists {
-		return fmt.Errorf("client %s already initialized", name)
+// DiscoverAllCapabilities creates temporary probe connections to all configured clients,
+// discovers their capabilities (tools, prompts, resources), and then closes the connections.
+// This is used at startup to register tools globally on the MCP server.
+func (cm *ClientManager) DiscoverAllCapabilities(ctx context.Context) (*DiscoveredCapabilities, error) {
+	cm.mu.RLock()
+	configs := make(map[string]config.ClientConfig)
+	for k, v := range cm.clientConfigs {
+		configs[k] = v
+	}
+	cm.mu.RUnlock()
+
+	cm.logger.Info(ctx, "Discovering capabilities from all downstream clients",
+		zap.Int("client_count", len(configs)))
+
+	discovered := &DiscoveredCapabilities{
+		Tools:     make(map[string][]mcp.Tool),
+		Prompts:   make(map[string][]mcp.Prompt),
+		Resources: make(map[string][]mcp.Resource),
+		Templates: make(map[string][]mcp.ResourceTemplate),
 	}
 
-	clientInfo := &ClientInfo{
+	var errs []string
+	var skippedPassThrough []string
+	for name, cfg := range configs {
+		// Skip probing for clients with pass-through auth enabled
+		// These clients require upstream credentials which aren't available at startup
+		if cfg.Auth.PassThrough.Enabled {
+			cm.logger.Info(ctx, "Skipping probe for pass-through auth client (requires upstream credentials)",
+				zap.String("client", name))
+			skippedPassThrough = append(skippedPassThrough, name)
+			continue
+		}
+
+		// Create a temporary probe client
+		clientInfo, err := cm.createClient(ctx, name, cfg)
+		if err != nil {
+			errMsg := fmt.Sprintf("failed to probe client %s: %v", name, err)
+			errs = append(errs, errMsg)
+			cm.logger.Error(ctx, "Probe client creation failed",
+				zap.String("client", name),
+				zap.Error(err))
+			continue
+		}
+
+		// Store discovered capabilities
+		discovered.Tools[name] = clientInfo.Tools
+		discovered.Prompts[name] = clientInfo.Prompts
+		discovered.Resources[name] = clientInfo.Resources
+		discovered.Templates[name] = clientInfo.Templates
+
+		cm.logger.Info(ctx, "Discovered capabilities from client",
+			zap.String("client", name),
+			zap.Int("tools", len(clientInfo.Tools)),
+			zap.Int("prompts", len(clientInfo.Prompts)),
+			zap.Int("resources", len(clientInfo.Resources)),
+			zap.Int("templates", len(clientInfo.Templates)))
+
+		// Close the probe client
+		if clientInfo.Client != nil {
+			if err := clientInfo.Client.Close(); err != nil {
+				cm.logger.Warn(ctx, "Failed to close probe client",
+					zap.String("client", name),
+					zap.Error(err))
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		cm.logger.Warn(ctx, "Some clients failed during capability discovery",
+			zap.Int("failed_count", len(errs)),
+			zap.Int("total_count", len(configs)))
+		// Don't return error - continue with successfully discovered capabilities
+	}
+
+	cm.logger.Info(ctx, "Capability discovery complete",
+		zap.Int("clients_discovered", len(discovered.Tools)),
+		zap.Int("clients_skipped_passthrough", len(skippedPassThrough)))
+
+	return discovered, nil
+}
+
+// SessionDiscoveryResult contains information about tools discovered during session creation
+type SessionDiscoveryResult struct {
+	// PassThroughClients contains clients with pass-through auth that discovered tools
+	// These tools should be registered as session-specific tools
+	PassThroughClients map[string]*SessionClientInfo
+}
+
+// CreateSessionClients creates downstream client instances for a new upstream session
+// Returns discovery results for pass-through clients that need session-specific tool registration
+func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID string) (*SessionDiscoveryResult, error) {
+	cm.mu.RLock()
+	configs := make(map[string]config.ClientConfig)
+	for k, v := range cm.clientConfigs {
+		configs[k] = v
+	}
+	cm.mu.RUnlock()
+
+	cm.logger.Info(ctx, "Creating downstream clients for session",
+		zap.String("session_id", sessionID),
+		zap.Int("client_count", len(configs)))
+
+	// Create a session first
+	cm.sessionManager.CreateSession(sessionID)
+
+	result := &SessionDiscoveryResult{
+		PassThroughClients: make(map[string]*SessionClientInfo),
+	}
+
+	var errs []string
+	for name, cfg := range configs {
+		clientInfo, err := cm.createClient(ctx, name, cfg)
+		if err != nil {
+			errMsg := fmt.Sprintf("failed to create client %s: %v", name, err)
+			errs = append(errs, errMsg)
+			cm.logger.Error(ctx, "Client creation failed for session",
+				zap.String("session_id", sessionID),
+				zap.String("client", name),
+				zap.Error(err))
+			continue
+		}
+
+		// Store client in session
+		cm.sessionManager.SetSessionClient(sessionID, name, clientInfo)
+		cm.logger.Debug(ctx, "Created downstream client for session",
+			zap.String("session_id", sessionID),
+			zap.String("client", name))
+
+		// Track pass-through clients for session-specific tool registration
+		if cfg.Auth.PassThrough.Enabled && len(clientInfo.Tools) > 0 {
+			result.PassThroughClients[name] = clientInfo
+			cm.logger.Info(ctx, "Discovered tools from pass-through client for session",
+				zap.String("session_id", sessionID),
+				zap.String("client", name),
+				zap.Int("tools_count", len(clientInfo.Tools)))
+		}
+	}
+
+	if len(errs) > 0 {
+		return result, fmt.Errorf("failed to create %d client(s) for session %s", len(errs), sessionID)
+	}
+
+	cm.logger.Info(ctx, "Successfully created all downstream clients for session",
+		zap.String("session_id", sessionID))
+	return result, nil
+}
+
+// createClient creates a single downstream client instance
+func (cm *ClientManager) createClient(ctx context.Context, name string, cfg config.ClientConfig) (*SessionClientInfo, error) {
+	clientInfo := &SessionClientInfo{
 		Name:   name,
 		Config: cfg,
 	}
@@ -150,43 +272,36 @@ func (cm *ClientManager) InitializeClient(ctx context.Context, name string, cfg 
 
 		cl, err = client.NewStreamableHttpClient(cfg.DownstreamURL, httpOpts...)
 	default:
-		return fmt.Errorf("unsupported transport type: %s", cfg.Type)
+		return nil, fmt.Errorf("unsupported transport type: %s", cfg.Type)
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to create MCP client: %w", err)
+		return nil, fmt.Errorf("failed to create MCP client: %w", err)
 	}
 
 	clientInfo.Client = cl
 
-	// For pass-through auth clients, defer capability check until first session
-	if cfg.Auth.PassThrough.Enabled {
-		clientInfo.RequiresLazyInit = true
-		cm.clients[name] = clientInfo
-		cm.logger.Info(ctx, "Initialized MCP client with lazy initialization",
-			zap.String("name", name),
-			zap.Bool("pass_through_auth", true))
-		return nil
-	}
-
-	// Check capabilities immediately for non-pass-through clients
-	if err := cm.checkCapabilities(ctx, clientInfo); err != nil {
+	// Check capabilities
+	if err := cm.checkSessionClientCapabilities(ctx, clientInfo); err != nil {
 		if closeErr := cl.Close(); closeErr != nil {
 			cm.logger.Error(ctx, "failed to close client after capability check error",
 				zap.String("name", name),
 				zap.Error(closeErr))
 		}
-		return fmt.Errorf("failed to check capabilities: %w", err)
+		return nil, fmt.Errorf("failed to check capabilities: %w", err)
 	}
 
-	cm.clients[name] = clientInfo
 	cm.logger.Info(ctx, "Initialized MCP client", zap.String("name", name))
-
-	return nil
+	return clientInfo, nil
 }
 
-// checkCapabilities checks and stores client capabilities
-func (cm *ClientManager) checkCapabilities(ctx context.Context, clientInfo *ClientInfo) error {
+// CloseSessionClients closes all downstream clients for a session
+func (cm *ClientManager) CloseSessionClients(ctx context.Context, sessionID string) error {
+	return cm.sessionManager.DeleteSession(ctx, sessionID)
+}
+
+// checkSessionClientCapabilities checks and stores capabilities for a session client
+func (cm *ClientManager) checkSessionClientCapabilities(ctx context.Context, clientInfo *SessionClientInfo) error {
 	cm.logger.Debug(ctx, "Checking MCP server capabilities", zap.String("client", clientInfo.Name))
 
 	req := &mcp.InitializeRequest{
@@ -209,7 +324,7 @@ func (cm *ClientManager) checkCapabilities(ctx context.Context, clientInfo *Clie
 
 	if clientInfo.Config.Type == "stdio" {
 		// Use retry logic for stdio clients to handle startup race conditions
-		resp, err = cm.initializeWithRetry(ctx, clientInfo, req)
+		resp, err = cm.initializeSessionClientWithRetry(ctx, clientInfo, req)
 		if err != nil {
 			return fmt.Errorf("failed to initialize MCP server after retries: %w", err)
 		}
@@ -243,81 +358,109 @@ func (cm *ClientManager) checkCapabilities(ctx context.Context, clientInfo *Clie
 	}
 
 	// Discover capabilities with retry logic
-	if err := cm.discoverCapabilities(ctx, clientInfo); err != nil {
+	if err := cm.discoverSessionClientCapabilities(ctx, clientInfo); err != nil {
 		return fmt.Errorf("failed to discover capabilities: %w", err)
 	}
 
 	return nil
 }
 
-// CheckCapabilitiesForSession checks capabilities for a client in a specific session
-// This is used for lazy initialization of pass-through auth clients
-// Returns the ClientInfo with loaded capabilities
-func (cm *ClientManager) CheckCapabilitiesForSession(ctx context.Context, clientName, requestID string) (*ClientInfo, error) {
-	cm.mu.RLock()
-	clientInfo, exists := cm.clients[clientName]
-	cm.mu.RUnlock()
-
-	if !exists {
-		return nil, fmt.Errorf("client %s not found", clientName)
+// GetSessionClient retrieves a downstream client for a specific session
+func (cm *ClientManager) GetSessionClient(sessionID, clientName string) (*SessionClientInfo, error) {
+	clientInfo, ok := cm.sessionManager.GetSessionClient(sessionID, clientName)
+	if !ok {
+		return nil, fmt.Errorf("client %s not found for session %s", clientName, sessionID)
 	}
-
-	// Check if capabilities already loaded for this session
-	if cm.sessionManager.HasClientCapabilities(requestID, clientName) {
-		cm.logger.Debug(ctx, "Capabilities already loaded for session",
-			zap.String("client", clientName))
-		// Return nil to indicate already loaded
-		return nil, nil
-	}
-
-	cm.logger.Info(ctx, "Checking capabilities for session",
-		zap.String("request_id", requestID),
-		zap.String("client", clientName))
-
-	// Use a temporary ClientInfo to avoid modifying the shared instance
-	sessionClientInfo := &ClientInfo{
-		Name:   clientInfo.Name,
-		Client: clientInfo.Client,
-		Config: clientInfo.Config,
-	}
-
-	// Check capabilities with the session context (which contains credentials)
-	if err := cm.checkCapabilities(ctx, sessionClientInfo); err != nil {
-		return nil, fmt.Errorf("failed to check capabilities for session: %w", err)
-	}
-
-	// Store capabilities in session manager
-	cm.sessionManager.SetClientCapabilities(requestID, clientName, sessionClientInfo.Capabilities)
-
-	cm.logger.Info(ctx, "Successfully loaded capabilities for session",
-		zap.String("request_id", requestID),
-		zap.String("client", clientName),
-		zap.Int("tools", len(sessionClientInfo.Tools)),
-		zap.Int("prompts", len(sessionClientInfo.Prompts)),
-		zap.Int("resources", len(sessionClientInfo.Resources)))
-
-	return sessionClientInfo, nil
+	return clientInfo, nil
 }
 
-// GetLazyInitClients returns a list of client names that require lazy initialization
-func (cm *ClientManager) GetLazyInitClients() []string {
+// GetAllSessionClients retrieves all downstream clients for a session
+func (cm *ClientManager) GetAllSessionClients(sessionID string) (map[string]*SessionClientInfo, error) {
+	session, ok := cm.sessionManager.GetSession(sessionID)
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	return session.GetAllClients(), nil
+}
+
+// GetClientConfigs returns all client configurations (for capability reporting)
+func (cm *ClientManager) GetClientConfigs() map[string]config.ClientConfig {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
-
-	var lazyClients []string
-	for name, info := range cm.clients {
-		if info.RequiresLazyInit {
-			lazyClients = append(lazyClients, name)
-		}
+	result := make(map[string]config.ClientConfig)
+	for k, v := range cm.clientConfigs {
+		result[k] = v
 	}
-	return lazyClients
+	return result
 }
 
-// discoverCapabilities discovers tools, prompts, and resources with retry logic
-func (cm *ClientManager) discoverCapabilities(ctx context.Context, clientInfo *ClientInfo) error {
+// SetSessionClientIP sets the client IP for a session
+func (cm *ClientManager) SetSessionClientIP(sessionID, clientIP string) {
+	session, ok := cm.sessionManager.GetSession(sessionID)
+	if !ok {
+		return
+	}
+	session.SetClientIP(clientIP)
+}
+
+// GetActiveSessions returns information about all active sessions
+func (cm *ClientManager) GetActiveSessions() []SessionInfo {
+	sessionIDs := cm.sessionManager.GetAllSessions()
+	sessions := make([]SessionInfo, 0, len(sessionIDs))
+
+	for _, sessionID := range sessionIDs {
+		session, ok := cm.sessionManager.GetSession(sessionID)
+		if !ok {
+			continue
+		}
+
+		// Get downstream client names for this session
+		clients := session.GetAllClients()
+		clientNames := make([]string, 0, len(clients))
+		for clientName := range clients {
+			clientNames = append(clientNames, clientName)
+		}
+
+		sessions = append(sessions, SessionInfo{
+			SessionID:       sessionID,
+			ClientIP:        session.GetClientIP(),
+			DownstreamNames: clientNames,
+		})
+	}
+
+	return sessions
+}
+
+// GetSessionClientTools returns the tools discovered for each client in a session
+func (cm *ClientManager) GetSessionClientTools(sessionID string) []SessionClientTools {
+	session, ok := cm.sessionManager.GetSession(sessionID)
+	if !ok {
+		return nil
+	}
+
+	clients := session.GetAllClients()
+	result := make([]SessionClientTools, 0, len(clients))
+
+	for clientName, clientInfo := range clients {
+		toolNames := make([]string, 0, len(clientInfo.Tools))
+		for _, tool := range clientInfo.Tools {
+			toolNames = append(toolNames, tool.Name)
+		}
+
+		result = append(result, SessionClientTools{
+			ClientName: clientName,
+			Tools:      toolNames,
+		})
+	}
+
+	return result
+}
+
+// discoverSessionClientCapabilities discovers tools, prompts, and resources for a session client
+func (cm *ClientManager) discoverSessionClientCapabilities(ctx context.Context, clientInfo *SessionClientInfo) error {
 	// Get tools if available (try regardless of ListChanged for stdio clients)
 	if clientInfo.Capabilities.Tools != nil {
-		tools, err := cm.discoverToolsWithRetry(ctx, clientInfo)
+		tools, err := cm.discoverSessionToolsWithRetry(ctx, clientInfo)
 		if err != nil {
 			return fmt.Errorf("failed to discover tools: %w", err)
 		}
@@ -330,7 +473,7 @@ func (cm *ClientManager) discoverCapabilities(ctx context.Context, clientInfo *C
 
 	// Get prompts if available
 	if clientInfo.Capabilities.Prompts != nil && clientInfo.Capabilities.Prompts.ListChanged {
-		prompts, err := cm.discoverPromptsWithRetry(ctx, clientInfo)
+		prompts, err := cm.discoverSessionPromptsWithRetry(ctx, clientInfo)
 		if err != nil {
 			return fmt.Errorf("failed to discover prompts: %w", err)
 		}
@@ -339,14 +482,14 @@ func (cm *ClientManager) discoverCapabilities(ctx context.Context, clientInfo *C
 
 	// Get resources if available
 	if clientInfo.Capabilities.Resources != nil && clientInfo.Capabilities.Resources.ListChanged {
-		resources, err := cm.discoverResourcesWithRetry(ctx, clientInfo)
+		resources, err := cm.discoverSessionResourcesWithRetry(ctx, clientInfo)
 		if err != nil {
 			return fmt.Errorf("failed to discover resources: %w", err)
 		}
 		clientInfo.Resources = resources
 
 		// Also list resource templates if available
-		templates, err := cm.discoverResourceTemplatesWithRetry(ctx, clientInfo)
+		templates, err := cm.discoverSessionResourceTemplatesWithRetry(ctx, clientInfo)
 		if err != nil {
 			return fmt.Errorf("failed to discover resource templates: %w", err)
 		}
@@ -356,11 +499,11 @@ func (cm *ClientManager) discoverCapabilities(ctx context.Context, clientInfo *C
 	return nil
 }
 
-// retryWithDelay executes a function with retry logic
-func retryWithDelay[T any](
+// sessionRetryWithDelay executes a function with retry logic for session clients
+func sessionRetryWithDelay[T any](
 	ctx context.Context,
 	logger *config.SessionLogger,
-	clientInfo *ClientInfo,
+	clientInfo *SessionClientInfo,
 	operation string,
 	fn func() (T, error),
 	validateResult func(T, int) bool,
@@ -431,9 +574,9 @@ func retryWithDelay[T any](
 	return zeroValue, nil // Return zero value if no error but no valid result
 }
 
-// discoverToolsWithRetry discovers tools with retry logic for stdio clients
-func (cm *ClientManager) discoverToolsWithRetry(ctx context.Context, clientInfo *ClientInfo) ([]mcp.Tool, error) {
-	return retryWithDelay(ctx, cm.logger, clientInfo, "tool discovery",
+// discoverSessionToolsWithRetry discovers tools with retry logic for session clients
+func (cm *ClientManager) discoverSessionToolsWithRetry(ctx context.Context, clientInfo *SessionClientInfo) ([]mcp.Tool, error) {
+	return sessionRetryWithDelay(ctx, cm.logger, clientInfo, "tool discovery",
 		func() ([]mcp.Tool, error) {
 			toolsReq := &mcp.ListToolsRequest{
 				PaginatedRequest: mcp.PaginatedRequest{
@@ -465,9 +608,9 @@ func (cm *ClientManager) discoverToolsWithRetry(ctx context.Context, clientInfo 
 	)
 }
 
-// discoverPromptsWithRetry discovers prompts with retry logic for stdio clients
-func (cm *ClientManager) discoverPromptsWithRetry(ctx context.Context, clientInfo *ClientInfo) ([]mcp.Prompt, error) {
-	return retryWithDelay(ctx, cm.logger, clientInfo, "prompt discovery",
+// discoverSessionPromptsWithRetry discovers prompts with retry logic for session clients
+func (cm *ClientManager) discoverSessionPromptsWithRetry(ctx context.Context, clientInfo *SessionClientInfo) ([]mcp.Prompt, error) {
+	return sessionRetryWithDelay(ctx, cm.logger, clientInfo, "prompt discovery",
 		func() ([]mcp.Prompt, error) {
 			promptsReq := &mcp.ListPromptsRequest{
 				PaginatedRequest: mcp.PaginatedRequest{
@@ -487,9 +630,9 @@ func (cm *ClientManager) discoverPromptsWithRetry(ctx context.Context, clientInf
 	)
 }
 
-// discoverResourcesWithRetry discovers resources with retry logic for stdio clients
-func (cm *ClientManager) discoverResourcesWithRetry(ctx context.Context, clientInfo *ClientInfo) ([]mcp.Resource, error) {
-	return retryWithDelay(ctx, cm.logger, clientInfo, "resource discovery",
+// discoverSessionResourcesWithRetry discovers resources with retry logic for session clients
+func (cm *ClientManager) discoverSessionResourcesWithRetry(ctx context.Context, clientInfo *SessionClientInfo) ([]mcp.Resource, error) {
+	return sessionRetryWithDelay(ctx, cm.logger, clientInfo, "resource discovery",
 		func() ([]mcp.Resource, error) {
 			resourcesReq := &mcp.ListResourcesRequest{
 				PaginatedRequest: mcp.PaginatedRequest{
@@ -509,9 +652,9 @@ func (cm *ClientManager) discoverResourcesWithRetry(ctx context.Context, clientI
 	)
 }
 
-// discoverResourceTemplatesWithRetry discovers resource templates with retry logic for stdio clients
-func (cm *ClientManager) discoverResourceTemplatesWithRetry(ctx context.Context, clientInfo *ClientInfo) ([]mcp.ResourceTemplate, error) {
-	return retryWithDelay(ctx, cm.logger, clientInfo, "resource template discovery",
+// discoverSessionResourceTemplatesWithRetry discovers resource templates with retry logic for session clients
+func (cm *ClientManager) discoverSessionResourceTemplatesWithRetry(ctx context.Context, clientInfo *SessionClientInfo) ([]mcp.ResourceTemplate, error) {
+	return sessionRetryWithDelay(ctx, cm.logger, clientInfo, "resource template discovery",
 		func() ([]mcp.ResourceTemplate, error) {
 			templatesReq := &mcp.ListResourceTemplatesRequest{
 				PaginatedRequest: mcp.PaginatedRequest{
@@ -531,8 +674,8 @@ func (cm *ClientManager) discoverResourceTemplatesWithRetry(ctx context.Context,
 	)
 }
 
-// initializeWithRetry attempts to initialize an MCP client with exponential backoff retry logic
-func (cm *ClientManager) initializeWithRetry(ctx context.Context, clientInfo *ClientInfo, req *mcp.InitializeRequest) (*mcp.InitializeResult, error) {
+// initializeSessionClientWithRetry attempts to initialize an MCP client with exponential backoff retry logic
+func (cm *ClientManager) initializeSessionClientWithRetry(ctx context.Context, clientInfo *SessionClientInfo, req *mcp.InitializeRequest) (*mcp.InitializeResult, error) {
 	cfg := clientInfo.Config
 	maxRetries := cfg.InitializationRetries
 	baseDelay := time.Duration(cfg.RetryDelayMs) * time.Millisecond
@@ -618,47 +761,9 @@ func (cm *ClientManager) initializeWithRetry(ctx context.Context, clientInfo *Cl
 	return nil, fmt.Errorf("initialization failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
-// GetClient returns a client by name
-func (cm *ClientManager) GetClient(name string) (*ClientInfo, error) {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-
-	result, exists := cm.clients[name]
-	if !exists {
-		return nil, fmt.Errorf("client not found: %s", name)
-	}
-
-	return result, nil
-}
-
-// GetAllClients returns all client information
-func (cm *ClientManager) GetAllClients() map[string]*ClientInfo {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-
-	// Return a copy to avoid race conditions
-	result := make(map[string]*ClientInfo)
-	maps.Copy(result, cm.clients)
-	return result
-}
-
-// Close closes all managed clients
-func (cm *ClientManager) Close() error {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	var errs []error
-	for name, clientInfo := range cm.clients {
-		if err := clientInfo.Client.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close client %s: %w", name, err))
-		}
-	}
-
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-
-	return nil
+// Close closes all session clients
+func (cm *ClientManager) Close(ctx context.Context) error {
+	return cm.sessionManager.CloseAllSessions(ctx)
 }
 
 // ParsePrefixedName parses a prefixed name (e.g., "aws__list_files") into client name and original name
