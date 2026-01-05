@@ -412,12 +412,6 @@ func LoadConfig(configPath string) (*Config, error) {
 		config.Server.ListenAddr = "127.0.0.1"
 	}
 
-	// TODO : Seems like this environment variable should be configurable.
-	// Override OpenAI API key from environment variable if set
-	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		config.AIPolicyValidation.APIKey = apiKey
-	}
-
 	// Set default values for native tools configuration
 	if config.NativeTools.AuditLog.MaxEntries == 0 {
 		config.NativeTools.AuditLog.MaxEntries = 1000
@@ -456,7 +450,6 @@ For each concern, estimate the potential impact category and explain the reasoni
 	// Load CEL request policies from rules file
 	if config.PolicyValidation.Enabled {
 		if config.PolicyValidation.RulesFile == "" {
-			// TODO : Note that the docs say this is optional and we have default rules?
 			return nil, fmt.Errorf("policy_validation is enabled but rules_file is not specified")
 		}
 		resolvedPath := resolveRulesFilePath(config.PolicyValidation.RulesFile, configFileDir)
@@ -684,7 +677,7 @@ func ValidateConfig(cfg *Config) error {
 	// Validate AI validation configuration
 	if cfg.AIPolicyValidation.Enabled {
 		if cfg.AIPolicyValidation.APIKey == "" {
-			errors = append(errors, "OPENAI_API_KEY environment variable is required when AI validation is enabled")
+			errors = append(errors, "ai_validation.api_key is required when AI validation is enabled")
 		}
 		if cfg.AIPolicyValidation.Endpoint == "" {
 			errors = append(errors, "ai_validation.endpoint is required when AI validation is enabled")

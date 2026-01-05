@@ -81,7 +81,7 @@ func (h *NativeToolsHandler) handleGenerateAuditReport(ctx context.Context, req 
 
 	// Check if AI is configured
 	if h.config.NativeTools.AuditReport.APIKey == "" {
-		return mcp.NewToolResultError("Audit report generation requires an OpenAI API key. Configure native_tools.audit_report.api_key or set OPENAI_API_KEY environment variable."), nil
+		return mcp.NewToolResultError("Audit report generation requires an API key. Configure native_tools.audit_report.api_key or ai_validation.api_key in your config file."), nil
 	}
 
 	// Parse parameters

@@ -305,7 +305,7 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 	require.Contains(t, errMsg, "downstream_mcp_servers[test2].capability_discovery_retries must be less than 10")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test2].capability_retry_delay_ms must be less than 30000ms")
 	require.Contains(t, errMsg, "audit.path is required")
-	require.Contains(t, errMsg, "OPENAI_API_KEY environment variable is required")
+	require.Contains(t, errMsg, "ai_validation.api_key is required")
 	require.Contains(t, errMsg, "ai_validation.endpoint is required")
 	require.Contains(t, errMsg, "ai_validation.model is required")
 }

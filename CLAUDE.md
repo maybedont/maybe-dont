@@ -98,9 +98,9 @@ The project uses Go's standard testing framework with testify for assertions. Ke
 ## Environment Variables
 
 Key environment variables for configuration:
-- `OPENAI_API_KEY` - OpenAI API key for AI validation (overrides config file setting)
 - `MAYBEDONT_METRICS_OPTOUT` - Set to any value to disable anonymous usage metrics collection
 - Environment variables follow the pattern: `MAYBE_DONT_{CONFIG_PATH}` where CONFIG_PATH uses underscores
+- Use `${VAR_NAME}` syntax in config files for environment variable substitution (e.g., `api_key: "${OPENAI_API_KEY}"`)
 
 ## Anonymous Usage Metrics
 
