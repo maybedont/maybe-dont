@@ -48,6 +48,7 @@ func TestServerTypeValidation(t *testing.T) {
 							KeyFile  string `mapstructure:"key_file"`
 						} `mapstructure:"tls"`
 					} `mapstructure:"sse"`
+					TrustedProxies []string `mapstructure:"trusted_proxies"`
 				}{
 					Type:       tt.serverType,
 					ListenAddr: tt.listenAddr,
@@ -105,6 +106,7 @@ func TestListenAddrValidation(t *testing.T) {
 							KeyFile  string `mapstructure:"key_file"`
 						} `mapstructure:"tls"`
 					} `mapstructure:"sse"`
+					TrustedProxies []string `mapstructure:"trusted_proxies"`
 				}{
 					Type:       tt.serverType,
 					ListenAddr: tt.listenAddr,
@@ -242,6 +244,7 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 					KeyFile  string `mapstructure:"key_file"`
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
+			TrustedProxies []string `mapstructure:"trusted_proxies"`
 		}{
 			Type: "invalid-type", // Error 1: invalid server type
 		},
@@ -320,6 +323,7 @@ func TestValidateConfigSuccess(t *testing.T) {
 					KeyFile  string `mapstructure:"key_file"`
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
+			TrustedProxies []string `mapstructure:"trusted_proxies"`
 		}{
 			Type: ServerTypeSTDIO,
 		},
