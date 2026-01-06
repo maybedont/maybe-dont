@@ -40,7 +40,7 @@ if [ $exit_code -eq 0 ] ; then
     echo ""
     echo "Or by using the standard developer start script: "
     echo ""
-    echo " > ./developer/scripts/startLocalDockerImage.sh"
+    echo " > make docker-run"
     echo ""
     # We return a success code in case remove failed, the :tmp image may not exist.
     true
