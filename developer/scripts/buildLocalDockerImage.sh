@@ -22,14 +22,16 @@ esac
 
 # Build a linux binary for the current architecture
 make clean
-GOOS=linux GOARCH=${TARGET_ARCH} make build
+CGO_ENABLED=0 GOOS=linux GOARCH=${TARGET_ARCH} make build
 
 echo "Build docker image using --platform=linux/${TARGET_ARCH} named ${IMG}:dev"
 
 # If the image already exists, move it to :tmp
 docker tag "${IMG}:dev" "${IMG}:tmp" &>/dev/null
 
-docker buildx build --platform=linux/${TARGET_ARCH} -t ${IMG}:dev .
+# Note that --progress=plain makes this more verbose to help debug build issues. Should be ok to just leave it on since
+# this is only used locally to build images.
+docker buildx build --progress=plain --platform=linux/${TARGET_ARCH} -t ${IMG}:dev .
 exit_code=$?
 if [ $exit_code -eq 0 ] ; then
     docker image rm "${IMG}:tmp" &>/dev/null
