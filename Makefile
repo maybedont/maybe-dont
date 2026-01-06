@@ -10,7 +10,7 @@ DATE = $(shell date -u '+%Y-%m-%d %H:%M:%S')
 METRICS_DATASET ?= $(shell echo $$METRICS_DATASET)
 METRICS_API_TOKEN ?= $(shell echo $$METRICS_API_TOKEN)
 
-.PHONY: all build clean lint test
+.PHONY: all build clean lint test docker-build docker-run
 
 all: build
 
@@ -34,3 +34,12 @@ bump-version:
 
 snapshot:
 	goreleaser release --snapshot --skip=docker --clean
+
+run: build
+	./$(BINARY_NAME) start --config-path ~/.maybe-dont/
+
+docker-build:
+	./developer/scripts/buildLocalDockerImage.sh
+
+docker-run: docker-build
+	./developer/scripts/runLocalDockerImage.sh
