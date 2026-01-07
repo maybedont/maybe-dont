@@ -291,7 +291,7 @@ func (g *Gateway) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Tool handler function
+// HandleToolCall tool handler function
 func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Track tool invocation in metrics
 	if g.metricsCollector != nil {
@@ -304,9 +304,17 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		return g.nativeToolsHandler.HandleToolCall(ctx, req)
 	}
 
-	// Create audit log entry
+	// Get session ID and client IP early for audit logging
+	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	clientIP, _ := GetClientIP(ctx)
+
+	// Create audit log entry with session context
 	auditLog := map[string]interface{}{
 		"request": req,
+		"client": map[string]interface{}{
+			"ip_address": clientIP,
+			"session_id": sessionID,
+		},
 	}
 
 	// Ensure audit log is always written, even on panic
@@ -368,8 +376,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		return nil, fmt.Errorf("invalid tool name format: %w", err)
 	}
 
-	// Get session ID from context
-	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	// Check if we have a valid session
 	if !hasSession {
 		auditLog["error"] = "no session ID in context"
 		auditLog["status"] = "no_session"
