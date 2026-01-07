@@ -31,7 +31,7 @@ docker tag "${IMG}:dev" "${IMG}:tmp" &>/dev/null
 
 # Note that --progress=plain makes this more verbose to help debug build issues. Should be ok to just leave it on since
 # this is only used locally to build images.
-docker buildx build --progress=plain --platform=linux/${TARGET_ARCH} -t ${IMG}:dev .
+docker buildx build --rm --progress=plain --platform=linux/${TARGET_ARCH} -t ${IMG}:dev .
 exit_code=$?
 if [ $exit_code -eq 0 ] ; then
     docker image rm "${IMG}:tmp" &>/dev/null
