@@ -8,12 +8,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// LoggingHandler logs tool call request details
+// ToolLoggingHandler logs tool call request details
 type ToolLoggingHandler struct {
 	auditLogger *config.SessionLogger
 }
 
-// NewLoggingHandler creates a new logging handler
+// NewToolLoggingHandler creates a new logging handler
 func NewToolLoggingHandler(auditLogger *config.SessionLogger) *ToolLoggingHandler {
 	return &ToolLoggingHandler{
 		auditLogger: auditLogger,

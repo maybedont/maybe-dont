@@ -34,8 +34,8 @@ type AIPolicyEngine struct {
 	client   *openai.Client
 }
 
-// NewAIPolicyEngine creates a new AI policy engine
-func InitAIPolicyEngine(ctx context.Context, logger *config.SessionLogger, engine *AIPolicyEngine) error {
+// InitAIPolicyEngine creates a new AI policy engine
+func InitAIPolicyEngine(logger *config.SessionLogger, engine *AIPolicyEngine) error {
 	// Set the logger
 	engine.logger = logger
 

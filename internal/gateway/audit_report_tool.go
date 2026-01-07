@@ -106,8 +106,8 @@ func (h *NativeToolsHandler) handleGenerateAuditReport(ctx context.Context, req 
 		if ia, ok := args["include_impact_analysis"].(bool); ok {
 			params.IncludeImpactAnalysis = ia
 		}
-		if fmt, ok := args["format"].(string); ok {
-			params.Format = fmt
+		if format, ok := args["format"].(string); ok {
+			params.Format = format
 		}
 	}
 
@@ -268,7 +268,7 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []map
 	entrySummary := h.prepareEntrySummary(entries, stats)
 
 	// Build the user prompt
-	userPrompt := h.buildReportPrompt(entrySummary, stats, params)
+	userPrompt := h.buildReportPrompt(entrySummary, params)
 
 	// Create OpenAI client
 	client := openai.NewClient(
@@ -408,7 +408,7 @@ func (h *NativeToolsHandler) prepareEntrySummary(entries []map[string]interface{
 }
 
 // buildReportPrompt builds the prompt for the AI
-func (h *NativeToolsHandler) buildReportPrompt(entrySummary string, stats AuditReportStatistics, params AuditReportRequest) string {
+func (h *NativeToolsHandler) buildReportPrompt(entrySummary string, params AuditReportRequest) string {
 	prompt := fmt.Sprintf(`Analyze the following MCP gateway audit log data and generate a security analysis report.
 
 Focus Area: %s

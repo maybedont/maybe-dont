@@ -91,7 +91,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		}
 
 		// Create AI policy engine
-		err = InitAIPolicyEngine(ctx, logger, aiPolicyEngine)
+		err = InitAIPolicyEngine(logger, aiPolicyEngine)
 		if err != nil {
 			return nil, fmt.Errorf("failed to init AI policy engine: %w", err)
 		}
