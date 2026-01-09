@@ -16,7 +16,6 @@ import (
 	"golang.org/x/text/language"
 )
 
-
 // ClientManager manages multiple MCP client instances
 type ClientManager struct {
 	// clientConfigs stores the configuration for each downstream client
@@ -205,6 +204,44 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 	cm.logger.Info(ctx, "Successfully created all downstream clients for session",
 		zap.String("session_id", sessionID))
 	return result, nil
+}
+
+// CreateSingleSessionClient creates a single downstream client for an existing session.
+// This is used for on-demand discovery of pass-through clients that weren't connected at session creation.
+func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionID, clientName string, cfg config.ClientConfig) (*SessionClientInfo, error) {
+	cm.logger.Info(ctx, "Creating single downstream client for session",
+		zap.String("session_id", sessionID),
+		zap.String("client", clientName))
+
+	// Ensure session exists
+	session, exists := cm.sessionManager.GetSession(sessionID)
+	if !exists {
+		// Create session if it doesn't exist (shouldn't normally happen)
+		cm.sessionManager.CreateSession(sessionID)
+	} else {
+		// Check if client already exists in session
+		if existingClient, ok := session.GetClient(clientName); ok && existingClient != nil && existingClient.Client != nil {
+			cm.logger.Debug(ctx, "Client already exists for session",
+				zap.String("session_id", sessionID),
+				zap.String("client", clientName))
+			return existingClient, nil
+		}
+	}
+
+	// Create the client
+	clientInfo, err := cm.createClient(ctx, clientName, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client %s: %w", clientName, err)
+	}
+
+	// Store client in session
+	cm.sessionManager.SetSessionClient(sessionID, clientName, clientInfo)
+	cm.logger.Info(ctx, "Created downstream client for session",
+		zap.String("session_id", sessionID),
+		zap.String("client", clientName),
+		zap.Int("tools_count", len(clientInfo.Tools)))
+
+	return clientInfo, nil
 }
 
 // createClient creates a single downstream client instance

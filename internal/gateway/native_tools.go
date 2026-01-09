@@ -14,8 +14,9 @@ const (
 	// NativeToolPrefix is the prefix for all native gateway tools
 	NativeToolPrefix = "maybedont__"
 
-	ToolGetAuditLog           = "maybedont__get_audit_log"
+	ToolDiscoverTools         = "maybedont__discover_tools"
 	ToolGenerateAuditReport   = "maybedont__generate_audit_report"
+	ToolGetAuditLog           = "maybedont__get_audit_log"
 	ToolListDownstreamServers = "maybedont__list_downstream_servers"
 	ToolListSessions          = "maybedont__list_sessions"
 )
@@ -55,6 +56,34 @@ type SessionProvider interface {
 	GetSessionClientTools(sessionID string) []SessionClientTools
 }
 
+// DiscoveryResult contains the result of pass-through tool discovery
+type DiscoveryResult struct {
+	DiscoveredClients []DiscoveredClientInfo `json:"discovered_clients"`
+	AlreadyConnected  []string               `json:"already_connected,omitempty"`
+	Errors            []DiscoveryError       `json:"errors,omitempty"`
+}
+
+// DiscoveredClientInfo contains information about a discovered client
+type DiscoveredClientInfo struct {
+	ClientName string   `json:"client_name"`
+	ToolCount  int      `json:"tool_count"`
+	Tools      []string `json:"tools"`
+}
+
+// DiscoveryError contains information about a discovery error
+type DiscoveryError struct {
+	ClientName string `json:"client_name"`
+	Error      string `json:"error"`
+}
+
+// PassThroughDiscoveryProvider provides the ability to discover tools from pass-through clients
+type PassThroughDiscoveryProvider interface {
+	// DiscoverPassThroughTools triggers discovery for pass-through clients
+	// and registers discovered tools for the session.
+	// If clientName is empty, discovers all pass-through clients.
+	DiscoverPassThroughTools(ctx context.Context, sessionID string, clientName string) (*DiscoveryResult, error)
+}
+
 // NativeToolsHandler handles native gateway tools
 type NativeToolsHandler struct {
 	config               *config.Config
@@ -63,6 +92,7 @@ type NativeToolsHandler struct {
 	clientConfigProvider ClientConfigProvider
 	toolsProvider        RegisteredToolsProvider
 	sessionProvider      SessionProvider
+	discoveryProvider    PassThroughDiscoveryProvider
 }
 
 // NewNativeToolsHandler creates a new native tools handler
@@ -87,6 +117,11 @@ func (h *NativeToolsHandler) SetToolsProvider(provider RegisteredToolsProvider) 
 // SetSessionProvider sets the provider for session information
 func (h *NativeToolsHandler) SetSessionProvider(provider SessionProvider) {
 	h.sessionProvider = provider
+}
+
+// SetDiscoveryProvider sets the provider for pass-through tool discovery
+func (h *NativeToolsHandler) SetDiscoveryProvider(provider PassThroughDiscoveryProvider) {
+	h.discoveryProvider = provider
 }
 
 // IsNativeTool checks if a tool name is a native gateway tool
@@ -114,6 +149,9 @@ func (h *NativeToolsHandler) GetTools() []mcp.Tool {
 		tools = append(tools, h.getListSessionsToolDefinition())
 	}
 
+	// discover_tools is always enabled - it's required for pass-through auth to work
+	tools = append(tools, h.getDiscoverToolsDefinition())
+
 	return tools
 }
 
@@ -130,6 +168,8 @@ func (h *NativeToolsHandler) HandleToolCall(ctx context.Context, req mcp.CallToo
 		return h.handleListDownstreamServers(ctx, req)
 	case ToolListSessions:
 		return h.handleListSessions(ctx, req)
+	case ToolDiscoverTools:
+		return h.handleDiscoverTools(ctx, req)
 	default:
 		return nil, fmt.Errorf("unknown native tool: %s", req.Params.Name)
 	}

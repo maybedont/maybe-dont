@@ -248,6 +248,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Wire up the session provider for native tools
 	g.nativeToolsHandler.SetSessionProvider(g.clientManager)
 
+	// Wire up the discovery provider for native tools (pass-through discovery)
+	g.nativeToolsHandler.SetDiscoveryProvider(g)
+
 	return nil
 }
 
@@ -611,4 +614,104 @@ func (g *Gateway) HandleResourceCall(ctx context.Context, req mcp.ReadResourceRe
 // Resource template handler function
 func (g *Gateway) HandleResourceTemplateCall(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 	return g.handleResourceRequest(ctx, req, "resource template")
+}
+
+// DiscoverPassThroughTools implements PassThroughDiscoveryProvider interface.
+// It triggers discovery for pass-through clients that weren't discovered at startup,
+// using credentials from the current request context.
+func (g *Gateway) DiscoverPassThroughTools(ctx context.Context, sessionID string, clientName string) (*DiscoveryResult, error) {
+	g.logger.Info(ctx, "Triggering pass-through tool discovery",
+		zap.String("session_id", sessionID),
+		zap.String("client_filter", clientName))
+
+	result := &DiscoveryResult{
+		DiscoveredClients: []DiscoveredClientInfo{},
+		AlreadyConnected:  []string{},
+		Errors:            []DiscoveryError{},
+	}
+
+	// Get all client configs
+	configs := g.clientManager.GetClientConfigs()
+
+	// Filter to only pass-through clients
+	var passThroughClients []string
+	for name, cfg := range configs {
+		if !cfg.Auth.PassThrough.Enabled {
+			continue
+		}
+		// If a specific client was requested, filter to that one
+		if clientName != "" && name != clientName {
+			continue
+		}
+		passThroughClients = append(passThroughClients, name)
+	}
+
+	if len(passThroughClients) == 0 {
+		if clientName != "" {
+			return nil, fmt.Errorf("client '%s' is not configured or is not a pass-through client", clientName)
+		}
+		g.logger.Info(ctx, "No pass-through clients configured")
+		return result, nil
+	}
+
+	// Check which clients are already connected for this session
+	for _, name := range passThroughClients {
+		existingClient, err := g.clientManager.GetSessionClient(sessionID, name)
+		if err == nil && existingClient != nil && existingClient.Client != nil {
+			// Client already connected
+			result.AlreadyConnected = append(result.AlreadyConnected, name)
+			g.logger.Debug(ctx, "Client already connected for session",
+				zap.String("session_id", sessionID),
+				zap.String("client", name))
+			continue
+		}
+
+		// Attempt to create/connect to this client
+		cfg := configs[name]
+		clientInfo, err := g.clientManager.CreateSingleSessionClient(ctx, sessionID, name, cfg)
+		if err != nil {
+			result.Errors = append(result.Errors, DiscoveryError{
+				ClientName: name,
+				Error:      err.Error(),
+			})
+			g.logger.Warn(ctx, "Failed to connect to pass-through client",
+				zap.String("session_id", sessionID),
+				zap.String("client", name),
+				zap.Error(err))
+			continue
+		}
+
+		// Register discovered tools for this session
+		if len(clientInfo.Tools) > 0 {
+			toolNames := make([]string, 0, len(clientInfo.Tools))
+			for _, tool := range clientInfo.Tools {
+				prefixedTool := tool
+				prefixedTool.Name = PrefixName(name, tool.Name)
+
+				err := g.server.AddSessionTool(sessionID, prefixedTool, g.handleToolCallWithErrorHandling)
+				if err != nil {
+					g.logger.Warn(ctx, "Failed to register session tool",
+						zap.String("session_id", sessionID),
+						zap.String("client", name),
+						zap.String("tool", prefixedTool.Name),
+						zap.Error(err))
+					continue
+				}
+				toolNames = append(toolNames, tool.Name)
+			}
+
+			result.DiscoveredClients = append(result.DiscoveredClients, DiscoveredClientInfo{
+				ClientName: name,
+				ToolCount:  len(toolNames),
+				Tools:      toolNames,
+			})
+
+			g.logger.Info(ctx, "Discovered and registered tools from pass-through client",
+				zap.String("session_id", sessionID),
+				zap.String("client", name),
+				zap.Int("tools_count", len(toolNames)))
+		}
+	}
+
+	return result, nil
 }
