@@ -19,3 +19,4 @@ EXPOSE 8080
 USER maybedont
 
 ENTRYPOINT ["/usr/local/maybedont/maybe-dont"]
+CMD ["start"]

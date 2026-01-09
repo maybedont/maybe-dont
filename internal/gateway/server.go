@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -61,11 +62,17 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 	}
 
 	// Register session-specific tools for pass-through clients
-	if result != nil && len(result.PassThroughClients) > 0 {
-		g.registerSessionTools(ctx, sessionID, result.PassThroughClients)
+	if result != nil && len(result.DownstreamClients) > 0 {
+		g.registerSessionTools(ctx, sessionID, result.DownstreamClients)
 	}
 
-	g.logger.Info(ctx, "Downstream clients created for session", zap.String("session_id", sessionID))
+	clientCount := 0
+	if result != nil {
+		clientCount = len(result.DownstreamClients)
+	}
+	g.logger.Info(ctx, "Downstream clients created for session",
+		zap.String("session_id", sessionID),
+		zap.Int("client_count", clientCount))
 }
 
 // registerSessionTools registers tools from pass-through clients as session-specific tools
@@ -416,7 +423,8 @@ func (g *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.C
 	result, err := g.HandleToolCall(ctx, req)
 	if err != nil {
 		// Check if it's a PolicyDeniedError
-		if policyErr, ok := err.(*PolicyDeniedError); ok {
+		var policyErr *PolicyDeniedError
+		if errors.As(err, &policyErr) {
 			// Create error result with user-friendly message
 			errorResult := mcp.NewToolResultError(policyErr.Message)
 

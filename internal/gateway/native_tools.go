@@ -89,18 +89,21 @@ type NativeToolsHandler struct {
 	config               *config.Config
 	logger               *config.SessionLogger
 	auditLogger          *config.SessionLogger
+	auditLogPath         string // Full path to the audit log file
 	clientConfigProvider ClientConfigProvider
 	toolsProvider        RegisteredToolsProvider
 	sessionProvider      SessionProvider
 	discoveryProvider    PassThroughDiscoveryProvider
 }
 
-// NewNativeToolsHandler creates a new native tools handler
-func NewNativeToolsHandler(cfg *config.Config, logger, auditLogger *config.SessionLogger) *NativeToolsHandler {
+// NewNativeToolsHandler creates a new native tools handler.
+// auditLogPath is the full resolved path to the audit log file.
+func NewNativeToolsHandler(cfg *config.Config, logger, auditLogger *config.SessionLogger, auditLogPath string) *NativeToolsHandler {
 	return &NativeToolsHandler{
-		config:      cfg,
-		logger:      logger,
-		auditLogger: auditLogger,
+		config:       cfg,
+		logger:       logger,
+		auditLogger:  auditLogger,
+		auditLogPath: auditLogPath,
 	}
 }
 

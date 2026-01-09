@@ -54,6 +54,11 @@ func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy) error {
 	// Validate each policy
 	for _, policy := range policies {
 
+		// Validate action, request validation can only be 'allow' or 'deny'
+		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny {
+			return fmt.Errorf("invalid action '%s' for policy %s: must be 'allow' or 'deny'", policy.Action, policy.Name)
+		}
+
 		// Store the compiled policy
 		e.policies = append(e.policies, AIPolicy{
 			Name:        policy.Name,

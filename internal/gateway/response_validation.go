@@ -10,12 +10,12 @@ import (
 
 // ResponseValidationResult represents the result of a single response validation check
 type ResponseValidationResult struct {
-	PolicyName      string `json:"policy_name"`
-	PolicyType      string `json:"policy_type"` // "cel" or "ai"
-	Allowed         bool   `json:"allowed"`
-	Message         string `json:"message,omitempty"`
-	Error           string `json:"error,omitempty"`
-	RedactedContent string `json:"redacted_content,omitempty"` // For redaction actions
+	PolicyName      string              `json:"policy_name"`
+	PolicyType      string              `json:"policy_type"` // "cel" or "ai"
+	Action          config.PolicyAction `json:"action"`      // "allow", "deny", or "redact"
+	Message         string              `json:"message,omitempty"`
+	Error           string              `json:"error,omitempty"`
+	RedactedContent string              `json:"redacted_content,omitempty"` // For redaction actions
 }
 
 // ResponseValidationResults represents all validation results for a response
@@ -24,10 +24,40 @@ type ResponseValidationResults struct {
 	Allowed         bool                       `json:"allowed"`
 	Message         string                     `json:"message,omitempty"`
 	Error           string                     `json:"error,omitempty"`
-	AllowCount      int                        `json:"allow_count"`
-	DenyCount       int                        `json:"deny_count"`
-	RedactCount     int                        `json:"redact_count"`
 	RedactedContent *string                    `json:"redacted_content,omitempty"` // Final redacted content if any redaction occurred
+}
+
+// AllowCount returns the number of results with allow action
+func (r *ResponseValidationResults) AllowCount() int {
+	count := 0
+	for _, result := range r.Results {
+		if result.Action == config.PolicyActionAllow {
+			count++
+		}
+	}
+	return count
+}
+
+// DenyCount returns the number of results with deny action
+func (r *ResponseValidationResults) DenyCount() int {
+	count := 0
+	for _, result := range r.Results {
+		if result.Action == config.PolicyActionDeny {
+			count++
+		}
+	}
+	return count
+}
+
+// RedactCount returns the number of results with redact action
+func (r *ResponseValidationResults) RedactCount() int {
+	count := 0
+	for _, result := range r.Results {
+		if result.Action == config.PolicyActionRedact {
+			count++
+		}
+	}
+	return count
 }
 
 // ResponseValidationHandler defines the interface for response validation handlers
@@ -58,6 +88,7 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 	var currentResult = result
 
 	for _, handler := range c.handlers {
+		// Audit trail: 2 : Log the HandleResponse : Response audit log : github__search_pull_requests
 		results, err := handler.HandleResponse(ctx, req, currentResult)
 		if err != nil {
 			c.logger.Error(ctx, "Response validation handler error",
@@ -68,9 +99,6 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 		}
 
 		finalResults.Results = append(finalResults.Results, results.Results...)
-		finalResults.AllowCount += results.AllowCount
-		finalResults.DenyCount += results.DenyCount
-		finalResults.RedactCount += results.RedactCount
 
 		// If a handler denied the response, mark overall as denied
 		if !results.Allowed {
@@ -99,9 +127,9 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 
 	// Set final message if not already set
 	if finalResults.Message == "" {
-		if finalResults.DenyCount > 0 {
+		if finalResults.DenyCount() > 0 {
 			finalResults.Message = "Response denied by policy"
-		} else if finalResults.RedactCount > 0 {
+		} else if finalResults.RedactCount() > 0 {
 			finalResults.Message = "Response content redacted"
 		} else {
 			finalResults.Message = "Response validation passed"

@@ -16,11 +16,11 @@ import (
 
 // CELPolicy represents a single CEL policy rule
 type CELPolicy struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Expression  string `yaml:"expression"`
-	Action      string `yaml:"action"` // allow or deny
-	Message     string `yaml:"message"`
+	Name        string              `yaml:"name"`
+	Description string              `yaml:"description"`
+	Expression  string              `yaml:"expression"`
+	Action      config.PolicyAction `yaml:"action"` // allow or deny
+	Message     string              `yaml:"message"`
 }
 
 // CELPolicyEngine handles CEL policy evaluation
@@ -99,7 +99,7 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 	for _, policy := range policies {
 		e.logger.Info(context.Background(), "Loading CEL policy",
 			zap.String("name", policy.Name),
-			zap.String("action", policy.Action),
+			zap.String("action", string(policy.Action)),
 		)
 
 		// Compile the expression
@@ -108,8 +108,8 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 			return fmt.Errorf("failed to compile policy %s: %w", policy.Name, issues.Err())
 		}
 
-		// Validate action
-		if policy.Action != "allow" && policy.Action != "deny" {
+		// Validate action, request validation can only be 'allow' or 'deny'
+		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny {
 			return fmt.Errorf("invalid action '%s' for policy %s: must be 'allow' or 'deny'", policy.Action, policy.Name)
 		}
 
@@ -170,7 +170,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 	for _, policy := range e.policies {
 		e.logger.Debug(ctx, "Evaluating CEL policy",
 			zap.String("name", policy.Name),
-			zap.String("action", policy.Action),
+			zap.String("action", string(policy.Action)),
 			zap.String("expression", policy.Expression),
 		)
 
@@ -201,10 +201,10 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 		e.logger.Debug(ctx, "CEL policy evaluation result",
 			zap.String("name", policy.Name),
 			zap.Bool("result", result),
-			zap.String("action", policy.Action),
+			zap.String("action", string(policy.Action)),
 		)
 
-		if result && policy.Action == "deny" {
+		if result && policy.Action == config.PolicyActionDeny {
 			results.Results = append(results.Results, ValidationResult{
 				PolicyName: policy.Name,
 				PolicyType: "cel",
@@ -217,7 +217,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				denyMsg = policy.Message
 			}
 		}
-		if result && policy.Action == "allow" {
+		if result && policy.Action == config.PolicyActionAllow {
 			results.Results = append(results.Results, ValidationResult{
 				PolicyName: policy.Name,
 				PolicyType: "cel",

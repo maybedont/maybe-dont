@@ -27,13 +27,11 @@ func TestGenerateAuditReport_EmptyFile(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
 	cfg.NativeTools.AuditReport.Enabled = true
 	cfg.NativeTools.AuditReport.APIKey = "test-key" // Required to get past the API key check
-	cfg.NativeTools.AuditReport.MaxEntriesForReport = 1000
-	cfg.Audit.Path = auditPath
+	cfg.NativeTools.AuditReport.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGenerateAuditReport
@@ -55,19 +53,19 @@ func TestGenerateAuditReport_FileDoesNotExist(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)
 
+	auditPath := "/tmp/non_existent_audit_log_report_test_12345.log"
+
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
 	cfg.NativeTools.AuditReport.Enabled = true
 	cfg.NativeTools.AuditReport.APIKey = "test-key"
-	cfg.NativeTools.AuditReport.MaxEntriesForReport = 1000
-	cfg.Audit.Path = "/tmp/non_existent_audit_log_report_test_12345.log"
+	cfg.NativeTools.AuditReport.MaxEntries = 1000
 
 	// Ensure file doesn't exist
-	_ = os.Remove(cfg.Audit.Path)
+	_ = os.Remove(auditPath)
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGenerateAuditReport
@@ -95,8 +93,8 @@ func TestGenerateAuditReport_AllEntriesOlderThanTimeWindow(t *testing.T) {
 
 	oldTime := float64(time.Now().Add(-30 * 24 * time.Hour).Unix())
 	entries := []string{
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__create_issue"}}}}`, oldTime),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"denied","request":{"params":{"name":"aws__delete_bucket"}}}}`, oldTime+1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"create_issue","client":"github","prefixed_name":"github__create_issue"},"action":"allow"}}`, oldTime),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"delete_bucket","client":"aws","prefixed_name":"aws__delete_bucket"},"action":"deny"}}`, oldTime+1),
 	}
 	content := ""
 	for _, entry := range entries {
@@ -108,13 +106,11 @@ func TestGenerateAuditReport_AllEntriesOlderThanTimeWindow(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
 	cfg.NativeTools.AuditReport.Enabled = true
 	cfg.NativeTools.AuditReport.APIKey = "test-key"
-	cfg.NativeTools.AuditReport.MaxEntriesForReport = 1000
-	cfg.Audit.Path = auditPath
+	cfg.NativeTools.AuditReport.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	// Test with default 24h time range - should return no entries message
 	t.Run("Default24hTimeRange", func(t *testing.T) {
@@ -161,11 +157,11 @@ func TestGetEntriesForReport_LimitReturnsMostRecentEntries(t *testing.T) {
 
 	now := float64(time.Now().Unix())
 	entries := []string{
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"status":"success","request":{"params":{"name":"tool_oldest"}}}}`, now-4),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"status":"success","request":{"params":{"name":"tool_second_oldest"}}}}`, now-3),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"status":"success","request":{"params":{"name":"tool_middle"}}}}`, now-2),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"status":"denied","request":{"params":{"name":"tool_second_newest"}}}}`, now-1),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"status":"success","request":{"params":{"name":"tool_newest"}}}}`, now),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"tool":{"name":"oldest","client":"test","prefixed_name":"tool_oldest"},"action":"allow"}}`, now-4),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"tool":{"name":"second_oldest","client":"test","prefixed_name":"tool_second_oldest"},"action":"allow"}}`, now-3),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"tool":{"name":"middle","client":"test","prefixed_name":"tool_middle"},"action":"allow"}}`, now-2),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"tool":{"name":"second_newest","client":"test","prefixed_name":"tool_second_newest"},"action":"deny"}}`, now-1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"tool":{"name":"newest","client":"test","prefixed_name":"tool_newest"},"action":"allow"}}`, now),
 	}
 	content := ""
 	for _, entry := range entries {
@@ -177,13 +173,11 @@ func TestGetEntriesForReport_LimitReturnsMostRecentEntries(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
 	cfg.NativeTools.AuditReport.Enabled = true
 	cfg.NativeTools.AuditReport.APIKey = "test-key"
-	cfg.NativeTools.AuditReport.MaxEntriesForReport = 2 // Limit to 2 entries
-	cfg.Audit.Path = auditPath
+	cfg.NativeTools.AuditReport.MaxEntries = 2 // Limit to 2 entries
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	// Get entries for report with the limit of 2
 	resultEntries, stats, err := handler.getEntriesForReport(ctx, "7d")
@@ -197,14 +191,12 @@ func TestGetEntriesForReport_LimitReturnsMostRecentEntries(t *testing.T) {
 
 	// Verify the most recent entries are returned (newest first after reversal)
 	// The entries should be: tool_newest (first), tool_second_newest (second)
-	require.NotNil(t, resultEntries[0].Audit.Request)
-	require.NotNil(t, resultEntries[0].Audit.Request.Params)
-	assert.Equal(t, "tool_newest", resultEntries[0].Audit.Request.Params.Name,
+	require.NotNil(t, resultEntries[0].Audit)
+	assert.Equal(t, "tool_newest", resultEntries[0].Audit.Tool.PrefixedName,
 		"First entry should be the most recent (tool_newest)")
 
-	require.NotNil(t, resultEntries[1].Audit.Request)
-	require.NotNil(t, resultEntries[1].Audit.Request.Params)
-	assert.Equal(t, "tool_second_newest", resultEntries[1].Audit.Request.Params.Name,
+	require.NotNil(t, resultEntries[1].Audit)
+	assert.Equal(t, "tool_second_newest", resultEntries[1].Audit.Tool.PrefixedName,
 		"Second entry should be the second most recent (tool_second_newest)")
 
 	// Verify stats count the statuses of the returned entries
@@ -224,8 +216,8 @@ func TestGetEntriesForReport_AllTimeRange(t *testing.T) {
 	// Create entries from 60 days ago
 	oldTime := float64(time.Now().Add(-60 * 24 * time.Hour).Unix())
 	entries := []string{
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"status":"success","request":{"params":{"name":"old_tool_1"}}}}`, oldTime),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"status":"success","request":{"params":{"name":"old_tool_2"}}}}`, oldTime+1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"tool":{"name":"old_tool_1","client":"test","prefixed_name":"old_tool_1"},"action":"allow"}}`, oldTime),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"audit","audit":{"tool":{"name":"old_tool_2","client":"test","prefixed_name":"old_tool_2"},"action":"allow"}}`, oldTime+1),
 	}
 	content := ""
 	for _, entry := range entries {
@@ -237,13 +229,11 @@ func TestGetEntriesForReport_AllTimeRange(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
 	cfg.NativeTools.AuditReport.Enabled = true
 	cfg.NativeTools.AuditReport.APIKey = "test-key"
-	cfg.NativeTools.AuditReport.MaxEntriesForReport = 1000
-	cfg.Audit.Path = auditPath
+	cfg.NativeTools.AuditReport.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	// Get entries with "all" time range - should include all entries regardless of age
 	resultEntries, stats, err := handler.getEntriesForReport(ctx, "all")

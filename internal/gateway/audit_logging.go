@@ -29,6 +29,8 @@ func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToo
 		zap.Any("arguments", req.Params.Arguments),
 	)
 
+	// TODO : This could use some work, it is confusing since this will end up in the audit log to call the policy 'audit logging'.
+	//        Is this really just an implicit policy to audit the use of this native tool?
 	// Return audit result - always allows but provides audit trail
 	return ValidationResults{
 		Results: []ValidationResult{

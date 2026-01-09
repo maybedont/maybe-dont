@@ -15,7 +15,7 @@ const (
 )
 
 // SessionLogger wraps a zap.Logger and automatically includes request_id from context in all log calls.
-// If no request_id exists in the context, it will use "n/a".
+// If no request_id exists in the context, it will use "-".
 type SessionLogger struct {
 	logger *zap.Logger
 }
@@ -25,15 +25,15 @@ func NewSessionLogger(logger *zap.Logger) *SessionLogger {
 	return &SessionLogger{logger: logger}
 }
 
-// extractRequestID extracts the request ID from the context, returning "n/a" if not present.
+// extractRequestID extracts the request ID from the context, returning "-" if not present.
 func (l *SessionLogger) extractRequestID(ctx context.Context) string {
 	if ctx == nil {
-		return "n/a"
+		return "-"
 	}
 	if requestID, ok := ctx.Value(RequestIDKey).(string); ok {
 		return requestID
 	}
-	return "n/a"
+	return "-"
 }
 
 // Debug logs a debug message with request_id automatically included.

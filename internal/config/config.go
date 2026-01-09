@@ -22,6 +22,15 @@ const (
 	ServerTypeSSE   ServerType = "sse"
 )
 
+// PolicyAction represents the action to take when a policy matches
+type PolicyAction string
+
+const (
+	PolicyActionAllow  PolicyAction = "allow"
+	PolicyActionDeny   PolicyAction = "deny"
+	PolicyActionRedact PolicyAction = "redact"
+)
+
 // Config represents the application configuration
 type Config struct {
 	// Server configuration
@@ -81,30 +90,29 @@ type Config struct {
 	// Audit configuration
 	Audit struct {
 		Enabled bool   `mapstructure:"enabled"`
-		Path    string `mapstructure:"path"`
+		Path    string `mapstructure:"path"` // Default: maybedont-audit.log (resolved in log-dir), or stdout/stderr
 	} `mapstructure:"audit"`
 
 	// Logging configuration
 	Logging struct {
 		LogLevel string `mapstructure:"level"`
-		Path     string `mapstructure:"path"`
+		Path     string `mapstructure:"path"` // Default: stdout, or filename (resolved in log-dir)
 	} `mapstructure:"logging"`
 
 	// NativeTools configuration for gateway-native tools
 	NativeTools struct {
 		AuditLog struct {
-			Enabled          bool  `mapstructure:"enabled"`
-			MaxEntries       int   `mapstructure:"max_entries"`
-			MaxFileSizeBytes int64 `mapstructure:"max_file_size_bytes"`
+			Enabled    bool `mapstructure:"enabled"`
+			MaxEntries int  `mapstructure:"max_entries"`
 		} `mapstructure:"audit_log"`
 
 		AuditReport struct {
-			Enabled             bool   `mapstructure:"enabled"`
-			Endpoint            string `mapstructure:"endpoint"`
-			Model               string `mapstructure:"model"`
-			APIKey              string `mapstructure:"api_key"`
-			MaxEntriesForReport int    `mapstructure:"max_entries_for_report"`
-			SystemPrompt        string `mapstructure:"system_prompt"`
+			Enabled      bool   `mapstructure:"enabled"`
+			Endpoint     string `mapstructure:"endpoint"`
+			Model        string `mapstructure:"model"`
+			APIKey       string `mapstructure:"api_key"`
+			MaxEntries   int    `mapstructure:"max_entries"`
+			SystemPrompt string `mapstructure:"system_prompt"`
 		} `mapstructure:"audit_report"`
 
 		ListServers struct {
@@ -163,38 +171,40 @@ type CredentialMapping struct {
 
 // CELPolicy represents a single CEL policy rule
 type CELPolicy struct {
-	Name        string `mapstructure:"name"`
-	Description string `mapstructure:"description"`
-	Expression  string `mapstructure:"expression"`
-	Action      string `mapstructure:"action"` // allow or deny
-	Message     string `mapstructure:"message"`
+	Name        string       `mapstructure:"name"`
+	Description string       `mapstructure:"description"`
+	Expression  string       `mapstructure:"expression"`
+	Action      PolicyAction `mapstructure:"action"` // allow or deny
+	Message     string       `mapstructure:"message"`
 }
 
+// AIPolicy represents a single AI policy rule
 type AIPolicy struct {
-	Name        string `mapstructure:"name"`
-	Description string `mapstructure:"description"`
-	Prompt      string `mapstructure:"prompt"`
-	Message     string `mapstructure:"message"`
+	Name        string       `mapstructure:"name"`
+	Description string       `mapstructure:"description"`
+	Prompt      string       `mapstructure:"prompt"`
+	Action      PolicyAction `mapstructure:"action"` // allow or deny
+	Message     string       `mapstructure:"message"`
 }
 
 // CELResponsePolicy represents a single CEL response policy rule
 type CELResponsePolicy struct {
-	Name                 string `mapstructure:"name"`
-	Description          string `mapstructure:"description"`
-	Expression           string `mapstructure:"expression"`
-	Action               string `mapstructure:"action"` // allow, deny, or redact
-	Message              string `mapstructure:"message"`
-	RedactionPattern     string `mapstructure:"redaction_pattern"`
-	RedactionReplacement string `mapstructure:"redaction_replacement"`
+	Name                 string       `mapstructure:"name"`
+	Description          string       `mapstructure:"description"`
+	Expression           string       `mapstructure:"expression"`
+	Action               PolicyAction `mapstructure:"action"` // allow, deny, or redact
+	Message              string       `mapstructure:"message"`
+	RedactionPattern     string       `mapstructure:"redaction_pattern"`
+	RedactionReplacement string       `mapstructure:"redaction_replacement"`
 }
 
 // AIResponsePolicy represents a single AI response policy rule
 type AIResponsePolicy struct {
-	Name        string `mapstructure:"name"`
-	Description string `mapstructure:"description"`
-	Prompt      string `mapstructure:"prompt"`
-	Action      string `mapstructure:"action"` // allow, deny, or redact
-	Message     string `mapstructure:"message"`
+	Name        string       `mapstructure:"name"`
+	Description string       `mapstructure:"description"`
+	Prompt      string       `mapstructure:"prompt"`
+	Action      PolicyAction `mapstructure:"action"` // allow, deny, or redact
+	Message     string       `mapstructure:"message"`
 }
 
 // LoadPoliciesFromFile loads CEL policies from a file
@@ -230,6 +240,13 @@ func LoadAIPoliciesFromFile(path string) ([]AIPolicy, error) {
 	}
 	if err := yaml.Unmarshal(data, &policies); err != nil {
 		return nil, fmt.Errorf("error unmarshaling AI policies: %w", err)
+	}
+
+	// the action is optional, and default is deny.
+	for i := range policies.Rules {
+		if policies.Rules[i].Action == "" {
+			policies.Rules[i].Action = PolicyActionDeny
+		}
 	}
 
 	return policies.Rules, nil
@@ -284,6 +301,58 @@ func resolveRulesFilePath(rulesFile, configDir string) string {
 		return rulesFile
 	}
 	return filepath.Join(configDir, rulesFile)
+}
+
+// applyEnvironmentOverrides walks through the config struct and overrides string fields
+// with values from environment variables using the specified prefix.
+// For example, with envPrefix="MAYBE_DONT", ai_validation.api_key can be set via MAYBE_DONT_AI_VALIDATION_API_KEY.
+// This provides a general mechanism for Docker/container deployments without hardcoding bindings.
+func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix string, envPrefix string) {
+	if !v.IsValid() {
+		return
+	}
+
+	switch v.Kind() {
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Field(i)
+			fieldType := t.Field(i)
+
+			if !field.CanSet() {
+				continue
+			}
+
+			// Get the mapstructure tag to determine the config key name
+			tag := fieldType.Tag.Get("mapstructure")
+			if tag == "" {
+				continue
+			}
+
+			// Build the full path for this field
+			var fullPath string
+			if pathPrefix == "" {
+				fullPath = tag
+			} else {
+				fullPath = pathPrefix + "_" + tag
+			}
+
+			// For string fields, check if there's an environment variable override
+			if field.Kind() == reflect.String {
+				envKey := envPrefix + "_" + strings.ToUpper(fullPath)
+				if envVal := os.Getenv(envKey); envVal != "" {
+					field.SetString(envVal)
+				}
+			} else if field.Kind() == reflect.Struct {
+				// Recursively process nested structs
+				applyEnvironmentOverrides(field, fieldType.Type, fullPath, envPrefix)
+			}
+		}
+
+	case reflect.Ptr:
+		if !v.IsNil() {
+			applyEnvironmentOverrides(v.Elem(), t.Elem(), pathPrefix, envPrefix)
+		}
+	}
 }
 
 // expandEnvironmentVariables recursively expands environment variables in string fields
@@ -354,8 +423,46 @@ func expandEnvironmentVariables(v reflect.Value) {
 	}
 }
 
-// LoadConfig loads the configuration from all sources
-func LoadConfig(configPath string) (*Config, error) {
+// ResolveConfigDir resolves the configuration directory with fallback logic.
+// Priority: 1) provided dir, 2) ./config (if exists), 3) $HOME/.maybe-dont/config
+func ResolveConfigDir(configDir string) string {
+	if configDir != "" {
+		return configDir
+	}
+
+	// Check ./config first
+	if info, err := os.Stat("./config"); err == nil && info.IsDir() {
+		return "./config"
+	}
+
+	// Fall back to $HOME/.maybe-dont/config
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		return filepath.Join(homeDir, ".maybe-dont", "config")
+	}
+
+	// Last resort: current directory
+	return "."
+}
+
+// ResolveLogDir resolves the log directory.
+// If logDir is provided, it is used directly.
+// Otherwise, the log directory defaults to a "logs" subdirectory within the config directory.
+// For example, if configDir is "./config", log-dir defaults to "./config/logs".
+// If configDir is "$HOME/.maybe-dont", log-dir defaults to "$HOME/.maybe-dont/logs".
+func ResolveLogDir(logDir, configDir string) string {
+	if logDir != "" {
+		return logDir
+	}
+
+	// Default to logs subdirectory within config directory
+	return filepath.Join(configDir, "logs")
+}
+
+// LoadConfig loads the configuration from all sources.
+// configDir: directory containing config files (resolved via ResolveConfigDir if empty)
+// configFileName: name of config file (defaults to "maybedont.yaml", falls back to "gateway-config.yaml")
+func LoadConfig(configDir, configFileName string) (*Config, error) {
 	// Use the global viper instance to ensure flag bindings work
 	v := viper.GetViper()
 
@@ -364,30 +471,65 @@ func LoadConfig(configPath string) (*Config, error) {
 	v.AutomaticEnv()
 
 	// Set up environment variable key mappings for nested map structures
-	// This allows environment variables to properly map to nested config fields
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	// Set config file name
-	v.SetConfigName("gateway-config")
+	// Resolve config directory
+	resolvedConfigDir := ResolveConfigDir(configDir)
+
+	// Set config type
 	v.SetConfigType("yaml")
 
-	// Add config paths
-	if configPath != "" {
-		v.AddConfigPath(configPath)
+	// Add config path
+	v.AddConfigPath(resolvedConfigDir)
+
+	// Try to find config file with fallback logic
+	configFileFound := false
+	var readErr error
+
+	if configFileName != "" {
+		// User specified a config file name - use it directly
+		// Strip .yaml/.yml extension if present for viper
+		baseName := strings.TrimSuffix(strings.TrimSuffix(configFileName, ".yaml"), ".yml")
+		v.SetConfigName(baseName)
+		if err := v.ReadInConfig(); err == nil {
+			configFileFound = true
+		} else {
+			readErr = err
+		}
 	} else {
-		v.AddConfigPath(".")
-		v.AddConfigPath("$HOME/.maybe-dont")
+		// Try maybedont.yaml first, then fall back to gateway-config.yaml (deprecated)
+		v.SetConfigName("maybedont")
+		if err := v.ReadInConfig(); err == nil {
+			configFileFound = true
+		} else {
+			// Fall back to deprecated config file - gateway-config.yaml
+			v.SetConfigName("gateway-config")
+			if err := v.ReadInConfig(); err == nil {
+				configFileFound = true
+
+				// Warn the user if they are using a deprecated config file
+				fmt.Printf("Filename gateway-config.yaml is deprecated, rename config file to maybedont.yaml\n")
+
+			} else {
+				readErr = err
+			}
+		}
 	}
 
 	// Set defaults before reading config
+	// Please note that if you add additional defaults, be sure to add the use case to TestViperConfigPathsMatchStruct.
 	v.SetDefault("native_tools.audit_log.enabled", true)
 	v.SetDefault("native_tools.audit_report.enabled", true)
 	v.SetDefault("native_tools.list_servers.enabled", true)
 	v.SetDefault("native_tools.list_sessions.enabled", true)
+	v.SetDefault("native_tools.audit_log.max_entries", 100)
+	v.SetDefault("native_tools.audit_report.max_entries", 1_000)
+	v.SetDefault("logging.path", "stdout")
+	v.SetDefault("audit.path", "maybedont-audit.log")
 
-	// Read config file
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("error reading config from path %s: %w", configPath, err)
+	// Check if config file was found
+	if !configFileFound {
+		return nil, fmt.Errorf("error reading config from directory %s: %w", resolvedConfigDir, readErr)
 	}
 
 	// Get the directory containing the config file for resolving relative rules file paths
@@ -399,8 +541,13 @@ func LoadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config from %s: %w", v.ConfigFileUsed(), err)
 	}
 
-	// Expand environment variables in all string fields
+	// Expand environment variables in all string fields (handles ${VAR} syntax in config values)
 	expandEnvironmentVariables(reflect.ValueOf(&config).Elem())
+
+	// Apply environment variable overrides using viper's configured prefix
+	// This allows any config field to be set via environment variable, e.g.:
+	// MAYBE_DONT_AI_VALIDATION_API_KEY, MAYBE_DONT_SERVER_LISTEN_ADDR, etc.
+	applyEnvironmentOverrides(reflect.ValueOf(&config).Elem(), reflect.TypeOf(config), "", v.GetEnvPrefix())
 
 	// Set default server type to stdio if not configured
 	if config.Server.Type == "" {
@@ -413,15 +560,6 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 
 	// Set default values for native tools configuration
-	if config.NativeTools.AuditLog.MaxEntries == 0 {
-		config.NativeTools.AuditLog.MaxEntries = 1000
-	}
-	if config.NativeTools.AuditLog.MaxFileSizeBytes == 0 {
-		config.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024 // 10MB
-	}
-	if config.NativeTools.AuditReport.MaxEntriesForReport == 0 {
-		config.NativeTools.AuditReport.MaxEntriesForReport = 500
-	}
 	// Inherit AI settings from ai_validation if not specified
 	if config.NativeTools.AuditReport.Endpoint == "" {
 		config.NativeTools.AuditReport.Endpoint = config.AIPolicyValidation.Endpoint
@@ -669,11 +807,6 @@ func ValidateConfig(cfg *Config) error {
 		}
 	}
 
-	// Validate audit configuration
-	if cfg.Audit.Path == "" {
-		errors = append(errors, "audit.path is required")
-	}
-
 	// Validate AI validation configuration
 	if cfg.AIPolicyValidation.Enabled {
 		if cfg.AIPolicyValidation.APIKey == "" {
@@ -684,6 +817,31 @@ func ValidateConfig(cfg *Config) error {
 		}
 		if cfg.AIPolicyValidation.Model == "" {
 			errors = append(errors, "ai_validation.model is required when AI validation is enabled")
+		}
+	}
+
+	// Validate native tools
+	if cfg.NativeTools.AuditLog.Enabled {
+		validateRange(cfg.NativeTools.AuditLog.MaxEntries, 10, 500, "native_tools.audit_log.max_entries", &errors)
+	}
+
+	if cfg.NativeTools.AuditReport.Enabled {
+		validateRange(cfg.NativeTools.AuditReport.MaxEntries, 10, 2_000, "native_tools.audit_report.max_entries", &errors)
+	}
+
+	// Validate logging.path - must be stdout, stderr, or a simple filename (no directory traversal)
+	if cfg.Logging.Path != "" && cfg.Logging.Path != "stdout" && cfg.Logging.Path != "stderr" {
+		if strings.Contains(cfg.Logging.Path, "/") || strings.Contains(cfg.Logging.Path, "\\") ||
+			strings.Contains(cfg.Logging.Path, "..") || strings.HasPrefix(cfg.Logging.Path, ".") {
+			errors = append(errors, "logging.path must be 'stdout', 'stderr', or a simple filename without path separators")
+		}
+	}
+
+	// Validate audit.path - must be stdout, stderr, or a simple filename (no directory traversal)
+	if cfg.Audit.Path != "" && cfg.Audit.Path != "stdout" && cfg.Audit.Path != "stderr" {
+		if strings.Contains(cfg.Audit.Path, "/") || strings.Contains(cfg.Audit.Path, "\\") ||
+			strings.Contains(cfg.Audit.Path, "..") || strings.HasPrefix(cfg.Audit.Path, ".") {
+			errors = append(errors, "audit.path must be 'stdout', 'stderr', or a simple filename without path separators")
 		}
 	}
 
@@ -699,8 +857,11 @@ func ValidateConfig(cfg *Config) error {
 	return nil
 }
 
-// GetLogger creates a new session-aware logger based on the configuration
-func GetLogger(cfg *Config) (*SessionLogger, error) {
+// GetLogger creates a new session-aware logger based on the configuration.
+// logDir: the resolved log directory where log files should be written.
+// If logging.path is "stdout" or "stderr", logs go directly there.
+// Otherwise, logging.path is treated as a filename and resolved within logDir.
+func GetLogger(cfg *Config, logDir string) (*SessionLogger, error) {
 	config := zap.NewProductionConfig()
 
 	// Set log level
@@ -711,14 +872,21 @@ func GetLogger(cfg *Config) (*SessionLogger, error) {
 	config.Level = zap.NewAtomicLevelAt(level)
 
 	// Set output paths based on configuration
-	if cfg.Logging.Path != "" {
-		// Use configured log file path
-		config.OutputPaths = []string{cfg.Logging.Path}
-		config.ErrorOutputPaths = []string{cfg.Logging.Path}
-	} else {
-		// Default to stdout/stderr if no path configured
+	logPath := cfg.Logging.Path
+	switch logPath {
+	case "", "stdout":
+		// Default to stdout
 		config.OutputPaths = []string{"stdout"}
 		config.ErrorOutputPaths = []string{"stderr"}
+	case "stderr":
+		// Log to stderr
+		config.OutputPaths = []string{"stderr"}
+		config.ErrorOutputPaths = []string{"stderr"}
+	default:
+		// Path is a filename - resolve it within logDir
+		fullPath := filepath.Join(logDir, logPath)
+		config.OutputPaths = []string{fullPath}
+		config.ErrorOutputPaths = []string{fullPath}
 	}
 
 	// Build the logger
@@ -732,16 +900,35 @@ func GetLogger(cfg *Config) (*SessionLogger, error) {
 	return NewSessionLogger(zapLogger), nil
 }
 
-// GetAuditLogger creates a new session-aware audit logger based on the configuration
-func GetAuditLogger(cfg *Config) (*SessionLogger, error) {
+// GetAuditLogger creates a new session-aware audit logger based on the configuration.
+// logDir: the resolved log directory where the audit log file should be written.
+// If audit.path is "stdout" or "stderr", logs go directly there.
+// Otherwise, audit.path is treated as a filename and resolved within logDir.
+func GetAuditLogger(cfg *Config, logDir string) (*SessionLogger, error) {
 	config := zap.NewProductionConfig()
 
 	// Set log level to info for audit logs
 	config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 
-	// Set output path to the configured audit path
-	config.OutputPaths = []string{cfg.Audit.Path}
-	config.ErrorOutputPaths = []string{cfg.Audit.Path}
+	// Set output path based on configuration
+	auditPath := cfg.Audit.Path
+	switch auditPath {
+	case "stdout":
+		config.OutputPaths = []string{"stdout"}
+		config.ErrorOutputPaths = []string{"stderr"}
+	case "stderr":
+		config.OutputPaths = []string{"stderr"}
+		config.ErrorOutputPaths = []string{"stderr"}
+	default:
+		// Path is a filename - resolve it within logDir
+		// Default to "maybedont-audit.log" if empty
+		if auditPath == "" {
+			auditPath = "maybedont-audit.log"
+		}
+		fullPath := filepath.Join(logDir, auditPath)
+		config.OutputPaths = []string{fullPath}
+		config.ErrorOutputPaths = []string{fullPath}
+	}
 
 	// Build the logger
 	logger, err := config.Build()
@@ -752,4 +939,24 @@ func GetAuditLogger(cfg *Config) (*SessionLogger, error) {
 	// Add logger type designation and wrap in SessionLogger
 	zapLogger := logger.With(zap.String("logger", "audit"))
 	return NewSessionLogger(zapLogger), nil
+}
+
+func validateRange(value, min, max int, fieldName string, errors *[]string) {
+	if value < min || value > max {
+		*errors = append(*errors, fmt.Sprintf("%s is invalid. The value must be >= %d and <= %d", fieldName, min, max))
+	}
+}
+
+// ResolveAuditLogPath returns the full path to the audit log file.
+// If audit.path is "stdout" or "stderr", it returns empty string (log goes to stdout/stderr).
+// Otherwise, it returns the path resolved within logDir.
+func ResolveAuditLogPath(cfg *Config, logDir string) string {
+	auditPath := cfg.Audit.Path
+	if auditPath == "stdout" || auditPath == "stderr" {
+		return "" // Audit goes to stdout/stderr, no file path
+	}
+	if auditPath == "" {
+		auditPath = "maybedont-audit.log"
+	}
+	return filepath.Join(logDir, auditPath)
 }

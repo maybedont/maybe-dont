@@ -55,6 +55,7 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 	var allowMessage string
 
 	for _, handler := range c.handlers {
+		// Audit trail: 1 : Log the HandleToolCall : Tool call audit log : github__search_pull_requests
 		results, err := handler.HandleToolCall(ctx, req)
 		if err != nil {
 			if finalError == nil {

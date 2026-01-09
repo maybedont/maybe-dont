@@ -21,13 +21,13 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 		{
 			Name:       "allow-read-tool",
 			Expression: `request.method == "tools/call" && request.params.name == "read_file"`,
-			Action:     "allow",
+			Action:     config.PolicyActionAllow,
 			Message:    "Allowed to call read_file",
 		},
 		{
 			Name:       "deny-delete-tool",
 			Expression: `request.method == "tools/call" && request.params.name == "delete_file"`,
-			Action:     "deny",
+			Action:     config.PolicyActionDeny,
 			Message:    "delete_file is not allowed",
 		},
 	}

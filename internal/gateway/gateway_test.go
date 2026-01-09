@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -31,7 +32,6 @@ func TestPolicyDeniedError_Structure(t *testing.T) {
 	assert.Equal(t, "delete_file", policyErr.Data["tool_name"])
 }
 
-//goland:noinspection GoTypeAssertionOnErrors
 func TestPolicyDeniedError_ErrorHandler(t *testing.T) {
 	// Test with a PolicyDeniedError
 	policyErr := &PolicyDeniedError{
@@ -45,7 +45,8 @@ func TestPolicyDeniedError_ErrorHandler(t *testing.T) {
 
 	// Create a mock function to test the error handling logic
 	handleError := func(err error) *mcp.CallToolResult {
-		if policyErr, ok := err.(*PolicyDeniedError); ok {
+		var policyErr *PolicyDeniedError
+		if errors.As(err, &policyErr) {
 			// Create error result with user-friendly message
 			errorResult := mcp.NewToolResultError(policyErr.Message)
 
@@ -116,7 +117,8 @@ func TestPolicyDeniedError_MultiplePolicies(t *testing.T) {
 
 	// Create a mock function to test the error handling logic
 	handleError := func(err error) *mcp.CallToolResult {
-		if policyErr, ok := err.(*PolicyDeniedError); ok {
+		var policyErr *PolicyDeniedError
+		if errors.As(err, &policyErr) {
 			// Create error result with user-friendly message
 			errorResult := mcp.NewToolResultError(policyErr.Message)
 

@@ -142,9 +142,8 @@ func (cm *ClientManager) DiscoverAllCapabilities(ctx context.Context) (*Discover
 
 // SessionDiscoveryResult contains information about tools discovered during session creation
 type SessionDiscoveryResult struct {
-	// PassThroughClients contains clients with pass-through auth that discovered tools
-	// These tools should be registered as session-specific tools
-	PassThroughClients map[string]*SessionClientInfo
+	// DownstreamClients contains newly discovered clients
+	DownstreamClients map[string]*SessionClientInfo
 }
 
 // CreateSessionClients creates downstream client instances for a new upstream session
@@ -165,7 +164,7 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 	cm.sessionManager.CreateSession(sessionID)
 
 	result := &SessionDiscoveryResult{
-		PassThroughClients: make(map[string]*SessionClientInfo),
+		DownstreamClients: make(map[string]*SessionClientInfo),
 	}
 
 	var errs []string
@@ -187,10 +186,11 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 			zap.String("session_id", sessionID),
 			zap.String("client", name))
 
-		// Track pass-through clients for session-specific tool registration
+		// Track clients
+		result.DownstreamClients[name] = clientInfo
+
 		if cfg.Auth.PassThrough.Enabled && len(clientInfo.Tools) > 0 {
-			result.PassThroughClients[name] = clientInfo
-			cm.logger.Info(ctx, "Discovered tools from pass-through client for session",
+			cm.logger.Debug(ctx, "Discovered tools from pass-through client for session",
 				zap.String("session_id", sessionID),
 				zap.String("client", name),
 				zap.Int("tools_count", len(clientInfo.Tools)))

@@ -34,7 +34,7 @@ The server will listen for MCP client connections and forward them to the config
 		}
 
 		// Create gateway instance
-		p, err := gateway.New(ctx, cfg, Logger, version)
+		p, err := gateway.New(ctx, cfg, Logger, version, ResolvedLogDir)
 		if err != nil {
 			return fmt.Errorf("failed to create gateway: %w", err)
 		}

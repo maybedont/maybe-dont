@@ -14,13 +14,13 @@ import (
 
 // CELResponsePolicy represents a single CEL response policy rule
 type CELResponsePolicy struct {
-	Name                 string `yaml:"name"`
-	Description          string `yaml:"description"`
-	Expression           string `yaml:"expression"`
-	Action               string `yaml:"action"` // allow, deny, or redact
-	Message              string `yaml:"message"`
-	RedactionPattern     string `yaml:"redaction_pattern"`
-	RedactionReplacement string `yaml:"redaction_replacement"`
+	Name                 string              `yaml:"name"`
+	Description          string              `yaml:"description"`
+	Expression           string              `yaml:"expression"`
+	Action               config.PolicyAction `yaml:"action"` // allow, deny, or redact
+	Message              string              `yaml:"message"`
+	RedactionPattern     string              `yaml:"redaction_pattern"`
+	RedactionReplacement string              `yaml:"redaction_replacement"`
 }
 
 // CELResponsePolicyEngine handles CEL policy evaluation for responses
@@ -60,7 +60,7 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePoli
 	for _, policy := range policies {
 		e.logger.Info(context.Background(), "Loading CEL response policy",
 			zap.String("name", policy.Name),
-			zap.String("action", policy.Action),
+			zap.String("action", string(policy.Action)),
 		)
 
 		// Compile the expression
@@ -69,8 +69,8 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePoli
 			return fmt.Errorf("failed to compile response policy %s: %w", policy.Name, issues.Err())
 		}
 
-		// Validate action
-		if policy.Action != "allow" && policy.Action != "deny" && policy.Action != "redact" {
+		// Validate action, a response policy can be 'allow', 'deny' or 'redact'
+		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny && policy.Action != config.PolicyActionRedact {
 			return fmt.Errorf("invalid action '%s' for response policy %s: must be 'allow', 'deny', or 'redact'", policy.Action, policy.Name)
 		}
 
@@ -126,7 +126,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	for _, policy := range e.policies {
 		e.logger.Debug(ctx, "Evaluating CEL response policy",
 			zap.String("name", policy.Name),
-			zap.String("action", policy.Action),
+			zap.String("action", string(policy.Action)),
 			zap.String("expression", policy.Expression),
 		)
 
@@ -157,25 +157,24 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		e.logger.Debug(ctx, "CEL response policy evaluation result",
 			zap.String("name", policy.Name),
 			zap.Bool("matched", matched),
-			zap.String("action", policy.Action),
+			zap.String("action", string(policy.Action)),
 		)
 
 		if matched {
 			switch policy.Action {
-			case "deny":
+			case config.PolicyActionDeny:
 				results.Results = append(results.Results, ResponseValidationResult{
 					PolicyName: policy.Name,
 					PolicyType: "cel",
-					Allowed:    false,
+					Action:     config.PolicyActionDeny,
 					Message:    policy.Message,
 				})
-				results.DenyCount++
 				results.Allowed = false
 				if results.Message == "" {
 					results.Message = policy.Message
 				}
 
-			case "redact":
+			case config.PolicyActionRedact:
 				// Apply redaction
 				content := e.getTextContent(result)
 				if content != "" {
@@ -185,21 +184,19 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 					results.Results = append(results.Results, ResponseValidationResult{
 						PolicyName:      policy.Name,
 						PolicyType:      "cel",
-						Allowed:         true,
+						Action:          config.PolicyActionRedact,
 						Message:         policy.Message,
 						RedactedContent: redacted,
 					})
-					results.RedactCount++
 				}
 
-			case "allow":
+			case config.PolicyActionAllow:
 				results.Results = append(results.Results, ResponseValidationResult{
 					PolicyName: policy.Name,
 					PolicyType: "cel",
-					Allowed:    true,
+					Action:     config.PolicyActionAllow,
 					Message:    policy.Message,
 				})
-				results.AllowCount++
 			}
 		}
 	}
@@ -211,9 +208,9 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 
 	// Set final result message if not already set
 	if results.Message == "" {
-		if results.DenyCount > 0 {
+		if results.DenyCount() > 0 {
 			results.Message = "Response denied by CEL policy"
-		} else if results.RedactCount > 0 {
+		} else if results.RedactCount() > 0 {
 			results.Message = "Response content redacted by CEL policy"
 		} else {
 			results.Message = "No CEL response policies matched"
@@ -223,8 +220,8 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	e.logger.Info(ctx, "CEL response policy evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
-		zap.Int("deny_count", results.DenyCount),
-		zap.Int("redact_count", results.RedactCount),
+		zap.Int("deny_count", results.DenyCount()),
+		zap.Int("redact_count", results.RedactCount()),
 	)
 
 	return results, nil

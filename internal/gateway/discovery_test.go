@@ -342,11 +342,11 @@ func TestCreateSessionClients_ReturnsPassThroughDiscoveryResult(t *testing.T) {
 
 	// But result should still be returned
 	require.NotNil(t, result)
-	require.NotNil(t, result.PassThroughClients)
+	require.NotNil(t, result.DownstreamClients)
 
 	// Since connections failed, no tools were discovered
 	// But the structure is correct for when connections succeed
-	assert.Empty(t, result.PassThroughClients)
+	assert.Empty(t, result.DownstreamClients)
 }
 
 func TestSessionDiscoveryResult_IdentifiesPassThroughClients(t *testing.T) {
@@ -355,7 +355,7 @@ func TestSessionDiscoveryResult_IdentifiesPassThroughClients(t *testing.T) {
 
 	// Manually create a discovery result to test the structure
 	result := &SessionDiscoveryResult{
-		PassThroughClients: map[string]*SessionClientInfo{
+		DownstreamClients: map[string]*SessionClientInfo{
 			"github": {
 				Name: "github",
 				Config: config.ClientConfig{
@@ -370,10 +370,10 @@ func TestSessionDiscoveryResult_IdentifiesPassThroughClients(t *testing.T) {
 	}
 
 	// Verify pass-through clients are tracked
-	require.Len(t, result.PassThroughClients, 1)
-	require.Contains(t, result.PassThroughClients, "github")
+	require.Len(t, result.DownstreamClients, 1)
+	require.Contains(t, result.DownstreamClients, "github")
 
-	githubInfo := result.PassThroughClients["github"]
+	githubInfo := result.DownstreamClients["github"]
 	assert.Equal(t, "github", githubInfo.Name)
 	assert.Len(t, githubInfo.Tools, 2)
 

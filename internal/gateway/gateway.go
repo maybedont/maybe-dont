@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -53,10 +54,11 @@ type Gateway struct {
 	trustedProxyChecker *TrustedProxyChecker
 }
 
-// New creates a new gateway instance
-func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, version string) (*Gateway, error) {
+// New creates a new gateway instance.
+// logDir: the resolved log directory for audit log file output.
+func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, version string, logDir string) (*Gateway, error) {
 	// Create audit logger with its own configuration
-	auditLogger, err := config.GetAuditLogger(cfg)
+	auditLogger, err := config.GetAuditLogger(cfg, logDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create audit logger: %w", err)
 	}
@@ -150,8 +152,9 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	// Create client manager
 	clientManager := NewClientManager(ctx, logger)
 
-	// Create native tools handler
-	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, auditLogger)
+	// Create native tools handler with the resolved audit log path
+	auditLogPath := config.ResolveAuditLogPath(cfg, logDir)
+	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, auditLogger, auditLogPath)
 
 	// Wire up the client config provider for native tools
 	nativeToolsHandler.SetClientConfigProvider(clientManager)
@@ -193,10 +196,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 		g.logger.Warn(ctx, "Failed to marshal config for debug print", zap.Error(err))
 	}
 
-	// Initialize validation chain with required handlers
-	handlers := []ToolValidationHandler{
-		NewToolLoggingHandler(g.auditLogger),
-	}
+	// Initialize validation chain with policy handlers
+	// Note: Audit logging is now handled centrally in HandleToolCall
+	var handlers []ToolValidationHandler
 
 	// Add CEL validation handler if enabled
 	if g.config.PolicyValidation.Enabled && g.policyEngine != nil {
@@ -213,9 +215,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 	g.validationChain = NewToolValidationChain(handlers...)
 
 	// Initialize response validation chain
-	responseHandlers := []ResponseValidationHandler{
-		NewResponseLoggingHandler(g.auditLogger),
-	}
+	// Note: Audit logging is now handled centrally in HandleToolCall
+	var responseHandlers []ResponseValidationHandler
 
 	// Add CEL response validation handler if enabled
 	if g.config.ResponseValidation.Enabled && g.responsePolicyEngine != nil {
@@ -301,45 +302,57 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		g.metricsCollector.IncrementToolInvocations()
 	}
 
-	// Check if this is a native gateway tool
+	// Check if this is a native gateway tool (not audited)
 	if IsNativeTool(req.Params.Name) {
 		g.logger.Debug(ctx, "Routing to native tool handler", zap.String("tool", req.Params.Name))
 		return g.nativeToolsHandler.HandleToolCall(ctx, req)
 	}
 
-	// Get session ID and client IP early for audit logging
+	// Get session ID, client IP, and request ID for audit logging
 	sessionID, hasSession := GetSessionIDFromContext(ctx)
 	clientIP, _ := GetClientIP(ctx)
+	requestID, _ := GetRequestID(ctx)
 
-	// Create audit log entry with session context
-	auditLog := map[string]interface{}{
-		"request": req,
-		"client": map[string]interface{}{
-			"ip_address": clientIP,
-			"session_id": sessionID,
-		},
+	// Parse the prefixed tool name early to populate audit context
+	clientName, originalToolName, parseErr := ParsePrefixedName(req.Params.Name)
+	if parseErr != nil {
+		// Can't create proper audit context without tool info, skip audit
+		return nil, fmt.Errorf("invalid tool name format: %w", parseErr)
 	}
 
-	// Ensure audit log is always written, even on panic
-	defer func() {
-		if r := recover(); r != nil {
-			auditLog["error"] = fmt.Sprintf("panic: %v", r)
-			auditLog["status"] = "panic"
-			g.auditLogger.Error(ctx, "Tool call audit (panic)", zap.Any("audit", auditLog))
-			panic(r) // Re-raise the panic
-		}
-	}()
+	// Create audit context
+	audit := NewAuditContext(req.Params.Name, clientName, originalToolName, sessionID, clientIP, requestID)
 
-	// Validate request through the chain
+	// Set request params (convert to map for audit)
+	if params, ok := req.Params.Arguments.(map[string]interface{}); ok {
+		audit.SetRequestParams(params)
+	}
+
+	// Helper to write audit log and return
+	// Include session_id and ip_address at top level for easier querying
+	writeAuditLog := func() {
+		entry := audit.Finalize()
+		g.auditLogger.Info(ctx, "Tool call audit",
+			zap.String("session_id", sessionID),
+			zap.String("ip_address", clientIP),
+			zap.Any("audit", entry))
+	}
+
+	// Validate request through the chain with timing
+	reqValidationStart := time.Now()
 	validationResults, err := g.ValidateToolCall(ctx, req)
+	reqValidationDuration := time.Since(reqValidationStart).Milliseconds()
+
 	if err != nil {
-		auditLog["error"] = err.Error()
-		auditLog["status"] = "validation_error"
-		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
+		// Validation error - don't write audit log (infrastructure error)
 		return nil, fmt.Errorf("request validation failed: %v", err)
 	}
 	g.logger.Debug(ctx, "Validation results", zap.Any("validationResults", validationResults))
 
+	// Extract validation results by policy type and populate audit context
+	g.populateRequestValidationAudit(audit, validationResults, reqValidationDuration)
+
+	// Determine if validation passed
 	if validationResults.DenyCount > 0 {
 		validationResults.Allowed = false
 		if validationResults.DenyCount == 1 {
@@ -352,47 +365,28 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		validationResults.Message = "All policies passed, maybe do."
 	}
 
-	// Add validation results to audit log
-	auditLog["validation"] = validationResults
-
-	// If validation failed, return structured error with user-friendly message
+	// If validation failed, set audit actions and write
 	if !validationResults.Allowed {
+		audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny))
+		writeAuditLog()
+
 		errorMessage, errorData := g.buildPolicyDeniedError(&validationResults, req.Params.Name)
-
-		auditLog["status"] = "denied"
-		g.auditLogger.Warn(ctx, "Tool call audit", zap.Any("audit", auditLog))
-
-		// Return error with proper MCP error code (-32600 for Invalid Request)
-		// Note: We'll need to handle this error code in the server layer
 		return nil, &PolicyDeniedError{
 			Message: errorMessage,
 			Data:    errorData,
 		}
 	}
 
-	// Parse the prefixed tool name to get client name and original tool name
-	clientName, originalToolName, err := ParsePrefixedName(req.Params.Name)
-	if err != nil {
-		auditLog["error"] = err.Error()
-		auditLog["status"] = "invalid_tool_name"
-		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
-		return nil, fmt.Errorf("invalid tool name format: %w", err)
-	}
-
 	// Check if we have a valid session
 	if !hasSession {
-		auditLog["error"] = "no session ID in context"
-		auditLog["status"] = "no_session"
-		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
+		// No session - infrastructure error, skip audit
 		return nil, fmt.Errorf("no session ID in context")
 	}
 
 	// Get the appropriate client for this session
 	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
 	if err != nil {
-		auditLog["error"] = err.Error()
-		auditLog["status"] = "client_not_found"
-		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
+		// Client not found - infrastructure error, skip audit
 		return nil, fmt.Errorf("client not found for session: %w", err)
 	}
 
@@ -400,39 +394,45 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	originalReq := req
 	originalReq.Params.Name = originalToolName
 
-	// Call the tool on the appropriate client
+	// Call the tool on the appropriate client with timing
+	toolCallStart := time.Now()
 	result, err := clientInfo.Client.CallTool(ctx, originalReq)
+	toolCallDuration := time.Since(toolCallStart).Milliseconds()
+
 	if err != nil {
-		auditLog["error"] = err.Error()
-		auditLog["status"] = "execution_error"
-		auditLog["client"] = clientName
-		auditLog["original_tool_name"] = originalToolName
-		g.auditLogger.Error(ctx, "Tool call audit", zap.Any("audit", auditLog))
+		// Tool execution error - infrastructure error, skip audit
 		return nil, fmt.Errorf("tool call failed: %w", err)
 	}
 
+	// Record tool call duration
+	audit.SetRequestDuration(toolCallDuration)
+
+	// Record response info
+	audit.SetResponse(len(result.Content), result.IsError)
+
 	// Validate response through the response validation chain
 	if g.responseValidationChain != nil {
-		responseValidationResults, err := g.responseValidationChain.Handle(ctx, req, result)
-		if err != nil {
-			g.logger.Error(ctx, "Response validation error", zap.Error(err))
+		respValidationStart := time.Now()
+		responseValidationResults, respErr := g.responseValidationChain.Handle(ctx, req, result)
+		respValidationDuration := time.Since(respValidationStart).Milliseconds()
+
+		if respErr != nil {
+			g.logger.Error(ctx, "Response validation error", zap.Error(respErr))
 			// Continue even if response validation has errors
 		}
 
-		// Add response validation results to audit log
-		auditLog["response_validation"] = responseValidationResults
+		// Populate response validation audit
+		g.populateResponseValidationAudit(audit, responseValidationResults, respValidationDuration)
 
-		// If response validation denied the response, return error
+		// If response validation denied the response
 		if !responseValidationResults.Allowed {
-			auditLog["status"] = "response_denied"
-			g.auditLogger.Warn(ctx, "Tool call audit - response denied", zap.Any("audit", auditLog))
-
+			audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny))
+			writeAuditLog()
 			return nil, fmt.Errorf("response denied by policy: %s", responseValidationResults.Message)
 		}
 
 		// If response was redacted, update the result
 		if responseValidationResults.RedactedContent != nil {
-			// Update the first text content item with redacted content
 			if len(result.Content) > 0 {
 				for i := range result.Content {
 					if textContent, ok := result.Content[i].(mcp.TextContent); ok {
@@ -442,7 +442,6 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 					}
 				}
 			}
-			auditLog["redacted"] = true
 		}
 
 		// Add response validation summary to metadata
@@ -452,12 +451,10 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		if result.Meta.AdditionalFields == nil {
 			result.Meta.AdditionalFields = make(map[string]interface{})
 		}
-
-		// Create a summary of response validations
 		responseValidationSummary := make(map[string]string)
 		for _, v := range responseValidationResults.Results {
 			if v.PolicyType != "audit" {
-				if v.Allowed {
+				if v.Action != config.PolicyActionDeny {
 					responseValidationSummary[v.PolicyName] = "passed"
 				} else {
 					responseValidationSummary[v.PolicyName] = "failed"
@@ -467,10 +464,6 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		result.Meta.AdditionalFields["response_validation_summary"] = responseValidationSummary
 	}
 
-	// Add execution result to audit log
-	auditLog["result"] = result
-	auditLog["status"] = "success"
-
 	// Add validation summary to the result metadata
 	if result.Meta == nil {
 		result.Meta = &mcp.Meta{}
@@ -478,8 +471,6 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if result.Meta.AdditionalFields == nil {
 		result.Meta.AdditionalFields = make(map[string]interface{})
 	}
-
-	// Create a summary of all validations
 	validationSummary := make(map[string]string)
 	for _, v := range validationResults.Results {
 		if v.PolicyType != "audit" {
@@ -492,10 +483,67 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	}
 	result.Meta.AdditionalFields["validation_summary"] = validationSummary
 
-	// Log the complete audit entry
-	g.auditLogger.Info(ctx, "Tool call audit", zap.Any("audit", auditLog))
+	// Success - set actions and write audit log
+	audit.SetActions(string(config.PolicyActionAllow), string(config.PolicyActionAllow))
+	writeAuditLog()
 
 	return result, nil
+}
+
+// populateRequestValidationAudit extracts validation results by policy type and populates audit context
+func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results ValidationResults, totalDurationMs int64) {
+	// For now, we don't have per-policy timing, so we'll estimate based on policy count
+	// In the future, we could modify handlers to return timing info
+	// TODO : Each handler should return timing
+	policyCount := len(results.Results)
+	if policyCount == 0 {
+		return
+	}
+
+	// Extract CEL and AI results
+	for _, r := range results.Results {
+		if r.PolicyType == "audit" {
+			continue // Skip audit-only policies
+		}
+
+		action := string(config.PolicyActionAllow)
+		if !r.Allowed {
+			action = string(config.PolicyActionDeny)
+		}
+
+		// Estimate duration per policy (rough split)
+		estimatedDuration := totalDurationMs / int64(policyCount)
+
+		switch r.PolicyType {
+		case "cel":
+			audit.SetRequestValidationCEL(action, r.PolicyName, estimatedDuration)
+		case "ai":
+			audit.SetRequestValidationAI(action, r.Message, estimatedDuration)
+		}
+	}
+}
+
+// populateResponseValidationAudit extracts response validation results by policy type
+func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results ResponseValidationResults, totalDurationMs int64) {
+	policyCount := len(results.Results)
+	if policyCount == 0 {
+		return
+	}
+
+	for _, r := range results.Results {
+		if r.PolicyType == "audit" {
+			continue
+		}
+
+		estimatedDuration := totalDurationMs / int64(policyCount)
+
+		switch r.PolicyType {
+		case "cel":
+			audit.SetResponseValidationCEL(string(r.Action), r.PolicyName, estimatedDuration)
+		case "ai":
+			audit.SetResponseValidationAI(string(r.Action), r.Message, estimatedDuration)
+		}
+	}
 }
 
 // buildPolicyDeniedError creates a user-friendly error message and structured data for policy failures

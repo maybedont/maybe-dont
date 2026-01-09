@@ -35,11 +35,10 @@ func (h *ResponseLoggingHandler) HandleResponse(ctx context.Context, req mcp.Cal
 			{
 				PolicyName: "Response Audit Logging",
 				PolicyType: "audit",
-				Allowed:    true,
+				Action:     config.PolicyActionAllow,
 				Message:    "Response logged for audit",
 			},
 		},
-		Allowed:    true,
-		AllowCount: 1,
+		Allowed: true,
 	}, nil
 }

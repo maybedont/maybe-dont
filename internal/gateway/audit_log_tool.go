@@ -10,63 +10,21 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
 
-// AuditLogEntry represents a parsed audit log entry
+// AuditLogEntry represents a parsed audit log entry from the zap-formatted log file
 type AuditLogEntry struct {
-	Level     string    `json:"level"`
-	Timestamp float64   `json:"ts"`
-	Caller    string    `json:"caller"`
-	Message   string    `json:"msg"`
-	Logger    string    `json:"logger"`
-	RequestID string    `json:"request_id"`
-	Audit     AuditData `json:"audit"`
-}
-
-// AuditData represents the audit-specific data in a log entry
-type AuditData struct {
-	Request            *AuditRequest              `json:"request,omitempty"`
-	Client             *AuditClient               `json:"client,omitempty"`
-	Validation         *ValidationResults         `json:"validation,omitempty"`
-	ResponseValidation *ResponseValidationResults `json:"response_validation,omitempty"`
-	Result             *AuditResult               `json:"result,omitempty"`
-	Status             string                     `json:"status,omitempty"`
-	Error              string                     `json:"error,omitempty"`
-	Redacted           bool                       `json:"redacted,omitempty"`
-	OriginalToolName   string                     `json:"original_tool_name,omitempty"`
-}
-
-// AuditClient represents client session information in audit logs
-type AuditClient struct {
-	IPAddress string `json:"ip_address,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-}
-
-// AuditRequest represents the request portion of an audit log entry
-type AuditRequest struct {
-	Method string              `json:"method,omitempty"`
-	Params *AuditRequestParams `json:"params,omitempty"`
-}
-
-// AuditRequestParams represents the params in an audit request
-type AuditRequestParams struct {
-	Name      string                 `json:"name,omitempty"`
-	Arguments map[string]interface{} `json:"arguments,omitempty"`
-	Meta      map[string]interface{} `json:"_meta,omitempty"`
-}
-
-// AuditResult represents the result portion of an audit log entry
-type AuditResult struct {
-	Content []AuditContent         `json:"content,omitempty"`
-	Meta    map[string]interface{} `json:"_meta,omitempty"`
-	IsError bool                   `json:"isError,omitempty"`
-}
-
-// AuditContent represents content items in the result
-type AuditContent struct {
-	Type string `json:"type,omitempty"`
-	Text string `json:"text,omitempty"`
+	Level     string      `json:"level"`
+	Timestamp float64     `json:"ts"`
+	Caller    string      `json:"caller"`
+	Message   string      `json:"msg"`
+	Logger    string      `json:"logger"`
+	RequestID string      `json:"request_id"`
+	SessionID string      `json:"session_id"`
+	IPAddress string      `json:"ip_address"`
+	Audit     *AuditEntry `json:"audit"`
 }
 
 // AuditLogFilter represents filters for audit log queries
@@ -157,14 +115,14 @@ func (h *NativeToolsHandler) handleGetAuditLog(ctx context.Context, req mcp.Call
 // Returns entries newest-first (up to limit), plus a count of matching entries found.
 // Note: totalCount may be less than actual total if we stop early due to time range.
 func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int, timeRange time.Duration, filter AuditLogFilter) ([]AuditLogEntry, int, error) {
-	auditPath := h.config.Audit.Path
+	auditPath := h.auditLogPath
 
 	// Check if audit path is stderr/stdout (can't read from those)
 	if auditPath == "stderr" || auditPath == "stdout" {
-		return nil, 0, fmt.Errorf("cannot read audit logs when audit.path is set to %s", auditPath)
+		return nil, 0, fmt.Errorf("cannot read audit logs when audit log path is set to %s", auditPath)
 	}
 
-	// Check file size before reading
+	// Check if file exists
 	fileInfo, err := os.Stat(auditPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -172,10 +130,6 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 			return []AuditLogEntry{}, 0, nil
 		}
 		return nil, 0, fmt.Errorf("failed to stat audit file: %w", err)
-	}
-
-	if fileInfo.Size() > h.config.NativeTools.AuditLog.MaxFileSizeBytes {
-		return nil, 0, fmt.Errorf("audit log file exceeds maximum size limit of %d bytes", h.config.NativeTools.AuditLog.MaxFileSizeBytes)
 	}
 
 	fileSize := fileInfo.Size()
@@ -241,7 +195,7 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 
 			var entry AuditLogEntry
 			if err := json.Unmarshal(line, &entry); err != nil {
-				h.logger.Warn(ctx, "Failed to parse audit log line", zap.Error(err))
+				h.logger.Debug(ctx, "Skipping unparseable audit log line (may be old format)", zap.Error(err))
 				continue
 			}
 
@@ -354,33 +308,41 @@ func (h *NativeToolsHandler) extractLinesReverse(chunk []byte, hasMoreBefore boo
 
 // matchesFilter checks if an audit entry matches the specified filters
 func (h *NativeToolsHandler) matchesFilter(entry AuditLogEntry, filter AuditLogFilter) bool {
-	// Filter by status
+	if entry.Audit == nil {
+		return false
+	}
+
+	// Skip entries that don't have the new format structure
+	// Old format entries will have empty Tool.PrefixedName
+	if entry.Audit.Tool.PrefixedName == "" {
+		return false
+	}
+
+	// Filter by status (action field: "allow" or "deny")
 	if filter.Status != "" {
-		if entry.Audit.Status != filter.Status {
+		// Map old status values to new action values for backward compatibility
+		expectedAction := filter.Status
+		switch filter.Status {
+		case "success":
+			expectedAction = string(config.PolicyActionAllow)
+		case "denied", "response_denied":
+			expectedAction = string(config.PolicyActionDeny)
+		}
+		if entry.Audit.Action != expectedAction {
 			return false
 		}
 	}
 
-	// Filter by tool name (prefix matching)
+	// Filter by tool name (prefix matching on prefixed_name)
 	if filter.ToolName != "" {
-		if entry.Audit.Request == nil || entry.Audit.Request.Params == nil {
-			return false
-		}
-		if !strings.HasPrefix(entry.Audit.Request.Params.Name, filter.ToolName) {
+		if !strings.HasPrefix(entry.Audit.Tool.PrefixedName, filter.ToolName) {
 			return false
 		}
 	}
 
-	// Filter by client - extract client name from tool name prefix
+	// Filter by client name
 	if filter.Client != "" {
-		if entry.Audit.Request == nil || entry.Audit.Request.Params == nil {
-			return false
-		}
-		clientName, _, err := ParsePrefixedName(entry.Audit.Request.Params.Name)
-		if err != nil {
-			return false
-		}
-		if clientName != filter.Client {
+		if entry.Audit.Tool.Client != filter.Client {
 			return false
 		}
 	}

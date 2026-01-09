@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"go.uber.org/zap"
@@ -196,7 +197,7 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 	}
 
 	// Read entries with time-based filtering (handled by readAuditLogEntries)
-	entries, _, err := h.readAuditLogEntries(ctx, h.config.NativeTools.AuditReport.MaxEntriesForReport, timeRange, AuditLogFilter{})
+	entries, _, err := h.readAuditLogEntries(ctx, h.config.NativeTools.AuditReport.MaxEntries, timeRange, AuditLogFilter{})
 	if err != nil {
 		return nil, AuditReportStatistics{}, err
 	}
@@ -211,39 +212,50 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 	uniqueClients := make(map[string]bool)
 
 	for _, entry := range entries {
+		if entry.Audit == nil {
+			continue
+		}
 		stats.TotalRequests++
 
-		// Count by status
-		switch entry.Audit.Status {
-		case "success":
+		// Count by action (allow/deny)
+		switch entry.Audit.Action {
+		case string(config.PolicyActionAllow):
 			stats.SuccessCount++
-		case "denied":
+		case string(config.PolicyActionDeny):
 			stats.DeniedCount++
 		default:
 			stats.ErrorCount++
 		}
 
-		// Extract tool name and client
-		if entry.Audit.Request != nil && entry.Audit.Request.Params != nil {
-			toolName := entry.Audit.Request.Params.Name
-			if toolName != "" {
-				stats.TopTools[toolName]++
-				uniqueTools[toolName] = true
+		// Extract tool name and client from the new structure
+		toolName := entry.Audit.Tool.PrefixedName
+		if toolName != "" {
+			stats.TopTools[toolName]++
+			uniqueTools[toolName] = true
 
-				// Extract client from prefixed name
-				if clientName, _, err := ParsePrefixedName(toolName); err == nil {
-					stats.TopClients[clientName]++
-					uniqueClients[clientName] = true
-				}
+			// Use the client field directly
+			if entry.Audit.Tool.Client != "" {
+				stats.TopClients[entry.Audit.Tool.Client]++
+				uniqueClients[entry.Audit.Tool.Client] = true
 			}
 		}
 
-		// Track denied policies
-		if entry.Audit.Validation != nil {
-			for _, result := range entry.Audit.Validation.Results {
-				if !result.Allowed {
-					stats.DeniedByPolicy[result.PolicyName]++
-				}
+		// Track denied policies from request validation
+		if entry.Audit.RequestValidation != nil {
+			if entry.Audit.RequestValidation.CEL != nil && entry.Audit.RequestValidation.CEL.Action == string(config.PolicyActionDeny) {
+				stats.DeniedByPolicy[entry.Audit.RequestValidation.CEL.RuleMatched]++
+			}
+			if entry.Audit.RequestValidation.AI != nil && entry.Audit.RequestValidation.AI.Action == string(config.PolicyActionDeny) {
+				stats.DeniedByPolicy["AI Policy"]++
+			}
+		}
+		// Track denied policies from response validation
+		if entry.Audit.ResponseValidation != nil {
+			if entry.Audit.ResponseValidation.CEL != nil && entry.Audit.ResponseValidation.CEL.Action == string(config.PolicyActionDeny) {
+				stats.DeniedByPolicy[entry.Audit.ResponseValidation.CEL.RuleMatched]++
+			}
+			if entry.Audit.ResponseValidation.AI != nil && entry.Audit.ResponseValidation.AI.Action == string(config.PolicyActionDeny) {
+				stats.DeniedByPolicy["AI Response Policy"]++
 			}
 		}
 	}
@@ -355,31 +367,14 @@ func (h *NativeToolsHandler) prepareEntrySummary(entries []AuditLogEntry, stats 
 		if deniedCount >= 5 {
 			break
 		}
-		if entry.Audit.Status == "denied" {
-			if entry.Audit.Request != nil && entry.Audit.Request.Params != nil {
-				toolName := entry.Audit.Request.Params.Name
-				args, _ := json.Marshal(entry.Audit.Request.Params.Arguments)
-				summary += fmt.Sprintf("  - Tool: %s, Args: %s\n", toolName, string(args))
-				deniedCount++
-			}
+		if entry.Audit == nil {
+			continue
 		}
-	}
-
-	// Sample of error entries
-	summary += "\nSample Error Requests:\n"
-	errorCount := 0
-	for _, entry := range entries {
-		if errorCount >= 5 {
-			break
-		}
-		status := entry.Audit.Status
-		if status != "success" && status != "denied" {
-			if entry.Audit.Request != nil && entry.Audit.Request.Params != nil {
-				toolName := entry.Audit.Request.Params.Name
-				errorMsg := entry.Audit.Error
-				summary += fmt.Sprintf("  - Tool: %s, Status: %s, Error: %s\n", toolName, status, errorMsg)
-				errorCount++
-			}
+		if entry.Audit.Action == string(config.PolicyActionDeny) {
+			toolName := entry.Audit.Tool.PrefixedName
+			args, _ := json.Marshal(entry.Audit.Request.Params)
+			summary += fmt.Sprintf("  - Tool: %s, Args: %s\n", toolName, string(args))
+			deniedCount++
 		}
 	}
 

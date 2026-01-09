@@ -23,13 +23,12 @@ func TestGetAuditLog_FileDoesNotExist(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024 // 10MB
-	cfg.Audit.Path = "/tmp/non_existent_audit_log_12345.log"
+	auditPath := "/tmp/non_existent_audit_log_12345.log"
 
 	// Ensure file doesn't exist
-	_ = os.Remove(cfg.Audit.Path)
+	_ = os.Remove(auditPath)
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -68,10 +67,8 @@ func TestGetAuditLog_EmptyFile(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
-	cfg.Audit.Path = auditPath
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -110,10 +107,8 @@ func TestGetAuditLog_FileWithOnlyWhitespace(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
-	cfg.Audit.Path = auditPath
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -147,9 +142,9 @@ func TestGetAuditLog_WithValidEntries(t *testing.T) {
 
 	now := float64(time.Now().Unix())
 	entries := []string{
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__create_issue"}}}}`, now-2),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"denied","request":{"params":{"name":"aws__delete_bucket"}}}}`, now-1),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__search_code"}}}}`, now),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"create_issue","client":"github","prefixed_name":"github__create_issue"},"action":"allow"}}`, now-2),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"delete_bucket","client":"aws","prefixed_name":"aws__delete_bucket"},"action":"deny"}}`, now-1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"search_code","client":"github","prefixed_name":"github__search_code"},"action":"allow"}}`, now),
 	}
 	content := ""
 	for _, entry := range entries {
@@ -161,10 +156,8 @@ func TestGetAuditLog_WithValidEntries(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
-	cfg.Audit.Path = auditPath
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -198,11 +191,11 @@ func TestGetAuditLog_WithMalformedEntries(t *testing.T) {
 	auditPath := filepath.Join(tmpDir, "malformed_audit.log")
 
 	now := float64(time.Now().Unix())
-	content := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"success"}}
+	content := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"test","client":"test","prefixed_name":"test__test"},"action":"allow"}}
 not valid json at all
-{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"denied"}}
+{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"test2","client":"test","prefixed_name":"test__test2"},"action":"deny"}}
 {incomplete json
-{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"success"}}
+{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"test3","client":"test","prefixed_name":"test__test3"},"action":"allow"}}
 `, now-2, now-1, now)
 	err := os.WriteFile(auditPath, []byte(content), 0644)
 	require.NoError(t, err)
@@ -210,10 +203,8 @@ not valid json at all
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
-	cfg.Audit.Path = auditPath
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -236,6 +227,57 @@ not valid json at all
 	assert.Equal(t, 3, response.TotalCount)
 }
 
+func TestGetAuditLog_WithOldFormatEntries(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+
+	// Create a file with mix of new format and old format entries
+	// Old format entries are valid JSON but use the old structure (status, request.params.name)
+	// They should be gracefully skipped since they don't have the new tool structure
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "mixed_format_audit.log")
+
+	now := float64(time.Now().Unix())
+	content := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"success","request":{"params":{"name":"old_tool"}}}}
+{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"new_tool","client":"test","prefixed_name":"test__new_tool"},"action":"allow"}}
+{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"denied","request":{"params":{"name":"another_old_tool"}}}}
+{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"new_tool2","client":"test","prefixed_name":"test__new_tool2"},"action":"deny"}}
+`, now-3, now-2, now-1, now)
+	err := os.WriteFile(auditPath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	cfg := &config.Config{}
+	cfg.NativeTools.AuditLog.Enabled = true
+	cfg.NativeTools.AuditLog.MaxEntries = 1000
+
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = ToolGetAuditLog
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := handler.handleGetAuditLog(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "Should not error on old format entries, just skip them")
+
+	// Parse response
+	var response AuditLogResponse
+	textContent, ok := mcp.AsTextContent(result.Content[0])
+	require.True(t, ok)
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	// Should only return new format entries (2 out of 4 lines)
+	// Old format entries have empty tool.prefixed_name and are filtered out by matchesFilter
+	assert.Len(t, response.Entries, 2, "Should only return new format entries")
+	assert.Equal(t, 2, response.TotalCount)
+
+	// Verify the returned entries are the new format ones
+	assert.Equal(t, "test__new_tool2", response.Entries[0].Audit.Tool.PrefixedName, "First entry should be newest new-format entry")
+	assert.Equal(t, "test__new_tool", response.Entries[1].Audit.Tool.PrefixedName, "Second entry should be older new-format entry")
+}
+
 func TestGetAuditLog_StderrPath(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)
@@ -243,10 +285,9 @@ func TestGetAuditLog_StderrPath(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
-	cfg.Audit.Path = "stderr"
+	auditPath := "stderr"
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -260,7 +301,7 @@ func TestGetAuditLog_StderrPath(t *testing.T) {
 	// Verify error message
 	textContent, ok := mcp.AsTextContent(result.Content[0])
 	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "cannot read audit logs when audit.path is set to stderr")
+	assert.Contains(t, textContent.Text, "cannot read audit logs when audit log path is set to stderr")
 }
 
 func TestGetAuditLog_StdoutPath(t *testing.T) {
@@ -270,10 +311,9 @@ func TestGetAuditLog_StdoutPath(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
-	cfg.Audit.Path = "stdout"
+	auditPath := "stdout"
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -287,40 +327,7 @@ func TestGetAuditLog_StdoutPath(t *testing.T) {
 	// Verify error message
 	textContent, ok := mcp.AsTextContent(result.Content[0])
 	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "cannot read audit logs when audit.path is set to stdout")
-}
-
-func TestGetAuditLog_FileTooLarge(t *testing.T) {
-	ctx := context.Background()
-	logger := newTestLogger(t)
-
-	// Create a small file but set a very small max size limit
-	tmpDir := t.TempDir()
-	auditPath := filepath.Join(tmpDir, "small_audit.log")
-	err := os.WriteFile(auditPath, []byte(`{"level":"info","ts":1735851292.935,"msg":"audit"}`), 0644)
-	require.NoError(t, err)
-
-	cfg := &config.Config{}
-	cfg.NativeTools.AuditLog.Enabled = true
-	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 // Only 10 bytes allowed
-	cfg.Audit.Path = auditPath
-
-	handler := NewNativeToolsHandler(cfg, logger, logger)
-
-	req := mcp.CallToolRequest{}
-	req.Params.Name = ToolGetAuditLog
-	req.Params.Arguments = map[string]interface{}{}
-
-	result, err := handler.handleGetAuditLog(ctx, req)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.True(t, result.IsError, "Should return error when file exceeds max size")
-
-	// Verify error message
-	textContent, ok := mcp.AsTextContent(result.Content[0])
-	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "exceeds maximum size limit")
+	assert.Contains(t, textContent.Text, "cannot read audit logs when audit log path is set to stdout")
 }
 
 func TestGetAuditLog_AllEntriesOlderThanTimeWindow(t *testing.T) {
@@ -334,9 +341,9 @@ func TestGetAuditLog_AllEntriesOlderThanTimeWindow(t *testing.T) {
 	// Create entries from 30 days ago
 	oldTime := float64(time.Now().Add(-30 * 24 * time.Hour).Unix())
 	entries := []string{
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__create_issue"}}}}`, oldTime),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"denied","request":{"params":{"name":"aws__delete_bucket"}}}}`, oldTime+1),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__search_code"}}}}`, oldTime+2),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"create_issue","client":"github","prefixed_name":"github__create_issue"},"action":"allow"}}`, oldTime),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"delete_bucket","client":"aws","prefixed_name":"aws__delete_bucket"},"action":"deny"}}`, oldTime+1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"search_code","client":"github","prefixed_name":"github__search_code"},"action":"allow"}}`, oldTime+2),
 	}
 	content := ""
 	for _, entry := range entries {
@@ -348,10 +355,8 @@ func TestGetAuditLog_AllEntriesOlderThanTimeWindow(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
-	cfg.Audit.Path = auditPath
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	// Test with default 7-day window - should return empty results
 	t.Run("DefaultTimeWindow", func(t *testing.T) {
@@ -423,10 +428,10 @@ func TestGetAuditLog_WithFiltering(t *testing.T) {
 
 	now := float64(time.Now().Unix())
 	entries := []string{
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"success","request":{"params":{"name":"github__create_issue"}}}}`, now-3),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"denied","request":{"params":{"name":"aws__delete_bucket"}}}}`, now-2),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"success","request":{"params":{"name":"github__search_code"}}}}`, now-1),
-		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"denied","request":{"params":{"name":"github__delete_repo"}}}}`, now),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"create_issue","client":"github","prefixed_name":"github__create_issue"},"action":"allow"}}`, now-3),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"delete_bucket","client":"aws","prefixed_name":"aws__delete_bucket"},"action":"deny"}}`, now-2),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"search_code","client":"github","prefixed_name":"github__search_code"},"action":"allow"}}`, now-1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"delete_repo","client":"github","prefixed_name":"github__delete_repo"},"action":"deny"}}`, now),
 	}
 	content := ""
 	for _, entry := range entries {
@@ -438,10 +443,8 @@ func TestGetAuditLog_WithFiltering(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
-	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
-	cfg.Audit.Path = auditPath
 
-	handler := NewNativeToolsHandler(cfg, logger, logger)
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
 	// Test filtering by status
 	t.Run("FilterByStatus", func(t *testing.T) {
@@ -509,14 +512,12 @@ func TestGetAuditLog_WithFiltering(t *testing.T) {
 		// Verify that the most recent entries are returned (newest first)
 		// Entry order in file: github__create_issue (oldest), aws__delete_bucket, github__search_code, github__delete_repo (newest)
 		// Expected result: github__delete_repo (first/newest), github__search_code (second)
-		require.NotNil(t, response.Entries[0].Audit.Request)
-		require.NotNil(t, response.Entries[0].Audit.Request.Params)
-		assert.Equal(t, "github__delete_repo", response.Entries[0].Audit.Request.Params.Name,
+		require.NotNil(t, response.Entries[0].Audit)
+		assert.Equal(t, "github__delete_repo", response.Entries[0].Audit.Tool.PrefixedName,
 			"First entry should be the most recent (github__delete_repo)")
 
-		require.NotNil(t, response.Entries[1].Audit.Request)
-		require.NotNil(t, response.Entries[1].Audit.Request.Params)
-		assert.Equal(t, "github__search_code", response.Entries[1].Audit.Request.Params.Name,
+		require.NotNil(t, response.Entries[1].Audit)
+		assert.Equal(t, "github__search_code", response.Entries[1].Audit.Tool.PrefixedName,
 			"Second entry should be the second most recent (github__search_code)")
 	})
 }
