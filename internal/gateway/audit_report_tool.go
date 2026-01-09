@@ -311,7 +311,7 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 		Concerns:   aiResponse.Concerns,
 		Statistics: stats,
 		Metadata: AuditReportMetadata{
-			GeneratedAt:     time.Now().Format(time.RFC3339),
+			GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
 			TimeRange:       params.TimeRange,
 			EntriesAnalyzed: len(entries),
 			Focus:           params.Focus,

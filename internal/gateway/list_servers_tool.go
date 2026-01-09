@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"go.uber.org/zap"
@@ -23,6 +24,7 @@ type DownstreamServerInfo struct {
 
 // ListDownstreamServersResponse is the response for the list_downstream_servers tool
 type ListDownstreamServersResponse struct {
+	Timestamp    string                 `json:"timestamp"`
 	Servers      []DownstreamServerInfo `json:"servers"`
 	TotalServers int                    `json:"total_servers"`
 	TotalTools   int                    `json:"total_tools"`
@@ -32,8 +34,12 @@ type ListDownstreamServersResponse struct {
 // getListDownstreamServersToolDefinition returns the MCP tool definition for list_downstream_servers
 func (h *NativeToolsHandler) getListDownstreamServersToolDefinition() mcp.Tool {
 	return mcp.Tool{
-		Name:        ToolListDownstreamServers,
-		Description: "[EXPERIMENTAL] List all configured downstream MCP servers connected through this gateway, including their connection type and available tools count.",
+		Name: ToolListDownstreamServers,
+		Description: "List all configured downstream MCP servers connected through this gateway, " +
+			"including their connection type and available tools count. " +
+			"If a server shows tools_count=0, tools may not yet be discovered for this session. " +
+			"Use " + ToolDiscoverTools + " to trigger discovery, then re-call this tool to see updated counts. " +
+			"Check the timestamp field to determine the age of previously cached results.",
 		Annotations: mcp.ToolAnnotation{
 			ReadOnlyHint: boolPtr(true),
 		},
@@ -168,6 +174,7 @@ func (h *NativeToolsHandler) handleListDownstreamServers(ctx context.Context, re
 	}
 
 	response := ListDownstreamServersResponse{
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
 		Servers:      servers,
 		TotalServers: len(servers),
 		TotalTools:   totalTools,
