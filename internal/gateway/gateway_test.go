@@ -31,6 +31,7 @@ func TestPolicyDeniedError_Structure(t *testing.T) {
 	assert.Equal(t, "delete_file", policyErr.Data["tool_name"])
 }
 
+//goland:noinspection GoTypeAssertionOnErrors
 func TestPolicyDeniedError_ErrorHandler(t *testing.T) {
 	// Test with a PolicyDeniedError
 	policyErr := &PolicyDeniedError{

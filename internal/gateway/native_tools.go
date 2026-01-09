@@ -20,6 +20,11 @@ const (
 	ToolListSessions          = "maybedont__list_sessions"
 )
 
+// boolPtr returns a pointer to a bool value (helper for annotations)
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 // ClientConfigProvider provides access to downstream client configurations
 type ClientConfigProvider interface {
 	GetClientConfigs() map[string]config.ClientConfig
@@ -134,7 +139,10 @@ func (h *NativeToolsHandler) HandleToolCall(ctx context.Context, req mcp.CallToo
 func (h *NativeToolsHandler) getAuditLogToolDefinition() mcp.Tool {
 	return mcp.Tool{
 		Name:        ToolGetAuditLog,
-		Description: "Retrieve the gateway's audit log entries. Returns JSON-formatted log entries from the configured audit log file.",
+		Description: "[EXPERIMENTAL] Retrieve the gateway's audit log entries. Returns JSON-formatted log entries from the configured audit log file.",
+		Annotations: mcp.ToolAnnotation{
+			ReadOnlyHint: boolPtr(true),
+		},
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -143,10 +151,10 @@ func (h *NativeToolsHandler) getAuditLogToolDefinition() mcp.Tool {
 					"description": fmt.Sprintf("Maximum number of log entries to return (default: 100, max: %d)", h.config.NativeTools.AuditLog.MaxEntries),
 					"default":     100,
 				},
-				"offset": map[string]interface{}{
-					"type":        "integer",
-					"description": "Number of entries to skip from the end (0 = most recent)",
-					"default":     0,
+				"time_range": map[string]interface{}{
+					"type":        "string",
+					"description": "Time range to look back for entries. Supports Go duration format (e.g., '1h30m', '45m'), days ('7d', '30d'), weeks ('2w'), or 'all' for no limit. Default: '7d'",
+					"default":     "7d",
 				},
 				"filter": map[string]interface{}{
 					"type":        "object",
@@ -176,14 +184,16 @@ func (h *NativeToolsHandler) getAuditLogToolDefinition() mcp.Tool {
 func (h *NativeToolsHandler) getAuditReportToolDefinition() mcp.Tool {
 	return mcp.Tool{
 		Name:        ToolGenerateAuditReport,
-		Description: "Generate an AI-powered analysis report of the gateway's audit log. Analyzes patterns, security concerns, and provides recommendations prioritized by business impact.",
+		Description: "[EXPERIMENTAL] Generate an AI-powered analysis report of the gateway's audit log. Analyzes patterns, security concerns, and provides recommendations prioritized by business impact.",
+		Annotations: mcp.ToolAnnotation{
+			ReadOnlyHint: boolPtr(true),
+		},
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
 				"time_range": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"1h", "6h", "24h", "7d", "30d", "all"},
-					"description": "Time range of logs to analyze",
+					"description": "Time range of logs to analyze. Supports Go duration format (e.g., '1h30m', '45m'), days ('7d', '30d'), weeks ('2w'), or 'all' for no limit. Default: '24h'",
 					"default":     "24h",
 				},
 				"focus": map[string]interface{}{

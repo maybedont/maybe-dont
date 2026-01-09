@@ -20,7 +20,7 @@ type MockValidationHandler struct {
 	expectedResult ValidationResult
 }
 
-func (m *MockValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+func (m *MockValidationHandler) HandleToolCall(context.Context, mcp.CallToolRequest) (ValidationResults, error) {
 	if m.shouldError {
 		return ValidationResults{}, errors.New("mock error")
 	}

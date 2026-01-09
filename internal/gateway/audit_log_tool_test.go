@@ -3,9 +3,11 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/maybedont/maybe-dont/internal/config"
@@ -50,7 +52,7 @@ func TestGetAuditLog_FileDoesNotExist(t *testing.T) {
 	assert.Empty(t, response.Entries, "Should return empty entries for non-existent file")
 	assert.Equal(t, 0, response.TotalCount, "Total count should be 0")
 	assert.Equal(t, 0, response.ReturnedCount, "Returned count should be 0")
-	assert.False(t, response.HasMore, "HasMore should be false")
+	assert.False(t, response.Truncated, "Truncated should be false")
 }
 
 func TestGetAuditLog_EmptyFile(t *testing.T) {
@@ -92,7 +94,7 @@ func TestGetAuditLog_EmptyFile(t *testing.T) {
 	assert.Empty(t, response.Entries, "Should return empty entries for empty file")
 	assert.Equal(t, 0, response.TotalCount, "Total count should be 0")
 	assert.Equal(t, 0, response.ReturnedCount, "Returned count should be 0")
-	assert.False(t, response.HasMore, "HasMore should be false")
+	assert.False(t, response.Truncated, "Truncated should be false")
 }
 
 func TestGetAuditLog_FileWithOnlyWhitespace(t *testing.T) {
@@ -139,14 +141,15 @@ func TestGetAuditLog_WithValidEntries(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)
 
-	// Create a file with valid audit log entries
+	// Create a file with valid audit log entries using recent timestamps
 	tmpDir := t.TempDir()
 	auditPath := filepath.Join(tmpDir, "valid_audit.log")
 
+	now := float64(time.Now().Unix())
 	entries := []string{
-		`{"level":"info","ts":1735851292.935,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__create_issue"}}}}`,
-		`{"level":"info","ts":1735851293.123,"msg":"Tool call audit","logger":"audit","audit":{"status":"denied","request":{"params":{"name":"aws__delete_bucket"}}}}`,
-		`{"level":"info","ts":1735851294.456,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__search_code"}}}}`,
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__create_issue"}}}}`, now-2),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"denied","request":{"params":{"name":"aws__delete_bucket"}}}}`, now-1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__search_code"}}}}`, now),
 	}
 	content := ""
 	for _, entry := range entries {
@@ -183,23 +186,24 @@ func TestGetAuditLog_WithValidEntries(t *testing.T) {
 	assert.Len(t, response.Entries, 3)
 	assert.Equal(t, 3, response.TotalCount)
 	assert.Equal(t, 3, response.ReturnedCount)
-	assert.False(t, response.HasMore)
+	assert.False(t, response.Truncated)
 }
 
 func TestGetAuditLog_WithMalformedEntries(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)
 
-	// Create a file with mix of valid and malformed entries
+	// Create a file with mix of valid and malformed entries using recent timestamps
 	tmpDir := t.TempDir()
 	auditPath := filepath.Join(tmpDir, "malformed_audit.log")
 
-	content := `{"level":"info","ts":1735851292.935,"msg":"Tool call audit","audit":{"status":"success"}}
+	now := float64(time.Now().Unix())
+	content := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"success"}}
 not valid json at all
-{"level":"info","ts":1735851293.123,"msg":"Tool call audit","audit":{"status":"denied"}}
+{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"denied"}}
 {incomplete json
-{"level":"info","ts":1735851294.456,"msg":"Tool call audit","audit":{"status":"success"}}
-`
+{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"success"}}
+`, now-2, now-1, now)
 	err := os.WriteFile(auditPath, []byte(content), 0644)
 	require.NoError(t, err)
 
@@ -319,19 +323,110 @@ func TestGetAuditLog_FileTooLarge(t *testing.T) {
 	assert.Contains(t, textContent.Text, "exceeds maximum size limit")
 }
 
+func TestGetAuditLog_AllEntriesOlderThanTimeWindow(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+
+	// Create a file with entries that are older than the default 7-day window
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "old_audit.log")
+
+	// Create entries from 30 days ago
+	oldTime := float64(time.Now().Add(-30 * 24 * time.Hour).Unix())
+	entries := []string{
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__create_issue"}}}}`, oldTime),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"denied","request":{"params":{"name":"aws__delete_bucket"}}}}`, oldTime+1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"status":"success","request":{"params":{"name":"github__search_code"}}}}`, oldTime+2),
+	}
+	content := ""
+	for _, entry := range entries {
+		content += entry + "\n"
+	}
+	err := os.WriteFile(auditPath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	cfg := &config.Config{}
+	cfg.NativeTools.AuditLog.Enabled = true
+	cfg.NativeTools.AuditLog.MaxEntries = 1000
+	cfg.NativeTools.AuditLog.MaxFileSizeBytes = 10 * 1024 * 1024
+	cfg.Audit.Path = auditPath
+
+	handler := NewNativeToolsHandler(cfg, logger, logger)
+
+	// Test with default 7-day window - should return empty results
+	t.Run("DefaultTimeWindow", func(t *testing.T) {
+		req := mcp.CallToolRequest{}
+		req.Params.Name = ToolGetAuditLog
+		req.Params.Arguments = map[string]interface{}{}
+
+		result, err := handler.handleGetAuditLog(ctx, req)
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+
+		var response AuditLogResponse
+		textContent, _ := mcp.AsTextContent(result.Content[0])
+		_ = json.Unmarshal([]byte(textContent.Text), &response)
+
+		assert.Empty(t, response.Entries, "Should return no entries when all are older than 7 days")
+		assert.Equal(t, 0, response.TotalCount)
+		assert.False(t, response.Truncated)
+	})
+
+	// Test with explicit 1-day window - should return empty results
+	t.Run("ExplicitOneDayWindow", func(t *testing.T) {
+		req := mcp.CallToolRequest{}
+		req.Params.Name = ToolGetAuditLog
+		req.Params.Arguments = map[string]interface{}{
+			"time_range": "1d",
+		}
+
+		result, err := handler.handleGetAuditLog(ctx, req)
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+
+		var response AuditLogResponse
+		textContent, _ := mcp.AsTextContent(result.Content[0])
+		_ = json.Unmarshal([]byte(textContent.Text), &response)
+
+		assert.Empty(t, response.Entries, "Should return no entries when all are older than 1 day")
+		assert.Equal(t, 0, response.TotalCount)
+	})
+
+	// Test with large enough window - should return all entries
+	t.Run("LargeTimeWindow", func(t *testing.T) {
+		req := mcp.CallToolRequest{}
+		req.Params.Name = ToolGetAuditLog
+		req.Params.Arguments = map[string]interface{}{
+			"time_range": "60d", // 60 days should include 30-day-old entries
+		}
+
+		result, err := handler.handleGetAuditLog(ctx, req)
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+
+		var response AuditLogResponse
+		textContent, _ := mcp.AsTextContent(result.Content[0])
+		_ = json.Unmarshal([]byte(textContent.Text), &response)
+
+		assert.Len(t, response.Entries, 3, "Should return all entries with 60-day window")
+		assert.Equal(t, 3, response.TotalCount)
+	})
+}
+
 func TestGetAuditLog_WithFiltering(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)
 
-	// Create a file with various entries
+	// Create a file with various entries using recent timestamps
 	tmpDir := t.TempDir()
 	auditPath := filepath.Join(tmpDir, "filterable_audit.log")
 
+	now := float64(time.Now().Unix())
 	entries := []string{
-		`{"level":"info","ts":1735851292.935,"msg":"Tool call audit","audit":{"status":"success","request":{"params":{"name":"github__create_issue"}}}}`,
-		`{"level":"info","ts":1735851293.123,"msg":"Tool call audit","audit":{"status":"denied","request":{"params":{"name":"aws__delete_bucket"}}}}`,
-		`{"level":"info","ts":1735851294.456,"msg":"Tool call audit","audit":{"status":"success","request":{"params":{"name":"github__search_code"}}}}`,
-		`{"level":"info","ts":1735851295.789,"msg":"Tool call audit","audit":{"status":"denied","request":{"params":{"name":"github__delete_repo"}}}}`,
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"success","request":{"params":{"name":"github__create_issue"}}}}`, now-3),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"denied","request":{"params":{"name":"aws__delete_bucket"}}}}`, now-2),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"success","request":{"params":{"name":"github__search_code"}}}}`, now-1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"denied","request":{"params":{"name":"github__delete_repo"}}}}`, now),
 	}
 	content := ""
 	for _, entry := range entries {
@@ -390,13 +485,12 @@ func TestGetAuditLog_WithFiltering(t *testing.T) {
 		assert.Len(t, response.Entries, 3, "Should return only github entries")
 	})
 
-	// Test pagination
-	t.Run("Pagination", func(t *testing.T) {
+	// Test limit and truncation - verify most recent entries are returned
+	t.Run("LimitWithTruncation", func(t *testing.T) {
 		req := mcp.CallToolRequest{}
 		req.Params.Name = ToolGetAuditLog
 		req.Params.Arguments = map[string]interface{}{
-			"limit":  float64(2),
-			"offset": float64(1),
+			"limit": float64(2),
 		}
 
 		result, err := handler.handleGetAuditLog(ctx, req)
@@ -410,6 +504,19 @@ func TestGetAuditLog_WithFiltering(t *testing.T) {
 		assert.Len(t, response.Entries, 2, "Should return 2 entries (limit)")
 		assert.Equal(t, 4, response.TotalCount, "Total should be 4")
 		assert.Equal(t, 2, response.ReturnedCount)
-		assert.True(t, response.HasMore, "Should have more entries available")
+		assert.True(t, response.Truncated, "Should indicate truncation when more entries exist")
+
+		// Verify that the most recent entries are returned (newest first)
+		// Entry order in file: github__create_issue (oldest), aws__delete_bucket, github__search_code, github__delete_repo (newest)
+		// Expected result: github__delete_repo (first/newest), github__search_code (second)
+		require.NotNil(t, response.Entries[0].Audit.Request)
+		require.NotNil(t, response.Entries[0].Audit.Request.Params)
+		assert.Equal(t, "github__delete_repo", response.Entries[0].Audit.Request.Params.Name,
+			"First entry should be the most recent (github__delete_repo)")
+
+		require.NotNil(t, response.Entries[1].Audit.Request)
+		require.NotNil(t, response.Entries[1].Audit.Request.Params)
+		assert.Equal(t, "github__search_code", response.Entries[1].Audit.Request.Params.Name,
+			"Second entry should be the second most recent (github__search_code)")
 	})
 }

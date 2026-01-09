@@ -33,7 +33,10 @@ type ListDownstreamServersResponse struct {
 func (h *NativeToolsHandler) getListDownstreamServersToolDefinition() mcp.Tool {
 	return mcp.Tool{
 		Name:        ToolListDownstreamServers,
-		Description: "List all configured downstream MCP servers connected through this gateway, including their connection type and available tools count.",
+		Description: "[EXPERIMENTAL] List all configured downstream MCP servers connected through this gateway, including their connection type and available tools count.",
+		Annotations: mcp.ToolAnnotation{
+			ReadOnlyHint: boolPtr(true),
+		},
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
