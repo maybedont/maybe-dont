@@ -75,6 +75,7 @@ rules:
 
     - name: "Check external network access"
       description: "Prevent HTTP requests to external domains"
+      mode: disabled
       action: deny
       prompt: |-
         ANALYZE: Does this operation make HTTP/HTTPS requests to external domains?

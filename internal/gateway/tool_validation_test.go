@@ -155,7 +155,7 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 		},
 	}
 
-	err = celEngine.LoadPolicies(policies)
+	err = celEngine.LoadPolicies(policies, config.PolicyModeEnabled)
 	require.NoError(t, err)
 
 	// Create validation chain with real handlers
@@ -287,7 +287,7 @@ func TestCELValidationHandler_Isolation(t *testing.T) {
 			Message:    "Allowed to call tools",
 		},
 	}
-	err = engine.LoadPolicies(policies)
+	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
 	require.NoError(t, err)
 
 	handler := NewToolCELValidationHandler(sessionLogger, engine)

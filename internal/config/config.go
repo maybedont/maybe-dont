@@ -31,6 +31,48 @@ const (
 	PolicyActionRedact PolicyAction = "redact"
 )
 
+// PolicyMode represents the execution mode for a policy or policy group
+type PolicyMode string
+
+const (
+	PolicyModeEnabled   PolicyMode = "enabled"    // Policy is enforced (default)
+	PolicyModeAuditOnly PolicyMode = "audit_only" // Policy executes and is recorded, but doesn't affect final result
+	PolicyModeDisabled  PolicyMode = "disabled"   // Policy is not executed
+)
+
+// IsValid returns true if the PolicyMode is a valid value
+func (m PolicyMode) IsValid() bool {
+	return m == PolicyModeEnabled || m == PolicyModeAuditOnly || m == PolicyModeDisabled || m == ""
+}
+
+// ResolveValidationMode resolves the effective mode for a validation config section.
+// Priority: Mode field > Enabled field (deprecated) > defaultMode parameter
+// Each validation section can have its own default mode.
+func ResolveValidationMode(mode PolicyMode, enabled *bool, defaultMode PolicyMode) PolicyMode {
+	// If explicit mode is set, use it
+	if mode != "" {
+		return mode
+	}
+	// If deprecated enabled field is set, convert to mode
+	if enabled != nil {
+		if *enabled {
+			return PolicyModeEnabled
+		}
+		return PolicyModeDisabled
+	}
+	// Use the provided default
+	return defaultMode
+}
+
+// ResolvePolicyMode resolves the effective mode for an individual policy.
+// Per-rule mode overrides top-level default mode.
+func ResolvePolicyMode(ruleMode PolicyMode, defaultMode PolicyMode) PolicyMode {
+	if ruleMode != "" {
+		return ruleMode
+	}
+	return defaultMode
+}
+
 // Config represents the application configuration
 type Config struct {
 	// Server configuration
@@ -55,14 +97,16 @@ type Config struct {
 
 	// Policy configuration
 	PolicyValidation struct {
-		Enabled   bool        `mapstructure:"enabled"`
+		Enabled   *bool       `mapstructure:"enabled"`    // Deprecated: use Mode instead
+		Mode      PolicyMode  `mapstructure:"mode"`       // enabled, audit_only, disabled (default: enabled)
 		RulesFile string      `mapstructure:"rules_file"`
 		Rules     []CELPolicy `mapstructure:"rules"`
 	} `mapstructure:"policy_validation"`
 
 	// AI validation configuration
 	AIPolicyValidation struct {
-		Enabled   bool       `mapstructure:"enabled"`
+		Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: audit_only)
 		Endpoint  string     `mapstructure:"endpoint"`
 		Model     string     `mapstructure:"model"`
 		RulesFile string     `mapstructure:"rules_file"`
@@ -72,14 +116,16 @@ type Config struct {
 
 	// Response validation configuration
 	ResponseValidation struct {
-		Enabled   bool                `mapstructure:"enabled"`
+		Enabled   *bool               `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode      PolicyMode          `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
 		RulesFile string              `mapstructure:"rules_file"`
 		Rules     []CELResponsePolicy `mapstructure:"rules"`
 	} `mapstructure:"response_validation"`
 
 	// AI response validation configuration
 	AIResponseValidation struct {
-		Enabled   bool               `mapstructure:"enabled"`
+		Enabled   *bool              `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode      PolicyMode         `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
 		RulesFile string             `mapstructure:"rules_file"`
 		Rules     []AIResponsePolicy `mapstructure:"rules"`
 	} `mapstructure:"ai_response_validation"`
@@ -176,6 +222,7 @@ type CELPolicy struct {
 	Expression  string       `mapstructure:"expression"`
 	Action      PolicyAction `mapstructure:"action"` // allow or deny
 	Message     string       `mapstructure:"message"`
+	Mode        PolicyMode   `mapstructure:"mode"` // Optional: overrides top-level mode
 }
 
 // AIPolicy represents a single AI policy rule
@@ -185,6 +232,7 @@ type AIPolicy struct {
 	Prompt      string       `mapstructure:"prompt"`
 	Action      PolicyAction `mapstructure:"action"` // allow or deny
 	Message     string       `mapstructure:"message"`
+	Mode        PolicyMode   `mapstructure:"mode"` // Optional: overrides top-level mode
 }
 
 // CELResponsePolicy represents a single CEL response policy rule
@@ -196,6 +244,7 @@ type CELResponsePolicy struct {
 	Message              string       `mapstructure:"message"`
 	RedactionPattern     string       `mapstructure:"redaction_pattern"`
 	RedactionReplacement string       `mapstructure:"redaction_replacement"`
+	Mode                 PolicyMode   `mapstructure:"mode"` // Optional: overrides top-level mode
 }
 
 // AIResponsePolicy represents a single AI response policy rule
@@ -205,6 +254,7 @@ type AIResponsePolicy struct {
 	Prompt      string       `mapstructure:"prompt"`
 	Action      PolicyAction `mapstructure:"action"` // allow, deny, or redact
 	Message     string       `mapstructure:"message"`
+	Mode        PolicyMode   `mapstructure:"mode"` // Optional: overrides top-level mode
 }
 
 // LoadPoliciesFromFile loads CEL policies from a file
@@ -588,8 +638,25 @@ When reporting concerns, prioritize them by potential business impact:
 For each concern, estimate the potential impact category and explain the reasoning.`
 	}
 
-	// Load CEL request policies from rules file
-	if config.PolicyValidation.Enabled {
+	// Resolve and store validation modes with their respective defaults
+	// CEL policy validation defaults to enabled
+	config.PolicyValidation.Mode = ResolveValidationMode(
+		config.PolicyValidation.Mode, config.PolicyValidation.Enabled, PolicyModeEnabled)
+
+	// AI validation defaults to audit_only (non-blocking by default)
+	config.AIPolicyValidation.Mode = ResolveValidationMode(
+		config.AIPolicyValidation.Mode, config.AIPolicyValidation.Enabled, PolicyModeAuditOnly)
+
+	// Response validation defaults to disabled
+	config.ResponseValidation.Mode = ResolveValidationMode(
+		config.ResponseValidation.Mode, config.ResponseValidation.Enabled, PolicyModeDisabled)
+
+	// AI response validation defaults to disabled
+	config.AIResponseValidation.Mode = ResolveValidationMode(
+		config.AIResponseValidation.Mode, config.AIResponseValidation.Enabled, PolicyModeDisabled)
+
+	// Load CEL request policies from rules file (if mode is not disabled)
+	if config.PolicyValidation.Mode != PolicyModeDisabled {
 		if config.PolicyValidation.RulesFile == "" {
 			return nil, fmt.Errorf("policy_validation is enabled but rules_file is not specified")
 		}
@@ -601,8 +668,8 @@ For each concern, estimate the potential impact category and explain the reasoni
 		config.PolicyValidation.Rules = policies
 	}
 
-	// Load AI request policies from rules file
-	if config.AIPolicyValidation.Enabled {
+	// Load AI request policies from rules file (if mode is not disabled)
+	if config.AIPolicyValidation.Mode != PolicyModeDisabled {
 		if config.AIPolicyValidation.RulesFile == "" {
 			return nil, fmt.Errorf("ai_validation is enabled but rules_file is not specified")
 		}
@@ -614,8 +681,8 @@ For each concern, estimate the potential impact category and explain the reasoni
 		config.AIPolicyValidation.Rules = aiPolicies
 	}
 
-	// Load CEL response policies from rules file
-	if config.ResponseValidation.Enabled {
+	// Load CEL response policies from rules file (if mode is not disabled)
+	if config.ResponseValidation.Mode != PolicyModeDisabled {
 		if config.ResponseValidation.RulesFile == "" {
 			return nil, fmt.Errorf("response_validation is enabled but rules_file is not specified")
 		}
@@ -627,8 +694,8 @@ For each concern, estimate the potential impact category and explain the reasoni
 		config.ResponseValidation.Rules = responsePolicies
 	}
 
-	// Load AI response policies from rules file
-	if config.AIResponseValidation.Enabled {
+	// Load AI response policies from rules file (if mode is not disabled)
+	if config.AIResponseValidation.Mode != PolicyModeDisabled {
 		if config.AIResponseValidation.RulesFile == "" {
 			return nil, fmt.Errorf("ai_response_validation is enabled but rules_file is not specified")
 		}
@@ -810,8 +877,9 @@ func ValidateConfig(cfg *Config) error {
 		}
 	}
 
-	// Validate AI validation configuration
-	if cfg.AIPolicyValidation.Enabled {
+	// Validate AI validation configuration (if mode is enabled or audit_only)
+	// Empty mode is treated as disabled for backwards compatibility
+	if cfg.AIPolicyValidation.Mode != PolicyModeDisabled && cfg.AIPolicyValidation.Mode != "" {
 		if cfg.AIPolicyValidation.APIKey == "" {
 			errors = append(errors, "ai_validation.api_key is required when AI validation is enabled")
 		}

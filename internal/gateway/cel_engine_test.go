@@ -32,7 +32,7 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies)
+	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
 	require.NoError(t, err)
 
 	tests := []struct {

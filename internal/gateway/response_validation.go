@@ -13,6 +13,7 @@ type ResponseValidationResult struct {
 	PolicyName      string              `json:"policy_name"`
 	PolicyType      string              `json:"policy_type"` // "cel" or "ai"
 	Action          config.PolicyAction `json:"action"`      // "allow", "deny", or "redact"
+	Mode            config.PolicyMode   `json:"mode"`        // "enabled", "audit_only", or "disabled"
 	Message         string              `json:"message,omitempty"`
 	Error           string              `json:"error,omitempty"`
 	RedactedContent string              `json:"redacted_content,omitempty"` // For redaction actions

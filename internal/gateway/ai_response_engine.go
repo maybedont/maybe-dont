@@ -21,6 +21,7 @@ type AIResponsePolicy struct {
 	Prompt      string              `yaml:"prompt"`
 	Action      config.PolicyAction `yaml:"action"` // allow, deny, or redact
 	Message     string              `yaml:"message"`
+	Mode        config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
 }
 
 // AIResponsePolicyEngine handles AI policy evaluation for responses
@@ -45,26 +46,48 @@ func InitAIResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 }
 
 // LoadPolicies loads AI response policies from configuration
-func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy) error {
+// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
+func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy, defaultMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info(context.Background(), "Loading AI response policies", zap.Int("count", len(policies)))
+	e.logger.Info(context.Background(), "Loading AI response policies",
+		zap.Int("count", len(policies)),
+		zap.String("default_mode", string(defaultMode)),
+	)
 
 	// Validate each policy
 	for _, policy := range policies {
+		// Resolve effective mode for this policy
+		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+
+		e.logger.Info(context.Background(), "Loading AI response policy",
+			zap.String("name", policy.Name),
+			zap.String("action", string(policy.Action)),
+			zap.String("mode", string(effectiveMode)),
+		)
+
+		// Skip disabled policies
+		if effectiveMode == config.PolicyModeDisabled {
+			e.logger.Info(context.Background(), "Skipping disabled AI response policy",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
+
 		// Validate action, a response policy can be 'allow', 'deny' or 'redact'
 		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny && policy.Action != config.PolicyActionRedact {
 			return fmt.Errorf("invalid action %s for AI response policy %s", policy.Action, policy.Name)
 		}
 
-		// Store the policy
+		// Store the policy with resolved mode
 		e.policies = append(e.policies, AIResponsePolicy{
 			Name:        policy.Name,
 			Description: policy.Description,
 			Prompt:      policy.Prompt,
 			Action:      policy.Action,
 			Message:     policy.Message,
+			Mode:        effectiveMode,
 		})
 	}
 
@@ -142,6 +165,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 						PolicyName: p.Name,
 						PolicyType: "ai",
 						Action:     config.PolicyActionDeny,
+						Mode:       p.Mode,
 						Error:      fmt.Sprintf("Failed to evaluate response policy: %v", err),
 						DurationMs: durationMs,
 					},
@@ -156,6 +180,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 						PolicyName: p.Name,
 						PolicyType: "ai",
 						Action:     config.PolicyActionDeny,
+						Mode:       p.Mode,
 						Error:      "No response from AI model",
 						DurationMs: durationMs,
 					},
@@ -173,6 +198,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 						PolicyName: p.Name,
 						PolicyType: "ai",
 						Action:     config.PolicyActionDeny,
+						Mode:       p.Mode,
 						Error:      fmt.Sprintf("Failed to parse AI response: %v", err),
 						DurationMs: durationMs,
 					},
@@ -196,6 +222,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				PolicyName: p.Name,
 				PolicyType: "ai",
 				Action:     action,
+				Mode:       p.Mode,
 				Message:    evaluation.Message,
 				DurationMs: durationMs,
 			}
@@ -224,12 +251,15 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		}
 		results.Results = append(results.Results, result.result)
 
-		switch result.result.Action {
-		case config.PolicyActionDeny:
-			results.Allowed = false
-		case config.PolicyActionRedact:
-			content := result.result.RedactedContent
-			redactedContent = &content
+		// Only affect final decision if mode is enabled (not audit_only)
+		if result.result.Mode == config.PolicyModeEnabled {
+			switch result.result.Action {
+			case config.PolicyActionDeny:
+				results.Allowed = false
+			case config.PolicyActionRedact:
+				content := result.result.RedactedContent
+				redactedContent = &content
+			}
 		}
 	}
 

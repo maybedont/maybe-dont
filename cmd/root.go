@@ -95,12 +95,12 @@ and providing comprehensive audit logging.`,
 				Logger.Warn(context.Background(), "Failed to initialize metrics collector", zap.Error(err))
 				// Don't fail startup if metrics initialization fails
 			} else {
-				// Set rule usage flags based on config
+				// Set rule usage flags based on config (mode is already resolved during config loading)
 				MetricsCollector.SetRuleUsage(
-					cfg.AIPolicyValidation.Enabled,
-					cfg.PolicyValidation.Enabled,
-					cfg.AIResponseValidation.Enabled,
-					cfg.ResponseValidation.Enabled,
+					cfg.AIPolicyValidation.Mode != config.PolicyModeDisabled,
+					cfg.PolicyValidation.Mode != config.PolicyModeDisabled,
+					cfg.AIResponseValidation.Mode != config.PolicyModeDisabled,
+					cfg.ResponseValidation.Mode != config.PolicyModeDisabled,
 				)
 				// Set MCP server count
 				MetricsCollector.SetMCPServerCount(len(cfg.DownstreamMCPServers))

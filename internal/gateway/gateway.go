@@ -67,25 +67,29 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	var policyEngine *CELPolicyEngine
 	var aiPolicyEngine *AIPolicyEngine
 
-	// Initialize CEL policy engine only if enabled
-	if cfg.PolicyValidation.Enabled {
-		logger.Info(ctx, "Initializing CEL policy engine")
+	// Mode is already resolved during config loading, use it directly
+	celPolicyMode := cfg.PolicyValidation.Mode
+	aiPolicyMode := cfg.AIPolicyValidation.Mode
+
+	// Initialize CEL policy engine only if not disabled
+	if celPolicyMode != config.PolicyModeDisabled {
+		logger.Info(ctx, "Initializing CEL policy engine", zap.String("mode", string(celPolicyMode)))
 		policyEngine, err = NewCELPolicyEngine(ctx, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create CEL policy engine: %w", err)
 		}
 
-		// Load policies from configuration
-		if err := policyEngine.LoadPolicies(cfg.PolicyValidation.Rules); err != nil {
+		// Load policies from configuration with the resolved mode
+		if err := policyEngine.LoadPolicies(cfg.PolicyValidation.Rules, celPolicyMode); err != nil {
 			return nil, fmt.Errorf("failed to load CEL policies: %w", err)
 		}
 	} else {
 		logger.Info(ctx, "CEL policy validation is disabled")
 	}
 
-	// Initialize AI policy engine only if enabled
-	if cfg.AIPolicyValidation.Enabled {
-		logger.Info(ctx, "Initializing AI policy engine")
+	// Initialize AI policy engine only if not disabled
+	if aiPolicyMode != config.PolicyModeDisabled {
+		logger.Info(ctx, "Initializing AI policy engine", zap.String("mode", string(aiPolicyMode)))
 		aiPolicyEngine = &AIPolicyEngine{
 			endpoint: cfg.AIPolicyValidation.Endpoint,
 			model:    cfg.AIPolicyValidation.Model,
@@ -98,8 +102,8 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 			return nil, fmt.Errorf("failed to init AI policy engine: %w", err)
 		}
 
-		// Load policies from configuration
-		if err := aiPolicyEngine.LoadPolicies(cfg.AIPolicyValidation.Rules); err != nil {
+		// Load policies from configuration with the resolved mode
+		if err := aiPolicyEngine.LoadPolicies(cfg.AIPolicyValidation.Rules, aiPolicyMode); err != nil {
 			return nil, fmt.Errorf("failed to load AI policies: %w", err)
 		}
 	} else {
@@ -110,25 +114,29 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	var responsePolicyEngine *CELResponsePolicyEngine
 	var aiResponsePolicyEngine *AIResponsePolicyEngine
 
-	// Initialize CEL response policy engine only if enabled
-	if cfg.ResponseValidation.Enabled {
-		logger.Info(ctx, "Initializing CEL response policy engine")
+	// Mode is already resolved during config loading, use it directly
+	celResponseMode := cfg.ResponseValidation.Mode
+	aiResponseMode := cfg.AIResponseValidation.Mode
+
+	// Initialize CEL response policy engine only if not disabled
+	if celResponseMode != config.PolicyModeDisabled {
+		logger.Info(ctx, "Initializing CEL response policy engine", zap.String("mode", string(celResponseMode)))
 		responsePolicyEngine, err = NewCELResponsePolicyEngine(ctx, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create CEL response policy engine: %w", err)
 		}
 
-		// Load policies from configuration
-		if err := responsePolicyEngine.LoadPolicies(cfg.ResponseValidation.Rules); err != nil {
+		// Load policies from configuration with the resolved mode
+		if err := responsePolicyEngine.LoadPolicies(cfg.ResponseValidation.Rules, celResponseMode); err != nil {
 			return nil, fmt.Errorf("failed to load CEL response policies: %w", err)
 		}
 	} else {
 		logger.Info(ctx, "CEL response validation is disabled")
 	}
 
-	// Initialize AI response policy engine only if enabled
-	if cfg.AIResponseValidation.Enabled {
-		logger.Info(ctx, "Initializing AI response policy engine")
+	// Initialize AI response policy engine only if not disabled
+	if aiResponseMode != config.PolicyModeDisabled {
+		logger.Info(ctx, "Initializing AI response policy engine", zap.String("mode", string(aiResponseMode)))
 		aiResponsePolicyEngine = &AIResponsePolicyEngine{
 			endpoint: cfg.AIPolicyValidation.Endpoint,
 			model:    cfg.AIPolicyValidation.Model,
@@ -141,8 +149,8 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 			return nil, fmt.Errorf("failed to init AI response policy engine: %w", err)
 		}
 
-		// Load policies from configuration
-		if err := aiResponsePolicyEngine.LoadPolicies(cfg.AIResponseValidation.Rules); err != nil {
+		// Load policies from configuration with the resolved mode
+		if err := aiResponsePolicyEngine.LoadPolicies(cfg.AIResponseValidation.Rules, aiResponseMode); err != nil {
 			return nil, fmt.Errorf("failed to load AI response policies: %w", err)
 		}
 	} else {
@@ -200,14 +208,14 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Note: Audit logging is now handled centrally in HandleToolCall
 	var handlers []ToolValidationHandler
 
-	// Add CEL validation handler if enabled
-	if g.config.PolicyValidation.Enabled && g.policyEngine != nil {
+	// Add CEL validation handler if engine was created (mode is enabled or audit_only)
+	if g.policyEngine != nil {
 		g.logger.Info(ctx, "Adding CEL validation handler to chain")
 		handlers = append(handlers, NewToolCELValidationHandler(g.logger, g.policyEngine))
 	}
 
-	// Add AI validation handler if enabled
-	if g.config.AIPolicyValidation.Enabled && g.aiPolicyEngine != nil {
+	// Add AI validation handler if engine was created (mode is enabled or audit_only)
+	if g.aiPolicyEngine != nil {
 		g.logger.Info(ctx, "Adding AI validation handler to chain")
 		handlers = append(handlers, NewToolAIValidationHandler(g.logger, g.aiPolicyEngine))
 	}
@@ -218,14 +226,14 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Note: Audit logging is now handled centrally in HandleToolCall
 	var responseHandlers []ResponseValidationHandler
 
-	// Add CEL response validation handler if enabled
-	if g.config.ResponseValidation.Enabled && g.responsePolicyEngine != nil {
+	// Add CEL response validation handler if engine was created (mode is enabled or audit_only)
+	if g.responsePolicyEngine != nil {
 		g.logger.Info(ctx, "Adding CEL response validation handler to chain")
 		responseHandlers = append(responseHandlers, NewResponseCELValidationHandler(g.logger, g.responsePolicyEngine))
 	}
 
-	// Add AI response validation handler if enabled
-	if g.config.AIResponseValidation.Enabled && g.aiResponsePolicyEngine != nil {
+	// Add AI response validation handler if engine was created (mode is enabled or audit_only)
+	if g.aiResponsePolicyEngine != nil {
 		g.logger.Info(ctx, "Adding AI response validation handler to chain")
 		responseHandlers = append(responseHandlers, NewResponseAIValidationHandler(g.logger, g.aiResponsePolicyEngine))
 	}

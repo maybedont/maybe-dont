@@ -22,6 +22,7 @@ type AIPolicy struct {
 	Prompt      string              `yaml:"prompt"`
 	Action      config.PolicyAction `yaml:"action"` // allow or deny
 	Message     string              `yaml:"message"`
+	Mode        config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
 }
 
 // AIPolicyEngine handles AI policy evaluation
@@ -48,28 +49,52 @@ func InitAIPolicyEngine(logger *config.SessionLogger, engine *AIPolicyEngine) er
 }
 
 // LoadPolicies loads AI policies from configuration
-func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy) error {
+// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
+func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy, defaultMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	e.logger.Info(context.Background(), "Loading AI policies",
+		zap.Int("count", len(policies)),
+		zap.String("default_mode", string(defaultMode)),
+	)
+
 	// Validate each policy
 	for _, policy := range policies {
+		// Resolve effective mode for this policy
+		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+
+		e.logger.Info(context.Background(), "Loading AI policy",
+			zap.String("name", policy.Name),
+			zap.String("action", string(policy.Action)),
+			zap.String("mode", string(effectiveMode)),
+		)
+
+		// Skip disabled policies
+		if effectiveMode == config.PolicyModeDisabled {
+			e.logger.Info(context.Background(), "Skipping disabled AI policy",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
 
 		// Validate action, request validation can only be 'allow' or 'deny'
 		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny {
 			return fmt.Errorf("invalid action '%s' for policy %s: must be 'allow' or 'deny'", policy.Action, policy.Name)
 		}
 
-		// Store the compiled policy
+		// Store the compiled policy with resolved mode
 		e.policies = append(e.policies, AIPolicy{
 			Name:        policy.Name,
 			Description: policy.Description,
 			Prompt:      policy.Prompt,
 			Action:      policy.Action,
 			Message:     policy.Message,
+			Mode:        effectiveMode,
 		})
 	}
 
+	e.logger.Info(context.Background(), "Loaded AI policies", zap.Int("count", len(e.policies)))
 	return nil
 }
 
@@ -135,6 +160,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 						PolicyName: p.Name,
 						PolicyType: "ai",
 						Action:     config.PolicyActionDeny,
+						Mode:       p.Mode,
 						Error:      fmt.Sprintf("Failed to evaluate policy: %v", err),
 						DurationMs: durationMs,
 					},
@@ -149,6 +175,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 						PolicyName: p.Name,
 						PolicyType: "ai",
 						Action:     config.PolicyActionDeny,
+						Mode:       p.Mode,
 						Error:      "No response from AI model",
 						DurationMs: durationMs,
 					},
@@ -166,6 +193,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 						PolicyName: p.Name,
 						PolicyType: "ai",
 						Action:     config.PolicyActionDeny,
+						Mode:       p.Mode,
 						Error:      fmt.Sprintf("Failed to parse result: %v", err),
 						DurationMs: durationMs,
 					},
@@ -185,6 +213,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					PolicyName: p.Name,
 					PolicyType: "ai",
 					Action:     config.PolicyActionDeny,
+					Mode:       p.Mode,
 					Message:    result.Message,
 					DurationMs: durationMs,
 				}
@@ -194,6 +223,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					PolicyName: p.Name,
 					PolicyType: "ai",
 					Action:     config.PolicyActionAllow,
+					Mode:       p.Mode,
 					Message:    result.Message,
 					DurationMs: durationMs,
 				}
@@ -230,10 +260,14 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		}
 
 		results.Results = append(results.Results, result.result)
-		if result.result.Action == config.PolicyActionAllow {
-			results.AllowCount++
-		} else {
-			results.DenyCount++
+
+		// Only count toward final decision if mode is enabled (not audit_only)
+		if result.result.Mode == config.PolicyModeEnabled {
+			if result.result.Action == config.PolicyActionAllow {
+				results.AllowCount++
+			} else {
+				results.DenyCount++
+			}
 		}
 	}
 

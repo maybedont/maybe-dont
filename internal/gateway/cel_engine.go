@@ -22,6 +22,7 @@ type CELPolicy struct {
 	Expression  string              `yaml:"expression"`
 	Action      config.PolicyAction `yaml:"action"` // allow or deny
 	Message     string              `yaml:"message"`
+	Mode        config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
 }
 
 // CELPolicyEngine handles CEL policy evaluation
@@ -90,18 +91,34 @@ func NewCELPolicyEngine(ctx context.Context, logger *config.SessionLogger) (*CEL
 }
 
 // LoadPolicies loads CEL policies from configuration
-func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
+// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
+func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy, defaultMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info(context.Background(), "Loading CEL policies", zap.Int("count", len(policies)))
+	e.logger.Info(context.Background(), "Loading CEL policies",
+		zap.Int("count", len(policies)),
+		zap.String("default_mode", string(defaultMode)),
+	)
 
 	// Validate and compile each policy
 	for _, policy := range policies {
+		// Resolve effective mode for this policy
+		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+
 		e.logger.Info(context.Background(), "Loading CEL policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
+			zap.String("mode", string(effectiveMode)),
 		)
+
+		// Skip disabled policies - don't even compile them
+		if effectiveMode == config.PolicyModeDisabled {
+			e.logger.Info(context.Background(), "Skipping disabled CEL policy",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
 
 		// Compile the expression
 		_, issues := e.env.Compile(policy.Expression)
@@ -114,13 +131,14 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.CELPolicy) error {
 			return fmt.Errorf("invalid action '%s' for policy %s: must be 'allow' or 'deny'", policy.Action, policy.Name)
 		}
 
-		// Store the compiled policy
+		// Store the compiled policy with resolved mode
 		e.policies = append(e.policies, CELPolicy{
 			Name:        policy.Name,
 			Description: policy.Description,
 			Expression:  policy.Expression,
 			Action:      policy.Action,
 			Message:     policy.Message,
+			Mode:        effectiveMode,
 		})
 	}
 
@@ -217,13 +235,17 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				PolicyName: policy.Name,
 				PolicyType: "cel",
 				Action:     config.PolicyActionDeny,
+				Mode:       policy.Mode,
 				Message:    policy.Message,
 				DurationMs: durationMs,
 			})
-			results.DenyCount++
-			if !denyMatched {
-				denyMatched = true
-				denyMsg = policy.Message
+			// Only count toward final decision if mode is enabled (not audit_only)
+			if policy.Mode == config.PolicyModeEnabled {
+				results.DenyCount++
+				if !denyMatched {
+					denyMatched = true
+					denyMsg = policy.Message
+				}
 			}
 		}
 		if result && policy.Action == config.PolicyActionAllow {
@@ -231,13 +253,17 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				PolicyName: policy.Name,
 				PolicyType: "cel",
 				Action:     config.PolicyActionAllow,
+				Mode:       policy.Mode,
 				Message:    policy.Message,
 				DurationMs: durationMs,
 			})
-			results.AllowCount++
-			if !allowMatched {
-				allowMatched = true
-				allowMsg = policy.Message
+			// Only count toward final decision if mode is enabled (not audit_only)
+			if policy.Mode == config.PolicyModeEnabled {
+				results.AllowCount++
+				if !allowMatched {
+					allowMatched = true
+					allowMsg = policy.Message
+				}
 			}
 		}
 	}
@@ -256,6 +282,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 			PolicyName: "CEL Policy Engine",
 			PolicyType: "cel",
 			Action:     config.PolicyActionAllow,
+			Mode:       config.PolicyModeEnabled,
 			Message:    "No policies matched",
 		})
 	}

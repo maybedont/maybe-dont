@@ -20,6 +20,7 @@ type CELResponsePolicy struct {
 	Expression           string              `yaml:"expression"`
 	Action               config.PolicyAction `yaml:"action"` // allow, deny, or redact
 	Message              string              `yaml:"message"`
+	Mode                 config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
 	RedactionPattern     string              `yaml:"redaction_pattern"`
 	RedactionReplacement string              `yaml:"redaction_replacement"`
 }
@@ -51,18 +52,34 @@ func NewCELResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 }
 
 // LoadPolicies loads CEL response policies from configuration
-func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePolicy) error {
+// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
+func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePolicy, defaultMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info(context.Background(), "Loading CEL response policies", zap.Int("count", len(policies)))
+	e.logger.Info(context.Background(), "Loading CEL response policies",
+		zap.Int("count", len(policies)),
+		zap.String("default_mode", string(defaultMode)),
+	)
 
 	// Validate and compile each policy
 	for _, policy := range policies {
+		// Resolve effective mode for this policy
+		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+
 		e.logger.Info(context.Background(), "Loading CEL response policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
+			zap.String("mode", string(effectiveMode)),
 		)
+
+		// Skip disabled policies
+		if effectiveMode == config.PolicyModeDisabled {
+			e.logger.Info(context.Background(), "Skipping disabled CEL response policy",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
 
 		// Compile the expression
 		_, issues := e.env.Compile(policy.Expression)
@@ -75,13 +92,14 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePoli
 			return fmt.Errorf("invalid action '%s' for response policy %s: must be 'allow', 'deny', or 'redact'", policy.Action, policy.Name)
 		}
 
-		// Store the compiled policy
+		// Store the compiled policy with resolved mode
 		e.policies = append(e.policies, CELResponsePolicy{
 			Name:                 policy.Name,
 			Description:          policy.Description,
 			Expression:           policy.Expression,
 			Action:               policy.Action,
 			Message:              policy.Message,
+			Mode:                 effectiveMode,
 			RedactionPattern:     policy.RedactionPattern,
 			RedactionReplacement: policy.RedactionReplacement,
 		})
@@ -175,12 +193,16 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 					PolicyName: policy.Name,
 					PolicyType: "cel",
 					Action:     config.PolicyActionDeny,
+					Mode:       policy.Mode,
 					Message:    policy.Message,
 					DurationMs: durationMs,
 				})
-				results.Allowed = false
-				if results.Message == "" {
-					results.Message = policy.Message
+				// Only affect final decision if mode is enabled (not audit_only)
+				if policy.Mode == config.PolicyModeEnabled {
+					results.Allowed = false
+					if results.Message == "" {
+						results.Message = policy.Message
+					}
 				}
 
 			case config.PolicyActionRedact:
@@ -188,16 +210,21 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				content := e.getTextContent(result)
 				if content != "" {
 					redacted := e.applyRedaction(content, policy.RedactionPattern, policy.RedactionReplacement)
-					redactedContent = &redacted
 
 					results.Results = append(results.Results, ResponseValidationResult{
 						PolicyName:      policy.Name,
 						PolicyType:      "cel",
 						Action:          config.PolicyActionRedact,
+						Mode:            policy.Mode,
 						Message:         policy.Message,
 						RedactedContent: redacted,
 						DurationMs:      durationMs,
 					})
+
+					// Only actually apply redaction if mode is enabled (not audit_only)
+					if policy.Mode == config.PolicyModeEnabled {
+						redactedContent = &redacted
+					}
 				}
 
 			case config.PolicyActionAllow:
@@ -205,6 +232,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 					PolicyName: policy.Name,
 					PolicyType: "cel",
 					Action:     config.PolicyActionAllow,
+					Mode:       policy.Mode,
 					Message:    policy.Message,
 					DurationMs: durationMs,
 				})

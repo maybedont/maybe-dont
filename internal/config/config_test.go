@@ -272,14 +272,15 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 			// No required fields in Audit anymore
 		},
 		AIPolicyValidation: struct {
-			Enabled   bool       `mapstructure:"enabled"`
+			Enabled   *bool      `mapstructure:"enabled"`
+			Mode      PolicyMode `mapstructure:"mode"`
 			Endpoint  string     `mapstructure:"endpoint"`
 			Model     string     `mapstructure:"model"`
 			RulesFile string     `mapstructure:"rules_file"`
 			APIKey    string     `mapstructure:"api_key"`
 			Rules     []AIPolicy `mapstructure:"rules"`
 		}{
-			Enabled: true,
+			Mode: PolicyModeEnabled, // Use Mode instead of deprecated Enabled
 			// Missing APIKey - Error 11
 			// Missing Endpoint - Error 12
 			// Missing Model - Error 13
@@ -376,6 +377,10 @@ downstream_mcp_servers:
   test:
     type: stdio
     command: echo
+
+# Explicitly disable CEL policy validation (it defaults to enabled)
+policy_validation:
+  mode: disabled
 
 ai_validation:
   enabled: true

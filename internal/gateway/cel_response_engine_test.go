@@ -125,7 +125,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 			engine, err := NewCELResponsePolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies)
+			err = engine.LoadPolicies(tt.policies, config.PolicyModeEnabled)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateResponse(context.Background(), tt.request, tt.response)

@@ -38,6 +38,7 @@ func (h *ToolLoggingHandler) HandleToolCall(ctx context.Context, req mcp.CallToo
 				PolicyName: "Audit Logging",
 				PolicyType: "audit",
 				Action:     config.PolicyActionAllow,
+				Mode:       config.PolicyModeEnabled,
 				Message:    "Tool call logged for audit",
 			},
 		},

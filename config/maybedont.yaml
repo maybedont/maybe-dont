@@ -42,14 +42,14 @@ server:
 # Policy configuration
 policy_validation:
   # Enable CEL-based tool validation
-  enabled: true
+  mode: enabled
   # Path to CEL policy rules file (required when enabled)
   rules_file: "cel.rules.yaml"
 
 # AI validation configuration
 ai_validation:
   # Enable AI-powered tool validation
-  enabled: true
+  mode: audit_only
   # OpenAI-compatible API endpoint
   endpoint: "https://api.openai.com/v1/chat/completions"
   # API key (required when enabled)
@@ -63,7 +63,7 @@ ai_validation:
 # These policies validate and filter tool call RESPONSES before returning to the client
 response_validation:
   # Enable CEL-based response validation
-  enabled: false
+  mode: disabled
   # Path to CEL response policy rules file (required when enabled)
   rules_file: "cel_response.rules.yaml"
 
@@ -71,7 +71,7 @@ response_validation:
 # Uses AI to detect and filter sensitive information in responses
 ai_response_validation:
   # Enable AI-powered response validation
-  enabled: false
+  mode: disabled
   # Path to AI response policy rules file (required when enabled)
   rules_file: "ai_response.rules.yaml"
   # Note: Uses the same endpoint and model as ai_validation above
