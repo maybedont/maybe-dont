@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -168,6 +169,9 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
+		// Track timing for this policy evaluation
+		startTime := time.Now()
+
 		e.logger.Debug(ctx, "Evaluating CEL policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
@@ -192,6 +196,9 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 			return ValidationResults{}, fmt.Errorf("failed to evaluate policy %s: %w", policy.Name, err)
 		}
 
+		// Calculate duration
+		durationMs := time.Since(startTime).Milliseconds()
+
 		// Check result
 		result, ok := out.Value().(bool)
 		if !ok {
@@ -202,14 +209,16 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 			zap.String("name", policy.Name),
 			zap.Bool("result", result),
 			zap.String("action", string(policy.Action)),
+			zap.Int64("duration_ms", durationMs),
 		)
 
 		if result && policy.Action == config.PolicyActionDeny {
 			results.Results = append(results.Results, ValidationResult{
 				PolicyName: policy.Name,
 				PolicyType: "cel",
-				Allowed:    false,
+				Action:     config.PolicyActionDeny,
 				Message:    policy.Message,
+				DurationMs: durationMs,
 			})
 			results.DenyCount++
 			if !denyMatched {
@@ -221,8 +230,9 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 			results.Results = append(results.Results, ValidationResult{
 				PolicyName: policy.Name,
 				PolicyType: "cel",
-				Allowed:    true,
+				Action:     config.PolicyActionAllow,
 				Message:    policy.Message,
+				DurationMs: durationMs,
 			})
 			results.AllowCount++
 			if !allowMatched {
@@ -245,7 +255,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 		results.Results = append(results.Results, ValidationResult{
 			PolicyName: "CEL Policy Engine",
 			PolicyType: "cel",
-			Allowed:    true,
+			Action:     config.PolicyActionAllow,
 			Message:    "No policies matched",
 		})
 	}

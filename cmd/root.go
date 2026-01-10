@@ -56,7 +56,7 @@ and providing comprehensive audit logging.`,
 		resolvedCfgDir = config.ResolveConfigDir(resolvedCfgDir)
 
 		// Resolve log directory from CLI flag or environment variable
-		// If not specified, derives from config directory (e.g., ./config → ./logs)
+		// If not specified, derives from config directory (e.g., ./config → ./config/logs)
 		ResolvedLogDir = logDir
 		if ResolvedLogDir == "" {
 			ResolvedLogDir = os.Getenv("MAYBE_DONT_LOG_DIR")

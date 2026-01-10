@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -124,6 +125,9 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
+		// Track timing for this policy evaluation
+		startTime := time.Now()
+
 		e.logger.Debug(ctx, "Evaluating CEL response policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
@@ -154,10 +158,14 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			return ResponseValidationResults{}, fmt.Errorf("response policy %s did not return a boolean", policy.Name)
 		}
 
+		// Calculate duration
+		durationMs := time.Since(startTime).Milliseconds()
+
 		e.logger.Debug(ctx, "CEL response policy evaluation result",
 			zap.String("name", policy.Name),
 			zap.Bool("matched", matched),
 			zap.String("action", string(policy.Action)),
+			zap.Int64("duration_ms", durationMs),
 		)
 
 		if matched {
@@ -168,6 +176,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 					PolicyType: "cel",
 					Action:     config.PolicyActionDeny,
 					Message:    policy.Message,
+					DurationMs: durationMs,
 				})
 				results.Allowed = false
 				if results.Message == "" {
@@ -187,6 +196,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 						Action:          config.PolicyActionRedact,
 						Message:         policy.Message,
 						RedactedContent: redacted,
+						DurationMs:      durationMs,
 					})
 				}
 
@@ -196,6 +206,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 					PolicyType: "cel",
 					Action:     config.PolicyActionAllow,
 					Message:    policy.Message,
+					DurationMs: durationMs,
 				})
 			}
 		}

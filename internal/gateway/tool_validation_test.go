@@ -47,7 +47,7 @@ func TestValidationChain_HandlerComposition(t *testing.T) {
 		expectedResult: ValidationResult{
 			PolicyName: "Allow Policy",
 			PolicyType: "mock",
-			Allowed:    true,
+			Action:     config.PolicyActionAllow,
 			Message:    "Allowed by mock handler",
 		},
 	}
@@ -58,7 +58,7 @@ func TestValidationChain_HandlerComposition(t *testing.T) {
 		expectedResult: ValidationResult{
 			PolicyName: "Deny Policy",
 			PolicyType: "mock",
-			Allowed:    false,
+			Action:     config.PolicyActionDeny,
 			Message:    "Denied by mock handler",
 		},
 	}
@@ -85,11 +85,11 @@ func TestValidationChain_HandlerComposition(t *testing.T) {
 	for _, result := range results.Results {
 		if result.PolicyName == "Allow Policy" {
 			foundAllow = true
-			assert.True(t, result.Allowed)
+			assert.Equal(t, config.PolicyActionAllow, result.Action)
 		}
 		if result.PolicyName == "Deny Policy" {
 			foundDeny = true
-			assert.False(t, result.Allowed)
+			assert.Equal(t, config.PolicyActionDeny, result.Action)
 		}
 	}
 	assert.True(t, foundAllow)
@@ -109,7 +109,7 @@ func TestValidationChain_ErrorHandling(t *testing.T) {
 		expectedResult: ValidationResult{
 			PolicyName: "Working Policy",
 			PolicyType: "mock",
-			Allowed:    true,
+			Action:     config.PolicyActionAllow,
 			Message:    "Working handler succeeded",
 		},
 	}
@@ -269,7 +269,7 @@ func TestLoggingHandler_Isolation(t *testing.T) {
 	assert.Len(t, results.Results, 1) // Should have one audit log result
 	assert.Equal(t, "Audit Logging", results.Results[0].PolicyName)
 	assert.Equal(t, "audit", results.Results[0].PolicyType)
-	assert.True(t, results.Results[0].Allowed)
+	assert.Equal(t, config.PolicyActionAllow, results.Results[0].Action)
 }
 
 func TestCELValidationHandler_Isolation(t *testing.T) {

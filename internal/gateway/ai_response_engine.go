@@ -107,6 +107,9 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	// Launch a goroutine for each policy
 	for _, policy := range e.policies {
 		go func(p AIResponsePolicy) {
+			// Track timing for this policy evaluation
+			startTime := time.Now()
+
 			// Create a new context for this goroutine
 			policyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
@@ -130,6 +133,9 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					},
 				},
 			})
+
+			durationMs := time.Since(startTime).Milliseconds()
+
 			if err != nil {
 				resultChan <- policyResult{
 					result: ResponseValidationResult{
@@ -137,6 +143,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 						PolicyType: "ai",
 						Action:     config.PolicyActionDeny,
 						Error:      fmt.Sprintf("Failed to evaluate response policy: %v", err),
+						DurationMs: durationMs,
 					},
 					err: err,
 				}
@@ -150,6 +157,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 						PolicyType: "ai",
 						Action:     config.PolicyActionDeny,
 						Error:      "No response from AI model",
+						DurationMs: durationMs,
 					},
 					err: fmt.Errorf("no response from AI model"),
 				}
@@ -166,6 +174,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 						PolicyType: "ai",
 						Action:     config.PolicyActionDeny,
 						Error:      fmt.Sprintf("Failed to parse AI response: %v", err),
+						DurationMs: durationMs,
 					},
 					err: err,
 				}
@@ -188,6 +197,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				PolicyType: "ai",
 				Action:     action,
 				Message:    evaluation.Message,
+				DurationMs: durationMs,
 			}
 
 			// Include redacted content if applicable

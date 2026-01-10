@@ -16,6 +16,7 @@ type ResponseValidationResult struct {
 	Message         string              `json:"message,omitempty"`
 	Error           string              `json:"error,omitempty"`
 	RedactedContent string              `json:"redacted_content,omitempty"` // For redaction actions
+	DurationMs      int64               `json:"duration_ms"`                // Time taken to evaluate this policy in milliseconds
 }
 
 // ResponseValidationResults represents all validation results for a response

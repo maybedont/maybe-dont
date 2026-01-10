@@ -329,19 +329,14 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	}
 
 	// Helper to write audit log and return
-	// Include session_id and ip_address at top level for easier querying
 	writeAuditLog := func() {
 		entry := audit.Finalize()
 		g.auditLogger.Info(ctx, "Tool call audit",
-			zap.String("session_id", sessionID),
-			zap.String("ip_address", clientIP),
 			zap.Any("audit", entry))
 	}
 
-	// Validate request through the chain with timing
-	reqValidationStart := time.Now()
+	// Validate request through the chain (timing is captured per-policy)
 	validationResults, err := g.ValidateToolCall(ctx, req)
-	reqValidationDuration := time.Since(reqValidationStart).Milliseconds()
 
 	if err != nil {
 		// Validation error - don't write audit log (infrastructure error)
@@ -350,7 +345,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	g.logger.Debug(ctx, "Validation results", zap.Any("validationResults", validationResults))
 
 	// Extract validation results by policy type and populate audit context
-	g.populateRequestValidationAudit(audit, validationResults, reqValidationDuration)
+	g.populateRequestValidationAudit(audit, validationResults)
 
 	// Determine if validation passed
 	if validationResults.DenyCount > 0 {
@@ -410,11 +405,9 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	// Record response info
 	audit.SetResponse(len(result.Content), result.IsError)
 
-	// Validate response through the response validation chain
+	// Validate response through the response validation chain (timing is captured per-policy)
 	if g.responseValidationChain != nil {
-		respValidationStart := time.Now()
 		responseValidationResults, respErr := g.responseValidationChain.Handle(ctx, req, result)
-		respValidationDuration := time.Since(respValidationStart).Milliseconds()
 
 		if respErr != nil {
 			g.logger.Error(ctx, "Response validation error", zap.Error(respErr))
@@ -422,7 +415,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		}
 
 		// Populate response validation audit
-		g.populateResponseValidationAudit(audit, responseValidationResults, respValidationDuration)
+		g.populateResponseValidationAudit(audit, responseValidationResults)
 
 		// If response validation denied the response
 		if !responseValidationResults.Allowed {
@@ -474,7 +467,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	validationSummary := make(map[string]string)
 	for _, v := range validationResults.Results {
 		if v.PolicyType != "audit" {
-			if v.Allowed {
+			if v.Action == config.PolicyActionAllow {
 				validationSummary[v.PolicyName] = "passed"
 			} else {
 				validationSummary[v.PolicyName] = "failed"
@@ -491,12 +484,8 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 }
 
 // populateRequestValidationAudit extracts validation results by policy type and populates audit context
-func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results ValidationResults, totalDurationMs int64) {
-	// For now, we don't have per-policy timing, so we'll estimate based on policy count
-	// In the future, we could modify handlers to return timing info
-	// TODO : Each handler should return timing
-	policyCount := len(results.Results)
-	if policyCount == 0 {
+func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results ValidationResults) {
+	if len(results.Results) == 0 {
 		return
 	}
 
@@ -506,27 +495,18 @@ func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results Va
 			continue // Skip audit-only policies
 		}
 
-		action := string(config.PolicyActionAllow)
-		if !r.Allowed {
-			action = string(config.PolicyActionDeny)
-		}
-
-		// Estimate duration per policy (rough split)
-		estimatedDuration := totalDurationMs / int64(policyCount)
-
 		switch r.PolicyType {
 		case "cel":
-			audit.SetRequestValidationCEL(action, r.PolicyName, estimatedDuration)
+			audit.SetRequestValidationCEL(string(r.Action), r.PolicyName, r.DurationMs)
 		case "ai":
-			audit.SetRequestValidationAI(action, r.Message, estimatedDuration)
+			audit.SetRequestValidationAI(string(r.Action), r.Message, r.DurationMs)
 		}
 	}
 }
 
 // populateResponseValidationAudit extracts response validation results by policy type
-func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results ResponseValidationResults, totalDurationMs int64) {
-	policyCount := len(results.Results)
-	if policyCount == 0 {
+func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results ResponseValidationResults) {
+	if len(results.Results) == 0 {
 		return
 	}
 
@@ -535,13 +515,11 @@ func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results R
 			continue
 		}
 
-		estimatedDuration := totalDurationMs / int64(policyCount)
-
 		switch r.PolicyType {
 		case "cel":
-			audit.SetResponseValidationCEL(string(r.Action), r.PolicyName, estimatedDuration)
+			audit.SetResponseValidationCEL(string(r.Action), r.PolicyName, r.DurationMs)
 		case "ai":
-			audit.SetResponseValidationAI(string(r.Action), r.Message, estimatedDuration)
+			audit.SetResponseValidationAI(string(r.Action), r.Message, r.DurationMs)
 		}
 	}
 }
@@ -553,7 +531,7 @@ func (g *Gateway) buildPolicyDeniedError(validationResults *ValidationResults, t
 	var deniedMessages []string
 
 	for _, result := range validationResults.Results {
-		if !result.Allowed && result.PolicyType != "audit" {
+		if result.Action == config.PolicyActionDeny && result.PolicyType != "audit" {
 			deniedPolicies = append(deniedPolicies, result.PolicyName)
 			if result.Message != "" {
 				deniedMessages = append(deniedMessages, result.Message)

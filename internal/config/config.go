@@ -424,7 +424,7 @@ func expandEnvironmentVariables(v reflect.Value) {
 }
 
 // ResolveConfigDir resolves the configuration directory with fallback logic.
-// Priority: 1) provided dir, 2) ./config (if exists), 3) $HOME/.maybe-dont/config
+// Priority: 1) provided dir, 2) ./config (if exists), 3) $HOME/.maybe-dont/config (if exists), 4) current directory
 func ResolveConfigDir(configDir string) string {
 	if configDir != "" {
 		return configDir
@@ -435,10 +435,13 @@ func ResolveConfigDir(configDir string) string {
 		return "./config"
 	}
 
-	// Fall back to $HOME/.maybe-dont/config
+	// Fall back to $HOME/.maybe-dont/config only if it exists
 	homeDir, err := os.UserHomeDir()
 	if err == nil {
-		return filepath.Join(homeDir, ".maybe-dont", "config")
+		homeCfgDir := filepath.Join(homeDir, ".maybe-dont", "config")
+		if info, err := os.Stat(homeCfgDir); err == nil && info.IsDir() {
+			return homeCfgDir
+		}
 	}
 
 	// Last resort: current directory

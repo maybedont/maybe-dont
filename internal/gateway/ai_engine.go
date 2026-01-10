@@ -17,10 +17,11 @@ import (
 
 // AIPolicy represents a single AI policy rule
 type AIPolicy struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Prompt      string `yaml:"prompt"`
-	Message     string `yaml:"message"`
+	Name        string              `yaml:"name"`
+	Description string              `yaml:"description"`
+	Prompt      string              `yaml:"prompt"`
+	Action      config.PolicyAction `yaml:"action"` // allow or deny
+	Message     string              `yaml:"message"`
 }
 
 // AIPolicyEngine handles AI policy evaluation
@@ -64,6 +65,7 @@ func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy) error {
 			Name:        policy.Name,
 			Description: policy.Description,
 			Prompt:      policy.Prompt,
+			Action:      policy.Action,
 			Message:     policy.Message,
 		})
 	}
@@ -76,7 +78,7 @@ type AIResponse struct {
 	Message string `json:"message"`
 }
 
-// Evaluate evaluates a tool call request against all policies
+// EvaluateToolCall evaluates a tool call request against all policies
 func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -98,6 +100,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	// Launch a goroutine for each policy
 	for _, policy := range e.policies {
 		go func(p AIPolicy) {
+			// Track timing for this policy evaluation
+			startTime := time.Now()
+
 			// Create a new context for this goroutine
 			policyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
@@ -121,13 +126,17 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					},
 				},
 			})
+
+			durationMs := time.Since(startTime).Milliseconds()
+
 			if err != nil {
 				resultChan <- policyResult{
 					result: ValidationResult{
 						PolicyName: p.Name,
 						PolicyType: "ai",
-						Allowed:    false,
+						Action:     config.PolicyActionDeny,
 						Error:      fmt.Sprintf("Failed to evaluate policy: %v", err),
+						DurationMs: durationMs,
 					},
 					err: err,
 				}
@@ -139,8 +148,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					result: ValidationResult{
 						PolicyName: p.Name,
 						PolicyType: "ai",
-						Allowed:    false,
+						Action:     config.PolicyActionDeny,
 						Error:      "No response from AI model",
+						DurationMs: durationMs,
 					},
 					err: fmt.Errorf("no response from AI model"),
 				}
@@ -155,20 +165,46 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					result: ValidationResult{
 						PolicyName: p.Name,
 						PolicyType: "ai",
-						Allowed:    false,
+						Action:     config.PolicyActionDeny,
 						Error:      fmt.Sprintf("Failed to parse result: %v", err),
+						DurationMs: durationMs,
 					},
 					err: err,
 				}
 				return
 			}
 
-			// Create validation result based on policy action and AI response
-			validationResult := ValidationResult{
-				PolicyName: p.Name,
-				PolicyType: "ai",
-				Message:    result.Message,
-				Allowed:    result.Allowed,
+			// Determine if this policy triggers based on action and AI response
+			// - "deny" policies trigger when AI says allowed: false (found something bad)
+			// - "allow" policies trigger when AI says allowed: true (confirmed OK)
+			var validationResult ValidationResult
+
+			if p.Action == config.PolicyActionDeny && !result.Allowed {
+				// Deny policy triggered - AI found a reason to deny
+				validationResult = ValidationResult{
+					PolicyName: p.Name,
+					PolicyType: "ai",
+					Action:     config.PolicyActionDeny,
+					Message:    result.Message,
+					DurationMs: durationMs,
+				}
+			} else if p.Action == config.PolicyActionAllow && result.Allowed {
+				// Allow policy triggered - AI confirmed this is OK
+				validationResult = ValidationResult{
+					PolicyName: p.Name,
+					PolicyType: "ai",
+					Action:     config.PolicyActionAllow,
+					Message:    result.Message,
+					DurationMs: durationMs,
+				}
+			} else {
+				// Policy did not trigger (deny policy but AI allowed, or allow policy but AI denied)
+				// Don't record a result - this is consistent with CEL behavior
+				resultChan <- policyResult{
+					result: ValidationResult{},
+					err:    nil,
+				}
+				return
 			}
 
 			resultChan <- policyResult{
@@ -187,8 +223,14 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				zap.Error(result.err),
 			)
 		}
+
+		// Skip empty results (policy did not trigger)
+		if result.result.PolicyName == "" {
+			continue
+		}
+
 		results.Results = append(results.Results, result.result)
-		if result.result.Allowed {
+		if result.result.Action == config.PolicyActionAllow {
 			results.AllowCount++
 		} else {
 			results.DenyCount++

@@ -14,16 +14,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// AuditLogEntry represents a parsed audit log entry from the zap-formatted log file
+// AuditLogEntry represents a parsed audit log entry from the zap-formatted log file.
+// Session/client info is in Audit.IncomingRequest (not duplicated at top level).
 type AuditLogEntry struct {
 	Level     string      `json:"level"`
 	Timestamp float64     `json:"ts"`
 	Caller    string      `json:"caller"`
 	Message   string      `json:"msg"`
 	Logger    string      `json:"logger"`
-	RequestID string      `json:"request_id"`
-	SessionID string      `json:"session_id"`
-	IPAddress string      `json:"ip_address"`
 	Audit     *AuditEntry `json:"audit"`
 }
 
