@@ -106,9 +106,21 @@ func (g *Gateway) discoverAndRegisterSessionTools(sessionID string, clientIP str
 		zap.Int("client_count", clientCount))
 }
 
-// registerSessionTools registers tools from pass-through clients as session-specific tools
+// registerSessionTools registers tools from pass-through clients as session-specific tools.
+// Only pass-through clients need session tools; non-pass-through clients have their
+// tools registered globally at startup.
 func (g *Gateway) registerSessionTools(ctx context.Context, sessionID string, clients map[string]*SessionClientInfo) {
 	for clientName, clientInfo := range clients {
+		// Only register session tools for pass-through clients
+		// Non-pass-through clients have their tools registered globally at startup
+		if !clientInfo.Config.Auth.PassThrough.Enabled {
+			g.logger.Debug(ctx, "Skipping session tool registration for non-pass-through client",
+				zap.String("session_id", sessionID),
+				zap.String("client", clientName))
+			continue
+		}
+
+		registeredCount := 0
 		for _, tool := range clientInfo.Tools {
 			prefixedTool := tool
 			prefixedTool.Name = PrefixName(clientName, tool.Name)
@@ -122,11 +134,20 @@ func (g *Gateway) registerSessionTools(ctx context.Context, sessionID string, cl
 					zap.Error(err))
 				continue
 			}
+			registeredCount++
 
 			g.logger.Debug(ctx, "Registered session-specific tool",
 				zap.String("session_id", sessionID),
 				zap.String("client", clientName),
 				zap.String("tool", prefixedTool.Name))
+		}
+
+		if registeredCount != len(clientInfo.Tools) {
+			g.logger.Warn(ctx, "Not all tools were registered successfully",
+				zap.String("session_id", sessionID),
+				zap.String("client", clientName),
+				zap.Int("attempted", len(clientInfo.Tools)),
+				zap.Int("registered", registeredCount))
 		}
 
 		g.logger.Info(ctx, "Registered session-specific tools from pass-through client",
