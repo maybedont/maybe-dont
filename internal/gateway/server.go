@@ -38,10 +38,50 @@ func (g *Gateway) initServer(ctx context.Context) error {
 	}
 }
 
-// onSessionRegister handles new upstream client sessions by creating downstream clients
+// onSessionRegister handles new upstream client sessions by creating downstream clients.
+// Tool discovery and registration is performed asynchronously to avoid blocking the
+// session registration hook, which can cause race conditions if the client disconnects
+// before discovery completes.
 func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSession) {
 	sessionID := session.SessionID()
 	g.logger.Info(ctx, "New upstream session registered", zap.String("session_id", sessionID))
+
+	// Extract values from context that we need to preserve for async work.
+	// The request context (ctx) may be cancelled when the HTTP request ends,
+	// so we need to capture these values and create a new context for async work.
+	clientIP, hasClientIP := GetClientIP(ctx)
+	serviceCreds, _ := ctx.Value(ServiceCredentialsKey).(*ServiceCredentials)
+
+	// Store client IP in session immediately (this is fast, no network I/O)
+	if hasClientIP && clientIP != "" {
+		g.clientManager.SetSessionClientIP(sessionID, clientIP)
+		g.logger.Debug(ctx, "Stored client IP for session",
+			zap.String("session_id", sessionID),
+			zap.String("client_ip", clientIP))
+	}
+
+	// Run tool discovery asynchronously to avoid blocking the session registration hook.
+	// This prevents race conditions where the session gets unregistered (via defer in
+	// the HTTP handler) before tool discovery completes.
+	go g.discoverAndRegisterSessionTools(sessionID, clientIP, serviceCreds)
+}
+
+// discoverAndRegisterSessionTools performs async discovery of downstream client tools
+// and registers them with the session. This runs in a goroutine to avoid blocking
+// the session registration hook.
+func (g *Gateway) discoverAndRegisterSessionTools(sessionID string, clientIP string, serviceCreds *ServiceCredentials) {
+	// Create a background context with the preserved values.
+	// We use Background() because the original request context may be cancelled.
+	ctx := context.Background()
+	if serviceCreds != nil {
+		ctx = WithServiceCredentials(ctx, serviceCreds)
+	}
+	if clientIP != "" {
+		ctx = WithClientIP(ctx, clientIP)
+	}
+
+	g.logger.Debug(ctx, "Starting async tool discovery for session",
+		zap.String("session_id", sessionID))
 
 	// Create downstream clients for this session
 	result, err := g.clientManager.CreateSessionClients(ctx, sessionID)
@@ -49,16 +89,7 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 		g.logger.Error(ctx, "Failed to create downstream clients for session",
 			zap.String("session_id", sessionID),
 			zap.Error(err))
-		// Note: We can't return an error from this hook, but tools will fail when used
 		// Continue to register any tools that were successfully discovered
-	}
-
-	// Store client IP in session (extracted from HTTP request context)
-	if clientIP, ok := GetClientIP(ctx); ok && clientIP != "" {
-		g.clientManager.SetSessionClientIP(sessionID, clientIP)
-		g.logger.Debug(ctx, "Stored client IP for session",
-			zap.String("session_id", sessionID),
-			zap.String("client_ip", clientIP))
 	}
 
 	// Register session-specific tools for pass-through clients
@@ -70,7 +101,7 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 	if result != nil {
 		clientCount = len(result.DownstreamClients)
 	}
-	g.logger.Info(ctx, "Downstream clients created for session",
+	g.logger.Info(ctx, "Async tool discovery completed for session",
 		zap.String("session_id", sessionID),
 		zap.Int("client_count", clientCount))
 }
