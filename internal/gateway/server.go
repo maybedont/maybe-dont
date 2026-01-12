@@ -121,6 +121,11 @@ func (g *Gateway) registerSessionTools(ctx context.Context, sessionID string, cl
 		}
 
 		registeredCount := 0
+		g.logger.Info(ctx, "Starting session tool registration",
+			zap.String("session_id", sessionID),
+			zap.String("client", clientName),
+			zap.Int("tools_to_register", len(clientInfo.Tools)))
+
 		for _, tool := range clientInfo.Tools {
 			prefixedTool := tool
 			prefixedTool.Name = PrefixName(clientName, tool.Name)
@@ -135,25 +140,20 @@ func (g *Gateway) registerSessionTools(ctx context.Context, sessionID string, cl
 				continue
 			}
 			registeredCount++
-
-			g.logger.Debug(ctx, "Registered session-specific tool",
-				zap.String("session_id", sessionID),
-				zap.String("client", clientName),
-				zap.String("tool", prefixedTool.Name))
 		}
 
 		if registeredCount != len(clientInfo.Tools) {
-			g.logger.Warn(ctx, "Not all tools were registered successfully",
+			g.logger.Warn(ctx, "Completed session tool registration with errors",
 				zap.String("session_id", sessionID),
 				zap.String("client", clientName),
-				zap.Int("attempted", len(clientInfo.Tools)),
+				zap.Int("registered", registeredCount),
+				zap.Int("total", len(clientInfo.Tools)))
+		} else {
+			g.logger.Info(ctx, "Completed session tool registration",
+				zap.String("session_id", sessionID),
+				zap.String("client", clientName),
 				zap.Int("registered", registeredCount))
 		}
-
-		g.logger.Info(ctx, "Registered session-specific tools from pass-through client",
-			zap.String("session_id", sessionID),
-			zap.String("client", clientName),
-			zap.Int("tools_count", len(clientInfo.Tools)))
 	}
 }
 
