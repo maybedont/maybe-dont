@@ -116,7 +116,7 @@ func TestLazyDiscovery_ReturnsToolsFromDiscovery(t *testing.T) {
 }
 
 // TestLazyDiscovery_MergesTools verifies that discovered tools are correctly
-// merged with existing tools without duplicates.
+// merged with existing tools without duplicates, preserving order.
 func TestLazyDiscovery_MergesTools(t *testing.T) {
 	// Simulate existing tools (native tools + non-pass-through)
 	existingTools := []mcp.Tool{
@@ -131,25 +131,27 @@ func TestLazyDiscovery_MergesTools(t *testing.T) {
 		{Name: "github__search_code", Description: "GitHub tool"},
 	}
 
-	// Simulate the merge logic from toolListFilter
-	toolMap := make(map[string]mcp.Tool)
+	// Simulate the order-preserving merge logic from toolListFilter
+	existingNames := make(map[string]bool)
 	for _, tool := range existingTools {
-		toolMap[tool.Name] = tool
+		existingNames[tool.Name] = true
 	}
+	mergedTools := existingTools
 	for _, tool := range discoveredTools {
-		if _, exists := toolMap[tool.Name]; !exists {
-			toolMap[tool.Name] = tool
+		if !existingNames[tool.Name] {
+			mergedTools = append(mergedTools, tool)
 		}
-	}
-
-	// Convert back to slice
-	mergedTools := make([]mcp.Tool, 0, len(toolMap))
-	for _, tool := range toolMap {
-		mergedTools = append(mergedTools, tool)
 	}
 
 	// Verify all tools are present
 	assert.Len(t, mergedTools, 5, "Should have 5 tools after merge")
+
+	// Verify order is preserved: existing tools first, then discovered
+	assert.Equal(t, "maybedont__discover_tools", mergedTools[0].Name)
+	assert.Equal(t, "maybedont__list_servers", mergedTools[1].Name)
+	assert.Equal(t, "aws__list_buckets", mergedTools[2].Name)
+	assert.Equal(t, "github__create_issue", mergedTools[3].Name)
+	assert.Equal(t, "github__search_code", mergedTools[4].Name)
 
 	// Verify no duplicates
 	toolNames := make(map[string]bool)
@@ -173,18 +175,19 @@ func TestLazyDiscovery_NoDuplicatesOnMultipleCalls(t *testing.T) {
 		{Name: "github__create_issue", Description: "GitHub tool"},
 	}
 
-	// Merge should not duplicate
-	toolMap := make(map[string]mcp.Tool)
+	// Merge should not duplicate, using order-preserving approach
+	existingNames := make(map[string]bool)
 	for _, tool := range existingToolsAfterFirstCall {
-		toolMap[tool.Name] = tool
+		existingNames[tool.Name] = true
 	}
+	mergedTools := existingToolsAfterFirstCall
 	for _, tool := range secondCallTools {
-		if _, exists := toolMap[tool.Name]; !exists {
-			toolMap[tool.Name] = tool
+		if !existingNames[tool.Name] {
+			mergedTools = append(mergedTools, tool)
 		}
 	}
 
-	assert.Len(t, toolMap, 2, "Should still have only 2 unique tools")
+	assert.Len(t, mergedTools, 2, "Should still have only 2 unique tools")
 }
 
 // TestLazyDiscovery_OnlyProcessesPassThroughClients verifies that only

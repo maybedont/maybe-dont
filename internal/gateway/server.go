@@ -319,22 +319,18 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 		// Check if we need to discover pass-through tools for this session
 		discoveredTools := g.ensurePassThroughToolsDiscovered(ctx, sessionID)
 
-		// Merge discovered tools with the existing tools
+		// Merge discovered tools with the existing tools, preserving order
 		if len(discoveredTools) > 0 {
-			// Create a map to avoid duplicates (session tools should already be in 'tools' if registered)
-			toolMap := make(map[string]mcp.Tool)
+			// Track existing tool names to avoid duplicates
+			existingNames := make(map[string]bool)
 			for _, tool := range tools {
-				toolMap[tool.Name] = tool
+				existingNames[tool.Name] = true
 			}
+			// Append only the tools that don't already exist
 			for _, tool := range discoveredTools {
-				if _, exists := toolMap[tool.Name]; !exists {
-					toolMap[tool.Name] = tool
+				if !existingNames[tool.Name] {
+					tools = append(tools, tool)
 				}
-			}
-			// Convert back to slice
-			tools = make([]mcp.Tool, 0, len(toolMap))
-			for _, tool := range toolMap {
-				tools = append(tools, tool)
 			}
 		}
 
