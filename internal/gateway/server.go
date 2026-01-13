@@ -185,18 +185,21 @@ func (g *Gateway) onSessionUnregister(ctx context.Context, session server.Client
 	g.logger.Info(ctx, "Downstream clients closed for session", zap.String("session_id", sessionID))
 }
 
-// ensurePassThroughToolsDiscovered ensures that pass-through tools have been discovered
-// for this session. If not already discovered, it performs synchronous discovery.
-// Returns the list of discovered tools (which may be empty if no pass-through clients).
+// ensurePassThroughToolsDiscovered ensures that pass-through tools are available
+// for this session. It checks for existing downstream clients and returns their tools,
+// or performs synchronous discovery if no clients exist yet.
+// Returns the list of tools (which may be empty if no pass-through clients).
 func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionID string) []mcp.Tool {
 	// Check if this session already has downstream clients connected
 	existingClients := g.clientManager.GetSessionClientNames(sessionID)
 	if len(existingClients) > 0 {
-		// Tools should already be registered via async discovery
-		g.logger.Debug(ctx, "Session already has downstream clients",
+		// Downstream clients exist - return their tools directly.
+		// The tools may not be registered as session tools (due to race conditions),
+		// so we return them here to be merged into the tools/list response.
+		g.logger.Debug(ctx, "Session has downstream clients, returning their tools",
 			zap.String("session_id", sessionID),
 			zap.Strings("clients", existingClients))
-		return nil
+		return g.getToolsFromExistingClients(ctx, sessionID)
 	}
 
 	// Get credentials from context for pass-through auth
@@ -252,6 +255,41 @@ func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionI
 	g.logger.Info(ctx, "Lazy tool discovery completed",
 		zap.String("session_id", sessionID),
 		zap.Int("tools_discovered", len(allTools)))
+
+	return allTools
+}
+
+// getToolsFromExistingClients retrieves tools from downstream clients that are already
+// connected for this session. This handles the case where async discovery connected
+// the clients but session tool registration failed due to timing issues.
+func (g *Gateway) getToolsFromExistingClients(ctx context.Context, sessionID string) []mcp.Tool {
+	clients, err := g.clientManager.GetAllSessionClients(sessionID)
+	if err != nil {
+		g.logger.Debug(ctx, "Failed to get session clients",
+			zap.String("session_id", sessionID),
+			zap.Error(err))
+		return nil
+	}
+
+	var allTools []mcp.Tool
+	for clientName, clientInfo := range clients {
+		// Only process pass-through clients
+		if !clientInfo.Config.Auth.PassThrough.Enabled {
+			continue
+		}
+
+		for _, tool := range clientInfo.Tools {
+			prefixedTool := tool
+			prefixedTool.Name = PrefixName(clientName, tool.Name)
+			allTools = append(allTools, prefixedTool)
+		}
+	}
+
+	if len(allTools) > 0 {
+		g.logger.Debug(ctx, "Retrieved tools from existing downstream clients",
+			zap.String("session_id", sessionID),
+			zap.Int("tool_count", len(allTools)))
+	}
 
 	return allTools
 }

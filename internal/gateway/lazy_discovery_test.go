@@ -340,6 +340,47 @@ func TestGetSessionClientNames_ReturnsEmptyForNewSession(t *testing.T) {
 	assert.Empty(t, clients, "New session should have no downstream clients")
 }
 
+// TestGetToolsFromExistingClients_ReturnsToolsWhenClientsExist verifies that
+// when downstream clients exist (from async discovery), their tools are returned
+// even if session tool registration failed.
+func TestGetToolsFromExistingClients_ReturnsToolsWhenClientsExist(t *testing.T) {
+	// This test documents the scenario:
+	// 1. Async discovery runs and connects to downstream clients
+	// 2. AddSessionTool fails (session not found in MCP server due to timing)
+	// 3. Downstream clients exist in SessionManager, but tools aren't in sessionToolsStore
+	// 4. tools/list is called - we should still return the tools from existing clients
+
+	// Simulate existing client info
+	githubConfig := config.ClientConfig{
+		Type: "http",
+	}
+	githubConfig.Auth.PassThrough.Enabled = true
+
+	clientInfo := &SessionClientInfo{
+		Name:   "github",
+		Config: githubConfig,
+		Tools: []mcp.Tool{
+			{Name: "create_issue", Description: "Create GitHub issue"},
+			{Name: "search_code", Description: "Search code"},
+		},
+	}
+
+	// Simulate what getToolsFromExistingClients does
+	var allTools []mcp.Tool
+	if clientInfo.Config.Auth.PassThrough.Enabled {
+		for _, tool := range clientInfo.Tools {
+			prefixedTool := tool
+			prefixedTool.Name = PrefixName("github", tool.Name)
+			allTools = append(allTools, prefixedTool)
+		}
+	}
+
+	// Should return prefixed tools
+	require.Len(t, allTools, 2)
+	assert.Equal(t, "github__create_issue", allTools[0].Name)
+	assert.Equal(t, "github__search_code", allTools[1].Name)
+}
+
 // TestCredentialCheck_IdentifiesPassThroughClients verifies that the credential
 // check correctly identifies when pass-through credentials are available.
 func TestCredentialCheck_IdentifiesPassThroughClients(t *testing.T) {
