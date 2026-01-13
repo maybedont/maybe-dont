@@ -10,7 +10,7 @@ DATE = $(shell date -u '+%Y-%m-%d %H:%M:%S')
 METRICS_DATASET ?= $(shell echo $$METRICS_DATASET)
 METRICS_API_TOKEN ?= $(shell echo $$METRICS_API_TOKEN)
 
-.PHONY: all build clean lint test bump-version snapshot run docker-build docker-run
+.PHONY: all build clean lint test bump-version snapshot run docker-build docker-run setup
 
 all: build
 
@@ -43,3 +43,6 @@ docker-build:
 
 docker-run: docker-build
 	./developer/scripts/runLocalDockerImage.sh
+
+setup:
+	./developer/scripts/install-hooks.sh

@@ -1,0 +1,57 @@
+#!/bin/bash
+#
+# Git commit-msg hook to validate conventional commit format on main branch.
+# This enforces the same policy as .github/workflows/pr-title.yaml
+#
+# Install this hook by running: ./scripts/install-hooks.sh
+#
+
+# Get the current branch
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+
+# Only enforce on main branch
+if [[ "$BRANCH" != "main" ]]; then
+    exit 0
+fi
+
+# Read the commit message (first line only for title validation)
+COMMIT_MSG_FILE="$1"
+TITLE=$(head -n 1 "$COMMIT_MSG_FILE")
+
+# Skip merge commits
+if [[ "$TITLE" =~ ^Merge ]]; then
+    exit 0
+fi
+
+# Conventional commit regex pattern
+# Format: type(optional scope)!: description
+# The ! indicates a breaking change
+# Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_-]+\))?!?: .+'
+
+if [[ ! "$TITLE" =~ $PATTERN ]]; then
+    echo ""
+    echo "ERROR: Commit message does not follow Conventional Commits format"
+    echo ""
+    echo "Your message: $TITLE"
+    echo ""
+    echo "Expected format: type(scope): description"
+    echo "  or: type: description"
+    echo "  or: type!: description (breaking change)"
+    echo ""
+    echo "Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+    echo ""
+    echo "Examples:"
+    echo "  feat: add user authentication"
+    echo "  fix(api): handle null response"
+    echo "  docs: update README"
+    echo "  chore(deps): bump dependencies"
+    echo "  feat!: breaking API change"
+    echo "  refactor(core)!: rename public methods"
+    echo ""
+    echo "See: https://www.conventionalcommits.org/en/v1.0.0/"
+    echo ""
+    exit 1
+fi
+
+exit 0
