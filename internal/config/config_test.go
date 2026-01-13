@@ -421,8 +421,8 @@ rules:
 		"API key should be loaded from MAYBE_DONT_AI_VALIDATION_API_KEY environment variable")
 }
 
-func TestApplyEnvironmentOverrides(t *testing.T) {
-	// Test that applyEnvironmentOverrides works for various nested config paths
+func TestApplyEnvironmentOverrides_Strings(t *testing.T) {
+	// Test that applyEnvironmentOverrides works for string fields
 
 	tests := []struct {
 		name     string
@@ -489,6 +489,256 @@ func TestApplyEnvironmentOverrides(t *testing.T) {
 				"Expected %s to be set from %s", tt.name, tt.envVar)
 		})
 	}
+}
+
+func TestApplyEnvironmentOverrides_Booleans(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVar   string
+		envValue string
+		expected bool
+		check    func(*Config) bool
+	}{
+		{
+			name:     "audit.enabled true",
+			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
+			envValue: "true",
+			expected: true,
+			check:    func(c *Config) bool { return c.Audit.Enabled },
+		},
+		{
+			name:     "audit.enabled false",
+			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
+			envValue: "false",
+			expected: false,
+			check:    func(c *Config) bool { return c.Audit.Enabled },
+		},
+		{
+			name:     "audit.enabled TRUE (uppercase)",
+			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
+			envValue: "TRUE",
+			expected: true,
+			check:    func(c *Config) bool { return c.Audit.Enabled },
+		},
+		{
+			name:     "audit.enabled 1",
+			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
+			envValue: "1",
+			expected: true,
+			check:    func(c *Config) bool { return c.Audit.Enabled },
+		},
+		{
+			name:     "audit.enabled 0",
+			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
+			envValue: "0",
+			expected: false,
+			check:    func(c *Config) bool { return c.Audit.Enabled },
+		},
+		{
+			name:     "native_tools.audit_log.enabled",
+			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_ENABLED",
+			envValue: "true",
+			expected: true,
+			check:    func(c *Config) bool { return c.NativeTools.AuditLog.Enabled },
+		},
+		{
+			name:     "native_tools.audit_report.enabled",
+			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_REPORT_ENABLED",
+			envValue: "true",
+			expected: true,
+			check:    func(c *Config) bool { return c.NativeTools.AuditReport.Enabled },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := os.Setenv(tt.envVar, tt.envValue)
+			require.NoError(t, err)
+			defer func() {
+				_ = os.Unsetenv(tt.envVar)
+			}()
+
+			config := &Config{}
+			applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+			actual := tt.check(config)
+			require.Equal(t, tt.expected, actual,
+				"Expected %s=%s to set bool to %v", tt.envVar, tt.envValue, tt.expected)
+		})
+	}
+}
+
+func TestApplyEnvironmentOverrides_Integers(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVar   string
+		envValue string
+		expected int
+		check    func(*Config) int
+	}{
+		{
+			name:     "native_tools.audit_log.max_entries",
+			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_MAX_ENTRIES",
+			envValue: "500",
+			expected: 500,
+			check:    func(c *Config) int { return c.NativeTools.AuditLog.MaxEntries },
+		},
+		{
+			name:     "native_tools.audit_report.max_entries",
+			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_REPORT_MAX_ENTRIES",
+			envValue: "2000",
+			expected: 2000,
+			check:    func(c *Config) int { return c.NativeTools.AuditReport.MaxEntries },
+		},
+		{
+			name:     "zero value",
+			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_MAX_ENTRIES",
+			envValue: "0",
+			expected: 0,
+			check:    func(c *Config) int { return c.NativeTools.AuditLog.MaxEntries },
+		},
+		{
+			name:     "negative value",
+			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_MAX_ENTRIES",
+			envValue: "-1",
+			expected: -1,
+			check:    func(c *Config) int { return c.NativeTools.AuditLog.MaxEntries },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := os.Setenv(tt.envVar, tt.envValue)
+			require.NoError(t, err)
+			defer func() {
+				_ = os.Unsetenv(tt.envVar)
+			}()
+
+			config := &Config{}
+			applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+			actual := tt.check(config)
+			require.Equal(t, tt.expected, actual,
+				"Expected %s=%s to set int to %d", tt.envVar, tt.envValue, tt.expected)
+		})
+	}
+}
+
+func TestApplyEnvironmentOverrides_InvalidValues(t *testing.T) {
+	// Test that invalid values don't crash and leave defaults unchanged
+
+	t.Run("invalid bool leaves default", func(t *testing.T) {
+		err := os.Setenv("MAYBE_DONT_AUDIT_ENABLED", "not-a-bool")
+		require.NoError(t, err)
+		defer func() {
+			_ = os.Unsetenv("MAYBE_DONT_AUDIT_ENABLED")
+		}()
+
+		config := &Config{}
+		config.Audit.Enabled = true // set a default
+
+		applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+		// Should remain unchanged because "not-a-bool" can't be parsed
+		require.True(t, config.Audit.Enabled, "Invalid bool should leave default unchanged")
+	})
+
+	t.Run("invalid int leaves default", func(t *testing.T) {
+		err := os.Setenv("MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_MAX_ENTRIES", "not-a-number")
+		require.NoError(t, err)
+		defer func() {
+			_ = os.Unsetenv("MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_MAX_ENTRIES")
+		}()
+
+		config := &Config{}
+		config.NativeTools.AuditLog.MaxEntries = 100 // set a default
+
+		applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+		require.Equal(t, 100, config.NativeTools.AuditLog.MaxEntries,
+			"Invalid int should leave default unchanged")
+	})
+}
+
+func TestApplyEnvironmentOverrides_StringSlice(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVar   string
+		envValue string
+		expected []string
+		check    func(*Config) []string
+	}{
+		{
+			name:     "server.trusted_proxies single value",
+			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
+			envValue: "10.0.0.1",
+			expected: []string{"10.0.0.1"},
+			check:    func(c *Config) []string { return c.Server.TrustedProxies },
+		},
+		{
+			name:     "server.trusted_proxies multiple values",
+			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
+			envValue: "10.0.0.1,10.0.0.2,10.0.0.3",
+			expected: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"},
+			check:    func(c *Config) []string { return c.Server.TrustedProxies },
+		},
+		{
+			name:     "server.trusted_proxies with spaces",
+			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
+			envValue: "10.0.0.1, 10.0.0.2 , 10.0.0.3",
+			expected: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"},
+			check:    func(c *Config) []string { return c.Server.TrustedProxies },
+		},
+		{
+			name:     "server.trusted_proxies empty entries filtered",
+			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
+			envValue: "10.0.0.1,,10.0.0.2",
+			expected: []string{"10.0.0.1", "10.0.0.2"},
+			check:    func(c *Config) []string { return c.Server.TrustedProxies },
+		},
+		{
+			name:     "server.trusted_proxies CIDR ranges",
+			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
+			envValue: "10.0.0.0/8,192.168.0.0/16",
+			expected: []string{"10.0.0.0/8", "192.168.0.0/16"},
+			check:    func(c *Config) []string { return c.Server.TrustedProxies },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := os.Setenv(tt.envVar, tt.envValue)
+			require.NoError(t, err)
+			defer func() {
+				_ = os.Unsetenv(tt.envVar)
+			}()
+
+			config := &Config{}
+			applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+			actual := tt.check(config)
+			require.Equal(t, tt.expected, actual,
+				"Expected %s=%s to set slice to %v", tt.envVar, tt.envValue, tt.expected)
+		})
+	}
+}
+
+func TestApplyEnvironmentOverrides_DoesNotOverrideWhenNotSet(t *testing.T) {
+	// Ensure that when env var is not set, existing values are preserved
+
+	config := &Config{}
+	config.AIPolicyValidation.APIKey = "original-key"
+	config.Audit.Enabled = true
+	config.NativeTools.AuditLog.MaxEntries = 100
+	config.Server.TrustedProxies = []string{"original"}
+
+	// Don't set any environment variables
+	applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+	require.Equal(t, "original-key", config.AIPolicyValidation.APIKey)
+	require.True(t, config.Audit.Enabled)
+	require.Equal(t, 100, config.NativeTools.AuditLog.MaxEntries)
+	require.Equal(t, []string{"original"}, config.Server.TrustedProxies)
 }
 
 // TestViperConfigPathsMatchStruct validates that the string paths used for viper.SetDefault

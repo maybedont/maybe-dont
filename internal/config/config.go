@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -353,10 +354,18 @@ func resolveRulesFilePath(rulesFile, configDir string) string {
 	return filepath.Join(configDir, rulesFile)
 }
 
-// applyEnvironmentOverrides walks through the config struct and overrides string fields
+// applyEnvironmentOverrides walks through the config struct and overrides fields
 // with values from environment variables using the specified prefix.
 // For example, with envPrefix="MAYBE_DONT", ai_validation.api_key can be set via MAYBE_DONT_AI_VALIDATION_API_KEY.
 // This provides a general mechanism for Docker/container deployments without hardcoding bindings.
+//
+// Supported types:
+//   - string: set directly from env var value
+//   - bool: parsed from "true"/"false" (case-insensitive)
+//   - int, int64: parsed as base-10 integers
+//   - float64: parsed as floating point numbers
+//   - []string: parsed as comma-separated values (e.g., "a,b,c" -> ["a", "b", "c"])
+//   - nested structs: recursively processed
 func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix string, envPrefix string) {
 	if !v.IsValid() {
 		return
@@ -386,13 +395,61 @@ func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix strin
 				fullPath = pathPrefix + "_" + tag
 			}
 
-			// For string fields, check if there's an environment variable override
-			if field.Kind() == reflect.String {
-				envKey := envPrefix + "_" + strings.ToUpper(fullPath)
-				if envVal := os.Getenv(envKey); envVal != "" {
-					field.SetString(envVal)
+			envKey := envPrefix + "_" + strings.ToUpper(fullPath)
+			envVal := os.Getenv(envKey)
+
+			// Only process if environment variable is set
+			if envVal == "" {
+				// Still need to recurse into nested structs
+				if field.Kind() == reflect.Struct {
+					applyEnvironmentOverrides(field, fieldType.Type, fullPath, envPrefix)
+				} else if field.Kind() == reflect.Ptr && !field.IsNil() {
+					applyEnvironmentOverrides(field.Elem(), fieldType.Type.Elem(), fullPath, envPrefix)
 				}
-			} else if field.Kind() == reflect.Struct {
+				continue
+			}
+
+			// Apply the environment variable based on field type
+			switch field.Kind() {
+			case reflect.String:
+				field.SetString(envVal)
+
+			case reflect.Bool:
+				if boolVal, err := strconv.ParseBool(envVal); err == nil {
+					field.SetBool(boolVal)
+				}
+
+			case reflect.Int:
+				if intVal, err := strconv.ParseInt(envVal, 10, 0); err == nil {
+					field.SetInt(intVal)
+				}
+
+			case reflect.Int64:
+				if intVal, err := strconv.ParseInt(envVal, 10, 64); err == nil {
+					field.SetInt(intVal)
+				}
+
+			case reflect.Float64:
+				if floatVal, err := strconv.ParseFloat(envVal, 64); err == nil {
+					field.SetFloat(floatVal)
+				}
+
+			case reflect.Slice:
+				// Handle []string slices with comma-separated values
+				if field.Type().Elem().Kind() == reflect.String {
+					// Split by comma and trim whitespace from each element
+					parts := strings.Split(envVal, ",")
+					result := make([]string, 0, len(parts))
+					for _, part := range parts {
+						trimmed := strings.TrimSpace(part)
+						if trimmed != "" {
+							result = append(result, trimmed)
+						}
+					}
+					field.Set(reflect.ValueOf(result))
+				}
+
+			case reflect.Struct:
 				// Recursively process nested structs
 				applyEnvironmentOverrides(field, fieldType.Type, fullPath, envPrefix)
 			}
