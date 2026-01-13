@@ -86,6 +86,9 @@ jobs:
       contents: read
       id-token: write  # Required for Workload Identity Federation
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Debug OIDC Token
         run: |
           ID_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -98,7 +101,6 @@ jobs:
         with:
           workload_identity_provider: 'projects/580294893150/locations/global/workloadIdentityPools/github-actions/providers/github'
           service_account: 'gha-cloudrun-deployer@utility-dynamo-481523-i9.iam.gserviceaccount.com'
-          create_credentials_file: false
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
