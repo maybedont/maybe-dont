@@ -16,10 +16,13 @@ Maybe Don't Gateway is a security middleware service built in Go that acts as a 
 - `go test -v ./internal/gateway/...` - Run tests for specific package
 - `go test -run TestName -v ./...` - Run a specific test
 - `go mod tidy` - Clean up dependencies after changes
+- `make setup` - Install Git hooks for the developer
+- `make docker-build` - Build a local dev Docker image
+- `make docker-run` - Build a local dev Docker image and then start it
 
 ### Running the Gateway
 - `./maybe-dont start` - Start the gateway with default config
-- `./maybe-dont start --config gateway-config.yaml` - Start with specific config file
+- `./maybe-dont start --config-dir {some dir}` - Start the gateway with a specific location for the config file
 - `./maybe-dont version` - Show version information
 
 ### Release Management
