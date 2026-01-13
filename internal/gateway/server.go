@@ -44,13 +44,18 @@ func (g *Gateway) initServer(ctx context.Context) error {
 // before discovery completes.
 func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSession) {
 	sessionID := session.SessionID()
-	g.logger.Info(ctx, "New upstream session registered", zap.String("session_id", sessionID))
 
 	// Extract values from context that we need to preserve for async work.
 	// The request context (ctx) may be cancelled when the HTTP request ends,
 	// so we need to capture these values and create a new context for async work.
 	clientIP, hasClientIP := GetClientIP(ctx)
 	serviceCreds, _ := ctx.Value(ServiceCredentialsKey).(*ServiceCredentials)
+
+	// Determine if this session has credentials (helps identify initialization vs SSE sessions)
+	hasCredentials := serviceCreds != nil && len(serviceCreds.clients) > 0
+	g.logger.Info(ctx, "New upstream session registered",
+		zap.String("session_id", sessionID),
+		zap.Bool("has_credentials", hasCredentials))
 
 	// Store client IP in session immediately (this is fast, no network I/O)
 	if hasClientIP && clientIP != "" {
@@ -60,10 +65,18 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 			zap.String("client_ip", clientIP))
 	}
 
-	// Run tool discovery asynchronously to avoid blocking the session registration hook.
-	// This prevents race conditions where the session gets unregistered (via defer in
-	// the HTTP handler) before tool discovery completes.
-	go g.discoverAndRegisterSessionTools(sessionID, clientIP, serviceCreds)
+	// Only trigger tool discovery if credentials are present.
+	// This ensures we only discover tools for the session that actually has auth credentials,
+	// avoiding duplicate discovery for SSE connections that may not have credentials.
+	if hasCredentials {
+		// Run tool discovery asynchronously to avoid blocking the session registration hook.
+		// This prevents race conditions where the session gets unregistered (via defer in
+		// the HTTP handler) before tool discovery completes.
+		go g.discoverAndRegisterSessionTools(sessionID, clientIP, serviceCreds)
+	} else {
+		g.logger.Debug(ctx, "Skipping tool discovery - no credentials in context",
+			zap.String("session_id", sessionID))
+	}
 }
 
 // discoverAndRegisterSessionTools performs async discovery of downstream client tools
@@ -181,10 +194,50 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	hooks.AddOnRegisterSession(g.onSessionRegister)
 	hooks.AddOnUnregisterSession(g.onSessionUnregister)
 
+	// Create a tool filter for debugging session tool visibility
+	toolListDebugFilter := func(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
+		session := server.ClientSessionFromContext(ctx)
+		if session != nil {
+			sessionID := session.SessionID()
+			// Count tools by prefix to understand source
+			prefixCounts := make(map[string]int)
+			for _, tool := range tools {
+				clientName, _, err := ParsePrefixedName(tool.Name)
+				if err != nil {
+					prefixCounts["native"]++
+				} else {
+					prefixCounts[clientName]++
+				}
+			}
+
+			// Check if this session has a downstream client connected (indicates discovery happened)
+			hasDownstreamClients := false
+			if g.clientManager != nil {
+				if clients := g.clientManager.GetSessionClientNames(sessionID); len(clients) > 0 {
+					hasDownstreamClients = true
+					g.logger.Debug(ctx, "Session has downstream clients",
+						zap.String("session_id", sessionID),
+						zap.Strings("clients", clients))
+				}
+			}
+
+			g.logger.Info(ctx, "tools/list response",
+				zap.String("session_id", sessionID),
+				zap.Int("total_tools", len(tools)),
+				zap.Any("by_prefix", prefixCounts),
+				zap.Bool("has_downstream_clients", hasDownstreamClients))
+		} else {
+			g.logger.Info(ctx, "tools/list called with no session context",
+				zap.Int("tool_count", len(tools)))
+		}
+		return tools // Pass through unchanged
+	}
+
 	opts := []server.ServerOption{
 		server.WithLogging(),
 		server.WithRecovery(),
 		server.WithHooks(hooks),
+		server.WithToolFilter(toolListDebugFilter),
 	}
 
 	// Discover capabilities from all downstream clients using temporary probe connections

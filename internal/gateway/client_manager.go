@@ -420,6 +420,19 @@ func (cm *ClientManager) GetAllSessionClients(sessionID string) (map[string]*Ses
 	return session.GetAllClients(), nil
 }
 
+// GetSessionClientNames returns the names of all clients connected for a session
+func (cm *ClientManager) GetSessionClientNames(sessionID string) []string {
+	clients, err := cm.GetAllSessionClients(sessionID)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(clients))
+	for name := range clients {
+		names = append(names, name)
+	}
+	return names
+}
+
 // GetClientConfigs returns all client configurations (for capability reporting)
 func (cm *ClientManager) GetClientConfigs() map[string]config.ClientConfig {
 	cm.mu.RLock()
