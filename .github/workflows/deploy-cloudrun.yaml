@@ -25,15 +25,19 @@ on:
         type: string
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: maybedont/maybe-dont
+  # Source registry for tag lookup
+  GHCR_REGISTRY: ghcr.io
+  GHCR_IMAGE: maybedont/maybe-dont
+  # Artifact Registry remote repository that mirrors ghcr.io
+  AR_IMAGE: us-central1-docker.pkg.dev/utility-dynamo-481523-i9/ghcr/maybedont/maybe-dont
 
 jobs:
   resolve-tag:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
-      image: ${{ steps.resolve.outputs.image }}
+      ghcr_image: ${{ steps.resolve.outputs.ghcr_image }}
+      ar_image: ${{ steps.resolve.outputs.ar_image }}
     steps:
       - name: Resolve container tag
         id: resolve
@@ -65,15 +69,16 @@ jobs:
           fi
 
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG" >> $GITHUB_OUTPUT
+          echo "ghcr_image=${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE }}:$TAG" >> $GITHUB_OUTPUT
+          echo "ar_image=${{ env.AR_IMAGE }}:$TAG" >> $GITHUB_OUTPUT
 
-      - name: Verify image exists
+      - name: Verify image exists on ghcr.io
         run: |
-          echo "Verifying image exists: ${{ steps.resolve.outputs.image }}"
+          echo "Verifying image exists: ${{ steps.resolve.outputs.ghcr_image }}"
 
           # Use docker manifest inspect to verify the image exists
-          docker manifest inspect ${{ steps.resolve.outputs.image }} > /dev/null 2>&1 || {
-            echo "::error::Image not found: ${{ steps.resolve.outputs.image }}"
+          docker manifest inspect ${{ steps.resolve.outputs.ghcr_image }} > /dev/null 2>&1 || {
+            echo "::error::Image not found: ${{ steps.resolve.outputs.ghcr_image }}"
             exit 1
           }
 
@@ -107,13 +112,13 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
-          echo "Deploying image: ${{ needs.resolve-tag.outputs.image }}"
+          echo "Deploying image: ${{ needs.resolve-tag.outputs.ar_image }}"
           echo "Service: ${{ inputs.service }}"
           echo "Region: ${{ inputs.region }}"
           echo "Project: ${{ inputs.project }}"
 
           gcloud run services update ${{ inputs.service }} \
-            --image=${{ needs.resolve-tag.outputs.image }} \
+            --image=${{ needs.resolve-tag.outputs.ar_image }} \
             --region=${{ inputs.region }} \
             --project=${{ inputs.project }}
 
@@ -136,5 +141,5 @@ jobs:
           echo "| Service | \`${{ inputs.service }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Region | \`${{ inputs.region }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Image Tag | \`${{ needs.resolve-tag.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Full Image | \`${{ needs.resolve-tag.outputs.image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| AR Image | \`${{ needs.resolve-tag.outputs.ar_image }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Service URL | ${{ steps.service-url.outputs.url }} |" >> $GITHUB_STEP_SUMMARY
