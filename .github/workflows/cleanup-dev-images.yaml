@@ -1,4 +1,4 @@
-name: Cleanup dev container images
+name: cleanup dev container images
 
 on:
   schedule:
