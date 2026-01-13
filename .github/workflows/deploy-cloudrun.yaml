@@ -86,6 +86,13 @@ jobs:
       contents: read
       id-token: write  # Required for Workload Identity Federation
     steps:
+      - name: Debug OIDC Token
+        run: |
+          ID_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://iam.googleapis.com/projects/580294893150/locations/global/workloadIdentityPools/github-actions/providers/github" | jq -r '.value')
+          echo "Token claims:"
+          echo "$ID_TOKEN" | awk -F. '{print $2}' | base64 -d 2>/dev/null | jq -r '.'
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
