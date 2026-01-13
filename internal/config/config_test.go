@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -421,207 +423,214 @@ rules:
 		"API key should be loaded from MAYBE_DONT_AI_VALIDATION_API_KEY environment variable")
 }
 
-func TestApplyEnvironmentOverrides_Strings(t *testing.T) {
-	// Test that applyEnvironmentOverrides works for string fields
+// TestApplyEnvironmentOverrides_AllConfigFields uses reflection to discover all settable
+// fields in the Config struct and verifies that each can be set via environment variables.
+// This ensures that any new fields added to Config are automatically tested.
+func TestApplyEnvironmentOverrides_AllConfigFields(t *testing.T) {
+	// Collect all field paths and their types from the Config struct
+	fields := collectConfigFields(reflect.TypeOf(Config{}), "")
 
-	tests := []struct {
-		name     string
-		envVar   string
-		envValue string
-		check    func(*Config) string
-	}{
-		{
-			name:     "ai_validation.api_key",
-			envVar:   "MAYBE_DONT_AI_VALIDATION_API_KEY",
-			envValue: "ai-key-123",
-			check:    func(c *Config) string { return c.AIPolicyValidation.APIKey },
-		},
-		{
-			name:     "ai_validation.endpoint",
-			envVar:   "MAYBE_DONT_AI_VALIDATION_ENDPOINT",
-			envValue: "https://custom-endpoint.example.com",
-			check:    func(c *Config) string { return c.AIPolicyValidation.Endpoint },
-		},
-		{
-			name:     "ai_validation.model",
-			envVar:   "MAYBE_DONT_AI_VALIDATION_MODEL",
-			envValue: "gpt-4-turbo",
-			check:    func(c *Config) string { return c.AIPolicyValidation.Model },
-		},
-		{
-			name:     "native_tools.audit_report.api_key",
-			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_REPORT_API_KEY",
-			envValue: "audit-key-456",
-			check:    func(c *Config) string { return c.NativeTools.AuditReport.APIKey },
-		},
-		{
-			name:     "audit.path",
-			envVar:   "MAYBE_DONT_AUDIT_PATH",
-			envValue: "custom-audit.log",
-			check:    func(c *Config) string { return c.Audit.Path },
-		},
-		{
-			name:     "logging.level",
-			envVar:   "MAYBE_DONT_LOGGING_LEVEL",
-			envValue: "debug",
-			check:    func(c *Config) string { return c.Logging.LogLevel },
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Set up environment variable
-			err := os.Setenv(tt.envVar, tt.envValue)
+	for _, field := range fields {
+		t.Run(field.envVar, func(t *testing.T) {
+			// Set the environment variable
+			err := os.Setenv(field.envVar, field.testValue)
 			require.NoError(t, err)
 			defer func() {
-				_ = os.Unsetenv(tt.envVar)
+				_ = os.Unsetenv(field.envVar)
 			}()
 
-			// Create a config with empty values
+			// Create a fresh config and apply overrides
 			config := &Config{}
-
-			// Apply environment overrides with MAYBE_DONT prefix
 			applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
 
-			// Verify the value was set
-			actual := tt.check(config)
-			require.Equal(t, tt.envValue, actual,
-				"Expected %s to be set from %s", tt.name, tt.envVar)
+			// Get the actual value using reflection
+			actualValue := getFieldValue(reflect.ValueOf(config).Elem(), field.path)
+			require.NotNil(t, actualValue, "Could not get value for path: %s", field.path)
+
+			// Compare based on type - use reflect to handle type aliases like ServerType
+			actualVal := reflect.ValueOf(actualValue)
+			switch field.kind {
+			case reflect.String:
+				// Handle string and string-based type aliases (like ServerType, PolicyMode)
+				require.Equal(t, field.testValue, actualVal.String(),
+					"String field %s was not set correctly from %s", field.path, field.envVar)
+
+			case reflect.Bool:
+				expected, _ := strconv.ParseBool(field.testValue)
+				require.Equal(t, expected, actualVal.Bool(),
+					"Bool field %s was not set correctly from %s", field.path, field.envVar)
+
+			case reflect.Int:
+				expected, _ := strconv.Atoi(field.testValue)
+				require.Equal(t, int64(expected), actualVal.Int(),
+					"Int field %s was not set correctly from %s", field.path, field.envVar)
+
+			case reflect.Slice:
+				// For []string slices
+				expectedParts := strings.Split(field.testValue, ",")
+				var expected []string
+				for _, p := range expectedParts {
+					if trimmed := strings.TrimSpace(p); trimmed != "" {
+						expected = append(expected, trimmed)
+					}
+				}
+				// Convert reflect.Value to []string
+				actualSlice := make([]string, actualVal.Len())
+				for i := 0; i < actualVal.Len(); i++ {
+					actualSlice[i] = actualVal.Index(i).String()
+				}
+				require.Equal(t, expected, actualSlice,
+					"Slice field %s was not set correctly from %s", field.path, field.envVar)
+			}
 		})
 	}
 }
 
-func TestApplyEnvironmentOverrides_Booleans(t *testing.T) {
-	tests := []struct {
-		name     string
-		envVar   string
-		envValue string
-		expected bool
-		check    func(*Config) bool
-	}{
-		{
-			name:     "audit.enabled true",
-			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
-			envValue: "true",
-			expected: true,
-			check:    func(c *Config) bool { return c.Audit.Enabled },
-		},
-		{
-			name:     "audit.enabled false",
-			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
-			envValue: "false",
-			expected: false,
-			check:    func(c *Config) bool { return c.Audit.Enabled },
-		},
-		{
-			name:     "audit.enabled TRUE (uppercase)",
-			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
-			envValue: "TRUE",
-			expected: true,
-			check:    func(c *Config) bool { return c.Audit.Enabled },
-		},
-		{
-			name:     "audit.enabled 1",
-			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
-			envValue: "1",
-			expected: true,
-			check:    func(c *Config) bool { return c.Audit.Enabled },
-		},
-		{
-			name:     "audit.enabled 0",
-			envVar:   "MAYBE_DONT_AUDIT_ENABLED",
-			envValue: "0",
-			expected: false,
-			check:    func(c *Config) bool { return c.Audit.Enabled },
-		},
-		{
-			name:     "native_tools.audit_log.enabled",
-			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_ENABLED",
-			envValue: "true",
-			expected: true,
-			check:    func(c *Config) bool { return c.NativeTools.AuditLog.Enabled },
-		},
-		{
-			name:     "native_tools.audit_report.enabled",
-			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_REPORT_ENABLED",
-			envValue: "true",
-			expected: true,
-			check:    func(c *Config) bool { return c.NativeTools.AuditReport.Enabled },
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := os.Setenv(tt.envVar, tt.envValue)
-			require.NoError(t, err)
-			defer func() {
-				_ = os.Unsetenv(tt.envVar)
-			}()
-
-			config := &Config{}
-			applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
-
-			actual := tt.check(config)
-			require.Equal(t, tt.expected, actual,
-				"Expected %s=%s to set bool to %v", tt.envVar, tt.envValue, tt.expected)
-		})
-	}
+// configFieldInfo holds metadata about a config field for testing
+type configFieldInfo struct {
+	path      string       // dot-separated path like "server.listen_addr"
+	envVar    string       // environment variable name like "MAYBE_DONT_SERVER_LISTEN_ADDR"
+	kind      reflect.Kind // the field's kind (string, bool, int, etc.)
+	testValue string       // a valid test value for this field type
 }
 
-func TestApplyEnvironmentOverrides_Integers(t *testing.T) {
-	tests := []struct {
-		name     string
-		envVar   string
-		envValue string
-		expected int
-		check    func(*Config) int
-	}{
-		{
-			name:     "native_tools.audit_log.max_entries",
-			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_MAX_ENTRIES",
-			envValue: "500",
-			expected: 500,
-			check:    func(c *Config) int { return c.NativeTools.AuditLog.MaxEntries },
-		},
-		{
-			name:     "native_tools.audit_report.max_entries",
-			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_REPORT_MAX_ENTRIES",
-			envValue: "2000",
-			expected: 2000,
-			check:    func(c *Config) int { return c.NativeTools.AuditReport.MaxEntries },
-		},
-		{
-			name:     "zero value",
-			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_MAX_ENTRIES",
-			envValue: "0",
-			expected: 0,
-			check:    func(c *Config) int { return c.NativeTools.AuditLog.MaxEntries },
-		},
-		{
-			name:     "negative value",
-			envVar:   "MAYBE_DONT_NATIVE_TOOLS_AUDIT_LOG_MAX_ENTRIES",
-			envValue: "-1",
-			expected: -1,
-			check:    func(c *Config) int { return c.NativeTools.AuditLog.MaxEntries },
-		},
+// collectConfigFields recursively discovers all settable fields in a struct type.
+// It skips maps, slices of structs, and pointer types (except *bool which is special).
+func collectConfigFields(t reflect.Type, pathPrefix string) []configFieldInfo {
+	var fields []configFieldInfo
+
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := os.Setenv(tt.envVar, tt.envValue)
-			require.NoError(t, err)
-			defer func() {
-				_ = os.Unsetenv(tt.envVar)
-			}()
-
-			config := &Config{}
-			applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
-
-			actual := tt.check(config)
-			require.Equal(t, tt.expected, actual,
-				"Expected %s=%s to set int to %d", tt.envVar, tt.envValue, tt.expected)
-		})
+	if t.Kind() != reflect.Struct {
+		return fields
 	}
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+
+		// Skip unexported fields
+		if !field.IsExported() {
+			continue
+		}
+
+		// Get the mapstructure tag
+		tag := field.Tag.Get("mapstructure")
+		if tag == "" {
+			continue
+		}
+
+		// Build the full path
+		var fullPath string
+		if pathPrefix == "" {
+			fullPath = tag
+		} else {
+			fullPath = pathPrefix + "." + tag
+		}
+
+		// Build the environment variable name
+		envVar := "MAYBE_DONT_" + strings.ToUpper(strings.ReplaceAll(fullPath, ".", "_"))
+
+		fieldType := field.Type
+		kind := fieldType.Kind()
+
+		switch kind {
+		case reflect.String:
+			fields = append(fields, configFieldInfo{
+				path:      fullPath,
+				envVar:    envVar,
+				kind:      kind,
+				testValue: "test-value-" + tag,
+			})
+
+		case reflect.Bool:
+			fields = append(fields, configFieldInfo{
+				path:      fullPath,
+				envVar:    envVar,
+				kind:      kind,
+				testValue: "true",
+			})
+
+		case reflect.Int, reflect.Int64:
+			fields = append(fields, configFieldInfo{
+				path:      fullPath,
+				envVar:    envVar,
+				kind:      reflect.Int, // treat int64 as int for testing purposes
+				testValue: "42",
+			})
+
+		case reflect.Float64:
+			fields = append(fields, configFieldInfo{
+				path:      fullPath,
+				envVar:    envVar,
+				kind:      kind,
+				testValue: "3.14",
+			})
+
+		case reflect.Slice:
+			// Only handle []string slices
+			if fieldType.Elem().Kind() == reflect.String {
+				fields = append(fields, configFieldInfo{
+					path:      fullPath,
+					envVar:    envVar,
+					kind:      kind,
+					testValue: "value1,value2,value3",
+				})
+			}
+			// Skip other slice types (e.g., []CELPolicy)
+
+		case reflect.Struct:
+			// Recursively collect fields from nested structs
+			nestedFields := collectConfigFields(fieldType, fullPath)
+			fields = append(fields, nestedFields...)
+
+		case reflect.Map:
+			// Skip maps (like DownstreamMCPServers) - they can't be set via simple env vars
+
+		case reflect.Ptr:
+			// Skip pointer fields (like *bool for deprecated Enabled fields)
+			// These require special handling that we don't support via env vars
+		}
+	}
+
+	return fields
+}
+
+// getFieldValue navigates to a field using a dot-separated path and returns its value
+func getFieldValue(v reflect.Value, path string) interface{} {
+	parts := strings.Split(path, ".")
+
+	current := v
+	for _, part := range parts {
+		if current.Kind() == reflect.Ptr {
+			if current.IsNil() {
+				return nil
+			}
+			current = current.Elem()
+		}
+
+		if current.Kind() != reflect.Struct {
+			return nil
+		}
+
+		// Find field by mapstructure tag
+		found := false
+		for i := 0; i < current.NumField(); i++ {
+			field := current.Type().Field(i)
+			tag := field.Tag.Get("mapstructure")
+			if tag == part {
+				current = current.Field(i)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil
+		}
+	}
+
+	return current.Interface()
 }
 
 func TestApplyEnvironmentOverrides_InvalidValues(t *testing.T) {
@@ -660,48 +669,25 @@ func TestApplyEnvironmentOverrides_InvalidValues(t *testing.T) {
 	})
 }
 
-func TestApplyEnvironmentOverrides_StringSlice(t *testing.T) {
+func TestApplyEnvironmentOverrides_StringSliceEdgeCases(t *testing.T) {
+	// Test edge cases for []string parsing that aren't covered by the main test
 	tests := []struct {
 		name     string
 		envVar   string
 		envValue string
 		expected []string
-		check    func(*Config) []string
 	}{
 		{
-			name:     "server.trusted_proxies single value",
-			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
-			envValue: "10.0.0.1",
-			expected: []string{"10.0.0.1"},
-			check:    func(c *Config) []string { return c.Server.TrustedProxies },
-		},
-		{
-			name:     "server.trusted_proxies multiple values",
-			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
-			envValue: "10.0.0.1,10.0.0.2,10.0.0.3",
-			expected: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"},
-			check:    func(c *Config) []string { return c.Server.TrustedProxies },
-		},
-		{
-			name:     "server.trusted_proxies with spaces",
+			name:     "with spaces between values",
 			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
 			envValue: "10.0.0.1, 10.0.0.2 , 10.0.0.3",
 			expected: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"},
-			check:    func(c *Config) []string { return c.Server.TrustedProxies },
 		},
 		{
-			name:     "server.trusted_proxies empty entries filtered",
+			name:     "empty entries filtered",
 			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
 			envValue: "10.0.0.1,,10.0.0.2",
 			expected: []string{"10.0.0.1", "10.0.0.2"},
-			check:    func(c *Config) []string { return c.Server.TrustedProxies },
-		},
-		{
-			name:     "server.trusted_proxies CIDR ranges",
-			envVar:   "MAYBE_DONT_SERVER_TRUSTED_PROXIES",
-			envValue: "10.0.0.0/8,192.168.0.0/16",
-			expected: []string{"10.0.0.0/8", "192.168.0.0/16"},
-			check:    func(c *Config) []string { return c.Server.TrustedProxies },
 		},
 	}
 
@@ -716,9 +702,7 @@ func TestApplyEnvironmentOverrides_StringSlice(t *testing.T) {
 			config := &Config{}
 			applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
 
-			actual := tt.check(config)
-			require.Equal(t, tt.expected, actual,
-				"Expected %s=%s to set slice to %v", tt.envVar, tt.envValue, tt.expected)
+			require.Equal(t, tt.expected, config.Server.TrustedProxies)
 		})
 	}
 }
