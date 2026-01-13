@@ -44,20 +44,41 @@ jobs:
             /orgs/maybedont/packages/container/maybe-dont/versions \
             --paginate)
 
-          # Filter to dev-* tags older than cutoff
-          TO_DELETE=$(echo "$VERSIONS" | jq -r --arg cutoff "$CUTOFF_DATE" '
+          # Get all dev-* images sorted by created_at (newest first)
+          ALL_DEV_IMAGES=$(echo "$VERSIONS" | jq -s '
+            flatten |
+            map(select(.metadata.container.tags | any(startswith("dev-")))) |
+            sort_by(.created_at) | reverse
+          ')
+
+          TOTAL_DEV_COUNT=$(echo "$ALL_DEV_IMAGES" | jq 'length')
+          echo "Total dev-* images: $TOTAL_DEV_COUNT"
+
+          if [ "$TOTAL_DEV_COUNT" -le 1 ]; then
+            echo "Only $TOTAL_DEV_COUNT dev image(s) exist - keeping at least one"
+            exit 0
+          fi
+
+          # Get the newest dev image (to always keep)
+          NEWEST_ID=$(echo "$ALL_DEV_IMAGES" | jq -r '.[0].id')
+          NEWEST_TAGS=$(echo "$ALL_DEV_IMAGES" | jq -r '.[0].metadata.container.tags | join(", ")')
+          echo "Newest dev image (will keep): ID $NEWEST_ID, Tags: $NEWEST_TAGS"
+
+          # Filter to dev-* tags older than cutoff, excluding the newest one
+          TO_DELETE=$(echo "$ALL_DEV_IMAGES" | jq -r --arg cutoff "$CUTOFF_DATE" --argjson newest_id "$NEWEST_ID" '
             .[] |
-            select(.metadata.container.tags | any(startswith("dev-"))) |
+            select(.id != $newest_id) |
             select(.created_at < $cutoff) |
             {id: .id, tags: .metadata.container.tags, created: .created_at} |
             @json
           ')
 
           if [ -z "$TO_DELETE" ]; then
-            echo "No dev images found older than $DAYS_TO_KEEP days"
+            echo "No dev images found older than $DAYS_TO_KEEP days (excluding newest)"
             exit 0
           fi
 
+          echo ""
           echo "Found images to delete:"
           echo "$TO_DELETE" | jq -r '"  - ID: \(.id), Tags: \(.tags | join(", ")), Created: \(.created)"'
 
