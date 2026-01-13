@@ -91,6 +91,7 @@ jobs:
         with:
           workload_identity_provider: 'projects/580294893150/locations/global/workloadIdentityPools/github-actions/providers/github'
           service_account: 'gha-cloudrun-deployer@utility-dynamo-481523-i9.iam.gserviceaccount.com'
+          create_credentials_file: false
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
