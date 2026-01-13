@@ -521,3 +521,272 @@ func TestGetAuditLog_WithFiltering(t *testing.T) {
 			"Second entry should be the second most recent (github__search_code)")
 	})
 }
+
+func TestGetAuditLog_LineSpanningMultipleChunks(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+
+	// Create a file with a line that exceeds the 64KB chunk size
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "large_line_audit.log")
+
+	now := float64(time.Now().Unix())
+
+	// Create a large params value that will make the JSON line exceed 64KB
+	// 64KB = 65536 bytes, so we need a params string larger than that
+	largeParams := make([]byte, 70000)
+	for i := range largeParams {
+		largeParams[i] = 'x'
+	}
+
+	// Create entries: one normal, one large (>64KB), one normal
+	normalEntry1 := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"small_tool","client":"test","prefixed_name":"test__small_tool"},"action":"allow"}}`, now-2)
+	largeEntry := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"large_tool","client":"test","prefixed_name":"test__large_tool"},"action":"allow","request":{"params":{"data":"%s"}}}}`, now-1, string(largeParams))
+	normalEntry2 := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"another_small_tool","client":"test","prefixed_name":"test__another_small_tool"},"action":"deny"}}`, now)
+
+	content := normalEntry1 + "\n" + largeEntry + "\n" + normalEntry2 + "\n"
+	err := os.WriteFile(auditPath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	// Verify the file is larger than 64KB
+	fileInfo, err := os.Stat(auditPath)
+	require.NoError(t, err)
+	require.Greater(t, fileInfo.Size(), int64(64*1024), "File should be larger than 64KB to test chunk spanning")
+
+	cfg := &config.Config{}
+	cfg.NativeTools.AuditLog.Enabled = true
+	cfg.NativeTools.AuditLog.MaxEntries = 1000
+
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = ToolGetAuditLog
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := handler.handleGetAuditLog(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "Should handle lines spanning multiple chunks")
+
+	// Parse response
+	var response AuditLogResponse
+	textContent, ok := mcp.AsTextContent(result.Content[0])
+	require.True(t, ok)
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	// Should return all 3 entries (newest first)
+	assert.Len(t, response.Entries, 3, "Should return all 3 entries including the large one")
+	assert.Equal(t, 3, response.TotalCount)
+
+	// Verify order (newest first)
+	assert.Equal(t, "test__another_small_tool", response.Entries[0].Audit.Tool.PrefixedName)
+	assert.Equal(t, "test__large_tool", response.Entries[1].Audit.Tool.PrefixedName)
+	assert.Equal(t, "test__small_tool", response.Entries[2].Audit.Tool.PrefixedName)
+}
+
+func TestGetAuditLog_SingleLineLargerThan64KB(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+
+	// Create a file with a single line that exceeds 64KB (no other lines)
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "single_large_line_audit.log")
+
+	now := float64(time.Now().Unix())
+
+	// Create a large params value that will make the JSON line exceed 64KB
+	largeParams := make([]byte, 70000)
+	for i := range largeParams {
+		largeParams[i] = 'y'
+	}
+
+	largeEntry := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"single_large_tool","client":"test","prefixed_name":"test__single_large_tool"},"action":"allow","request":{"params":{"data":"%s"}}}}`, now, string(largeParams))
+
+	content := largeEntry + "\n"
+	err := os.WriteFile(auditPath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	cfg := &config.Config{}
+	cfg.NativeTools.AuditLog.Enabled = true
+	cfg.NativeTools.AuditLog.MaxEntries = 1000
+
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = ToolGetAuditLog
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := handler.handleGetAuditLog(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "Should handle single large line")
+
+	// Parse response
+	var response AuditLogResponse
+	textContent, ok := mcp.AsTextContent(result.Content[0])
+	require.True(t, ok)
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	// Should return the single large entry
+	assert.Len(t, response.Entries, 1, "Should return the single large entry")
+	assert.Equal(t, "test__single_large_tool", response.Entries[0].Audit.Tool.PrefixedName)
+}
+
+func TestGetAuditLog_NoNewlineAtEOF(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+
+	// Create a file without a trailing newline
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "no_newline_audit.log")
+
+	now := float64(time.Now().Unix())
+	entries := []string{
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"tool1","client":"test","prefixed_name":"test__tool1"},"action":"allow"}}`, now-1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"tool2","client":"test","prefixed_name":"test__tool2"},"action":"deny"}}`, now),
+	}
+	// No trailing newline after last entry
+	content := entries[0] + "\n" + entries[1]
+	err := os.WriteFile(auditPath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	cfg := &config.Config{}
+	cfg.NativeTools.AuditLog.Enabled = true
+	cfg.NativeTools.AuditLog.MaxEntries = 1000
+
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = ToolGetAuditLog
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := handler.handleGetAuditLog(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "Should handle file without trailing newline")
+
+	// Parse response
+	var response AuditLogResponse
+	textContent, ok := mcp.AsTextContent(result.Content[0])
+	require.True(t, ok)
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	// Should return both entries
+	assert.Len(t, response.Entries, 2, "Should return both entries even without trailing newline")
+	assert.Equal(t, "test__tool2", response.Entries[0].Audit.Tool.PrefixedName)
+	assert.Equal(t, "test__tool1", response.Entries[1].Audit.Tool.PrefixedName)
+}
+
+func TestTimestampToTime_Precision(t *testing.T) {
+	// Test that fractional seconds are preserved
+	tests := []struct {
+		name      string
+		timestamp float64
+		wantSec   int64
+		wantNsec  int64
+	}{
+		{
+			name:      "whole seconds",
+			timestamp: 1704067200.0, // 2024-01-01 00:00:00 UTC
+			wantSec:   1704067200,
+			wantNsec:  0,
+		},
+		{
+			name:      "half second",
+			timestamp: 1704067200.5,
+			wantSec:   1704067200,
+			wantNsec:  500000000,
+		},
+		{
+			name:      "millisecond precision",
+			timestamp: 1704067200.123,
+			wantSec:   1704067200,
+			wantNsec:  123000000,
+		},
+		{
+			name:      "microsecond precision",
+			timestamp: 1704067200.123456,
+			wantSec:   1704067200,
+			wantNsec:  123456000,
+		},
+		{
+			name:      "nanosecond precision",
+			timestamp: 1704067200.123456789,
+			wantSec:   1704067200,
+			wantNsec:  123456789,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := timestampToTime(tt.timestamp)
+			assert.Equal(t, tt.wantSec, result.Unix(), "Seconds should match")
+			// Allow small tolerance for floating point precision
+			assert.InDelta(t, tt.wantNsec, result.Nanosecond(), 100, "Nanoseconds should be close")
+		})
+	}
+}
+
+func TestGetAuditLog_TimeRangeWithFractionalTimestamps(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "fractional_ts_audit.log")
+
+	// Create entries with fractional timestamps
+	// Use a time just slightly before and after the cutoff to test precision
+	now := time.Now()
+	cutoffTime := now.Add(-1 * time.Hour)
+
+	// Entry 1: 1 second before cutoff (should be excluded)
+	ts1 := float64(cutoffTime.Add(-1*time.Second).UnixNano()) / 1e9
+	// Entry 2: 500ms after cutoff (should be included)
+	ts2 := float64(cutoffTime.Add(500*time.Millisecond).UnixNano()) / 1e9
+	// Entry 3: now (should be included)
+	ts3 := float64(now.UnixNano()) / 1e9
+
+	entries := []string{
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"old_tool","client":"test","prefixed_name":"test__old_tool"},"action":"allow"}}`, ts1),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"cutoff_tool","client":"test","prefixed_name":"test__cutoff_tool"},"action":"allow"}}`, ts2),
+		fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"new_tool","client":"test","prefixed_name":"test__new_tool"},"action":"allow"}}`, ts3),
+	}
+	content := ""
+	for _, entry := range entries {
+		content += entry + "\n"
+	}
+	err := os.WriteFile(auditPath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	cfg := &config.Config{}
+	cfg.NativeTools.AuditLog.Enabled = true
+	cfg.NativeTools.AuditLog.MaxEntries = 1000
+
+	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = ToolGetAuditLog
+	req.Params.Arguments = map[string]interface{}{
+		"time_range": "1h",
+	}
+
+	result, err := handler.handleGetAuditLog(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.IsError)
+
+	// Parse response
+	var response AuditLogResponse
+	textContent, ok := mcp.AsTextContent(result.Content[0])
+	require.True(t, ok)
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	// Should return 2 entries (the ones within the 1-hour window)
+	assert.Len(t, response.Entries, 2, "Should return entries within the time range with fractional precision")
+	assert.Equal(t, "test__new_tool", response.Entries[0].Audit.Tool.PrefixedName)
+	assert.Equal(t, "test__cutoff_tool", response.Entries[1].Audit.Tool.PrefixedName)
+}

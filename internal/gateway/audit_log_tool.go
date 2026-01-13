@@ -156,7 +156,7 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 
 	const chunkSize = 64 * 1024 // 64KB chunks
 	readPos := fileSize
-	var leftover []byte // Partial line from previous chunk
+	var leftover []byte // Partial line from previous chunk (accumulates for lines spanning multiple chunks)
 
 	for readPos > 0 && len(entries) < limit {
 		// Calculate chunk boundaries
@@ -173,6 +173,7 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 		}
 
 		// Append leftover from previous iteration (this is the end of a line that continued into next chunk)
+		// This handles lines that span multiple chunks (e.g., lines > 64KB)
 		if len(leftover) > 0 {
 			chunk = append(chunk, leftover...)
 			leftover = nil
@@ -182,6 +183,7 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 		lines := h.extractLinesReverse(chunk, chunkStart > 0)
 		if chunkStart > 0 && len(lines.partial) > 0 {
 			// Save partial line at the start for next iteration
+			// This accumulates across multiple chunks for very long lines
 			leftover = lines.partial
 		}
 
@@ -199,8 +201,9 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 
 			// Check time range - if entry is too old, we can stop
 			// (assuming log entries are chronologically ordered)
+			// Use full precision: extract nanoseconds from fractional timestamp
 			if !cutoffTime.IsZero() {
-				entryTime := time.Unix(int64(entry.Timestamp), 0)
+				entryTime := timestampToTime(entry.Timestamp)
 				if entryTime.Before(cutoffTime) {
 					// Entry is too old, and all earlier entries will be older too
 					return entries, totalCount, nil
@@ -225,7 +228,8 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 	if len(leftover) > 0 && len(entries) < limit {
 		var entry AuditLogEntry
 		if err := json.Unmarshal(leftover, &entry); err == nil {
-			if cutoffTime.IsZero() || !time.Unix(int64(entry.Timestamp), 0).Before(cutoffTime) {
+			entryTime := timestampToTime(entry.Timestamp)
+			if cutoffTime.IsZero() || !entryTime.Before(cutoffTime) {
 				if h.matchesFilter(entry, filter) {
 					totalCount++
 					if len(entries) < limit {
@@ -237,6 +241,14 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 	}
 
 	return entries, totalCount, nil
+}
+
+// timestampToTime converts a float64 Unix timestamp to time.Time with nanosecond precision.
+// The timestamp format is seconds since epoch, with fractional seconds for sub-second precision.
+func timestampToTime(ts float64) time.Time {
+	sec := int64(ts)
+	nsec := int64((ts - float64(sec)) * 1e9)
+	return time.Unix(sec, nsec)
 }
 
 // linesResult holds the result of extracting lines from a chunk

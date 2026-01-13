@@ -900,19 +900,17 @@ func ValidateConfig(cfg *Config) error {
 		validateRange(cfg.NativeTools.AuditReport.MaxEntries, 10, 2_000, "native_tools.audit_report.max_entries", &errors)
 	}
 
-	// Validate logging.path - must be stdout, stderr, or a simple filename (no directory traversal)
+	// Validate logging.path - must be stdout, stderr, or a safe relative path
 	if cfg.Logging.Path != "" && cfg.Logging.Path != "stdout" && cfg.Logging.Path != "stderr" {
-		if strings.Contains(cfg.Logging.Path, "/") || strings.Contains(cfg.Logging.Path, "\\") ||
-			strings.Contains(cfg.Logging.Path, "..") || strings.HasPrefix(cfg.Logging.Path, ".") {
-			errors = append(errors, "logging.path must be 'stdout', 'stderr', or a simple filename without path separators")
+		if err := ValidateRelativePath(cfg.Logging.Path); err != nil {
+			errors = append(errors, fmt.Sprintf("logging.path: %s", err.Error()))
 		}
 	}
 
-	// Validate audit.path - must be stdout, stderr, or a simple filename (no directory traversal)
+	// Validate audit.path - must be stdout, stderr, or a safe relative path
 	if cfg.Audit.Path != "" && cfg.Audit.Path != "stdout" && cfg.Audit.Path != "stderr" {
-		if strings.Contains(cfg.Audit.Path, "/") || strings.Contains(cfg.Audit.Path, "\\") ||
-			strings.Contains(cfg.Audit.Path, "..") || strings.HasPrefix(cfg.Audit.Path, ".") {
-			errors = append(errors, "audit.path must be 'stdout', 'stderr', or a simple filename without path separators")
+		if err := ValidateRelativePath(cfg.Audit.Path); err != nil {
+			errors = append(errors, fmt.Sprintf("audit.path: %s", err.Error()))
 		}
 	}
 
@@ -1016,6 +1014,124 @@ func validateRange(value, min, max int, fieldName string, errors *[]string) {
 	if value < min || value > max {
 		*errors = append(*errors, fmt.Sprintf("%s is invalid. The value must be >= %d and <= %d", fieldName, min, max))
 	}
+}
+
+// ValidateRelativePath validates that a path is safe for use as a relative path within a base directory.
+// It allows subdirectories (e.g., "logs/audit.log") but prevents path traversal attacks.
+//
+// The function checks for:
+// - Absolute paths (starting with / or drive letters on Windows)
+// - Parent directory references (..)
+// - Hidden files/directories (starting with .)
+// - Null bytes and control characters
+// - URL-encoded traversal attempts (%2e, %2f, etc.)
+// - Unicode normalization attacks
+// - Backslash usage (even on Unix, for consistency)
+// - Empty path components (e.g., "foo//bar")
+//
+// Returns nil if the path is safe, or an error describing the issue.
+func ValidateRelativePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+
+	// Check for null bytes and control characters (can be used to bypass validation)
+	for i, c := range path {
+		if c == 0 {
+			return fmt.Errorf("path contains null byte at position %d", i)
+		}
+		if c < 32 && c != '\t' {
+			return fmt.Errorf("path contains control character at position %d", i)
+		}
+	}
+
+	// Check for URL-encoded characters that could be used for traversal
+	// Common encodings: %2e = '.', %2f = '/', %5c = '\', %00 = null
+	lowerPath := strings.ToLower(path)
+	encodedPatterns := []string{
+		"%2e", // .
+		"%2f", // /
+		"%5c", // \
+		"%00", // null
+		"%252e", // double-encoded .
+		"%252f", // double-encoded /
+		"%c0%ae", // overlong UTF-8 encoding of .
+		"%c0%af", // overlong UTF-8 encoding of /
+		"%c1%9c", // overlong UTF-8 encoding of \
+	}
+	for _, pattern := range encodedPatterns {
+		if strings.Contains(lowerPath, pattern) {
+			return fmt.Errorf("path contains potentially malicious URL encoding: %s", pattern)
+		}
+	}
+
+	// Normalize the path to handle any platform-specific quirks
+	// filepath.Clean will normalize separators and collapse redundant components
+	cleanPath := filepath.Clean(path)
+
+	// Check for absolute paths
+	if filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("absolute paths are not allowed")
+	}
+
+	// After cleaning, check if the path tries to escape the base directory
+	// filepath.Clean converts ".." sequences, so we check the cleaned result
+	if strings.HasPrefix(cleanPath, "..") {
+		return fmt.Errorf("path cannot reference parent directory")
+	}
+
+	// Split the path and validate each component
+	// Use both / and \ as separators to handle cross-platform issues
+	// Replace backslashes with forward slashes for consistent handling
+	normalizedPath := strings.ReplaceAll(path, "\\", "/")
+	components := strings.Split(normalizedPath, "/")
+
+	for i, component := range components {
+		// Check for empty components (indicates double slashes or trailing slashes)
+		if component == "" {
+			if i == 0 {
+				return fmt.Errorf("path cannot start with a separator")
+			}
+			// Allow trailing empty component (trailing slash)
+			if i == len(components)-1 {
+				continue
+			}
+			return fmt.Errorf("path contains empty component (consecutive separators)")
+		}
+
+		// Check for parent directory reference
+		if component == ".." {
+			return fmt.Errorf("path cannot contain '..' (parent directory reference)")
+		}
+
+		// Check for current directory reference (usually harmless but unnecessary)
+		if component == "." {
+			return fmt.Errorf("path cannot contain '.' (current directory reference)")
+		}
+
+		// Check for hidden files/directories (starting with .)
+		if strings.HasPrefix(component, ".") {
+			return fmt.Errorf("path cannot contain hidden files or directories (starting with '.')")
+		}
+
+		// Check for multiple consecutive dots (potential traversal variant)
+		if strings.Contains(component, "...") {
+			return fmt.Errorf("path contains suspicious dot sequence")
+		}
+
+		// Check for whitespace at start/end of component (can be used to bypass checks)
+		if strings.TrimSpace(component) != component {
+			return fmt.Errorf("path component cannot have leading or trailing whitespace")
+		}
+
+		// Check for Windows-specific issues
+		// Colon is used for drive letters and NTFS alternate data streams
+		if strings.Contains(component, ":") {
+			return fmt.Errorf("path cannot contain colons")
+		}
+	}
+
+	return nil
 }
 
 // ResolveAuditLogPath returns the full path to the audit log file.

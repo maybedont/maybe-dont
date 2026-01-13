@@ -731,6 +731,250 @@ func TestValidateNativeToolsAuditReportMaxEntries(t *testing.T) {
 	}
 }
 
+func TestValidateRelativePath_ValidPaths(t *testing.T) {
+	// These paths should all be valid
+	validPaths := []string{
+		"audit.log",
+		"logs/audit.log",
+		"logs/subdir/audit.log",
+		"my-file.log",
+		"my_file.log",
+		"file123.log",
+		"logs/2024/01/audit.log",
+		"a/b/c/d/e/f/g.log",
+		"CamelCase/File.Log",
+		"file/",  // trailing slash is allowed
+	}
+
+	for _, path := range validPaths {
+		t.Run(path, func(t *testing.T) {
+			err := ValidateRelativePath(path)
+			require.NoError(t, err, "Path %q should be valid", path)
+		})
+	}
+}
+
+func TestValidateRelativePath_ParentDirectoryTraversal(t *testing.T) {
+	// These paths all attempt parent directory traversal and should be rejected
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"simple parent ref", ".."},
+		{"parent then file", "../file.log"},
+		{"parent with subdir", "../logs/file.log"},
+		{"double parent", "../../file.log"},
+		{"hidden parent traversal", "logs/../../../etc/passwd"},
+		{"parent in middle", "logs/../file.log"},
+		{"parent at end", "logs/.."},
+		{"triple dots", "logs/.../file.log"},
+		{"backslash parent", "..\\file.log"},
+		{"mixed separators parent", "logs\\..\\file.log"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRelativePath(tt.path)
+			require.Error(t, err, "Path %q should be rejected", tt.path)
+		})
+	}
+}
+
+func TestValidateRelativePath_AbsolutePaths(t *testing.T) {
+	// Absolute paths should be rejected
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"unix absolute", "/etc/passwd"},
+		{"unix absolute with subdir", "/var/log/audit.log"},
+		{"root only", "/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRelativePath(tt.path)
+			require.Error(t, err, "Path %q should be rejected", tt.path)
+		})
+	}
+}
+
+func TestValidateRelativePath_HiddenFiles(t *testing.T) {
+	// Hidden files/directories should be rejected
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"hidden file", ".hidden"},
+		{"hidden file in subdir", "logs/.hidden"},
+		{"hidden dir", ".hidden/file.log"},
+		{"hidden dir in path", "logs/.hidden/file.log"},
+		{"dotfile", ".bashrc"},
+		{"dot dir", ".config/file.log"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRelativePath(tt.path)
+			require.Error(t, err, "Path %q should be rejected", tt.path)
+		})
+	}
+}
+
+func TestValidateRelativePath_URLEncodedTraversal(t *testing.T) {
+	// URL-encoded traversal attempts should be rejected
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"encoded dot", "%2e%2e/file.log"},
+		{"encoded slash", "logs%2f..%2ffile.log"},
+		{"encoded backslash", "logs%5c..%5cfile.log"},
+		{"encoded null", "file%00.log"},
+		{"double encoded dot", "%252e%252e/file.log"},
+		{"overlong utf8 dot", "%c0%ae%c0%ae/file.log"},
+		{"overlong utf8 slash", "logs%c0%af..%c0%affile.log"},
+		{"mixed case encoding", "%2E%2E/file.log"},
+		{"uppercase encoding", "%2F"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRelativePath(tt.path)
+			require.Error(t, err, "Path %q should be rejected", tt.path)
+		})
+	}
+}
+
+func TestValidateRelativePath_ControlCharacters(t *testing.T) {
+	// Control characters should be rejected
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"null byte", "file\x00.log"},
+		{"null in middle", "logs/fi\x00le.log"},
+		{"newline", "file\n.log"},
+		{"carriage return", "file\r.log"},
+		{"bell", "file\x07.log"},
+		{"escape", "file\x1b.log"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRelativePath(tt.path)
+			require.Error(t, err, "Path %q should be rejected", tt.path)
+		})
+	}
+}
+
+func TestValidateRelativePath_EmptyAndWhitespace(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		shouldError bool
+	}{
+		{"empty string", "", true},
+		{"double slash", "logs//file.log", true},
+		{"triple slash", "logs///file.log", true},
+		{"leading slash", "/logs/file.log", true},
+		{"leading space", " file.log", true},
+		{"trailing space", "file.log ", true},
+		{"space in component", "logs/ file.log", true},
+		{"only spaces", "   ", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRelativePath(tt.path)
+			if tt.shouldError {
+				require.Error(t, err, "Path %q should be rejected", tt.path)
+			} else {
+				require.NoError(t, err, "Path %q should be valid", tt.path)
+			}
+		})
+	}
+}
+
+func TestValidateRelativePath_WindowsSpecific(t *testing.T) {
+	// Windows-specific path issues that should be rejected on all platforms
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"drive letter", "C:file.log"},
+		{"drive with path", "C:\\logs\\file.log"},
+		{"alternate data stream", "file.log:hidden"},
+		{"UNC path style", "\\\\server\\share\\file.log"},
+		{"backslash traversal", "logs\\..\\..\\etc\\passwd"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRelativePath(tt.path)
+			require.Error(t, err, "Path %q should be rejected", tt.path)
+		})
+	}
+}
+
+func TestValidateRelativePath_CurrentDirectory(t *testing.T) {
+	// Current directory references should be rejected
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"single dot", "."},
+		{"dot slash file", "./file.log"},
+		{"dot in middle", "logs/./file.log"},
+		{"multiple dots in middle", "logs/././file.log"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRelativePath(tt.path)
+			require.Error(t, err, "Path %q should be rejected", tt.path)
+		})
+	}
+}
+
+func TestValidateConfig_LoggingPathWithSubdirectory(t *testing.T) {
+	// Test that subdirectories are now allowed in logging.path
+	config := createValidBaseConfig()
+	config.Logging.Path = "logs/subdir/app.log"
+
+	err := ValidateConfig(config)
+	require.NoError(t, err, "Subdirectory paths should be allowed for logging.path")
+}
+
+func TestValidateConfig_AuditPathWithSubdirectory(t *testing.T) {
+	// Test that subdirectories are now allowed in audit.path
+	config := createValidBaseConfig()
+	config.Audit.Path = "audit/2024/01/audit.log"
+
+	err := ValidateConfig(config)
+	require.NoError(t, err, "Subdirectory paths should be allowed for audit.path")
+}
+
+func TestValidateConfig_LoggingPathTraversalRejected(t *testing.T) {
+	// Test that path traversal is rejected in logging.path
+	config := createValidBaseConfig()
+	config.Logging.Path = "../../../etc/passwd"
+
+	err := ValidateConfig(config)
+	require.Error(t, err, "Path traversal should be rejected in logging.path")
+	require.Contains(t, err.Error(), "logging.path")
+}
+
+func TestValidateConfig_AuditPathTraversalRejected(t *testing.T) {
+	// Test that path traversal is rejected in audit.path
+	config := createValidBaseConfig()
+	config.Audit.Path = "logs/../../../etc/passwd"
+
+	err := ValidateConfig(config)
+	require.Error(t, err, "Path traversal should be rejected in audit.path")
+	require.Contains(t, err.Error(), "audit.path")
+}
+
 // createValidBaseConfig creates a Config with all required fields set to valid values.
 // Use this as a starting point when testing specific validation rules.
 func createValidBaseConfig() *Config {
