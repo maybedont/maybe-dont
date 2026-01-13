@@ -18,6 +18,9 @@ jobs:
           # Format: type(optional scope)!: description
           # The ! indicates a breaking change
           # Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+          #
+          # IMPORTANT: This pattern is also used in .githooks/commit-msg
+          # If you modify this PATTERN, you MUST also update .githooks/commit-msg to match.
           PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_-]+\))?!?: .+'
 
           if [[ ! "$TITLE" =~ $PATTERN ]]; then

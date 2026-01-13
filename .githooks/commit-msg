@@ -1,9 +1,11 @@
 #!/bin/bash
 #
 # Git commit-msg hook to validate conventional commit format on main branch.
-# This enforces the same policy as .github/workflows/pr-title.yaml
 #
-# Install this hook by running: ./scripts/install-hooks.sh
+# IMPORTANT: This hook uses the same validation pattern as .github/workflows/pr-title.yaml
+# If you modify the PATTERN variable below, you MUST also update pr-title.yaml to match.
+#
+# Install this hook by running: make setup
 #
 
 # Get the current branch
