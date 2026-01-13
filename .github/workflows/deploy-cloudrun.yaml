@@ -1,0 +1,130 @@
+name: deploy to cloud run
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Container image tag (default: latest dev tag from ghcr.io)'
+        required: false
+        default: ''
+        type: string
+      service:
+        description: 'Cloud Run service name'
+        required: true
+        default: 'maybe-dont-dev'
+        type: string
+      region:
+        description: 'Cloud Run region'
+        required: true
+        default: 'us-central1'
+        type: string
+      project:
+        description: 'GCP Project ID'
+        required: true
+        default: 'utility-dynamo-481523-i9'
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: maybedont/maybe-dont
+
+jobs:
+  resolve-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      image: ${{ steps.resolve.outputs.image }}
+    steps:
+      - name: Resolve container tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+            echo "Using provided tag: $TAG"
+          else
+            echo "Fetching latest tag from GitHub Container Registry..."
+
+            # Get the latest package version using GitHub API
+            # This fetches package versions and gets the most recent tag
+            LATEST_TAG=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              /orgs/maybedont/packages/container/maybe-dont/versions \
+              --jq '.[0].metadata.container.tags | map(select(. != "" and (contains("-amd64") | not) and (contains("-arm64") | not))) | .[0]' \
+              2>/dev/null || echo "")
+
+            if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" = "null" ]; then
+              echo "::error::Failed to fetch latest tag from GitHub Container Registry"
+              exit 1
+            fi
+
+            TAG="$LATEST_TAG"
+            echo "Resolved latest tag: $TAG"
+          fi
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG" >> $GITHUB_OUTPUT
+
+      - name: Verify image exists
+        run: |
+          echo "Verifying image exists: ${{ steps.resolve.outputs.image }}"
+
+          # Use docker manifest inspect to verify the image exists
+          docker manifest inspect ${{ steps.resolve.outputs.image }} > /dev/null 2>&1 || {
+            echo "::error::Image not found: ${{ steps.resolve.outputs.image }}"
+            exit 1
+          }
+
+          echo "Image verified successfully"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: resolve-tag
+    permissions:
+      contents: read
+      id-token: write  # Required for Workload Identity Federation
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/580294893150/locations/global/workloadIdentityPools/github-actions/providers/github'
+          service_account: 'gha-cloudrun-deployer@utility-dynamo-481523-i9.iam.gserviceaccount.com'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          echo "Deploying image: ${{ needs.resolve-tag.outputs.image }}"
+          echo "Service: ${{ inputs.service }}"
+          echo "Region: ${{ inputs.region }}"
+          echo "Project: ${{ inputs.project }}"
+
+          gcloud run services update ${{ inputs.service }} \
+            --image=${{ needs.resolve-tag.outputs.image }} \
+            --region=${{ inputs.region }} \
+            --project=${{ inputs.project }}
+
+      - name: Get service URL
+        id: service-url
+        run: |
+          URL=$(gcloud run services describe ${{ inputs.service }} \
+            --region=${{ inputs.region }} \
+            --project=${{ inputs.project }} \
+            --format='value(status.url)')
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Summary
+        run: |
+          echo "## Cloud Run Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Project | \`${{ inputs.project }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | \`${{ inputs.service }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Region | \`${{ inputs.region }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Tag | \`${{ needs.resolve-tag.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Full Image | \`${{ needs.resolve-tag.outputs.image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Service URL | ${{ steps.service-url.outputs.url }} |" >> $GITHUB_STEP_SUMMARY

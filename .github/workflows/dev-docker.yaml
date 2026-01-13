@@ -1,4 +1,4 @@
-name: Dev Docker Build
+name: publish docker dev image
 
 on:
   workflow_dispatch:
@@ -9,9 +9,9 @@ on:
         default: 'main'
         type: string
       tag:
-        description: 'Docker image tag (default: dev)'
+        description: 'Docker image tag (default: dev-<ISO8601_timestamp>)'
         required: false
-        default: 'dev'
+        default: ''
         type: string
 
 permissions:
@@ -23,8 +23,23 @@ env:
   IMAGE_NAME: maybedont/maybe-dont
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.set-tag.outputs.tag }}
+    steps:
+      - name: Set tag
+        id: set-tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=dev-$(date -u +%Y-%m-%dT%H%M%SZ)" >> $GITHUB_OUTPUT
+          fi
+
   build:
     runs-on: ubuntu-latest
+    needs: setup
     strategy:
       matrix:
         include:
@@ -81,12 +96,12 @@ jobs:
           file: ./Dockerfile
           platforms: linux/${{ matrix.arch }}
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}-${{ matrix.arch }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.tag }}-${{ matrix.arch }}
           provenance: false
 
   manifest:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [setup, build]
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -101,9 +116,9 @@ jobs:
       - name: Create and push manifest
         run: |
           docker buildx imagetools create \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }} \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}-amd64 \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}-arm64
+            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.tag }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.tag }}-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.tag }}-arm64
 
       - name: Checkout for version info
         uses: actions/checkout@v4
@@ -122,9 +137,9 @@ jobs:
           echo "| Branch | \`${{ inputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Version | \`$VERSION\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Commit | \`$COMMIT\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Pull the image" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
