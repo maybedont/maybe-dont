@@ -36,6 +36,8 @@ jobs:
             echo "  chore(deps): bump dependencies"
             echo "  feat!: breaking API change"
             echo "  refactor(core)!: rename public methods"
+            echo ""
+            echo "See: https://www.conventionalcommits.org/en/v1.0.0/"
             exit 1
           fi
 
