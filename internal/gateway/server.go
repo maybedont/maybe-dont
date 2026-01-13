@@ -185,6 +185,77 @@ func (g *Gateway) onSessionUnregister(ctx context.Context, session server.Client
 	g.logger.Info(ctx, "Downstream clients closed for session", zap.String("session_id", sessionID))
 }
 
+// ensurePassThroughToolsDiscovered ensures that pass-through tools have been discovered
+// for this session. If not already discovered, it performs synchronous discovery.
+// Returns the list of discovered tools (which may be empty if no pass-through clients).
+func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionID string) []mcp.Tool {
+	// Check if this session already has downstream clients connected
+	existingClients := g.clientManager.GetSessionClientNames(sessionID)
+	if len(existingClients) > 0 {
+		// Tools should already be registered via async discovery
+		g.logger.Debug(ctx, "Session already has downstream clients",
+			zap.String("session_id", sessionID),
+			zap.Strings("clients", existingClients))
+		return nil
+	}
+
+	// Get credentials from context for pass-through auth
+	serviceCreds, _ := ctx.Value(ServiceCredentialsKey).(*ServiceCredentials)
+	if serviceCreds == nil || len(serviceCreds.clients) == 0 {
+		g.logger.Debug(ctx, "No credentials in context for lazy discovery",
+			zap.String("session_id", sessionID))
+		return nil
+	}
+
+	g.logger.Info(ctx, "Performing lazy tool discovery for session",
+		zap.String("session_id", sessionID))
+
+	// Perform synchronous discovery for this session
+	result, err := g.clientManager.CreateSessionClients(ctx, sessionID)
+	if err != nil {
+		g.logger.Error(ctx, "Failed lazy tool discovery",
+			zap.String("session_id", sessionID),
+			zap.Error(err))
+		return nil
+	}
+
+	if result == nil || len(result.DownstreamClients) == 0 {
+		g.logger.Debug(ctx, "No downstream clients discovered",
+			zap.String("session_id", sessionID))
+		return nil
+	}
+
+	// Collect all discovered tools and register them as session tools
+	var allTools []mcp.Tool
+	for clientName, clientInfo := range result.DownstreamClients {
+		// Only process pass-through clients
+		if !clientInfo.Config.Auth.PassThrough.Enabled {
+			continue
+		}
+
+		for _, tool := range clientInfo.Tools {
+			prefixedTool := tool
+			prefixedTool.Name = PrefixName(clientName, tool.Name)
+
+			// Register the tool with the session
+			if err := g.server.AddSessionTool(sessionID, prefixedTool, g.handleToolCallWithErrorHandling); err != nil {
+				g.logger.Warn(ctx, "Failed to register session tool during lazy discovery",
+					zap.String("session_id", sessionID),
+					zap.String("tool", prefixedTool.Name),
+					zap.Error(err))
+				// Still add to return list so it appears in tools/list
+			}
+			allTools = append(allTools, prefixedTool)
+		}
+	}
+
+	g.logger.Info(ctx, "Lazy tool discovery completed",
+		zap.String("session_id", sessionID),
+		zap.Int("tools_discovered", len(allTools)))
+
+	return allTools
+}
+
 // initMCPServer initializes the MCP server with common configuration and registers tools
 func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	ctx := context.Background()
@@ -194,50 +265,65 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	hooks.AddOnRegisterSession(g.onSessionRegister)
 	hooks.AddOnUnregisterSession(g.onSessionUnregister)
 
-	// Create a tool filter for debugging session tool visibility
-	toolListDebugFilter := func(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
+	// Create a tool filter that performs lazy discovery of pass-through tools.
+	// When tools/list is called, if the session doesn't have pass-through tools yet,
+	// we discover them synchronously and add them to the result.
+	toolListFilter := func(ctx context.Context, tools []mcp.Tool) []mcp.Tool {
 		session := server.ClientSessionFromContext(ctx)
-		if session != nil {
-			sessionID := session.SessionID()
-			// Count tools by prefix to understand source
-			prefixCounts := make(map[string]int)
-			for _, tool := range tools {
-				clientName, _, err := ParsePrefixedName(tool.Name)
-				if err != nil {
-					prefixCounts["native"]++
-				} else {
-					prefixCounts[clientName]++
-				}
-			}
-
-			// Check if this session has a downstream client connected (indicates discovery happened)
-			hasDownstreamClients := false
-			if g.clientManager != nil {
-				if clients := g.clientManager.GetSessionClientNames(sessionID); len(clients) > 0 {
-					hasDownstreamClients = true
-					g.logger.Debug(ctx, "Session has downstream clients",
-						zap.String("session_id", sessionID),
-						zap.Strings("clients", clients))
-				}
-			}
-
-			g.logger.Info(ctx, "tools/list response",
-				zap.String("session_id", sessionID),
-				zap.Int("total_tools", len(tools)),
-				zap.Any("by_prefix", prefixCounts),
-				zap.Bool("has_downstream_clients", hasDownstreamClients))
-		} else {
-			g.logger.Info(ctx, "tools/list called with no session context",
+		if session == nil {
+			g.logger.Debug(ctx, "tools/list called with no session context",
 				zap.Int("tool_count", len(tools)))
+			return tools
 		}
-		return tools // Pass through unchanged
+
+		sessionID := session.SessionID()
+
+		// Check if we need to discover pass-through tools for this session
+		discoveredTools := g.ensurePassThroughToolsDiscovered(ctx, sessionID)
+
+		// Merge discovered tools with the existing tools
+		if len(discoveredTools) > 0 {
+			// Create a map to avoid duplicates (session tools should already be in 'tools' if registered)
+			toolMap := make(map[string]mcp.Tool)
+			for _, tool := range tools {
+				toolMap[tool.Name] = tool
+			}
+			for _, tool := range discoveredTools {
+				if _, exists := toolMap[tool.Name]; !exists {
+					toolMap[tool.Name] = tool
+				}
+			}
+			// Convert back to slice
+			tools = make([]mcp.Tool, 0, len(toolMap))
+			for _, tool := range toolMap {
+				tools = append(tools, tool)
+			}
+		}
+
+		// Log the response for debugging
+		prefixCounts := make(map[string]int)
+		for _, tool := range tools {
+			clientName, _, err := ParsePrefixedName(tool.Name)
+			if err != nil {
+				prefixCounts["native"]++
+			} else {
+				prefixCounts[clientName]++
+			}
+		}
+
+		g.logger.Info(ctx, "tools/list response",
+			zap.String("session_id", sessionID),
+			zap.Int("total_tools", len(tools)),
+			zap.Any("by_prefix", prefixCounts))
+
+		return tools
 	}
 
 	opts := []server.ServerOption{
 		server.WithLogging(),
 		server.WithRecovery(),
 		server.WithHooks(hooks),
-		server.WithToolFilter(toolListDebugFilter),
+		server.WithToolFilter(toolListFilter),
 	}
 
 	// Discover capabilities from all downstream clients using temporary probe connections
