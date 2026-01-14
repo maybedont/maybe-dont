@@ -572,6 +572,13 @@ func ResolveLogDir(logDir, configDir string) string {
 // LoadConfig loads the configuration from all sources.
 // configDir: directory containing config files (resolved via ResolveConfigDir if empty)
 // configFileName: name of config file (defaults to "maybedont.yaml", falls back to "gateway-config.yaml")
+//
+// Configuration can be provided via:
+// 1. A YAML config file (maybedont.yaml or gateway-config.yaml)
+// 2. Environment variables with MAYBE_DONT_ prefix (e.g., MAYBE_DONT_SERVER_TYPE)
+// 3. A combination of both (environment variables override config file values)
+//
+// A config file is NOT required if all necessary values are provided via environment variables.
 func LoadConfig(configDir, configFileName string) (*Config, error) {
 	// Use the global viper instance to ensure flag bindings work
 	v := viper.GetViper()
@@ -592,9 +599,19 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	// Add config path
 	v.AddConfigPath(resolvedConfigDir)
 
+	// Set defaults before reading config
+	// Please note that if you add additional defaults, be sure to add the use case to TestViperConfigPathsMatchStruct.
+	v.SetDefault("native_tools.audit_log.enabled", true)
+	v.SetDefault("native_tools.audit_report.enabled", true)
+	v.SetDefault("native_tools.list_servers.enabled", true)
+	v.SetDefault("native_tools.list_sessions.enabled", true)
+	v.SetDefault("native_tools.audit_log.max_entries", 100)
+	v.SetDefault("native_tools.audit_report.max_entries", 1_000)
+	v.SetDefault("logging.path", "stdout")
+	v.SetDefault("audit.path", "maybedont-audit.log")
+
 	// Try to find config file with fallback logic
 	configFileFound := false
-	var readErr error
 
 	if configFileName != "" {
 		// User specified a config file name - use it directly
@@ -603,8 +620,6 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 		v.SetConfigName(baseName)
 		if err := v.ReadInConfig(); err == nil {
 			configFileFound = true
-		} else {
-			readErr = err
 		}
 	} else {
 		// Try maybedont.yaml first, then fall back to gateway-config.yaml (deprecated)
@@ -619,36 +634,26 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 
 				// Warn the user if they are using a deprecated config file
 				fmt.Printf("Filename gateway-config.yaml is deprecated, rename config file to maybedont.yaml\n")
-
-			} else {
-				readErr = err
 			}
 		}
 	}
 
-	// Set defaults before reading config
-	// Please note that if you add additional defaults, be sure to add the use case to TestViperConfigPathsMatchStruct.
-	v.SetDefault("native_tools.audit_log.enabled", true)
-	v.SetDefault("native_tools.audit_report.enabled", true)
-	v.SetDefault("native_tools.list_servers.enabled", true)
-	v.SetDefault("native_tools.list_sessions.enabled", true)
-	v.SetDefault("native_tools.audit_log.max_entries", 100)
-	v.SetDefault("native_tools.audit_report.max_entries", 1_000)
-	v.SetDefault("logging.path", "stdout")
-	v.SetDefault("audit.path", "maybedont-audit.log")
-
-	// Check if config file was found
-	if !configFileFound {
-		return nil, fmt.Errorf("error reading config from directory %s: %w", resolvedConfigDir, readErr)
+	// Get the directory for resolving relative rules file paths
+	// If a config file was found, use its directory; otherwise use the resolved config directory
+	var configFileDir string
+	if configFileFound {
+		configFileDir = filepath.Dir(v.ConfigFileUsed())
+	} else {
+		configFileDir = resolvedConfigDir
 	}
 
-	// Get the directory containing the config file for resolving relative rules file paths
-	configFileDir := filepath.Dir(v.ConfigFileUsed())
-
-	// Unmarshal config
+	// Unmarshal config (viper will use defaults and env vars even without a config file)
 	var config Config
 	if err := v.Unmarshal(&config); err != nil {
-		return nil, fmt.Errorf("error unmarshaling config from %s: %w", v.ConfigFileUsed(), err)
+		if configFileFound {
+			return nil, fmt.Errorf("error unmarshaling config from %s: %w", v.ConfigFileUsed(), err)
+		}
+		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
 	// Expand environment variables in all string fields (handles ${VAR} syntax in config values)
@@ -712,56 +717,68 @@ For each concern, estimate the potential impact category and explain the reasoni
 	config.AIResponseValidation.Mode = ResolveValidationMode(
 		config.AIResponseValidation.Mode, config.AIResponseValidation.Enabled, PolicyModeDisabled)
 
+	// Collect errors from loading policy rules files
+	// These are collected here so they can be reported alongside validation errors
+	var loadErrors []string
+
 	// Load CEL request policies from rules file (if mode is not disabled)
 	if config.PolicyValidation.Mode != PolicyModeDisabled {
 		if config.PolicyValidation.RulesFile == "" {
-			return nil, fmt.Errorf("policy_validation is enabled but rules_file is not specified")
+			loadErrors = append(loadErrors, "policy_validation is enabled but rules_file is not specified")
+		} else {
+			resolvedPath := resolveRulesFilePath(config.PolicyValidation.RulesFile, configFileDir)
+			policies, err := LoadCELPoliciesFromFile(resolvedPath)
+			if err != nil {
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading CEL policies from file: %v", err))
+			} else {
+				config.PolicyValidation.Rules = policies
+			}
 		}
-		resolvedPath := resolveRulesFilePath(config.PolicyValidation.RulesFile, configFileDir)
-		policies, err := LoadCELPoliciesFromFile(resolvedPath)
-		if err != nil {
-			return nil, fmt.Errorf("error loading CEL policies from file: %w", err)
-		}
-		config.PolicyValidation.Rules = policies
 	}
 
 	// Load AI request policies from rules file (if mode is not disabled)
 	if config.AIPolicyValidation.Mode != PolicyModeDisabled {
 		if config.AIPolicyValidation.RulesFile == "" {
-			return nil, fmt.Errorf("ai_validation is enabled but rules_file is not specified")
+			loadErrors = append(loadErrors, "ai_validation is enabled but rules_file is not specified")
+		} else {
+			resolvedPath := resolveRulesFilePath(config.AIPolicyValidation.RulesFile, configFileDir)
+			aiPolicies, err := LoadAIPoliciesFromFile(resolvedPath)
+			if err != nil {
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading AI policies from file: %v", err))
+			} else {
+				config.AIPolicyValidation.Rules = aiPolicies
+			}
 		}
-		resolvedPath := resolveRulesFilePath(config.AIPolicyValidation.RulesFile, configFileDir)
-		aiPolicies, err := LoadAIPoliciesFromFile(resolvedPath)
-		if err != nil {
-			return nil, fmt.Errorf("error loading AI policies from file: %w", err)
-		}
-		config.AIPolicyValidation.Rules = aiPolicies
 	}
 
 	// Load CEL response policies from rules file (if mode is not disabled)
 	if config.ResponseValidation.Mode != PolicyModeDisabled {
 		if config.ResponseValidation.RulesFile == "" {
-			return nil, fmt.Errorf("response_validation is enabled but rules_file is not specified")
+			loadErrors = append(loadErrors, "response_validation is enabled but rules_file is not specified")
+		} else {
+			resolvedPath := resolveRulesFilePath(config.ResponseValidation.RulesFile, configFileDir)
+			responsePolicies, err := LoadCELResponsePoliciesFromFile(resolvedPath)
+			if err != nil {
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading CEL response policies from file: %v", err))
+			} else {
+				config.ResponseValidation.Rules = responsePolicies
+			}
 		}
-		resolvedPath := resolveRulesFilePath(config.ResponseValidation.RulesFile, configFileDir)
-		responsePolicies, err := LoadCELResponsePoliciesFromFile(resolvedPath)
-		if err != nil {
-			return nil, fmt.Errorf("error loading CEL response policies from file: %w", err)
-		}
-		config.ResponseValidation.Rules = responsePolicies
 	}
 
 	// Load AI response policies from rules file (if mode is not disabled)
 	if config.AIResponseValidation.Mode != PolicyModeDisabled {
 		if config.AIResponseValidation.RulesFile == "" {
-			return nil, fmt.Errorf("ai_response_validation is enabled but rules_file is not specified")
+			loadErrors = append(loadErrors, "ai_response_validation is enabled but rules_file is not specified")
+		} else {
+			resolvedPath := resolveRulesFilePath(config.AIResponseValidation.RulesFile, configFileDir)
+			aiResponsePolicies, err := LoadAIResponsePoliciesFromFile(resolvedPath)
+			if err != nil {
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading AI response policies from file: %v", err))
+			} else {
+				config.AIResponseValidation.Rules = aiResponsePolicies
+			}
 		}
-		resolvedPath := resolveRulesFilePath(config.AIResponseValidation.RulesFile, configFileDir)
-		aiResponsePolicies, err := LoadAIResponsePoliciesFromFile(resolvedPath)
-		if err != nil {
-			return nil, fmt.Errorf("error loading AI response policies from file: %w", err)
-		}
-		config.AIResponseValidation.Rules = aiResponsePolicies
 	}
 
 	// Normalize client configs - handle field aliases
@@ -806,17 +823,39 @@ For each concern, estimate the potential impact category and explain the reasoni
 		config.DownstreamMCPServers[name] = client
 	}
 
-	// Validate config
-	if err := ValidateConfig(&config); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+	// Validate config with context about whether a config file was found
+	if err := validateConfigWithOptions(&config, configFileFound, loadErrors); err != nil {
+		return nil, err
 	}
 
 	return &config, nil
 }
 
-// ValidateConfig validates the configuration and collects all errors
+// ValidationContext provides additional context for configuration validation
+type ValidationContext struct {
+	ConfigFileFound bool
+}
+
+// ValidateConfig validates the configuration and collects all errors.
+// This is a convenience wrapper around ValidateConfigWithContext that assumes
+// a config file was found (for backwards compatibility with tests).
 func ValidateConfig(cfg *Config) error {
+	return ValidateConfigWithContext(cfg, true)
+}
+
+// ValidateConfigWithContext validates the configuration and collects all errors.
+// The configFileFound parameter indicates whether a config file was successfully loaded.
+// If false and validation fails, additional guidance is provided about using environment variables.
+func ValidateConfigWithContext(cfg *Config, configFileFound bool) error {
+	return validateConfigWithOptions(cfg, configFileFound, nil)
+}
+
+// validateConfigWithOptions is the internal implementation that validates the configuration,
+// collects all errors (including any pre-existing load errors), and provides contextual guidance.
+func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []string) error {
+	// Start with any errors from loading policy files
 	var errors []string
+	errors = append(errors, loadErrors...)
 
 	// Validate server type
 	switch cfg.Server.Type {
@@ -971,11 +1010,24 @@ func ValidateConfig(cfg *Config) error {
 		}
 	}
 
-	// Return collected errors
+	// Return collected errors with contextual guidance
 	if len(errors) > 0 {
 		errMsg := fmt.Sprintf("configuration validation failed with %d error(s):\n", len(errors))
 		for i, err := range errors {
 			errMsg += fmt.Sprintf("  %d. %s\n", i+1, err)
+		}
+
+		// Add guidance about config file status and environment variables
+		if !configFileFound {
+			errMsg += "\nNote: No configuration file was found. This is acceptable if you intend to configure\n"
+			errMsg += "the gateway entirely via environment variables (MAYBE_DONT_* prefix).\n"
+			errMsg += "For example:\n"
+			errMsg += "  - MAYBE_DONT_SERVER_TYPE=stdio\n"
+			errMsg += "  - MAYBE_DONT_AI_VALIDATION_API_KEY=your-api-key\n"
+			errMsg += "\nAlternatively, create a config file (maybedont.yaml) in one of these locations:\n"
+			errMsg += "  - ./config/\n"
+			errMsg += "  - ~/.maybe-dont/config/\n"
+			errMsg += "  - Current directory\n"
 		}
 		return fmt.Errorf("%s", errMsg)
 	}

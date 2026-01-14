@@ -1209,6 +1209,163 @@ func TestValidateConfig_AuditPathTraversalRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "audit.path")
 }
 
+func TestLoadConfigWithoutConfigFile(t *testing.T) {
+	// Reset viper to avoid state from previous tests
+	viper.Reset()
+
+	// Create a temporary empty directory (no config file)
+	tmpDir := t.TempDir()
+
+	// Set required environment variables to configure downstream MCP server
+	// Also disable policy_validation which defaults to enabled
+	envVars := map[string]string{
+		"MAYBE_DONT_SERVER_TYPE":            "stdio",
+		"MAYBE_DONT_POLICY_VALIDATION_MODE": "disabled",
+		// Note: downstream_mcp_servers cannot be set via env vars directly
+		// because they are a map type, but we can test the error message
+	}
+
+	for k, v := range envVars {
+		err := os.Setenv(k, v)
+		require.NoError(t, err)
+	}
+	defer func() {
+		for k := range envVars {
+			_ = os.Unsetenv(k)
+		}
+	}()
+
+	// Load config from empty directory - should fail validation but not panic
+	_, err := LoadConfig(tmpDir, "")
+	require.Error(t, err)
+
+	// Error message should contain guidance about environment variables
+	require.Contains(t, err.Error(), "No configuration file was found")
+	require.Contains(t, err.Error(), "MAYBE_DONT_")
+	require.Contains(t, err.Error(), "environment variables")
+
+	// Should still report the actual validation error
+	require.Contains(t, err.Error(), "at least one downstream MCP server must be configured")
+}
+
+func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
+	// Test that when config file is not found and validation fails,
+	// we get helpful guidance about using environment variables
+	config := &Config{
+		Server: struct {
+			Type       ServerType `mapstructure:"type"`
+			ListenAddr string     `mapstructure:"listen_addr"`
+			SSE        struct {
+				TLS struct {
+					Enabled  bool   `mapstructure:"enabled"`
+					CertFile string `mapstructure:"cert_file"`
+					KeyFile  string `mapstructure:"key_file"`
+				} `mapstructure:"tls"`
+			} `mapstructure:"sse"`
+			TrustedProxies []string `mapstructure:"trusted_proxies"`
+		}{
+			Type: ServerTypeSTDIO,
+		},
+		// Missing DownstreamMCPServers - will cause validation error
+		Audit: struct {
+			Enabled bool   `mapstructure:"enabled"`
+			Path    string `mapstructure:"path"`
+		}{
+			Path: "audit.log",
+		},
+	}
+
+	// Call with configFileFound=false
+	err := ValidateConfigWithContext(config, false)
+	require.Error(t, err)
+
+	// Should contain guidance about environment variables
+	errMsg := err.Error()
+	require.Contains(t, errMsg, "No configuration file was found")
+	require.Contains(t, errMsg, "MAYBE_DONT_")
+	require.Contains(t, errMsg, "maybedont.yaml")
+}
+
+func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
+	// Test that when config file IS found and validation fails,
+	// we do NOT show guidance about environment variables
+	config := &Config{
+		Server: struct {
+			Type       ServerType `mapstructure:"type"`
+			ListenAddr string     `mapstructure:"listen_addr"`
+			SSE        struct {
+				TLS struct {
+					Enabled  bool   `mapstructure:"enabled"`
+					CertFile string `mapstructure:"cert_file"`
+					KeyFile  string `mapstructure:"key_file"`
+				} `mapstructure:"tls"`
+			} `mapstructure:"sse"`
+			TrustedProxies []string `mapstructure:"trusted_proxies"`
+		}{
+			Type: ServerTypeSTDIO,
+		},
+		// Missing DownstreamMCPServers - will cause validation error
+		Audit: struct {
+			Enabled bool   `mapstructure:"enabled"`
+			Path    string `mapstructure:"path"`
+		}{
+			Path: "audit.log",
+		},
+	}
+
+	// Call with configFileFound=true
+	err := ValidateConfigWithContext(config, true)
+	require.Error(t, err)
+
+	// Should NOT contain guidance about environment variables
+	errMsg := err.Error()
+	require.NotContains(t, errMsg, "No configuration file was found")
+	require.NotContains(t, errMsg, "maybedont.yaml")
+}
+
+func TestLoadConfigWithEnvVarsOnly_ValidConfig(t *testing.T) {
+	// Reset viper to avoid state from previous tests
+	viper.Reset()
+
+	// Create a temporary directory with a minimal config file
+	// that only has the downstream MCP servers (since they can't be set via env vars)
+	tmpDir := t.TempDir()
+	configPath := tmpDir + "/maybedont.yaml"
+
+	// Minimal config with just downstream MCP servers
+	// Notes:
+	// - policy_validation defaults to enabled, so we must disable it since we have no rules file
+	// - ai_validation defaults to audit_only, so we must disable it since we have no API key
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+policy_validation:
+  mode: disabled
+
+ai_validation:
+  mode: disabled
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	// Set server type via environment variable to prove it works
+	err = os.Setenv("MAYBE_DONT_SERVER_TYPE", "stdio")
+	require.NoError(t, err)
+	defer func() {
+		_ = os.Unsetenv("MAYBE_DONT_SERVER_TYPE")
+	}()
+
+	// Load config
+	config, err := LoadConfig(tmpDir, "")
+	require.NoError(t, err)
+
+	// Verify server type was set (either from env var or default)
+	require.Equal(t, ServerTypeSTDIO, config.Server.Type)
+}
+
 // createValidBaseConfig creates a Config with all required fields set to valid values.
 // Use this as a starting point when testing specific validation rules.
 func createValidBaseConfig() *Config {
