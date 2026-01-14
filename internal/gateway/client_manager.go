@@ -180,8 +180,22 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 			continue
 		}
 
-		// Store client in session
-		cm.sessionManager.SetSessionClient(sessionID, name, clientInfo)
+		// Store client in session - if rejected (session closed/deleted), close the client immediately
+		if !cm.sessionManager.SetSessionClient(sessionID, name, clientInfo) {
+			cm.logger.Warn(ctx, "Session closed during client creation, closing orphaned client",
+				zap.String("session_id", sessionID),
+				zap.String("client", name))
+			if clientInfo.Client != nil {
+				if closeErr := clientInfo.Client.Close(); closeErr != nil {
+					cm.logger.Error(ctx, "Failed to close orphaned client",
+						zap.String("session_id", sessionID),
+						zap.String("client", name),
+						zap.Error(closeErr))
+				}
+			}
+			continue
+		}
+
 		cm.logger.Debug(ctx, "Created downstream client for session",
 			zap.String("session_id", sessionID),
 			zap.String("client", name))
@@ -213,19 +227,18 @@ func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionI
 		zap.String("session_id", sessionID),
 		zap.String("client", clientName))
 
-	// Ensure session exists
+	// Check if session exists
 	session, exists := cm.sessionManager.GetSession(sessionID)
 	if !exists {
-		// Create session if it doesn't exist (shouldn't normally happen)
-		cm.sessionManager.CreateSession(sessionID)
-	} else {
-		// Check if client already exists in session
-		if existingClient, ok := session.GetClient(clientName); ok && existingClient != nil && existingClient.Client != nil {
-			cm.logger.Debug(ctx, "Client already exists for session",
-				zap.String("session_id", sessionID),
-				zap.String("client", clientName))
-			return existingClient, nil
-		}
+		return nil, fmt.Errorf("session %s does not exist", sessionID)
+	}
+
+	// Check if client already exists in session
+	if existingClient, ok := session.GetClient(clientName); ok && existingClient != nil && existingClient.Client != nil {
+		cm.logger.Debug(ctx, "Client already exists for session",
+			zap.String("session_id", sessionID),
+			zap.String("client", clientName))
+		return existingClient, nil
 	}
 
 	// Create the client
@@ -234,8 +247,22 @@ func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionI
 		return nil, fmt.Errorf("failed to create client %s: %w", clientName, err)
 	}
 
-	// Store client in session
-	cm.sessionManager.SetSessionClient(sessionID, clientName, clientInfo)
+	// Store client in session - if rejected (session closed/deleted), close the client immediately
+	if !cm.sessionManager.SetSessionClient(sessionID, clientName, clientInfo) {
+		cm.logger.Warn(ctx, "Session closed during client creation, closing orphaned client",
+			zap.String("session_id", sessionID),
+			zap.String("client", clientName))
+		if clientInfo.Client != nil {
+			if closeErr := clientInfo.Client.Close(); closeErr != nil {
+				cm.logger.Error(ctx, "Failed to close orphaned client",
+					zap.String("session_id", sessionID),
+					zap.String("client", clientName),
+					zap.Error(closeErr))
+			}
+		}
+		return nil, fmt.Errorf("session %s was closed during client creation", sessionID)
+	}
+
 	cm.logger.Info(ctx, "Created downstream client for session",
 		zap.String("session_id", sessionID),
 		zap.String("client", clientName),

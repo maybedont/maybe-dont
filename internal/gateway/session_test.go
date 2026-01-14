@@ -2,8 +2,11 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/stretchr/testify/assert"
@@ -209,10 +212,11 @@ func TestClientManager_CloseSessionClients(t *testing.T) {
 
 	// Create a session
 	cm.sessionManager.CreateSession("test-session")
-	cm.sessionManager.SetSessionClient("test-session", "test", &SessionClientInfo{
+	ok := cm.sessionManager.SetSessionClient("test-session", "test", &SessionClientInfo{
 		Name:   "test",
 		Client: nil, // No actual client to close
 	})
+	require.True(t, ok, "SetSessionClient should succeed for active session")
 
 	// Verify session exists
 	assert.True(t, cm.sessionManager.HasSession("test-session"))
@@ -243,19 +247,19 @@ func TestMultipleUpstreamSessions_IsolatedDownstreamClients(t *testing.T) {
 
 	// Add different downstream clients to each session
 	// (simulating what CreateSessionClients would do)
-	cm.sessionManager.SetSessionClient(session1ID, "aws", &SessionClientInfo{
+	require.True(t, cm.sessionManager.SetSessionClient(session1ID, "aws", &SessionClientInfo{
 		Name: "aws-for-session-1",
-	})
-	cm.sessionManager.SetSessionClient(session1ID, "github", &SessionClientInfo{
+	}))
+	require.True(t, cm.sessionManager.SetSessionClient(session1ID, "github", &SessionClientInfo{
 		Name: "github-for-session-1",
-	})
+	}))
 
-	cm.sessionManager.SetSessionClient(session2ID, "aws", &SessionClientInfo{
+	require.True(t, cm.sessionManager.SetSessionClient(session2ID, "aws", &SessionClientInfo{
 		Name: "aws-for-session-2",
-	})
-	cm.sessionManager.SetSessionClient(session2ID, "github", &SessionClientInfo{
+	}))
+	require.True(t, cm.sessionManager.SetSessionClient(session2ID, "github", &SessionClientInfo{
 		Name: "github-for-session-2",
-	})
+	}))
 
 	// Verify each session has its own isolated clients
 	aws1, err := cm.GetSessionClient(session1ID, "aws")
@@ -293,4 +297,159 @@ func TestGenerateRequestID(t *testing.T) {
 		assert.False(t, ids[id], "Generated duplicate ID")
 		ids[id] = true
 	}
+}
+
+func TestSession_SetClientRejectsAfterClose(t *testing.T) {
+	// Test that SetClient rejects new clients after session is closed
+	session := NewSession("test-session")
+
+	// Add a client before closing - should succeed
+	ok := session.SetClient("client1", &SessionClientInfo{Name: "client1"})
+	assert.True(t, ok, "SetClient should succeed before close")
+
+	// Close the session
+	err := session.Close()
+	require.NoError(t, err)
+
+	// Try to add a client after closing - should be rejected
+	ok = session.SetClient("client2", &SessionClientInfo{Name: "client2"})
+	assert.False(t, ok, "SetClient should be rejected after close")
+
+	// Verify client2 was not added
+	_, exists := session.GetClient("client2")
+	assert.False(t, exists, "client2 should not exist after rejected SetClient")
+}
+
+func TestSessionManager_SetSessionClientRejectsDeletedSession(t *testing.T) {
+	// Test that SetSessionClient rejects clients for deleted sessions
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Create a session
+	sm.CreateSession("test-session")
+
+	// Add a client - should succeed
+	ok := sm.SetSessionClient("test-session", "client1", &SessionClientInfo{Name: "client1"})
+	assert.True(t, ok, "SetSessionClient should succeed for existing session")
+
+	// Delete the session
+	err := sm.DeleteSession(ctx, "test-session")
+	require.NoError(t, err)
+
+	// Try to add a client to deleted session - should be rejected
+	ok = sm.SetSessionClient("test-session", "client2", &SessionClientInfo{Name: "client2"})
+	assert.False(t, ok, "SetSessionClient should be rejected for deleted session")
+
+	// Verify session was not recreated
+	assert.False(t, sm.HasSession("test-session"), "Session should not be recreated")
+}
+
+func TestSessionManager_SetSessionClientRejectsClosingSession(t *testing.T) {
+	// Test that SetSessionClient rejects clients for sessions that are closing
+	// This simulates the race condition where async discovery completes after
+	// DeleteSession has started but before it completes
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Create a session
+	session := sm.CreateSession("test-session")
+
+	// Manually mark session as closing (simulates DeleteSession in progress)
+	session.mu.Lock()
+	session.closing = true
+	session.mu.Unlock()
+
+	// Try to add a client to closing session - should be rejected
+	ok := sm.SetSessionClient("test-session", "client1", &SessionClientInfo{Name: "client1"})
+	assert.False(t, ok, "SetSessionClient should be rejected for closing session")
+}
+
+func TestSessionCleanup_RaceCondition(t *testing.T) {
+	// This test simulates the race condition scenario:
+	// 1. Async goroutine creates a downstream client
+	// 2. Session is deleted before the client can be stored
+	// 3. SetSessionClient should reject the client (returning false)
+	// 4. Caller is responsible for closing the orphaned client
+	//
+	// This ensures no resource leaks when sessions are deleted during async discovery.
+
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Create and immediately delete a session
+	sm.CreateSession("test-session")
+	err := sm.DeleteSession(ctx, "test-session")
+	require.NoError(t, err)
+
+	// Simulate async discovery completing after session deletion
+	// The SetSessionClient call should be rejected
+	ok := sm.SetSessionClient("test-session", "orphaned-client", &SessionClientInfo{
+		Name:   "orphaned-client",
+		Client: nil, // In real scenario this would be an actual client that needs closing
+	})
+
+	assert.False(t, ok, "SetSessionClient should reject client for deleted session")
+	assert.False(t, sm.HasSession("test-session"), "Session should not be recreated by SetSessionClient")
+}
+
+func TestSessionCleanup_ConcurrentDeleteAndSetClient(t *testing.T) {
+	// Test concurrent DeleteSession and SetSessionClient calls
+	// This tests thread-safety of the closing flag mechanism
+
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Create session
+	sm.CreateSession("test-session")
+
+	// Run concurrent operations
+	const numGoroutines = 100
+	var wg sync.WaitGroup
+	deleteDone := make(chan struct{})
+
+	// Start goroutine that will delete the session
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Small delay to let some SetSessionClient calls start
+		time.Sleep(time.Millisecond)
+		_ = sm.DeleteSession(ctx, "test-session")
+		close(deleteDone)
+	}()
+
+	// Start goroutines that try to set clients
+	rejectedCount := int32(0)
+	acceptedCount := int32(0)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			clientName := fmt.Sprintf("client-%d", idx)
+			ok := sm.SetSessionClient("test-session", clientName, &SessionClientInfo{
+				Name:   clientName,
+				Client: nil,
+			})
+			if ok {
+				atomic.AddInt32(&acceptedCount, 1)
+			} else {
+				atomic.AddInt32(&rejectedCount, 1)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify session is gone
+	assert.False(t, sm.HasSession("test-session"))
+
+	// Some calls may have succeeded (before delete), some may have been rejected (after delete)
+	// The exact counts depend on timing, but we should have processed all of them
+	assert.Equal(t, int32(numGoroutines), acceptedCount+rejectedCount,
+		"All SetSessionClient calls should complete (accepted or rejected)")
+
+	t.Logf("Accepted: %d, Rejected: %d", acceptedCount, rejectedCount)
 }
