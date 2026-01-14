@@ -1,0 +1,48 @@
+{
+  "level": "info",
+  "ts": 1736870400.123456,
+  "msg": "Tool call audit",
+  "logger": "audit",
+  "request_id": "req-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "audit": {
+    "created_at": "2026-01-14T16:00:00.123456Z",
+    "tool": {
+      "name": "create_issue",
+      "client": "github",
+      "prefixed_name": "github__create_issue"
+    },
+    "incoming_request": {
+      "id": "req-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "session_id": "sess-98765432-1abc-def0-1234-567890abcdef",
+      "client_ip": "127.0.0.1"
+    },
+    "request": {
+      "params": {
+        "owner": "anthropics",
+        "repo": "claude-code",
+        "title": "Add support for custom themes",
+        "body": "It would be great to have custom theme support for the CLI interface."
+      },
+      "duration_ms": 342
+    },
+    "request_validation": {
+      "cel": {
+        "action": "allow",
+        "rule_matched": "github_issue_creation_allowed",
+        "duration_ms": 2
+      },
+      "ai": {
+        "action": "allow",
+        "reasoning": "This request creates a legitimate feature request issue. The content is constructive and does not contain any malicious code, credentials, or harmful content. The repository target appears to be a valid open source project.",
+        "duration_ms": 1847
+      }
+    },
+    "response": {
+      "content_items": 1,
+      "is_error": false
+    },
+    "recommended_action": "allow",
+    "action": "allow",
+    "duration_ms": 2191
+  }
+}

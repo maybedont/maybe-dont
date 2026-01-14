@@ -123,6 +123,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	toolCallStr := fmt.Sprintf("Tool: %s\nArguments: %v", req.Params.Name, req.Params.Arguments)
 
 	// Launch a goroutine for each policy
+	// Note, one downside of performing all of these tool calls in parallel is that any single policy
+	// could cause us to deny this request. If we have 10 policies, and the first one instructs us to
+	// deny the request, the remainder are not necessary.
 	for _, policy := range e.policies {
 		go func(p AIPolicy) {
 			// Track timing for this policy evaluation
@@ -245,6 +248,17 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	}
 
 	// Collect results from all goroutines
+	// This code will block, waiting for all goroutines, to complete.
+	// We could optionally wait for our first deny, and then cancel all remaining goroutines
+	// that have not yet completed to reduce the overall duration of this step.
+	// I think to do this correctly, we would have to ensure we only cancel goroutines that
+	// are being run for policies that would only duplicate the existing answer. For example
+	// if the remaining policies were audit_only, I think we would want to let them complete
+	// because that information will be used laster by the audit report. If we want to change
+	// this behavior we may want to make it a configuration option because it would modify what
+	// we are able to capture in the audit log. Or we let them complete, but we do not block
+	// the request from continuing, and we just delay the creation of the audit log until we have
+	// the results from all goroutines.
 	for i := 0; i < len(e.policies); i++ {
 		result := <-resultChan
 		if result.err != nil {

@@ -2,6 +2,8 @@ maybe-dont
 dist/
 kubectl-ai
 audit.log
+maybedont-audit.log
+maybedont-app.log
 .maybedont-metrics
 build
 .vscode
