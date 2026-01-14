@@ -1,26 +1,28 @@
 package gateway
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
 
-// AuditLogEntry represents a parsed audit log entry
+// AuditLogEntry represents a parsed audit log entry from the zap-formatted log file.
+// Session/client info is in Audit.IncomingRequest (not duplicated at top level).
 type AuditLogEntry struct {
-	Level     string                 `json:"level"`
-	Timestamp float64                `json:"ts"`
-	Caller    string                 `json:"caller"`
-	Message   string                 `json:"msg"`
-	Logger    string                 `json:"logger"`
-	RequestID string                 `json:"request_id"`
-	Audit     map[string]interface{} `json:"audit"`
+	Level     string      `json:"level"`
+	Timestamp float64     `json:"ts"`
+	Caller    string      `json:"caller"`
+	Message   string      `json:"msg"`
+	Logger    string      `json:"logger"`
+	Audit     *AuditEntry `json:"audit"`
 }
 
 // AuditLogFilter represents filters for audit log queries
@@ -32,27 +34,27 @@ type AuditLogFilter struct {
 
 // AuditLogResponse represents the response from get_audit_log
 type AuditLogResponse struct {
-	Entries       []map[string]interface{} `json:"entries"`
-	TotalCount    int                      `json:"total_count"`
-	ReturnedCount int                      `json:"returned_count"`
-	HasMore       bool                     `json:"has_more"`
+	Entries       []AuditLogEntry `json:"entries"`
+	TotalCount    int             `json:"total_count"`
+	ReturnedCount int             `json:"returned_count"`
+	Truncated     bool            `json:"truncated"`
 }
 
 // handleGetAuditLog handles the maybedont__get_audit_log tool call
 func (h *NativeToolsHandler) handleGetAuditLog(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	h.logger.Info(ctx, "Processing get_audit_log request")
 
-	// Parse parameters
+	// Parse parameters with defaults
 	limit := 100
-	offset := 0
+	timeRangeStr := "7d" // Default to last 7 days
 	var filter AuditLogFilter
 
 	if args, ok := req.Params.Arguments.(map[string]interface{}); ok && args != nil {
 		if l, ok := args["limit"].(float64); ok {
 			limit = int(l)
 		}
-		if o, ok := args["offset"].(float64); ok {
-			offset = int(o)
+		if tr, ok := args["time_range"].(string); ok {
+			timeRangeStr = tr
 		}
 		if f, ok := args["filter"].(map[string]interface{}); ok {
 			if s, ok := f["status"].(string); ok {
@@ -72,8 +74,14 @@ func (h *NativeToolsHandler) handleGetAuditLog(ctx context.Context, req mcp.Call
 		limit = h.config.NativeTools.AuditLog.MaxEntries
 	}
 
+	// Parse time range
+	timeRange, err := ParseTimeRange(timeRangeStr)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid time_range: %v", err)), nil
+	}
+
 	// Read and parse audit log file
-	entries, totalCount, err := h.readAuditLogEntries(ctx, limit, offset, filter)
+	entries, totalCount, err := h.readAuditLogEntries(ctx, limit, timeRange, filter)
 	if err != nil {
 		h.logger.Error(ctx, "Failed to read audit log", zap.Error(err))
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to read audit log: %v", err)), nil
@@ -84,7 +92,7 @@ func (h *NativeToolsHandler) handleGetAuditLog(ctx context.Context, req mcp.Call
 		Entries:       entries,
 		TotalCount:    totalCount,
 		ReturnedCount: len(entries),
-		HasMore:       totalCount > offset+len(entries),
+		Truncated:     totalCount > len(entries),
 	}
 
 	// Serialize to JSON
@@ -96,30 +104,38 @@ func (h *NativeToolsHandler) handleGetAuditLog(ctx context.Context, req mcp.Call
 	return mcp.NewToolResultText(string(responseJSON)), nil
 }
 
-// readAuditLogEntries reads and filters audit log entries from the configured file
-func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit, offset int, filter AuditLogFilter) ([]map[string]interface{}, int, error) {
-	auditPath := h.config.Audit.Path
+// readAuditLogEntries reads and filters audit log entries from the configured file.
+// It reads backwards from the end of the file, collecting entries until either:
+//   - The limit is reached, or
+//   - An entry falls outside the time range (entries are assumed chronologically ordered)
+//
+// A zero duration means no time filtering (collect up to limit entries).
+// Returns entries newest-first (up to limit), plus a count of matching entries found.
+// Note: totalCount may be less than actual total if we stop early due to time range.
+func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int, timeRange time.Duration, filter AuditLogFilter) ([]AuditLogEntry, int, error) {
+	auditPath := h.auditLogPath
 
 	// Check if audit path is stderr/stdout (can't read from those)
 	if auditPath == "stderr" || auditPath == "stdout" {
-		return nil, 0, fmt.Errorf("cannot read audit logs when audit.path is set to %s", auditPath)
+		return nil, 0, fmt.Errorf("cannot read audit logs when audit log path is set to %s", auditPath)
 	}
 
-	// Check file size before reading
+	// Check if file exists
 	fileInfo, err := os.Stat(auditPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Return empty results if file doesn't exist
-			return []map[string]interface{}{}, 0, nil
+			return []AuditLogEntry{}, 0, nil
 		}
 		return nil, 0, fmt.Errorf("failed to stat audit file: %w", err)
 	}
 
-	if fileInfo.Size() > h.config.NativeTools.AuditLog.MaxFileSizeBytes {
-		return nil, 0, fmt.Errorf("audit log file exceeds maximum size limit of %d bytes", h.config.NativeTools.AuditLog.MaxFileSizeBytes)
+	fileSize := fileInfo.Size()
+	if fileSize == 0 {
+		return []AuditLogEntry{}, 0, nil
 	}
 
-	// Open and read the file
+	// Open the file
 	file, err := os.Open(auditPath)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to open audit file: %w", err)
@@ -128,121 +144,215 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit, off
 		_ = file.Close()
 	}()
 
-	// Read all entries (we need to read all to count and apply offset from end)
-	var allEntries []map[string]interface{}
-	scanner := bufio.NewScanner(file)
+	// Calculate cutoff time if time range is specified
+	var cutoffTime time.Time
+	if timeRange > 0 {
+		cutoffTime = time.Now().Add(-timeRange)
+	}
 
-	// Increase buffer size for potentially large log lines
-	const maxScanTokenSize = 1024 * 1024 // 1MB per line max
-	buf := make([]byte, maxScanTokenSize)
-	scanner.Buffer(buf, maxScanTokenSize)
+	// Read backwards from end of file
+	var entries []AuditLogEntry
+	totalCount := 0
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
+	const chunkSize = 64 * 1024 // 64KB chunks
+	readPos := fileSize
+	var leftover []byte // Partial line from previous chunk (accumulates for lines spanning multiple chunks)
+
+	for readPos > 0 && len(entries) < limit {
+		// Calculate chunk boundaries
+		chunkStart := readPos - chunkSize
+		if chunkStart < 0 {
+			chunkStart = 0
+		}
+		chunkLen := readPos - chunkStart
+
+		// Read the chunk
+		chunk := make([]byte, chunkLen)
+		if _, err := file.ReadAt(chunk, chunkStart); err != nil && err != io.EOF {
+			return nil, 0, fmt.Errorf("failed to read chunk: %w", err)
 		}
 
-		var entry map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			h.logger.Warn(ctx, "Failed to parse audit log line", zap.Error(err))
-			continue
+		// Append leftover from previous iteration (this is the end of a line that continued into next chunk)
+		// This handles lines that span multiple chunks (e.g., lines > 64KB)
+		if len(leftover) > 0 {
+			chunk = append(chunk, leftover...)
+			leftover = nil
 		}
 
-		// Apply filters
-		if !h.matchesFilter(entry, filter) {
-			continue
+		// Find all complete lines in this chunk (reading backwards)
+		lines := h.extractLinesReverse(chunk, chunkStart > 0)
+		if chunkStart > 0 && len(lines.partial) > 0 {
+			// Save partial line at the start for next iteration
+			// This accumulates across multiple chunks for very long lines
+			leftover = lines.partial
 		}
 
-		allEntries = append(allEntries, entry)
+		// Process lines (they come out newest-first from extractLinesReverse)
+		for _, line := range lines.complete {
+			if len(line) == 0 {
+				continue
+			}
+
+			var entry AuditLogEntry
+			if err := json.Unmarshal(line, &entry); err != nil {
+				h.logger.Debug(ctx, "Skipping unparseable audit log line (may be old format)", zap.Error(err))
+				continue
+			}
+
+			// Check time range - if entry is too old, we can stop
+			// (assuming log entries are chronologically ordered)
+			// Use full precision: extract nanoseconds from fractional timestamp
+			if !cutoffTime.IsZero() {
+				entryTime := timestampToTime(entry.Timestamp)
+				if entryTime.Before(cutoffTime) {
+					// Entry is too old, and all earlier entries will be older too
+					return entries, totalCount, nil
+				}
+			}
+
+			// Apply filters
+			if !h.matchesFilter(entry, filter) {
+				continue
+			}
+
+			totalCount++
+			if len(entries) < limit {
+				entries = append(entries, entry)
+			}
+		}
+
+		readPos = chunkStart
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, 0, fmt.Errorf("error reading audit file: %w", err)
+	// Process any remaining leftover (first line of file)
+	if len(leftover) > 0 && len(entries) < limit {
+		var entry AuditLogEntry
+		if err := json.Unmarshal(leftover, &entry); err == nil {
+			entryTime := timestampToTime(entry.Timestamp)
+			if cutoffTime.IsZero() || !entryTime.Before(cutoffTime) {
+				if h.matchesFilter(entry, filter) {
+					totalCount++
+					if len(entries) < limit {
+						entries = append(entries, entry)
+					}
+				}
+			}
+		}
 	}
 
-	totalCount := len(allEntries)
+	return entries, totalCount, nil
+}
 
-	// Reverse entries (newest first)
-	for i, j := 0, len(allEntries)-1; i < j; i, j = i+1, j-1 {
-		allEntries[i], allEntries[j] = allEntries[j], allEntries[i]
+// timestampToTime converts a float64 Unix timestamp to time.Time with nanosecond precision.
+// The timestamp format is seconds since epoch, with fractional seconds for sub-second precision.
+func timestampToTime(ts float64) time.Time {
+	sec := int64(ts)
+	nsec := int64((ts - float64(sec)) * 1e9)
+	return time.Unix(sec, nsec)
+}
+
+// linesResult holds the result of extracting lines from a chunk
+type linesResult struct {
+	complete [][]byte // Complete lines, newest first
+	partial  []byte   // Partial line at the start of chunk (if not at file start)
+}
+
+// extractLinesReverse extracts complete lines from a chunk, returning them newest-first.
+// If hasMoreBefore is true, the first line in the chunk is assumed to be partial
+// (continuing from a previous chunk) and is returned separately.
+func (h *NativeToolsHandler) extractLinesReverse(chunk []byte, hasMoreBefore bool) linesResult {
+	var result linesResult
+
+	// Find all newline positions
+	var lineEnds []int
+	for i, b := range chunk {
+		if b == '\n' {
+			lineEnds = append(lineEnds, i)
+		}
 	}
 
-	// Apply offset and limit
-	start := offset
-	if start >= len(allEntries) {
-		return []map[string]interface{}{}, totalCount, nil
+	if len(lineEnds) == 0 {
+		// No newlines - entire chunk is one partial line
+		if hasMoreBefore {
+			result.partial = chunk
+		} else if len(chunk) > 0 {
+			result.complete = append(result.complete, chunk)
+		}
+		return result
 	}
 
-	end := start + limit
-	if end > len(allEntries) {
-		end = len(allEntries)
+	// Extract lines from end to start (newest first)
+	// Last segment: from last newline+1 to end of chunk
+	if lineEnds[len(lineEnds)-1] < len(chunk)-1 {
+		line := chunk[lineEnds[len(lineEnds)-1]+1:]
+		if len(line) > 0 {
+			result.complete = append(result.complete, line)
+		}
 	}
 
-	return allEntries[start:end], totalCount, nil
+	// Middle segments: between newlines (iterate backwards)
+	for i := len(lineEnds) - 1; i > 0; i-- {
+		start := lineEnds[i-1] + 1
+		end := lineEnds[i]
+		if end > start {
+			result.complete = append(result.complete, chunk[start:end])
+		}
+	}
+
+	// First segment: from start of chunk to first newline
+	firstNewline := lineEnds[0]
+	if hasMoreBefore {
+		// This is a partial line continuing from previous chunk
+		if firstNewline > 0 {
+			result.partial = chunk[:firstNewline]
+		}
+	} else {
+		// This is a complete line (start of file)
+		if firstNewline > 0 {
+			result.complete = append(result.complete, chunk[:firstNewline])
+		}
+	}
+
+	return result
 }
 
 // matchesFilter checks if an audit entry matches the specified filters
-func (h *NativeToolsHandler) matchesFilter(entry map[string]interface{}, filter AuditLogFilter) bool {
-	audit, ok := entry["audit"].(map[string]interface{})
-	if !ok {
-		// Skip entries without audit data
+func (h *NativeToolsHandler) matchesFilter(entry AuditLogEntry, filter AuditLogFilter) bool {
+	if entry.Audit == nil {
 		return false
 	}
 
-	// Filter by status
+	// Skip entries that don't have the new format structure
+	// Old format entries will have empty Tool.PrefixedName
+	if entry.Audit.Tool.PrefixedName == "" {
+		return false
+	}
+
+	// Filter by status (action field: "allow" or "deny")
 	if filter.Status != "" {
-		status, ok := audit["status"].(string)
-		if !ok || status != filter.Status {
+		// Map old status values to new action values for backward compatibility
+		expectedAction := filter.Status
+		switch filter.Status {
+		case "success":
+			expectedAction = string(config.PolicyActionAllow)
+		case "denied", "response_denied":
+			expectedAction = string(config.PolicyActionDeny)
+		}
+		if entry.Audit.Action != expectedAction {
 			return false
 		}
 	}
 
-	// Filter by tool name (prefix matching)
+	// Filter by tool name (prefix matching on prefixed_name)
 	if filter.ToolName != "" {
-		request, ok := audit["request"].(map[string]interface{})
-		if !ok {
-			return false
-		}
-		params, ok := request["params"].(map[string]interface{})
-		if !ok {
-			return false
-		}
-		toolName, ok := params["name"].(string)
-		if !ok {
-			return false
-		}
-		if !strings.HasPrefix(toolName, filter.ToolName) {
+		if !strings.HasPrefix(entry.Audit.Tool.PrefixedName, filter.ToolName) {
 			return false
 		}
 	}
 
-	// Filter by client
+	// Filter by client name
 	if filter.Client != "" {
-		// Client can be in the audit entry directly or parsed from tool name
-		client, ok := audit["client"].(string)
-		if ok && client == filter.Client {
-			return true
-		}
-
-		// Also try to extract from tool name
-		request, ok := audit["request"].(map[string]interface{})
-		if !ok {
-			return false
-		}
-		params, ok := request["params"].(map[string]interface{})
-		if !ok {
-			return false
-		}
-		toolName, ok := params["name"].(string)
-		if !ok {
-			return false
-		}
-		clientName, _, err := ParsePrefixedName(toolName)
-		if err != nil {
-			return false
-		}
-		if clientName != filter.Client {
+		if entry.Audit.Tool.Client != filter.Client {
 			return false
 		}
 	}

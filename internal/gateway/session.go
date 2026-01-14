@@ -33,6 +33,7 @@ type Session struct {
 	ClientIP string // IP address of the upstream client
 	mu       sync.RWMutex
 	clients  map[string]*SessionClientInfo // clientName -> downstream client for this session
+	closing  bool                          // true if session is being closed, prevents new clients
 }
 
 // NewSession creates a new session
@@ -65,11 +66,17 @@ func (s *Session) GetClient(clientName string) (*SessionClientInfo, bool) {
 	return clientInfo, ok
 }
 
-// SetClient stores a downstream client for this session
-func (s *Session) SetClient(clientName string, clientInfo *SessionClientInfo) {
+// SetClient stores a downstream client for this session.
+// Returns true if the client was stored successfully, false if the session is closing.
+// If false is returned, the caller is responsible for closing the client.
+func (s *Session) SetClient(clientName string, clientInfo *SessionClientInfo) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closing {
+		return false // Session is closing, don't accept new clients
+	}
 	s.clients[clientName] = clientInfo
+	return true
 }
 
 // GetAllClients returns all downstream clients for this session
@@ -83,10 +90,15 @@ func (s *Session) GetAllClients() map[string]*SessionClientInfo {
 	return result
 }
 
-// Close closes all downstream clients for this session
+// Close closes all downstream clients for this session.
+// After Close is called, SetClient will reject new clients to prevent resource leaks
+// from async operations that complete after the session is closed.
 func (s *Session) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Mark as closing to prevent new clients from being added
+	s.closing = true
 
 	var errs []error
 	for name, clientInfo := range s.clients {
@@ -174,17 +186,21 @@ func (sm *SessionManager) GetSessionClient(sessionID, clientName string) (*Sessi
 	return session.GetClient(clientName)
 }
 
-// SetSessionClient stores a downstream client for a session
-func (sm *SessionManager) SetSessionClient(sessionID, clientName string, clientInfo *SessionClientInfo) {
-	sm.mu.Lock()
+// SetSessionClient stores a downstream client for a session.
+// Returns true if the client was stored successfully, false if the session doesn't exist
+// or is closing. If false is returned, the caller is responsible for closing the client
+// to prevent resource leaks.
+func (sm *SessionManager) SetSessionClient(sessionID, clientName string, clientInfo *SessionClientInfo) bool {
+	sm.mu.RLock()
 	session, ok := sm.sessions[sessionID]
-	if !ok {
-		session = NewSession(sessionID)
-		sm.sessions[sessionID] = session
-	}
-	sm.mu.Unlock()
+	sm.mu.RUnlock()
 
-	session.SetClient(clientName, clientInfo)
+	if !ok {
+		// Session doesn't exist (was already deleted), reject the client
+		return false
+	}
+
+	return session.SetClient(clientName, clientInfo)
 }
 
 // HasSession checks if a session exists

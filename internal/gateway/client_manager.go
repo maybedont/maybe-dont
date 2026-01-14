@@ -16,7 +16,6 @@ import (
 	"golang.org/x/text/language"
 )
 
-
 // ClientManager manages multiple MCP client instances
 type ClientManager struct {
 	// clientConfigs stores the configuration for each downstream client
@@ -143,9 +142,8 @@ func (cm *ClientManager) DiscoverAllCapabilities(ctx context.Context) (*Discover
 
 // SessionDiscoveryResult contains information about tools discovered during session creation
 type SessionDiscoveryResult struct {
-	// PassThroughClients contains clients with pass-through auth that discovered tools
-	// These tools should be registered as session-specific tools
-	PassThroughClients map[string]*SessionClientInfo
+	// DownstreamClients contains newly discovered clients
+	DownstreamClients map[string]*SessionClientInfo
 }
 
 // CreateSessionClients creates downstream client instances for a new upstream session
@@ -166,7 +164,7 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 	cm.sessionManager.CreateSession(sessionID)
 
 	result := &SessionDiscoveryResult{
-		PassThroughClients: make(map[string]*SessionClientInfo),
+		DownstreamClients: make(map[string]*SessionClientInfo),
 	}
 
 	var errs []string
@@ -182,16 +180,31 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 			continue
 		}
 
-		// Store client in session
-		cm.sessionManager.SetSessionClient(sessionID, name, clientInfo)
+		// Store client in session - if rejected (session closed/deleted), close the client immediately
+		if !cm.sessionManager.SetSessionClient(sessionID, name, clientInfo) {
+			cm.logger.Warn(ctx, "Session closed during client creation, closing orphaned client",
+				zap.String("session_id", sessionID),
+				zap.String("client", name))
+			if clientInfo.Client != nil {
+				if closeErr := clientInfo.Client.Close(); closeErr != nil {
+					cm.logger.Error(ctx, "Failed to close orphaned client",
+						zap.String("session_id", sessionID),
+						zap.String("client", name),
+						zap.Error(closeErr))
+				}
+			}
+			continue
+		}
+
 		cm.logger.Debug(ctx, "Created downstream client for session",
 			zap.String("session_id", sessionID),
 			zap.String("client", name))
 
-		// Track pass-through clients for session-specific tool registration
+		// Track clients
+		result.DownstreamClients[name] = clientInfo
+
 		if cfg.Auth.PassThrough.Enabled && len(clientInfo.Tools) > 0 {
-			result.PassThroughClients[name] = clientInfo
-			cm.logger.Info(ctx, "Discovered tools from pass-through client for session",
+			cm.logger.Debug(ctx, "Discovered tools from pass-through client for session",
 				zap.String("session_id", sessionID),
 				zap.String("client", name),
 				zap.Int("tools_count", len(clientInfo.Tools)))
@@ -205,6 +218,57 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 	cm.logger.Info(ctx, "Successfully created all downstream clients for session",
 		zap.String("session_id", sessionID))
 	return result, nil
+}
+
+// CreateSingleSessionClient creates a single downstream client for an existing session.
+// This is used for on-demand discovery of pass-through clients that weren't connected at session creation.
+func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionID, clientName string, cfg config.ClientConfig) (*SessionClientInfo, error) {
+	cm.logger.Info(ctx, "Creating single downstream client for session",
+		zap.String("session_id", sessionID),
+		zap.String("client", clientName))
+
+	// Check if session exists
+	session, exists := cm.sessionManager.GetSession(sessionID)
+	if !exists {
+		return nil, fmt.Errorf("session %s does not exist", sessionID)
+	}
+
+	// Check if client already exists in session
+	if existingClient, ok := session.GetClient(clientName); ok && existingClient != nil && existingClient.Client != nil {
+		cm.logger.Debug(ctx, "Client already exists for session",
+			zap.String("session_id", sessionID),
+			zap.String("client", clientName))
+		return existingClient, nil
+	}
+
+	// Create the client
+	clientInfo, err := cm.createClient(ctx, clientName, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client %s: %w", clientName, err)
+	}
+
+	// Store client in session - if rejected (session closed/deleted), close the client immediately
+	if !cm.sessionManager.SetSessionClient(sessionID, clientName, clientInfo) {
+		cm.logger.Warn(ctx, "Session closed during client creation, closing orphaned client",
+			zap.String("session_id", sessionID),
+			zap.String("client", clientName))
+		if clientInfo.Client != nil {
+			if closeErr := clientInfo.Client.Close(); closeErr != nil {
+				cm.logger.Error(ctx, "Failed to close orphaned client",
+					zap.String("session_id", sessionID),
+					zap.String("client", clientName),
+					zap.Error(closeErr))
+			}
+		}
+		return nil, fmt.Errorf("session %s was closed during client creation", sessionID)
+	}
+
+	cm.logger.Info(ctx, "Created downstream client for session",
+		zap.String("session_id", sessionID),
+		zap.String("client", clientName),
+		zap.Int("tools_count", len(clientInfo.Tools)))
+
+	return clientInfo, nil
 }
 
 // createClient creates a single downstream client instance
@@ -381,6 +445,19 @@ func (cm *ClientManager) GetAllSessionClients(sessionID string) (map[string]*Ses
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
 	return session.GetAllClients(), nil
+}
+
+// GetSessionClientNames returns the names of all clients connected for a session
+func (cm *ClientManager) GetSessionClientNames(sessionID string) []string {
+	clients, err := cm.GetAllSessionClients(sessionID)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(clients))
+	for name := range clients {
+		names = append(names, name)
+	}
+	return names
 }
 
 // GetClientConfigs returns all client configurations (for capability reporting)

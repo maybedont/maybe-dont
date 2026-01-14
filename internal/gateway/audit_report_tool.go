@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"go.uber.org/zap"
@@ -106,8 +107,8 @@ func (h *NativeToolsHandler) handleGenerateAuditReport(ctx context.Context, req 
 		if ia, ok := args["include_impact_analysis"].(bool); ok {
 			params.IncludeImpactAnalysis = ia
 		}
-		if fmt, ok := args["format"].(string); ok {
-			params.Format = fmt
+		if format, ok := args["format"].(string); ok {
+			params.Format = format
 		}
 	}
 
@@ -149,37 +150,59 @@ func (h *NativeToolsHandler) handleGenerateAuditReport(ctx context.Context, req 
 	return mcp.NewToolResultText(output), nil
 }
 
-// getEntriesForReport retrieves audit log entries filtered by time range
-func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRange string) ([]map[string]interface{}, AuditReportStatistics, error) {
-	// Calculate the cutoff time
-	var cutoffTime time.Time
-	now := time.Now()
-
-	switch timeRange {
-	case "1h":
-		cutoffTime = now.Add(-1 * time.Hour)
-	case "6h":
-		cutoffTime = now.Add(-6 * time.Hour)
-	case "24h":
-		cutoffTime = now.Add(-24 * time.Hour)
-	case "7d":
-		cutoffTime = now.Add(-7 * 24 * time.Hour)
-	case "30d":
-		cutoffTime = now.Add(-30 * 24 * time.Hour)
-	case "all":
-		cutoffTime = time.Time{} // Zero time, includes all
-	default:
-		cutoffTime = now.Add(-24 * time.Hour)
+// ParseTimeRange parses a time range string into a time.Duration.
+// Supports:
+//   - Go's standard duration format: "1h30m", "45m", "2h", etc.
+//   - Extended formats: "7d" (days), "2w" (weeks)
+//   - Legacy enum values: "1h", "6h", "24h", "7d", "30d"
+//   - Special value "all" returns 0 (no time filter)
+//
+// Returns 0 duration for "all" or empty string (meaning no time filter).
+// Returns error for unparseable formats.
+func ParseTimeRange(s string) (time.Duration, error) {
+	if s == "" || s == "all" {
+		return 0, nil
 	}
 
-	// Read all entries (no filter, we'll filter by time ourselves)
-	allEntries, _, err := h.readAuditLogEntries(ctx, h.config.NativeTools.AuditReport.MaxEntriesForReport, 0, AuditLogFilter{})
+	// Try Go's standard duration parser first (handles "1h30m", "45m", "2h", etc.)
+	if d, err := time.ParseDuration(s); err == nil {
+		return d, nil
+	}
+
+	// Handle extended formats with days and weeks
+	if len(s) >= 2 {
+		unit := s[len(s)-1]
+		valueStr := s[:len(s)-1]
+
+		var value int
+		if _, err := fmt.Sscanf(valueStr, "%d", &value); err == nil {
+			switch unit {
+			case 'd': // days
+				return time.Duration(value) * 24 * time.Hour, nil
+			case 'w': // weeks
+				return time.Duration(value) * 7 * 24 * time.Hour, nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("invalid time range format: %q (supported: Go duration like '1h30m', days like '7d', weeks like '2w', or 'all')", s)
+}
+
+// getEntriesForReport retrieves audit log entries filtered by time range
+func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeStr string) ([]AuditLogEntry, AuditReportStatistics, error) {
+	// Parse time range string to duration
+	timeRange, err := ParseTimeRange(timeRangeStr)
+	if err != nil {
+		return nil, AuditReportStatistics{}, fmt.Errorf("invalid time range: %w", err)
+	}
+
+	// Read entries with time-based filtering (handled by readAuditLogEntries)
+	entries, _, err := h.readAuditLogEntries(ctx, h.config.NativeTools.AuditReport.MaxEntries, timeRange, AuditLogFilter{})
 	if err != nil {
 		return nil, AuditReportStatistics{}, err
 	}
 
-	// Filter by time and collect statistics
-	var filteredEntries []map[string]interface{}
+	// Collect statistics from the filtered entries
 	stats := AuditReportStatistics{
 		TopTools:       make(map[string]int),
 		TopClients:     make(map[string]int),
@@ -188,70 +211,51 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRange 
 	uniqueTools := make(map[string]bool)
 	uniqueClients := make(map[string]bool)
 
-	for _, entry := range allEntries {
-		// Parse timestamp
-		ts, ok := entry["ts"].(float64)
-		if !ok {
+	for _, entry := range entries {
+		if entry.Audit == nil {
 			continue
 		}
-		entryTime := time.Unix(int64(ts), int64((ts-float64(int64(ts)))*1e9))
-
-		// Skip entries older than cutoff
-		if !cutoffTime.IsZero() && entryTime.Before(cutoffTime) {
-			continue
-		}
-
-		filteredEntries = append(filteredEntries, entry)
-
-		// Collect statistics
-		audit, ok := entry["audit"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
 		stats.TotalRequests++
 
-		// Count by status
-		if status, ok := audit["status"].(string); ok {
-			switch status {
-			case "success":
-				stats.SuccessCount++
-			case "denied":
-				stats.DeniedCount++
-			default:
-				stats.ErrorCount++
+		// Count by action (allow/deny)
+		switch entry.Audit.Action {
+		case string(config.PolicyActionAllow):
+			stats.SuccessCount++
+		case string(config.PolicyActionDeny):
+			stats.DeniedCount++
+		default:
+			stats.ErrorCount++
+		}
+
+		// Extract tool name and client from the new structure
+		toolName := entry.Audit.Tool.PrefixedName
+		if toolName != "" {
+			stats.TopTools[toolName]++
+			uniqueTools[toolName] = true
+
+			// Use the client field directly
+			if entry.Audit.Tool.Client != "" {
+				stats.TopClients[entry.Audit.Tool.Client]++
+				uniqueClients[entry.Audit.Tool.Client] = true
 			}
 		}
 
-		// Extract tool name and client
-		if request, ok := audit["request"].(map[string]interface{}); ok {
-			if params, ok := request["params"].(map[string]interface{}); ok {
-				if toolName, ok := params["name"].(string); ok {
-					stats.TopTools[toolName]++
-					uniqueTools[toolName] = true
-
-					// Extract client from prefixed name
-					if clientName, _, err := ParsePrefixedName(toolName); err == nil {
-						stats.TopClients[clientName]++
-						uniqueClients[clientName] = true
-					}
-				}
+		// Track denied policies from request validation
+		if entry.Audit.RequestValidation != nil {
+			if entry.Audit.RequestValidation.CEL != nil && entry.Audit.RequestValidation.CEL.Action == string(config.PolicyActionDeny) {
+				stats.DeniedByPolicy[entry.Audit.RequestValidation.CEL.RuleMatched]++
+			}
+			if entry.Audit.RequestValidation.AI != nil && entry.Audit.RequestValidation.AI.Action == string(config.PolicyActionDeny) {
+				stats.DeniedByPolicy["AI Policy"]++
 			}
 		}
-
-		// Track denied policies
-		if validation, ok := audit["validation"].(map[string]interface{}); ok {
-			if results, ok := validation["results"].([]interface{}); ok {
-				for _, r := range results {
-					if result, ok := r.(map[string]interface{}); ok {
-						allowed, _ := result["allowed"].(bool)
-						if !allowed {
-							if policyName, ok := result["policy_name"].(string); ok {
-								stats.DeniedByPolicy[policyName]++
-							}
-						}
-					}
-				}
+		// Track denied policies from response validation
+		if entry.Audit.ResponseValidation != nil {
+			if entry.Audit.ResponseValidation.CEL != nil && entry.Audit.ResponseValidation.CEL.Action == string(config.PolicyActionDeny) {
+				stats.DeniedByPolicy[entry.Audit.ResponseValidation.CEL.RuleMatched]++
+			}
+			if entry.Audit.ResponseValidation.AI != nil && entry.Audit.ResponseValidation.AI.Action == string(config.PolicyActionDeny) {
+				stats.DeniedByPolicy["AI Response Policy"]++
 			}
 		}
 	}
@@ -259,16 +263,16 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRange 
 	stats.UniqueTools = len(uniqueTools)
 	stats.UniqueClients = len(uniqueClients)
 
-	return filteredEntries, stats, nil
+	return entries, stats, nil
 }
 
 // generateAIReport calls the AI to analyze the audit entries
-func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []map[string]interface{}, stats AuditReportStatistics, params AuditReportRequest) (*AuditReportResponse, error) {
+func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []AuditLogEntry, stats AuditReportStatistics, params AuditReportRequest) (*AuditReportResponse, error) {
 	// Prepare a summary of entries for the AI (we don't send raw entries to avoid token limits)
 	entrySummary := h.prepareEntrySummary(entries, stats)
 
 	// Build the user prompt
-	userPrompt := h.buildReportPrompt(entrySummary, stats, params)
+	userPrompt := h.buildReportPrompt(entrySummary, params)
 
 	// Create OpenAI client
 	client := openai.NewClient(
@@ -319,7 +323,7 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []map
 		Concerns:   aiResponse.Concerns,
 		Statistics: stats,
 		Metadata: AuditReportMetadata{
-			GeneratedAt:     time.Now().Format(time.RFC3339),
+			GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
 			TimeRange:       params.TimeRange,
 			EntriesAnalyzed: len(entries),
 			Focus:           params.Focus,
@@ -334,7 +338,7 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []map
 }
 
 // prepareEntrySummary creates a summary of entries suitable for AI analysis
-func (h *NativeToolsHandler) prepareEntrySummary(entries []map[string]interface{}, stats AuditReportStatistics) string {
+func (h *NativeToolsHandler) prepareEntrySummary(entries []AuditLogEntry, stats AuditReportStatistics) string {
 	// Create a condensed summary to avoid token limits
 	var summary string
 
@@ -363,44 +367,14 @@ func (h *NativeToolsHandler) prepareEntrySummary(entries []map[string]interface{
 		if deniedCount >= 5 {
 			break
 		}
-		audit, ok := entry["audit"].(map[string]interface{})
-		if !ok {
+		if entry.Audit == nil {
 			continue
 		}
-		status, _ := audit["status"].(string)
-		if status == "denied" {
-			if request, ok := audit["request"].(map[string]interface{}); ok {
-				if params, ok := request["params"].(map[string]interface{}); ok {
-					toolName, _ := params["name"].(string)
-					args, _ := json.Marshal(params["arguments"])
-					summary += fmt.Sprintf("  - Tool: %s, Args: %s\n", toolName, string(args))
-					deniedCount++
-				}
-			}
-		}
-	}
-
-	// Sample of error entries
-	summary += "\nSample Error Requests:\n"
-	errorCount := 0
-	for _, entry := range entries {
-		if errorCount >= 5 {
-			break
-		}
-		audit, ok := entry["audit"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		status, _ := audit["status"].(string)
-		if status != "success" && status != "denied" {
-			if request, ok := audit["request"].(map[string]interface{}); ok {
-				if params, ok := request["params"].(map[string]interface{}); ok {
-					toolName, _ := params["name"].(string)
-					errorMsg, _ := audit["error"].(string)
-					summary += fmt.Sprintf("  - Tool: %s, Status: %s, Error: %s\n", toolName, status, errorMsg)
-					errorCount++
-				}
-			}
+		if entry.Audit.Action == string(config.PolicyActionDeny) {
+			toolName := entry.Audit.Tool.PrefixedName
+			args, _ := json.Marshal(entry.Audit.Request.Params)
+			summary += fmt.Sprintf("  - Tool: %s, Args: %s\n", toolName, string(args))
+			deniedCount++
 		}
 	}
 
@@ -408,7 +382,7 @@ func (h *NativeToolsHandler) prepareEntrySummary(entries []map[string]interface{
 }
 
 // buildReportPrompt builds the prompt for the AI
-func (h *NativeToolsHandler) buildReportPrompt(entrySummary string, stats AuditReportStatistics, params AuditReportRequest) string {
+func (h *NativeToolsHandler) buildReportPrompt(entrySummary string, params AuditReportRequest) string {
 	prompt := fmt.Sprintf(`Analyze the following MCP gateway audit log data and generate a security analysis report.
 
 Focus Area: %s

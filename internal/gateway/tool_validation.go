@@ -10,11 +10,13 @@ import (
 
 // ValidationResult represents the result of a single validation check
 type ValidationResult struct {
-	PolicyName string `json:"policy_name"`
-	PolicyType string `json:"policy_type"` // "cel" or "ai"
-	Allowed    bool   `json:"allowed"`
-	Message    string `json:"message,omitempty"`
-	Error      string `json:"error,omitempty"`
+	PolicyName string              `json:"policy_name"`
+	PolicyType string              `json:"policy_type"` // "cel" or "ai"
+	Action     config.PolicyAction `json:"action"`      // "allow" or "deny"
+	Mode       config.PolicyMode   `json:"mode"`        // "enabled", "audit_only", or "disabled"
+	Message    string              `json:"message,omitempty"`
+	Error      string              `json:"error,omitempty"`
+	DurationMs int64               `json:"duration_ms"` // Time taken to evaluate this policy in milliseconds
 }
 
 // ValidationResults represents all validation results for a request
@@ -55,6 +57,7 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 	var allowMessage string
 
 	for _, handler := range c.handlers {
+		// Audit trail: 1 : Log the HandleToolCall : Tool call audit log : github__search_pull_requests
 		results, err := handler.HandleToolCall(ctx, req)
 		if err != nil {
 			if finalError == nil {
@@ -69,11 +72,11 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.AllowCount += results.AllowCount
 		finalResults.DenyCount += results.DenyCount
 
-		if !foundDeny && !results.Allowed && results.Message != "" {
+		if !foundDeny && results.DenyCount > 0 && results.Message != "" {
 			denyMessage = results.Message
 			foundDeny = true
 		}
-		if !foundAllow && results.Allowed && results.Message != "" {
+		if !foundAllow && results.AllowCount > 0 && results.Message != "" {
 			allowMessage = results.Message
 			foundAllow = true
 		}

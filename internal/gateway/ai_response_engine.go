@@ -16,11 +16,12 @@ import (
 
 // AIResponsePolicy represents a single AI response policy rule
 type AIResponsePolicy struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Prompt      string `yaml:"prompt"`
-	Action      string `yaml:"action"` // allow, deny, or redact
-	Message     string `yaml:"message"`
+	Name        string              `yaml:"name"`
+	Description string              `yaml:"description"`
+	Prompt      string              `yaml:"prompt"`
+	Action      config.PolicyAction `yaml:"action"` // allow, deny, or redact
+	Message     string              `yaml:"message"`
+	Mode        config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
 }
 
 // AIResponsePolicyEngine handles AI policy evaluation for responses
@@ -45,26 +46,48 @@ func InitAIResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 }
 
 // LoadPolicies loads AI response policies from configuration
-func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy) error {
+// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
+func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy, defaultMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info(context.Background(), "Loading AI response policies", zap.Int("count", len(policies)))
+	e.logger.Info(context.Background(), "Loading AI response policies",
+		zap.Int("count", len(policies)),
+		zap.String("default_mode", string(defaultMode)),
+	)
 
 	// Validate each policy
 	for _, policy := range policies {
-		// Validate action
-		if policy.Action != "allow" && policy.Action != "deny" && policy.Action != "redact" {
+		// Resolve effective mode for this policy
+		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+
+		e.logger.Info(context.Background(), "Loading AI response policy",
+			zap.String("name", policy.Name),
+			zap.String("action", string(policy.Action)),
+			zap.String("mode", string(effectiveMode)),
+		)
+
+		// Skip disabled policies
+		if effectiveMode == config.PolicyModeDisabled {
+			e.logger.Info(context.Background(), "Skipping disabled AI response policy",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
+
+		// Validate action, a response policy can be 'allow', 'deny' or 'redact'
+		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny && policy.Action != config.PolicyActionRedact {
 			return fmt.Errorf("invalid action %s for AI response policy %s", policy.Action, policy.Name)
 		}
 
-		// Store the policy
+		// Store the policy with resolved mode
 		e.policies = append(e.policies, AIResponsePolicy{
 			Name:        policy.Name,
 			Description: policy.Description,
 			Prompt:      policy.Prompt,
 			Action:      policy.Action,
 			Message:     policy.Message,
+			Mode:        effectiveMode,
 		})
 	}
 
@@ -107,6 +130,9 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	// Launch a goroutine for each policy
 	for _, policy := range e.policies {
 		go func(p AIResponsePolicy) {
+			// Track timing for this policy evaluation
+			startTime := time.Now()
+
 			// Create a new context for this goroutine
 			policyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
@@ -130,13 +156,18 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					},
 				},
 			})
+
+			durationMs := time.Since(startTime).Milliseconds()
+
 			if err != nil {
 				resultChan <- policyResult{
 					result: ResponseValidationResult{
 						PolicyName: p.Name,
 						PolicyType: "ai",
-						Allowed:    false,
+						Action:     config.PolicyActionDeny,
+						Mode:       p.Mode,
 						Error:      fmt.Sprintf("Failed to evaluate response policy: %v", err),
+						DurationMs: durationMs,
 					},
 					err: err,
 				}
@@ -148,8 +179,10 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					result: ResponseValidationResult{
 						PolicyName: p.Name,
 						PolicyType: "ai",
-						Allowed:    false,
+						Action:     config.PolicyActionDeny,
+						Mode:       p.Mode,
 						Error:      "No response from AI model",
+						DurationMs: durationMs,
 					},
 					err: fmt.Errorf("no response from AI model"),
 				}
@@ -164,24 +197,38 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					result: ResponseValidationResult{
 						PolicyName: p.Name,
 						PolicyType: "ai",
-						Allowed:    false,
+						Action:     config.PolicyActionDeny,
+						Mode:       p.Mode,
 						Error:      fmt.Sprintf("Failed to parse AI response: %v", err),
+						DurationMs: durationMs,
 					},
 					err: err,
 				}
 				return
 			}
 
+			// Determine action based on AI evaluation and policy configuration
+			var action config.PolicyAction
+			if !evaluation.Allowed {
+				action = config.PolicyActionDeny
+			} else if p.Action == config.PolicyActionRedact && evaluation.RedactedContent != "" {
+				action = config.PolicyActionRedact
+			} else {
+				action = config.PolicyActionAllow
+			}
+
 			// Create validation result based on policy action and AI response
 			validationResult := ResponseValidationResult{
 				PolicyName: p.Name,
 				PolicyType: "ai",
+				Action:     action,
+				Mode:       p.Mode,
 				Message:    evaluation.Message,
-				Allowed:    evaluation.Allowed,
+				DurationMs: durationMs,
 			}
 
-			// Handle redaction
-			if p.Action == "redact" && evaluation.RedactedContent != "" {
+			// Include redacted content if applicable
+			if action == config.PolicyActionRedact {
 				validationResult.RedactedContent = evaluation.RedactedContent
 			}
 
@@ -204,17 +251,15 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		}
 		results.Results = append(results.Results, result.result)
 
-		if result.result.Allowed {
-			results.AllowCount++
-		} else {
-			results.DenyCount++
-			results.Allowed = false
-		}
-
-		if result.result.RedactedContent != "" {
-			results.RedactCount++
-			content := result.result.RedactedContent
-			redactedContent = &content
+		// Only affect final decision if mode is enabled (not audit_only)
+		if result.result.Mode == config.PolicyModeEnabled {
+			switch result.result.Action {
+			case config.PolicyActionDeny:
+				results.Allowed = false
+			case config.PolicyActionRedact:
+				content := result.result.RedactedContent
+				redactedContent = &content
+			}
 		}
 	}
 
@@ -224,12 +269,12 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	}
 
 	// Set final result
-	if results.DenyCount > 0 {
+	if results.DenyCount() > 0 {
 		results.Allowed = false
 		results.Message = "Response denied by AI policy"
-	} else if results.RedactCount > 0 {
+	} else if results.RedactCount() > 0 {
 		results.Message = "Response content redacted by AI policy"
-	} else if results.AllowCount > 0 {
+	} else if results.AllowCount() > 0 {
 		results.Message = "All AI response policies passed"
 	} else {
 		results.Message = "No AI response policies matched"
@@ -238,8 +283,8 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	e.logger.Info(ctx, "Response evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
-		zap.Int("deny_count", results.DenyCount),
-		zap.Int("redact_count", results.RedactCount),
+		zap.Int("deny_count", results.DenyCount()),
+		zap.Int("redact_count", results.RedactCount()),
 	)
 
 	return results, nil

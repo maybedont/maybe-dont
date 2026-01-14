@@ -53,10 +53,12 @@ archives:
     wrap_in_directory: true
     files:
       - README.md
-      - src: gateway-config.yaml
+      - src: config/maybedont.yaml
+        dst: config/maybedont.yaml
         info:
           mode: 0644
-      - src: "*.rules.yaml"
+      - src: config/*.rules.yaml
+        dst: config/
         info:
           mode: 0644
       - LICENSE

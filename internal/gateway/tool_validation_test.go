@@ -20,7 +20,7 @@ type MockValidationHandler struct {
 	expectedResult ValidationResult
 }
 
-func (m *MockValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+func (m *MockValidationHandler) HandleToolCall(context.Context, mcp.CallToolRequest) (ValidationResults, error) {
 	if m.shouldError {
 		return ValidationResults{}, errors.New("mock error")
 	}
@@ -47,7 +47,7 @@ func TestValidationChain_HandlerComposition(t *testing.T) {
 		expectedResult: ValidationResult{
 			PolicyName: "Allow Policy",
 			PolicyType: "mock",
-			Allowed:    true,
+			Action:     config.PolicyActionAllow,
 			Message:    "Allowed by mock handler",
 		},
 	}
@@ -58,7 +58,7 @@ func TestValidationChain_HandlerComposition(t *testing.T) {
 		expectedResult: ValidationResult{
 			PolicyName: "Deny Policy",
 			PolicyType: "mock",
-			Allowed:    false,
+			Action:     config.PolicyActionDeny,
 			Message:    "Denied by mock handler",
 		},
 	}
@@ -85,11 +85,11 @@ func TestValidationChain_HandlerComposition(t *testing.T) {
 	for _, result := range results.Results {
 		if result.PolicyName == "Allow Policy" {
 			foundAllow = true
-			assert.True(t, result.Allowed)
+			assert.Equal(t, config.PolicyActionAllow, result.Action)
 		}
 		if result.PolicyName == "Deny Policy" {
 			foundDeny = true
-			assert.False(t, result.Allowed)
+			assert.Equal(t, config.PolicyActionDeny, result.Action)
 		}
 	}
 	assert.True(t, foundAllow)
@@ -109,7 +109,7 @@ func TestValidationChain_ErrorHandling(t *testing.T) {
 		expectedResult: ValidationResult{
 			PolicyName: "Working Policy",
 			PolicyType: "mock",
-			Allowed:    true,
+			Action:     config.PolicyActionAllow,
 			Message:    "Working handler succeeded",
 		},
 	}
@@ -144,18 +144,18 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 		{
 			Name:       "allow-read-tool",
 			Expression: `request.method == "tools/call" && request.params.name == "read_file"`,
-			Action:     "allow",
+			Action:     config.PolicyActionAllow,
 			Message:    "Allowed to call read_file",
 		},
 		{
 			Name:       "deny-delete-tool",
 			Expression: `request.method == "tools/call" && request.params.name == "delete_file"`,
-			Action:     "deny",
+			Action:     config.PolicyActionDeny,
 			Message:    "delete_file is not allowed",
 		},
 	}
 
-	err = celEngine.LoadPolicies(policies)
+	err = celEngine.LoadPolicies(policies, config.PolicyModeEnabled)
 	require.NoError(t, err)
 
 	// Create validation chain with real handlers
@@ -269,7 +269,7 @@ func TestLoggingHandler_Isolation(t *testing.T) {
 	assert.Len(t, results.Results, 1) // Should have one audit log result
 	assert.Equal(t, "Audit Logging", results.Results[0].PolicyName)
 	assert.Equal(t, "audit", results.Results[0].PolicyType)
-	assert.True(t, results.Results[0].Allowed)
+	assert.Equal(t, config.PolicyActionAllow, results.Results[0].Action)
 }
 
 func TestCELValidationHandler_Isolation(t *testing.T) {
@@ -283,11 +283,11 @@ func TestCELValidationHandler_Isolation(t *testing.T) {
 		{
 			Name:       "allow-tools-call",
 			Expression: `request.method == "tools/call"`,
-			Action:     "allow",
+			Action:     config.PolicyActionAllow,
 			Message:    "Allowed to call tools",
 		},
 	}
-	err = engine.LoadPolicies(policies)
+	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
 	require.NoError(t, err)
 
 	handler := NewToolCELValidationHandler(sessionLogger, engine)

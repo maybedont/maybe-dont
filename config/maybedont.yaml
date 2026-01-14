@@ -12,7 +12,7 @@ logging:
 
 audit:
   enabled: true
-  path: ./audit.log # filename, stderr, stdout
+  path: maybedont-audit.log # filename, stderr, stdout
 
 # Downstream MCP servers configuration
 downstream_mcp_servers:
@@ -42,16 +42,18 @@ server:
 # Policy configuration
 policy_validation:
   # Enable CEL-based tool validation
-  enabled: true
+  mode: enabled
   # Path to CEL policy rules file (required when enabled)
   rules_file: "cel.rules.yaml"
 
 # AI validation configuration
 ai_validation:
   # Enable AI-powered tool validation
-  enabled: true
+  mode: audit_only
   # OpenAI-compatible API endpoint
   endpoint: "https://api.openai.com/v1/chat/completions"
+  # API key (required when enabled)
+  api_key: "${OPENAI_API_KEY}"
   # Model to use for validation
   model: "gpt-4o-mini"
   # Path to AI policy rules file (required when enabled)
@@ -61,7 +63,7 @@ ai_validation:
 # These policies validate and filter tool call RESPONSES before returning to the client
 response_validation:
   # Enable CEL-based response validation
-  enabled: false
+  mode: disabled
   # Path to CEL response policy rules file (required when enabled)
   rules_file: "cel_response.rules.yaml"
 
@@ -69,7 +71,7 @@ response_validation:
 # Uses AI to detect and filter sensitive information in responses
 ai_response_validation:
   # Enable AI-powered response validation
-  enabled: false
+  mode: disabled
   # Path to AI response policy rules file (required when enabled)
   rules_file: "ai_response.rules.yaml"
   # Note: Uses the same endpoint and model as ai_validation above
@@ -81,10 +83,8 @@ native_tools:
   audit_log:
     # Enable the maybedont__get_audit_log tool (default: true)
     enabled: true
-    # Maximum number of log entries to return (default: 1000)
-    max_entries: 1000
-    # Maximum file size to read in bytes (default: 10MB)
-    max_file_size_bytes: 10485760
+    # Maximum number of log entries to return (default: 100)
+    max_entries: 100
 
   # Audit report generation tool configuration
   audit_report:
@@ -96,8 +96,8 @@ native_tools:
     # model: "gpt-4o-mini"
     # API key (defaults to ai_validation api_key if not specified)
     # api_key: ""
-    # Maximum entries to include in report generation (default: 500)
-    max_entries_for_report: 500
+    # Maximum entries to include in report generation (default: 1000)
+    max_entries: 1000
     # Custom system prompt for report generation (optional - has sensible default)
     # system_prompt: |
     #   You are an AI security analyst reviewing MCP gateway audit logs...

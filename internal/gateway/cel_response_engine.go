@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -14,13 +15,14 @@ import (
 
 // CELResponsePolicy represents a single CEL response policy rule
 type CELResponsePolicy struct {
-	Name                 string `yaml:"name"`
-	Description          string `yaml:"description"`
-	Expression           string `yaml:"expression"`
-	Action               string `yaml:"action"` // allow, deny, or redact
-	Message              string `yaml:"message"`
-	RedactionPattern     string `yaml:"redaction_pattern"`
-	RedactionReplacement string `yaml:"redaction_replacement"`
+	Name                 string              `yaml:"name"`
+	Description          string              `yaml:"description"`
+	Expression           string              `yaml:"expression"`
+	Action               config.PolicyAction `yaml:"action"` // allow, deny, or redact
+	Message              string              `yaml:"message"`
+	Mode                 config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
+	RedactionPattern     string              `yaml:"redaction_pattern"`
+	RedactionReplacement string              `yaml:"redaction_replacement"`
 }
 
 // CELResponsePolicyEngine handles CEL policy evaluation for responses
@@ -50,18 +52,34 @@ func NewCELResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 }
 
 // LoadPolicies loads CEL response policies from configuration
-func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePolicy) error {
+// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
+func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePolicy, defaultMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info(context.Background(), "Loading CEL response policies", zap.Int("count", len(policies)))
+	e.logger.Info(context.Background(), "Loading CEL response policies",
+		zap.Int("count", len(policies)),
+		zap.String("default_mode", string(defaultMode)),
+	)
 
 	// Validate and compile each policy
 	for _, policy := range policies {
+		// Resolve effective mode for this policy
+		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+
 		e.logger.Info(context.Background(), "Loading CEL response policy",
 			zap.String("name", policy.Name),
-			zap.String("action", policy.Action),
+			zap.String("action", string(policy.Action)),
+			zap.String("mode", string(effectiveMode)),
 		)
+
+		// Skip disabled policies
+		if effectiveMode == config.PolicyModeDisabled {
+			e.logger.Info(context.Background(), "Skipping disabled CEL response policy",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
 
 		// Compile the expression
 		_, issues := e.env.Compile(policy.Expression)
@@ -69,18 +87,19 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.CELResponsePoli
 			return fmt.Errorf("failed to compile response policy %s: %w", policy.Name, issues.Err())
 		}
 
-		// Validate action
-		if policy.Action != "allow" && policy.Action != "deny" && policy.Action != "redact" {
+		// Validate action, a response policy can be 'allow', 'deny' or 'redact'
+		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny && policy.Action != config.PolicyActionRedact {
 			return fmt.Errorf("invalid action '%s' for response policy %s: must be 'allow', 'deny', or 'redact'", policy.Action, policy.Name)
 		}
 
-		// Store the compiled policy
+		// Store the compiled policy with resolved mode
 		e.policies = append(e.policies, CELResponsePolicy{
 			Name:                 policy.Name,
 			Description:          policy.Description,
 			Expression:           policy.Expression,
 			Action:               policy.Action,
 			Message:              policy.Message,
+			Mode:                 effectiveMode,
 			RedactionPattern:     policy.RedactionPattern,
 			RedactionReplacement: policy.RedactionReplacement,
 		})
@@ -124,9 +143,12 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
+		// Track timing for this policy evaluation
+		startTime := time.Now()
+
 		e.logger.Debug(ctx, "Evaluating CEL response policy",
 			zap.String("name", policy.Name),
-			zap.String("action", policy.Action),
+			zap.String("action", string(policy.Action)),
 			zap.String("expression", policy.Expression),
 		)
 
@@ -154,52 +176,66 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			return ResponseValidationResults{}, fmt.Errorf("response policy %s did not return a boolean", policy.Name)
 		}
 
+		// Calculate duration
+		durationMs := time.Since(startTime).Milliseconds()
+
 		e.logger.Debug(ctx, "CEL response policy evaluation result",
 			zap.String("name", policy.Name),
 			zap.Bool("matched", matched),
-			zap.String("action", policy.Action),
+			zap.String("action", string(policy.Action)),
+			zap.Int64("duration_ms", durationMs),
 		)
 
 		if matched {
 			switch policy.Action {
-			case "deny":
+			case config.PolicyActionDeny:
 				results.Results = append(results.Results, ResponseValidationResult{
 					PolicyName: policy.Name,
 					PolicyType: "cel",
-					Allowed:    false,
+					Action:     config.PolicyActionDeny,
+					Mode:       policy.Mode,
 					Message:    policy.Message,
+					DurationMs: durationMs,
 				})
-				results.DenyCount++
-				results.Allowed = false
-				if results.Message == "" {
-					results.Message = policy.Message
+				// Only affect final decision if mode is enabled (not audit_only)
+				if policy.Mode == config.PolicyModeEnabled {
+					results.Allowed = false
+					if results.Message == "" {
+						results.Message = policy.Message
+					}
 				}
 
-			case "redact":
+			case config.PolicyActionRedact:
 				// Apply redaction
 				content := e.getTextContent(result)
 				if content != "" {
 					redacted := e.applyRedaction(content, policy.RedactionPattern, policy.RedactionReplacement)
-					redactedContent = &redacted
 
 					results.Results = append(results.Results, ResponseValidationResult{
 						PolicyName:      policy.Name,
 						PolicyType:      "cel",
-						Allowed:         true,
+						Action:          config.PolicyActionRedact,
+						Mode:            policy.Mode,
 						Message:         policy.Message,
 						RedactedContent: redacted,
+						DurationMs:      durationMs,
 					})
-					results.RedactCount++
+
+					// Only actually apply redaction if mode is enabled (not audit_only)
+					if policy.Mode == config.PolicyModeEnabled {
+						redactedContent = &redacted
+					}
 				}
 
-			case "allow":
+			case config.PolicyActionAllow:
 				results.Results = append(results.Results, ResponseValidationResult{
 					PolicyName: policy.Name,
 					PolicyType: "cel",
-					Allowed:    true,
+					Action:     config.PolicyActionAllow,
+					Mode:       policy.Mode,
 					Message:    policy.Message,
+					DurationMs: durationMs,
 				})
-				results.AllowCount++
 			}
 		}
 	}
@@ -211,9 +247,9 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 
 	// Set final result message if not already set
 	if results.Message == "" {
-		if results.DenyCount > 0 {
+		if results.DenyCount() > 0 {
 			results.Message = "Response denied by CEL policy"
-		} else if results.RedactCount > 0 {
+		} else if results.RedactCount() > 0 {
 			results.Message = "Response content redacted by CEL policy"
 		} else {
 			results.Message = "No CEL response policies matched"
@@ -223,8 +259,8 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	e.logger.Info(ctx, "CEL response policy evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
-		zap.Int("deny_count", results.DenyCount),
-		zap.Int("redact_count", results.RedactCount),
+		zap.Int("deny_count", results.DenyCount()),
+		zap.Int("redact_count", results.RedactCount()),
 	)
 
 	return results, nil

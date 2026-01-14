@@ -67,11 +67,11 @@ func TestToolLoggingHandler_RequestID(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, result.Allowed)
 
-		// Verify the log entry contains "n/a" for request_id
+		// Verify the log entry contains "-" for request_id when not set in context
 		logs := recorded.All()
 		require.Len(t, logs, 1)
 
 		requestIDField := logs[0].ContextMap()["request_id"]
-		assert.Equal(t, "n/a", requestIDField)
+		assert.Equal(t, "-", requestIDField)
 	})
 }

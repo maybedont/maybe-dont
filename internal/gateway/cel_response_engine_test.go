@@ -29,7 +29,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 				{
 					Name:       "test-policy",
 					Expression: `response.isError == true`,
-					Action:     "deny",
+					Action:     config.PolicyActionDeny,
 					Message:    "Error responses not allowed",
 				},
 			},
@@ -60,7 +60,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 				{
 					Name:       "block-errors",
 					Expression: `response.isError == true`,
-					Action:     "deny",
+					Action:     config.PolicyActionDeny,
 					Message:    "Error responses not allowed",
 				},
 			},
@@ -125,7 +125,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 			engine, err := NewCELResponsePolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies)
+			err = engine.LoadPolicies(tt.policies, config.PolicyModeEnabled)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateResponse(context.Background(), tt.request, tt.response)
@@ -134,9 +134,9 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 			assert.Equal(t, tt.expectAllowed, results.Allowed, "Allowed status mismatch")
 			if tt.expectRedacted {
 				assert.NotNil(t, results.RedactedContent, "Expected redacted content")
-				assert.Greater(t, results.RedactCount, 0, "Expected redaction count > 0")
+				assert.Greater(t, results.RedactCount(), 0, "Expected redaction count > 0")
 			} else {
-				assert.Equal(t, 0, results.RedactCount, "Expected no redactions")
+				assert.Equal(t, 0, results.RedactCount(), "Expected no redactions")
 			}
 		})
 	}
