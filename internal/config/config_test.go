@@ -274,13 +274,15 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 			// No required fields in Audit anymore
 		},
 		AIPolicyValidation: struct {
-			Enabled   *bool      `mapstructure:"enabled"`
-			Mode      PolicyMode `mapstructure:"mode"`
-			Endpoint  string     `mapstructure:"endpoint"`
-			Model     string     `mapstructure:"model"`
-			RulesFile string     `mapstructure:"rules_file"`
-			APIKey    string     `mapstructure:"api_key"`
-			Rules     []AIPolicy `mapstructure:"rules"`
+			Enabled             *bool      `mapstructure:"enabled"`
+			Mode                PolicyMode `mapstructure:"mode"`
+			Endpoint            string     `mapstructure:"endpoint"`
+			Model               string     `mapstructure:"model"`
+			RulesFile           string     `mapstructure:"rules_file"`
+			APIKey              string     `mapstructure:"api_key"`
+			MaxBlockingMs       int        `mapstructure:"max_blocking_ms"`
+			MaxRuleEvaluationMs int        `mapstructure:"max_rule_evaluation_ms"`
+			Rules               []AIPolicy `mapstructure:"rules"`
 		}{
 			Mode: PolicyModeEnabled, // Use Mode instead of deprecated Enabled
 			// Missing APIKey - Error 11
@@ -740,6 +742,8 @@ func TestViperConfigPathsMatchStruct(t *testing.T) {
 		"native_tools.audit_report.max_entries",
 		"logging.path",
 		"audit.path",
+		"ai_validation.max_blocking_ms",
+		"ai_validation.max_rule_evaluation_ms",
 	}
 
 	for _, path := range viperPaths {

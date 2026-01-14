@@ -98,21 +98,23 @@ type Config struct {
 
 	// Policy configuration
 	PolicyValidation struct {
-		Enabled   *bool       `mapstructure:"enabled"`    // Deprecated: use Mode instead
-		Mode      PolicyMode  `mapstructure:"mode"`       // enabled, audit_only, disabled (default: enabled)
+		Enabled   *bool       `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode      PolicyMode  `mapstructure:"mode"`    // enabled, audit_only, disabled (default: enabled)
 		RulesFile string      `mapstructure:"rules_file"`
 		Rules     []CELPolicy `mapstructure:"rules"`
 	} `mapstructure:"policy_validation"`
 
 	// AI validation configuration
 	AIPolicyValidation struct {
-		Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
-		Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: audit_only)
-		Endpoint  string     `mapstructure:"endpoint"`
-		Model     string     `mapstructure:"model"`
-		RulesFile string     `mapstructure:"rules_file"`
-		APIKey    string     `mapstructure:"api_key"`
-		Rules     []AIPolicy `mapstructure:"rules"`
+		Enabled             *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode                PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: audit_only)
+		Endpoint            string     `mapstructure:"endpoint"`
+		Model               string     `mapstructure:"model"`
+		RulesFile           string     `mapstructure:"rules_file"`
+		APIKey              string     `mapstructure:"api_key"`
+		MaxBlockingMs       int        `mapstructure:"max_blocking_ms"`        // Max time to block request waiting for decision (default: 5000ms)
+		MaxRuleEvaluationMs int        `mapstructure:"max_rule_evaluation_ms"` // Max time for any single rule to complete (default: 10000ms)
+		Rules               []AIPolicy `mapstructure:"rules"`
 	} `mapstructure:"ai_validation"`
 
 	// Response validation configuration
@@ -609,6 +611,8 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("native_tools.audit_report.max_entries", 1_000)
 	v.SetDefault("logging.path", "stdout")
 	v.SetDefault("audit.path", "maybedont-audit.log")
+	v.SetDefault("ai_validation.max_blocking_ms", 5_000)
+	v.SetDefault("ai_validation.max_rule_evaluation_ms", 10_000)
 
 	// Try to find config file with fallback logic
 	configFileFound := false
@@ -985,6 +989,19 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		if cfg.AIPolicyValidation.Model == "" {
 			errors = append(errors, "ai_validation.model is required when AI validation is enabled")
 		}
+		// Validate timeout values
+		if cfg.AIPolicyValidation.MaxBlockingMs < 0 {
+			errors = append(errors, "ai_validation.max_blocking_ms must be non-negative")
+		}
+		if cfg.AIPolicyValidation.MaxBlockingMs > 60000 {
+			errors = append(errors, "ai_validation.max_blocking_ms must be less than 60000ms (1 minute)")
+		}
+		if cfg.AIPolicyValidation.MaxRuleEvaluationMs < 0 {
+			errors = append(errors, "ai_validation.max_rule_evaluation_ms must be non-negative")
+		}
+		if cfg.AIPolicyValidation.MaxRuleEvaluationMs > 120000 {
+			errors = append(errors, "ai_validation.max_rule_evaluation_ms must be less than 120000ms (2 minutes)")
+		}
 	}
 
 	// Validate native tools
@@ -1158,12 +1175,12 @@ func ValidateRelativePath(path string) error {
 	// Common encodings: %2e = '.', %2f = '/', %5c = '\', %00 = null
 	lowerPath := strings.ToLower(path)
 	encodedPatterns := []string{
-		"%2e", // .
-		"%2f", // /
-		"%5c", // \
-		"%00", // null
-		"%252e", // double-encoded .
-		"%252f", // double-encoded /
+		"%2e",    // .
+		"%2f",    // /
+		"%5c",    // \
+		"%00",    // null
+		"%252e",  // double-encoded .
+		"%252f",  // double-encoded /
 		"%c0%ae", // overlong UTF-8 encoding of .
 		"%c0%af", // overlong UTF-8 encoding of /
 		"%c1%9c", // overlong UTF-8 encoding of \

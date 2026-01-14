@@ -27,6 +27,9 @@ type ValidationResults struct {
 	Error      string             `json:"error,omitempty"`
 	AllowCount int                `json:"allow_count"`
 	DenyCount  int                `json:"deny_count"`
+	// AIDetails contains detailed AI validation results for audit logging
+	// This is only populated by the AI validation handler
+	AIDetails  *AuditAIResult     `json:"ai_details,omitempty"`
 }
 
 // ToolValidationHandler defines the interface for tool validation handlers

@@ -91,9 +91,11 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	if aiPolicyMode != config.PolicyModeDisabled {
 		logger.Info(ctx, "Initializing AI policy engine", zap.String("mode", string(aiPolicyMode)))
 		aiPolicyEngine = &AIPolicyEngine{
-			endpoint: cfg.AIPolicyValidation.Endpoint,
-			model:    cfg.AIPolicyValidation.Model,
-			apiKey:   cfg.AIPolicyValidation.APIKey,
+			endpoint:            cfg.AIPolicyValidation.Endpoint,
+			model:               cfg.AIPolicyValidation.Model,
+			apiKey:              cfg.AIPolicyValidation.APIKey,
+			maxBlockingMs:       cfg.AIPolicyValidation.MaxBlockingMs,
+			maxRuleEvaluationMs: cfg.AIPolicyValidation.MaxRuleEvaluationMs,
 		}
 
 		// Create AI policy engine
@@ -493,42 +495,47 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 // populateRequestValidationAudit extracts validation results by policy type and populates audit context
 func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results ValidationResults) {
-	if len(results.Results) == 0 {
+	if len(results.Results) == 0 && results.AIDetails == nil {
 		return
 	}
 
-	// Extract CEL and AI results
+	// Extract CEL results
 	for _, r := range results.Results {
 		if r.PolicyType == "audit" {
 			continue // Skip audit-only policies
 		}
 
-		switch r.PolicyType {
-		case "cel":
+		if r.PolicyType == "cel" {
 			audit.SetRequestValidationCEL(string(r.Action), r.PolicyName, r.DurationMs)
-		case "ai":
-			audit.SetRequestValidationAI(string(r.Action), r.Message, r.DurationMs)
 		}
+	}
+
+	// Set AI details if present (new detailed format)
+	if results.AIDetails != nil {
+		audit.SetRequestValidationAI(results.AIDetails)
 	}
 }
 
 // populateResponseValidationAudit extracts response validation results by policy type
 func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results ResponseValidationResults) {
-	if len(results.Results) == 0 {
+	if len(results.Results) == 0 && results.AIDetails == nil {
 		return
 	}
 
+	// Extract CEL results
 	for _, r := range results.Results {
 		if r.PolicyType == "audit" {
 			continue
 		}
 
-		switch r.PolicyType {
-		case "cel":
+		if r.PolicyType == "cel" {
 			audit.SetResponseValidationCEL(string(r.Action), r.PolicyName, r.DurationMs)
-		case "ai":
-			audit.SetResponseValidationAI(string(r.Action), r.Message, r.DurationMs)
 		}
+	}
+
+	// Set AI details if present (new detailed format)
+	if results.AIDetails != nil {
+		audit.SetResponseValidationAI(results.AIDetails)
 	}
 }
 

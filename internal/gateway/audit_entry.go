@@ -46,16 +46,35 @@ type AuditResponseInfo struct {
 
 // AuditValidationInfo contains validation results for CEL and AI policies
 type AuditValidationInfo struct {
-	CEL *AuditPolicyResult `json:"cel,omitempty"`
-	AI  *AuditPolicyResult `json:"ai,omitempty"`
+	CEL *AuditCELResult `json:"cel,omitempty"`
+	AI  *AuditAIResult  `json:"ai,omitempty"`
 }
 
-// AuditPolicyResult contains the result of a single policy evaluation
-type AuditPolicyResult struct {
+// AuditCELResult contains the result of CEL policy evaluation
+type AuditCELResult struct {
 	Action      string `json:"action"`
 	RuleMatched string `json:"rule_matched,omitempty"`
-	Reasoning   string `json:"reasoning,omitempty"`
 	DurationMs  int64  `json:"duration_ms"`
+}
+
+// AuditAIResult contains the result of AI policy evaluation with detailed timing
+type AuditAIResult struct {
+	Action       string              `json:"action"`                  // Final decision: "allow" or "deny"
+	BlockedMs    int64               `json:"blocked_ms"`              // Time request was blocked waiting for decision
+	EvaluationMs int64               `json:"evaluation_ms"`           // Total wall-clock time for all rules to complete
+	DecidingRule string              `json:"deciding_rule,omitempty"` // Rule that caused the decision (omitted if none)
+	Reason       string              `json:"reason,omitempty"`        // Message from deciding rule's AI response
+	Results      []AuditAIRuleResult `json:"results"`                 // Per-rule results ordered by completion time
+}
+
+// AuditAIRuleResult contains the result of a single AI rule evaluation
+type AuditAIRuleResult struct {
+	Rule         string `json:"rule"`                    // Rule name from definition
+	Action       string `json:"action"`                  // Rule's configured action: "allow" or "deny"
+	Mode         string `json:"mode,omitempty"`          // Only present if "audit_only"
+	Result       string `json:"result"`                  // What rule contributed: "allow", "deny", or "error"
+	EvaluationMs int64  `json:"evaluation_ms"`           // Time for this rule to complete
+	Error        string `json:"error,omitempty"`         // Only present when result is "error"
 }
 
 // AuditContext is used to accumulate audit data through the request lifecycle
@@ -96,23 +115,19 @@ func (ac *AuditContext) SetRequestValidationCEL(action, ruleMatched string, dura
 	if ac.entry.RequestValidation == nil {
 		ac.entry.RequestValidation = &AuditValidationInfo{}
 	}
-	ac.entry.RequestValidation.CEL = &AuditPolicyResult{
+	ac.entry.RequestValidation.CEL = &AuditCELResult{
 		Action:      action,
 		RuleMatched: ruleMatched,
 		DurationMs:  durationMs,
 	}
 }
 
-// SetRequestValidationAI sets AI request validation result
-func (ac *AuditContext) SetRequestValidationAI(action, reasoning string, durationMs int64) {
+// SetRequestValidationAI sets AI request validation result with detailed timing and per-rule results
+func (ac *AuditContext) SetRequestValidationAI(aiResult *AuditAIResult) {
 	if ac.entry.RequestValidation == nil {
 		ac.entry.RequestValidation = &AuditValidationInfo{}
 	}
-	ac.entry.RequestValidation.AI = &AuditPolicyResult{
-		Action:     action,
-		Reasoning:  reasoning,
-		DurationMs: durationMs,
-	}
+	ac.entry.RequestValidation.AI = aiResult
 }
 
 // SetRequestDuration sets the duration of the actual tool call (excluding validation)
@@ -133,23 +148,19 @@ func (ac *AuditContext) SetResponseValidationCEL(action, ruleMatched string, dur
 	if ac.entry.ResponseValidation == nil {
 		ac.entry.ResponseValidation = &AuditValidationInfo{}
 	}
-	ac.entry.ResponseValidation.CEL = &AuditPolicyResult{
+	ac.entry.ResponseValidation.CEL = &AuditCELResult{
 		Action:      action,
 		RuleMatched: ruleMatched,
 		DurationMs:  durationMs,
 	}
 }
 
-// SetResponseValidationAI sets AI response validation result
-func (ac *AuditContext) SetResponseValidationAI(action, reasoning string, durationMs int64) {
+// SetResponseValidationAI sets AI response validation result with detailed timing and per-rule results
+func (ac *AuditContext) SetResponseValidationAI(aiResult *AuditAIResult) {
 	if ac.entry.ResponseValidation == nil {
 		ac.entry.ResponseValidation = &AuditValidationInfo{}
 	}
-	ac.entry.ResponseValidation.AI = &AuditPolicyResult{
-		Action:     action,
-		Reasoning:  reasoning,
-		DurationMs: durationMs,
-	}
+	ac.entry.ResponseValidation.AI = aiResult
 }
 
 // SetActions sets the recommended and actual actions
