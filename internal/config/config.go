@@ -94,35 +94,46 @@ type Config struct {
 		// If empty or not set, all proxies are trusted and the leftmost (first) IP is used.
 		// Examples: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1", "fc00::/7"]
 		TrustedProxies []string `mapstructure:"trusted_proxies"`
+		// SessionTimeoutMinutes is the idle timeout for sessions in minutes.
+		// Sessions inactive for longer than this will be cleaned up.
+		// Default: 30 minutes. Set to 0 to disable session timeout (not recommended).
+		SessionTimeoutMinutes int `mapstructure:"session_timeout_minutes"`
 	} `mapstructure:"server"`
 
-	// Policy configuration
-	PolicyValidation struct {
-		Enabled   *bool       `mapstructure:"enabled"` // Deprecated: use Mode instead
-		Mode      PolicyMode  `mapstructure:"mode"`    // enabled, audit_only, disabled (default: enabled)
-		RulesFile string      `mapstructure:"rules_file"`
-		Rules     []CELPolicy `mapstructure:"rules"`
-	} `mapstructure:"policy_validation"`
+	// Global validation settings that apply to all validation phases
+	Validation struct {
+		MaxBlockingMs       int `mapstructure:"max_blocking_ms"`        // Max cumulative time to block request waiting for decisions across all phases (default: 5000ms)
+		MaxRuleEvaluationMs int `mapstructure:"max_rule_evaluation_ms"` // Max time for any single rule to complete (default: 10000ms)
+		// AI settings shared by all AI-powered validation (request, response) and AI tools (audit report)
+		AI struct {
+			Endpoint string `mapstructure:"endpoint"` // OpenAI-compatible API endpoint
+			Model    string `mapstructure:"model"`    // Model to use for AI validation
+			APIKey   string `mapstructure:"api_key"`  // API key for AI endpoint
+		} `mapstructure:"ai"`
+	} `mapstructure:"validation"`
 
-	// AI validation configuration
-	AIPolicyValidation struct {
-		Enabled             *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
-		Mode                PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: audit_only)
-		Endpoint            string     `mapstructure:"endpoint"`
-		Model               string     `mapstructure:"model"`
-		RulesFile           string     `mapstructure:"rules_file"`
-		APIKey              string     `mapstructure:"api_key"`
-		MaxBlockingMs       int        `mapstructure:"max_blocking_ms"`        // Max time to block request waiting for decision (default: 5000ms)
-		MaxRuleEvaluationMs int        `mapstructure:"max_rule_evaluation_ms"` // Max time for any single rule to complete (default: 10000ms)
-		Rules               []AIPolicy `mapstructure:"rules"`
-	} `mapstructure:"ai_validation"`
+	// Request validation configuration (deterministic rules)
+	RequestValidation struct {
+		Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: enabled)
+		RulesFile string     `mapstructure:"rules_file"`
+		Rules     []Policy   `mapstructure:"rules"`
+	} `mapstructure:"request_validation"`
 
-	// Response validation configuration
+	// AI request validation configuration
+	AIRequestValidation struct {
+		Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: audit_only)
+		RulesFile string     `mapstructure:"rules_file"`
+		Rules     []AIPolicy `mapstructure:"rules"`
+	} `mapstructure:"ai_request_validation"`
+
+	// Response validation configuration (deterministic rules)
 	ResponseValidation struct {
-		Enabled   *bool               `mapstructure:"enabled"` // Deprecated: use Mode instead
-		Mode      PolicyMode          `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
-		RulesFile string              `mapstructure:"rules_file"`
-		Rules     []CELResponsePolicy `mapstructure:"rules"`
+		Enabled   *bool            `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode      PolicyMode       `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
+		RulesFile string           `mapstructure:"rules_file"`
+		Rules     []ResponsePolicy `mapstructure:"rules"`
 	} `mapstructure:"response_validation"`
 
 	// AI response validation configuration
@@ -157,9 +168,6 @@ type Config struct {
 
 		AuditReport struct {
 			Enabled      bool   `mapstructure:"enabled"`
-			Endpoint     string `mapstructure:"endpoint"`
-			Model        string `mapstructure:"model"`
-			APIKey       string `mapstructure:"api_key"`
 			MaxEntries   int    `mapstructure:"max_entries"`
 			SystemPrompt string `mapstructure:"system_prompt"`
 		} `mapstructure:"audit_report"`
@@ -218,8 +226,8 @@ type CredentialMapping struct {
 	Format       string `mapstructure:"format"`        // Optional. Template for value formatting. Use {value} placeholder. Default: "{value}" (raw value passthrough). Examples: "Bearer {value}", "sha256={value}"
 }
 
-// CELPolicy represents a single CEL policy rule
-type CELPolicy struct {
+// Policy represents a single deterministic policy rule (uses CEL expressions internally)
+type Policy struct {
 	Name        string       `mapstructure:"name"`
 	Description string       `mapstructure:"description"`
 	Expression  string       `mapstructure:"expression"`
@@ -238,8 +246,8 @@ type AIPolicy struct {
 	Mode        PolicyMode   `mapstructure:"mode"` // Optional: overrides top-level mode
 }
 
-// CELResponsePolicy represents a single CEL response policy rule
-type CELResponsePolicy struct {
+// ResponsePolicy represents a single deterministic response policy rule (uses CEL expressions internally)
+type ResponsePolicy struct {
 	Name                 string       `mapstructure:"name"`
 	Description          string       `mapstructure:"description"`
 	Expression           string       `mapstructure:"expression"`
@@ -260,8 +268,8 @@ type AIResponsePolicy struct {
 	Mode        PolicyMode   `mapstructure:"mode"` // Optional: overrides top-level mode
 }
 
-// LoadPoliciesFromFile loads CEL policies from a file
-func LoadCELPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
+// LoadPoliciesFromFile loads deterministic policies from a file
+func LoadPoliciesFromFile(rulesFile string) ([]Policy, error) {
 	if rulesFile == "" {
 		return nil, nil
 	}
@@ -272,7 +280,7 @@ func LoadCELPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
 	}
 
 	var policies struct {
-		Rules []CELPolicy `yaml:"rules"`
+		Rules []Policy `yaml:"rules"`
 	}
 	if err := yaml.Unmarshal(data, &policies); err != nil {
 		return nil, fmt.Errorf("error unmarshaling rules: %w", err)
@@ -305,8 +313,8 @@ func LoadAIPoliciesFromFile(path string) ([]AIPolicy, error) {
 	return policies.Rules, nil
 }
 
-// LoadCELResponsePoliciesFromFile loads CEL response policies from a file
-func LoadCELResponsePoliciesFromFile(rulesFile string) ([]CELResponsePolicy, error) {
+// LoadResponsePoliciesFromFile loads deterministic response policies from a file
+func LoadResponsePoliciesFromFile(rulesFile string) ([]ResponsePolicy, error) {
 	if rulesFile == "" {
 		return nil, nil
 	}
@@ -317,7 +325,7 @@ func LoadCELResponsePoliciesFromFile(rulesFile string) ([]CELResponsePolicy, err
 	}
 
 	var policies struct {
-		Rules []CELResponsePolicy `yaml:"rules"`
+		Rules []ResponsePolicy `yaml:"rules"`
 	}
 	if err := yaml.Unmarshal(data, &policies); err != nil {
 		return nil, fmt.Errorf("error unmarshaling response rules: %w", err)
@@ -611,8 +619,9 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("native_tools.audit_report.max_entries", 1_000)
 	v.SetDefault("logging.path", "stdout")
 	v.SetDefault("audit.path", "maybedont-audit.log")
-	v.SetDefault("ai_validation.max_blocking_ms", 5_000)
-	v.SetDefault("ai_validation.max_rule_evaluation_ms", 10_000)
+	v.SetDefault("validation.max_blocking_ms", 90_000)
+	v.SetDefault("validation.max_rule_evaluation_ms", 45_000)
+	v.SetDefault("server.session_timeout_minutes", 30)
 
 	// Try to find config file with fallback logic
 	configFileFound := false
@@ -679,16 +688,6 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	}
 
 	// Set default values for native tools configuration
-	// Inherit AI settings from ai_validation if not specified
-	if config.NativeTools.AuditReport.Endpoint == "" {
-		config.NativeTools.AuditReport.Endpoint = config.AIPolicyValidation.Endpoint
-	}
-	if config.NativeTools.AuditReport.Model == "" {
-		config.NativeTools.AuditReport.Model = config.AIPolicyValidation.Model
-	}
-	if config.NativeTools.AuditReport.APIKey == "" {
-		config.NativeTools.AuditReport.APIKey = config.AIPolicyValidation.APIKey
-	}
 	if config.NativeTools.AuditReport.SystemPrompt == "" {
 		config.NativeTools.AuditReport.SystemPrompt = `You are an AI security analyst reviewing MCP gateway audit logs.
 Analyze the tool calls, validation results, and patterns to provide insights on:
@@ -705,13 +704,13 @@ For each concern, estimate the potential impact category and explain the reasoni
 	}
 
 	// Resolve and store validation modes with their respective defaults
-	// CEL policy validation defaults to enabled
-	config.PolicyValidation.Mode = ResolveValidationMode(
-		config.PolicyValidation.Mode, config.PolicyValidation.Enabled, PolicyModeEnabled)
+	// Request validation defaults to enabled
+	config.RequestValidation.Mode = ResolveValidationMode(
+		config.RequestValidation.Mode, config.RequestValidation.Enabled, PolicyModeEnabled)
 
-	// AI validation defaults to audit_only (non-blocking by default)
-	config.AIPolicyValidation.Mode = ResolveValidationMode(
-		config.AIPolicyValidation.Mode, config.AIPolicyValidation.Enabled, PolicyModeAuditOnly)
+	// AI request validation defaults to audit_only (non-blocking by default)
+	config.AIRequestValidation.Mode = ResolveValidationMode(
+		config.AIRequestValidation.Mode, config.AIRequestValidation.Enabled, PolicyModeAuditOnly)
 
 	// Response validation defaults to disabled
 	config.ResponseValidation.Mode = ResolveValidationMode(
@@ -725,45 +724,51 @@ For each concern, estimate the potential impact category and explain the reasoni
 	// These are collected here so they can be reported alongside validation errors
 	var loadErrors []string
 
-	// Load CEL request policies from rules file (if mode is not disabled)
-	if config.PolicyValidation.Mode != PolicyModeDisabled {
-		if config.PolicyValidation.RulesFile == "" {
-			loadErrors = append(loadErrors, "policy_validation is enabled but rules_file is not specified")
+	// Load request policies from rules file (if mode is not disabled)
+	if config.RequestValidation.Mode != PolicyModeDisabled {
+		if config.RequestValidation.RulesFile == "" {
+			loadErrors = append(loadErrors, "request_validation is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.RequestValidation.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("request_validation.rules_file: %s", err.Error()))
 		} else {
-			resolvedPath := resolveRulesFilePath(config.PolicyValidation.RulesFile, configFileDir)
-			policies, err := LoadCELPoliciesFromFile(resolvedPath)
+			resolvedPath := resolveRulesFilePath(config.RequestValidation.RulesFile, configFileDir)
+			policies, err := LoadPoliciesFromFile(resolvedPath)
 			if err != nil {
-				loadErrors = append(loadErrors, fmt.Sprintf("error loading CEL policies from file: %v", err))
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading request policies from file: %v", err))
 			} else {
-				config.PolicyValidation.Rules = policies
+				config.RequestValidation.Rules = policies
 			}
 		}
 	}
 
 	// Load AI request policies from rules file (if mode is not disabled)
-	if config.AIPolicyValidation.Mode != PolicyModeDisabled {
-		if config.AIPolicyValidation.RulesFile == "" {
-			loadErrors = append(loadErrors, "ai_validation is enabled but rules_file is not specified")
+	if config.AIRequestValidation.Mode != PolicyModeDisabled {
+		if config.AIRequestValidation.RulesFile == "" {
+			loadErrors = append(loadErrors, "ai_request_validation is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.AIRequestValidation.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("ai_request_validation.rules_file: %s", err.Error()))
 		} else {
-			resolvedPath := resolveRulesFilePath(config.AIPolicyValidation.RulesFile, configFileDir)
+			resolvedPath := resolveRulesFilePath(config.AIRequestValidation.RulesFile, configFileDir)
 			aiPolicies, err := LoadAIPoliciesFromFile(resolvedPath)
 			if err != nil {
-				loadErrors = append(loadErrors, fmt.Sprintf("error loading AI policies from file: %v", err))
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading AI request policies from file: %v", err))
 			} else {
-				config.AIPolicyValidation.Rules = aiPolicies
+				config.AIRequestValidation.Rules = aiPolicies
 			}
 		}
 	}
 
-	// Load CEL response policies from rules file (if mode is not disabled)
+	// Load response policies from rules file (if mode is not disabled)
 	if config.ResponseValidation.Mode != PolicyModeDisabled {
 		if config.ResponseValidation.RulesFile == "" {
 			loadErrors = append(loadErrors, "response_validation is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.ResponseValidation.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("response_validation.rules_file: %s", err.Error()))
 		} else {
 			resolvedPath := resolveRulesFilePath(config.ResponseValidation.RulesFile, configFileDir)
-			responsePolicies, err := LoadCELResponsePoliciesFromFile(resolvedPath)
+			responsePolicies, err := LoadResponsePoliciesFromFile(resolvedPath)
 			if err != nil {
-				loadErrors = append(loadErrors, fmt.Sprintf("error loading CEL response policies from file: %v", err))
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading response policies from file: %v", err))
 			} else {
 				config.ResponseValidation.Rules = responsePolicies
 			}
@@ -774,6 +779,8 @@ For each concern, estimate the potential impact category and explain the reasoni
 	if config.AIResponseValidation.Mode != PolicyModeDisabled {
 		if config.AIResponseValidation.RulesFile == "" {
 			loadErrors = append(loadErrors, "ai_response_validation is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.AIResponseValidation.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("ai_response_validation.rules_file: %s", err.Error()))
 		} else {
 			resolvedPath := resolveRulesFilePath(config.AIResponseValidation.RulesFile, configFileDir)
 			aiResponsePolicies, err := LoadAIResponsePoliciesFromFile(resolvedPath)
@@ -977,31 +984,36 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		}
 	}
 
-	// Validate AI validation configuration (if mode is enabled or audit_only)
-	// Empty mode is treated as disabled for backwards compatibility
-	if cfg.AIPolicyValidation.Mode != PolicyModeDisabled && cfg.AIPolicyValidation.Mode != "" {
-		if cfg.AIPolicyValidation.APIKey == "" {
-			errors = append(errors, "ai_validation.api_key is required when AI validation is enabled")
+	// Validate AI configuration when any AI feature is enabled
+	// AI credentials are required when AI request validation, AI response validation, or audit report is enabled
+	aiRequestEnabled := cfg.AIRequestValidation.Mode != PolicyModeDisabled && cfg.AIRequestValidation.Mode != ""
+	aiResponseEnabled := cfg.AIResponseValidation.Mode != PolicyModeDisabled && cfg.AIResponseValidation.Mode != ""
+	auditReportEnabled := cfg.NativeTools.AuditReport.Enabled
+
+	if aiRequestEnabled || aiResponseEnabled || auditReportEnabled {
+		if cfg.Validation.AI.APIKey == "" {
+			errors = append(errors, "validation.ai.api_key is required when AI validation or audit report is enabled")
 		}
-		if cfg.AIPolicyValidation.Endpoint == "" {
-			errors = append(errors, "ai_validation.endpoint is required when AI validation is enabled")
+		if cfg.Validation.AI.Endpoint == "" {
+			errors = append(errors, "validation.ai.endpoint is required when AI validation or audit report is enabled")
 		}
-		if cfg.AIPolicyValidation.Model == "" {
-			errors = append(errors, "ai_validation.model is required when AI validation is enabled")
+		if cfg.Validation.AI.Model == "" {
+			errors = append(errors, "validation.ai.model is required when AI validation or audit report is enabled")
 		}
-		// Validate timeout values
-		if cfg.AIPolicyValidation.MaxBlockingMs < 0 {
-			errors = append(errors, "ai_validation.max_blocking_ms must be non-negative")
-		}
-		if cfg.AIPolicyValidation.MaxBlockingMs > 60000 {
-			errors = append(errors, "ai_validation.max_blocking_ms must be less than 60000ms (1 minute)")
-		}
-		if cfg.AIPolicyValidation.MaxRuleEvaluationMs < 0 {
-			errors = append(errors, "ai_validation.max_rule_evaluation_ms must be non-negative")
-		}
-		if cfg.AIPolicyValidation.MaxRuleEvaluationMs > 120000 {
-			errors = append(errors, "ai_validation.max_rule_evaluation_ms must be less than 120000ms (2 minutes)")
-		}
+	}
+
+	// Validate global validation timeout values
+	if cfg.Validation.MaxBlockingMs < 0 {
+		errors = append(errors, "validation.max_blocking_ms must be non-negative")
+	}
+	if cfg.Validation.MaxBlockingMs > 120000 {
+		errors = append(errors, "validation.max_blocking_ms must be less than 120000ms (2 minutes)")
+	}
+	if cfg.Validation.MaxRuleEvaluationMs < 0 {
+		errors = append(errors, "validation.max_rule_evaluation_ms must be non-negative")
+	}
+	if cfg.Validation.MaxRuleEvaluationMs > 120000 {
+		errors = append(errors, "validation.max_rule_evaluation_ms must be less than 120000ms (2 minutes)")
 	}
 
 	// Validate native tools

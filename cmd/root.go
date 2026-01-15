@@ -97,8 +97,8 @@ and providing comprehensive audit logging.`,
 			} else {
 				// Set rule usage flags based on config (mode is already resolved during config loading)
 				MetricsCollector.SetRuleUsage(
-					cfg.AIPolicyValidation.Mode != config.PolicyModeDisabled,
-					cfg.PolicyValidation.Mode != config.PolicyModeDisabled,
+					cfg.AIRequestValidation.Mode != config.PolicyModeDisabled,
+					cfg.RequestValidation.Mode != config.PolicyModeDisabled,
 					cfg.AIResponseValidation.Mode != config.PolicyModeDisabled,
 					cfg.ResponseValidation.Mode != config.PolicyModeDisabled,
 				)

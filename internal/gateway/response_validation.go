@@ -27,9 +27,12 @@ type ResponseValidationResults struct {
 	Message         string                     `json:"message,omitempty"`
 	Error           string                     `json:"error,omitempty"`
 	RedactedContent *string                    `json:"redacted_content,omitempty"` // Final redacted content if any redaction occurred
+	// CELDetails contains detailed CEL validation results for audit logging
+	// This is only populated by the CEL response validation handler
+	CELDetails *AuditCELResult `json:"cel_details,omitempty"`
 	// AIDetails contains detailed AI validation results for audit logging
 	// This is only populated by the AI response validation handler
-	AIDetails       *AuditAIResult             `json:"ai_details,omitempty"`
+	AIDetails *AuditAIResult `json:"ai_details,omitempty"`
 }
 
 // AllowCount returns the number of results with allow action

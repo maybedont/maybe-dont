@@ -17,7 +17,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		policies       []config.CELResponsePolicy
+		policies       []config.ResponsePolicy
 		request        mcp.CallToolRequest
 		response       *mcp.CallToolResult
 		expectAllowed  bool
@@ -25,7 +25,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 	}{
 		{
 			name: "allow response - no policies match",
-			policies: []config.CELResponsePolicy{
+			policies: []config.ResponsePolicy{
 				{
 					Name:       "test-policy",
 					Expression: `response.isError == true`,
@@ -56,7 +56,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 		},
 		{
 			name: "deny response - policy matches",
-			policies: []config.CELResponsePolicy{
+			policies: []config.ResponsePolicy{
 				{
 					Name:       "block-errors",
 					Expression: `response.isError == true`,
@@ -87,7 +87,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 		},
 		{
 			name: "redact response content",
-			policies: []config.CELResponsePolicy{
+			policies: []config.ResponsePolicy{
 				{
 					Name:                 "redact-sensitive",
 					Expression:           `size(response.content) > 0 && response.content[0].text.contains("password")`,
@@ -128,7 +128,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 			err = engine.LoadPolicies(tt.policies, config.PolicyModeEnabled)
 			require.NoError(t, err)
 
-			results, err := engine.EvaluateResponse(context.Background(), tt.request, tt.response)
+			results, err := engine.EvaluateResponse(context.Background(), tt.request, tt.response, nil)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.expectAllowed, results.Allowed, "Allowed status mismatch")

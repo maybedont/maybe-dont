@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Maybe Don't Gateway is a security middleware service built in Go that acts as a protective gateway between LLM/AI agents and Model Context Protocol (MCP) servers. It intercepts and validates MCP requests using both CEL-based policies and AI-powered validation to prevent potentially dangerous operations.
+Maybe Don't Gateway is a security middleware service built in Go that acts as a protective gateway between LLM/AI agents and Model Context Protocol (MCP) servers. It intercepts and validates MCP requests using both deterministic rules (CEL-based policies) and AI-powered validation to prevent potentially dangerous operations.
 
 ## Essential Commands
 
@@ -34,8 +34,8 @@ Maybe Don't Gateway is a security middleware service built in Go that acts as a 
 ### Core Structure
 The gateway operates as a transparent proxy between MCP clients and multiple downstream MCP servers, implementing a dual-validation approach:
 
-1. **CEL Engine** (`internal/gateway/cel_engine.go`) - Evaluates deterministic policy rules using Google's Common Expression Language
-2. **AI Engine** (`internal/gateway/ai_engine.go`) - Uses OpenAI API for context-aware validation of potentially dangerous operations
+1. **Request Policy Engine** (`internal/gateway/cel_engine.go`) - Evaluates deterministic policy rules using Google's Common Expression Language (CEL)
+2. **AI Request Policy Engine** (`internal/gateway/ai_engine.go`) - Uses OpenAI API for context-aware validation of potentially dangerous operations
 3. **ClientManager** (`internal/gateway/client_manager.go`) - Manages multiple downstream MCP client connections
 
 ### Multi-Client Architecture
@@ -63,10 +63,10 @@ Configuration is loaded in this order (later overrides earlier):
 3. Command-line flags
 
 ### Security Rules
-- **CEL Rules**: Loaded from external `cel.rules.yaml` file when `policy_validation` is enabled
-- **AI Rules**: Loaded from external `ai.rules.yaml` file when `ai_validation` is enabled
-- **CEL Response Rules**: Loaded from external `cel_response.rules.yaml` file when `response_validation` is enabled
-- **AI Response Rules**: Loaded from external `ai_response.rules.yaml` file when `ai_response_validation` is enabled
+- **Request Rules**: Loaded from external `rules.yaml` file when `request_validation` is enabled (deterministic CEL-based rules)
+- **AI Request Rules**: Loaded from external `ai_rules.yaml` file when `ai_request_validation` is enabled
+- **Response Rules**: Loaded from external `response_rules.yaml` file when `response_validation` is enabled (deterministic CEL-based rules)
+- **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `ai_response_validation` is enabled
 - **Multi-Client Validation**: Policies can target specific clients using name prefixes
 - **Required When Enabled**: Rules files must be specified in config when their corresponding validation feature is enabled
 
@@ -84,7 +84,7 @@ From `.cursor/rules/golang.mdc`:
 ## Testing Approach
 
 The project uses Go's standard testing framework with testify for assertions. Key test files:
-- `internal/gateway/cel_engine_test.go` - CEL policy engine tests
+- `internal/gateway/cel_engine_test.go` - Request policy engine tests
 - `internal/gateway/tool_validation_test.go` - Tool validation logic tests
 - `internal/gateway/gateway_test.go` - Main gateway integration tests
 - `internal/config/config_test.go` - Configuration loading tests
@@ -117,7 +117,7 @@ The following anonymized metrics are collected:
 - **Tool Invocations**: Count of tool calls processed by the gateway
 - **Gateway Starts**: Number of times the gateway has been started
 - **MCP Server Count**: Number of configured downstream MCP servers
-- **Rule Usage Flags**: Boolean flags indicating if AI rules, CEL rules, AI response rules, and CEL response rules are enabled
+- **Rule Usage Flags**: Boolean flags indicating if AI request rules, request rules, AI response rules, and response rules are enabled
 
 ### How It Works
 

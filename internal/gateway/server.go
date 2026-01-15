@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -185,6 +186,109 @@ func (g *Gateway) onSessionUnregister(ctx context.Context, session server.Client
 	g.logger.Info(ctx, "Downstream clients closed for session", zap.String("session_id", sessionID))
 }
 
+// jsonRPCRequest is used to parse just the method from a JSON-RPC request
+type jsonRPCRequest struct {
+	Method string `json:"method"`
+}
+
+// callToolParams is used to parse just the tool name from a tools/call request
+type callToolParams struct {
+	Params struct {
+		Name string `json:"name"`
+	} `json:"params"`
+}
+
+// onRequestInitialization is called before each request is processed.
+// It detects stale sessions where the tool being called belongs to a downstream
+// MCP server (based on the client prefix pattern), but the session doesn't exist
+// in our SessionManager (e.g., after server restart).
+//
+// In this case, we return an error instructing the AI agent to call discover_tools
+// to re-establish their session and refresh their tool list.
+func (g *Gateway) onRequestInitialization(ctx context.Context, id any, message any) error {
+	// Parse the raw JSON to get the method.
+	// The message is passed as json.RawMessage (which is a named type for []byte).
+	// We need to handle both json.RawMessage and []byte type assertions.
+	var msgBytes []byte
+	switch m := message.(type) {
+	case json.RawMessage:
+		msgBytes = m
+	case []byte:
+		msgBytes = m
+	default:
+		// Not raw bytes, can't parse - let it through
+		return nil
+	}
+
+	var req jsonRPCRequest
+	if err := json.Unmarshal(msgBytes, &req); err != nil {
+		// Can't parse method, let the normal handler deal with it
+		return nil
+	}
+
+	// Only check for tools/call requests
+	if req.Method != string(mcp.MethodToolsCall) {
+		return nil
+	}
+
+	// Parse the tool name from the request
+	var toolReq callToolParams
+	if err := json.Unmarshal(msgBytes, &toolReq); err != nil {
+		// Can't parse tool name, let the normal handler deal with it
+		return nil
+	}
+
+	toolName := toolReq.Params.Name
+	if toolName == "" {
+		// No tool name, let the normal handler deal with it
+		return nil
+	}
+
+	// Check if the tool name has a prefix that matches a configured downstream client
+	clientName, _, err := ParsePrefixedName(toolName)
+	if err != nil {
+		// Not a prefixed name (e.g., native tool like "maybedont__discover_tools")
+		// Let the normal handler deal with it
+		return nil
+	}
+
+	// Check if this client prefix corresponds to a configured downstream client
+	if !g.clientManager.IsClientConfigured(clientName) {
+		// Not a known client prefix, let the normal handler deal with it
+		// This could be a native tool or just an unknown tool
+		return nil
+	}
+
+	// The tool belongs to a configured downstream client.
+	// Now check if the session exists in our SessionManager.
+	session := server.ClientSessionFromContext(ctx)
+	if session == nil {
+		// No session in context - shouldn't happen, but let it through
+		return nil
+	}
+
+	sessionID := session.SessionID()
+
+	// Check if we have this session in our SessionManager
+	if g.clientManager.HasSession(sessionID) {
+		// Session exists, all good - let the request proceed
+		return nil
+	}
+
+	// Session doesn't exist in our SessionManager, but the tool belongs to a
+	// configured downstream client. This means the AI agent is using a stale
+	// session (e.g., from before a server restart).
+	g.logger.Info(ctx, "Stale session detected for downstream tool call",
+		zap.String("session_id", sessionID),
+		zap.String("tool_name", toolName),
+		zap.String("client_prefix", clientName))
+
+	return &SessionExpiredError{
+		SessionID: sessionID,
+		Reason:    fmt.Sprintf("session not found for tool '%s' from downstream server '%s'", toolName, clientName),
+	}
+}
+
 // ensurePassThroughToolsDiscovered ensures that pass-through tools are available
 // for this session. It checks for existing downstream clients and returns their tools,
 // or performs synchronous discovery if no clients exist yet.
@@ -302,6 +406,13 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	hooks := &server.Hooks{}
 	hooks.AddOnRegisterSession(g.onSessionRegister)
 	hooks.AddOnUnregisterSession(g.onSessionUnregister)
+
+	// Add request initialization hook to detect stale sessions.
+	// This hook runs before the SDK looks up the tool in its registry.
+	// If the session doesn't exist in our SessionManager but the tool name
+	// matches a configured downstream client prefix, we return an error
+	// instructing the AI agent to re-establish their session.
+	hooks.AddOnRequestInitialization(g.onRequestInitialization)
 
 	// Create a tool filter that performs lazy discovery of pass-through tools.
 	// When tools/list is called, if the session doesn't have pass-through tools yet,

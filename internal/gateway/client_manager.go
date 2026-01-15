@@ -27,11 +27,16 @@ type ClientManager struct {
 	logger         *config.SessionLogger
 }
 
-// NewClientManager creates a new client manager
+// NewClientManager creates a new client manager with the default session timeout
 func NewClientManager(ctx context.Context, logger *config.SessionLogger) *ClientManager {
+	return NewClientManagerWithTimeout(ctx, logger, DefaultSessionTimeout)
+}
+
+// NewClientManagerWithTimeout creates a new client manager with a custom session timeout
+func NewClientManagerWithTimeout(ctx context.Context, logger *config.SessionLogger, sessionTimeout time.Duration) *ClientManager {
 	return &ClientManager{
 		clientConfigs:  make(map[string]config.ClientConfig),
-		sessionManager: NewSessionManager(logger),
+		sessionManager: NewSessionManagerWithTimeout(logger, sessionTimeout),
 		logger:         logger,
 	}
 }
@@ -220,17 +225,22 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 	return result, nil
 }
 
-// CreateSingleSessionClient creates a single downstream client for an existing session.
+// CreateSingleSessionClient creates a single downstream client for a session.
+// If the session doesn't exist (e.g., after server restart), it creates a new session.
 // This is used for on-demand discovery of pass-through clients that weren't connected at session creation.
 func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionID, clientName string, cfg config.ClientConfig) (*SessionClientInfo, error) {
 	cm.logger.Info(ctx, "Creating single downstream client for session",
 		zap.String("session_id", sessionID),
 		zap.String("client", clientName))
 
-	// Check if session exists
+	// Get or create the session.
+	// If the session doesn't exist (e.g., after server restart), we create it.
+	// This allows discover_tools to work even with a stale session ID.
 	session, exists := cm.sessionManager.GetSession(sessionID)
 	if !exists {
-		return nil, fmt.Errorf("session %s does not exist", sessionID)
+		cm.logger.Info(ctx, "Session not found, creating new session for discovery",
+			zap.String("session_id", sessionID))
+		session = cm.sessionManager.CreateSession(sessionID)
 	}
 
 	// Check if client already exists in session
@@ -431,9 +441,17 @@ func (cm *ClientManager) checkSessionClientCapabilities(ctx context.Context, cli
 
 // GetSessionClient retrieves a downstream client for a specific session
 func (cm *ClientManager) GetSessionClient(sessionID, clientName string) (*SessionClientInfo, error) {
+	// First check if the session exists at all
+	if !cm.sessionManager.HasSession(sessionID) {
+		return nil, &SessionExpiredError{
+			SessionID: sessionID,
+			Reason:    "session no longer exists (server may have restarted)",
+		}
+	}
+
 	clientInfo, ok := cm.sessionManager.GetSessionClient(sessionID, clientName)
 	if !ok {
-		return nil, fmt.Errorf("client %s not found for session %s", clientName, sessionID)
+		return nil, fmt.Errorf("client '%s' not connected for this session. Call 'maybedont__discover_tools' with client filter '%s' to connect", clientName, clientName)
 	}
 	return clientInfo, nil
 }
@@ -442,7 +460,10 @@ func (cm *ClientManager) GetSessionClient(sessionID, clientName string) (*Sessio
 func (cm *ClientManager) GetAllSessionClients(sessionID string) (map[string]*SessionClientInfo, error) {
 	session, ok := cm.sessionManager.GetSession(sessionID)
 	if !ok {
-		return nil, fmt.Errorf("session %s not found", sessionID)
+		return nil, &SessionExpiredError{
+			SessionID: sessionID,
+			Reason:    "session no longer exists (server may have restarted)",
+		}
 	}
 	return session.GetAllClients(), nil
 }
@@ -838,9 +859,36 @@ func (cm *ClientManager) initializeSessionClientWithRetry(ctx context.Context, c
 	return nil, fmt.Errorf("initialization failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
-// Close closes all session clients
+// Close closes all session clients and stops the cleanup goroutine
 func (cm *ClientManager) Close(ctx context.Context) error {
+	// Stop the cleanup goroutine first
+	cm.sessionManager.StopCleanup()
+	// Then close all sessions
 	return cm.sessionManager.CloseAllSessions(ctx)
+}
+
+// IsClientConfigured checks if a client with the given name is configured
+func (cm *ClientManager) IsClientConfigured(clientName string) bool {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	_, ok := cm.clientConfigs[clientName]
+	return ok
+}
+
+// HasSession checks if a session exists in the session manager
+func (cm *ClientManager) HasSession(sessionID string) bool {
+	return cm.sessionManager.HasSession(sessionID)
+}
+
+// GetConfiguredClientNames returns a list of all configured client names
+func (cm *ClientManager) GetConfiguredClientNames() []string {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	names := make([]string, 0, len(cm.clientConfigs))
+	for name := range cm.clientConfigs {
+		names = append(names, name)
+	}
+	return names
 }
 
 // ParsePrefixedName parses a prefixed name (e.g., "aws__list_files") into client name and original name

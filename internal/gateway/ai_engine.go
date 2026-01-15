@@ -333,13 +333,12 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					decidingReason = result.message
 					cancelEval() // Cancel remaining goroutines
 				case "error":
-					// Errors on enabled policies cause deny (fail closed)
-					blockedMs = time.Since(evalStartTime).Milliseconds()
-					decided = true
-					finalAction = "deny"
-					decidingRule = result.rule
-					decidingReason = fmt.Sprintf("Rule evaluation failed: %s", result.err)
-					cancelEval()
+					// Errors on enabled policies fail open (allow) - don't block requests due to AI failures
+					// The error is still logged and recorded in audit, but doesn't affect the decision
+					e.logger.Warn(ctx, "AI policy evaluation failed, failing open",
+						zap.String("rule", result.rule),
+						zap.String("error", result.err),
+					)
 				}
 			}
 

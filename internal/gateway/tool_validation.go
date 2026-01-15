@@ -27,9 +27,12 @@ type ValidationResults struct {
 	Error      string             `json:"error,omitempty"`
 	AllowCount int                `json:"allow_count"`
 	DenyCount  int                `json:"deny_count"`
+	// CELDetails contains detailed CEL validation results for audit logging
+	// This is only populated by the CEL validation handler
+	CELDetails *AuditCELResult `json:"cel_details,omitempty"`
 	// AIDetails contains detailed AI validation results for audit logging
 	// This is only populated by the AI validation handler
-	AIDetails  *AuditAIResult     `json:"ai_details,omitempty"`
+	AIDetails *AuditAIResult `json:"ai_details,omitempty"`
 }
 
 // ToolValidationHandler defines the interface for tool validation handlers
@@ -75,6 +78,14 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.AllowCount += results.AllowCount
 		finalResults.DenyCount += results.DenyCount
 
+		// Propagate CEL and AI details from handlers
+		if results.CELDetails != nil {
+			finalResults.CELDetails = results.CELDetails
+		}
+		if results.AIDetails != nil {
+			finalResults.AIDetails = results.AIDetails
+		}
+
 		if !foundDeny && results.DenyCount > 0 && results.Message != "" {
 			denyMessage = results.Message
 			foundDeny = true
@@ -115,7 +126,26 @@ func NewToolCELValidationHandler(logger *config.SessionLogger, engine *CELPolicy
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolCELValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
-	return h.engine.EvaluateToolCall(ctx, req)
+	// Extract blocking budget from context if available
+	budget, _ := ctx.Value(blockingBudgetKey).(*BlockingBudget)
+	return h.engine.EvaluateToolCall(ctx, req, budget)
+}
+
+// blockingBudgetKeyType is used for context key to avoid collisions
+type blockingBudgetKeyType struct{}
+
+// blockingBudgetKey is the context key for BlockingBudget
+var blockingBudgetKey = blockingBudgetKeyType{}
+
+// WithBlockingBudget returns a new context with the BlockingBudget attached
+func WithBlockingBudget(ctx context.Context, budget *BlockingBudget) context.Context {
+	return context.WithValue(ctx, blockingBudgetKey, budget)
+}
+
+// BlockingBudgetFromContext extracts the BlockingBudget from context if available
+func BlockingBudgetFromContext(ctx context.Context) *BlockingBudget {
+	budget, _ := ctx.Value(blockingBudgetKey).(*BlockingBudget)
+	return budget
 }
 
 // ToolAIValidationHandler handles AI policy validation
