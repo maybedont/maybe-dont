@@ -57,8 +57,12 @@ archives:
         dst: config/maybedont.yaml
         info:
           mode: 0644
-      - src: config/*.rules.yaml
+      - src: config/*_rules.yaml
         dst: config/
+        info:
+          mode: 0644
+      - src: config/rules.yaml
+        dst: config/rules.yaml
         info:
           mode: 0644
       - LICENSE
