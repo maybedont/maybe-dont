@@ -169,6 +169,11 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		ast, issues := e.env.Compile(policy.Expression)
 		if issues != nil && issues.Err() != nil {
 			ruleDurationMs := time.Since(ruleStart).Milliseconds()
+			e.logger.Error(ctx, "CEL response policy compilation error",
+				zap.String("rule", policy.Name),
+				zap.Int64("evaluation_ms", ruleDurationMs),
+				zap.Error(issues.Err()),
+			)
 			ruleResults = append(ruleResults, AuditCELRuleResult{
 				Rule:         policy.Name,
 				Action:       string(policy.Action),
@@ -196,6 +201,11 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		prg, err := e.env.Program(ast)
 		if err != nil {
 			ruleDurationMs := time.Since(ruleStart).Milliseconds()
+			e.logger.Error(ctx, "CEL response policy program error",
+				zap.String("rule", policy.Name),
+				zap.Int64("evaluation_ms", ruleDurationMs),
+				zap.Error(err),
+			)
 			ruleResults = append(ruleResults, AuditCELRuleResult{
 				Rule:         policy.Name,
 				Action:       string(policy.Action),
@@ -224,6 +234,11 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		ruleDurationMs := time.Since(ruleStart).Milliseconds()
 
 		if err != nil {
+			e.logger.Error(ctx, "CEL response policy evaluation error",
+				zap.String("rule", policy.Name),
+				zap.Int64("evaluation_ms", ruleDurationMs),
+				zap.Error(err),
+			)
 			ruleResults = append(ruleResults, AuditCELRuleResult{
 				Rule:         policy.Name,
 				Action:       string(policy.Action),
@@ -277,7 +292,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			zap.String("name", policy.Name),
 			zap.Bool("matched", matched),
 			zap.String("action", string(policy.Action)),
-			zap.Int64("duration_ms", ruleDurationMs),
+			zap.Int64("evaluation_ms", ruleDurationMs),
 		)
 
 		// Determine the rule result based on expression match

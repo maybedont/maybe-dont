@@ -342,10 +342,19 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				}
 			}
 
-			// Log errors
+			// Debug log each rule result
+			e.logger.Debug(ctx, "AI policy evaluation result",
+				zap.String("rule", result.rule),
+				zap.String("action", string(result.action)),
+				zap.String("result", result.result),
+				zap.Int64("evaluation_ms", result.evaluationMs),
+			)
+
+			// Log errors with evaluation_ms
 			if result.err != "" {
-				e.logger.Error(ctx, "Policy evaluation error",
+				e.logger.Error(ctx, "AI policy evaluation error",
 					zap.String("rule", result.rule),
+					zap.Int64("evaluation_ms", result.evaluationMs),
 					zap.String("error", result.err),
 				)
 			}

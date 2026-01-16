@@ -315,9 +315,19 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 			Error:           func() string { if ruleResult.err != nil { return ruleResult.err.Error() }; return "" }(),
 		})
 
+		// Debug log each rule result
+		e.logger.Debug(ctx, "AI response policy evaluation result",
+			zap.String("rule", ruleResult.policy.Name),
+			zap.String("action", string(ruleResult.policy.Action)),
+			zap.String("result", ruleResult.result),
+			zap.Int64("evaluation_ms", ruleResult.evaluationMs),
+		)
+
+		// Log errors with evaluation_ms
 		if ruleResult.err != nil {
-			e.logger.Error(ctx, "Response policy evaluation failed",
-				zap.String("policy", ruleResult.policy.Name),
+			e.logger.Error(ctx, "AI response policy evaluation error",
+				zap.String("rule", ruleResult.policy.Name),
+				zap.Int64("evaluation_ms", ruleResult.evaluationMs),
 				zap.Error(ruleResult.err),
 			)
 		}
