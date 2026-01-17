@@ -38,43 +38,63 @@ server:
   type: http
   # Address to listen on (host:port)
   listen_addr: "0.0.0.0:8080"
+  # Session idle timeout in minutes.
+  # Sessions inactive for longer than this will be cleaned up.
+  # When a session expires, the AI agent will need to call maybedont__discover_tools to reconnect.
+  # Default: 30 minutes
+  # session_timeout_minutes: 30
 
-# Policy configuration
-policy_validation:
-  # Enable CEL-based tool validation
+# Global validation settings
+# These settings apply to all validation phases (request, AI request, response, AI response)
+validation:
+  # Maximum cumulative time (ms) to block a request waiting for validation decisions
+  # When exceeded, remaining validations continue asynchronously but the request proceeds (fail-open)
+  # Default: 90000ms (90 seconds)
+  max_blocking_ms: 10000
+  # Maximum time (ms) for any single rule evaluation to complete
+  # Default: 45000ms (45 seconds)
+  max_rule_evaluation_ms: 10000
+  # AI configuration shared by all AI-powered features (request validation, response validation, audit report)
+  ai:
+    # OpenAI-compatible API endpoint
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    # Model to use for AI validation
+    model: "gpt-4o-mini"
+    # API key (required when any AI feature is enabled)
+    api_key: "${OPENAI_API_KEY}"
+
+# Request validation configuration
+# Deterministic rules evaluated locally using CEL expressions
+request_validation:
+  # Enable deterministic request validation
   mode: enabled
-  # Path to CEL policy rules file (required when enabled)
-  rules_file: "cel.rules.yaml"
+  # Path to rules file (required when enabled)
+  rules_file: "rules.yaml"
 
-# AI validation configuration
-ai_validation:
-  # Enable AI-powered tool validation
+# AI request validation configuration
+# AI-powered validation using an LLM to evaluate requests
+ai_request_validation:
+  # Enable AI-powered request validation
   mode: audit_only
-  # OpenAI-compatible API endpoint
-  endpoint: "https://api.openai.com/v1/chat/completions"
-  # API key (required when enabled)
-  api_key: "${OPENAI_API_KEY}"
-  # Model to use for validation
-  model: "gpt-4o-mini"
-  # Path to AI policy rules file (required when enabled)
-  rules_file: "ai.rules.yaml"
+  # Path to AI rules file (required when enabled)
+  rules_file: "ai_rules.yaml"
 
 # Response validation configuration
-# These policies validate and filter tool call RESPONSES before returning to the client
+# Deterministic rules to validate and filter tool call RESPONSES before returning to the client
 response_validation:
-  # Enable CEL-based response validation
+  # Enable deterministic response validation
   mode: disabled
-  # Path to CEL response policy rules file (required when enabled)
-  rules_file: "cel_response.rules.yaml"
+  # Path to response rules file (required when enabled)
+  rules_file: "response_rules.yaml"
 
 # AI response validation configuration
 # Uses AI to detect and filter sensitive information in responses
 ai_response_validation:
   # Enable AI-powered response validation
   mode: disabled
-  # Path to AI response policy rules file (required when enabled)
-  rules_file: "ai_response.rules.yaml"
-  # Note: Uses the same endpoint and model as ai_validation above
+  # Path to AI response rules file (required when enabled)
+  rules_file: "ai_response_rules.yaml"
+  # Note: Uses the shared AI configuration from validation.ai above
 
 # Native gateway tools configuration
 # These tools are implemented directly in the gateway for introspection
@@ -90,14 +110,9 @@ native_tools:
   audit_report:
     # Enable the maybedont__generate_audit_report tool (default: true)
     enabled: true
-    # AI endpoint to use (defaults to ai_validation endpoint if not specified)
-    # endpoint: "https://api.openai.com/v1/chat/completions"
-    # Model to use (defaults to ai_validation model if not specified)
-    # model: "gpt-4o-mini"
-    # API key (defaults to ai_validation api_key if not specified)
-    # api_key: ""
     # Maximum entries to include in report generation (default: 1000)
     max_entries: 1000
+    # Note: Uses the shared AI configuration from validation.ai
     # Custom system prompt for report generation (optional - has sensible default)
     # system_prompt: |
     #   You are an AI security analyst reviewing MCP gateway audit logs...

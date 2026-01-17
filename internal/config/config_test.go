@@ -51,7 +51,8 @@ func TestServerTypeValidation(t *testing.T) {
 							KeyFile  string `mapstructure:"key_file"`
 						} `mapstructure:"tls"`
 					} `mapstructure:"sse"`
-					TrustedProxies []string `mapstructure:"trusted_proxies"`
+					TrustedProxies        []string `mapstructure:"trusted_proxies"`
+				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 				}{
 					Type:       tt.serverType,
 					ListenAddr: tt.listenAddr,
@@ -63,8 +64,9 @@ func TestServerTypeValidation(t *testing.T) {
 					},
 				},
 				Audit: struct {
-					Enabled bool   `mapstructure:"enabled"`
-					Path    string `mapstructure:"path"`
+					Path     string         `mapstructure:"path"`
+					Filter   string         `mapstructure:"filter"`
+					Rotation RotationConfig `mapstructure:"rotation"`
 				}{
 					Path: "audit.log",
 				},
@@ -109,7 +111,8 @@ func TestListenAddrValidation(t *testing.T) {
 							KeyFile  string `mapstructure:"key_file"`
 						} `mapstructure:"tls"`
 					} `mapstructure:"sse"`
-					TrustedProxies []string `mapstructure:"trusted_proxies"`
+					TrustedProxies        []string `mapstructure:"trusted_proxies"`
+				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 				}{
 					Type:       tt.serverType,
 					ListenAddr: tt.listenAddr,
@@ -121,8 +124,9 @@ func TestListenAddrValidation(t *testing.T) {
 					},
 				},
 				Audit: struct {
-					Enabled bool   `mapstructure:"enabled"`
-					Path    string `mapstructure:"path"`
+					Path     string         `mapstructure:"path"`
+					Filter   string         `mapstructure:"filter"`
+					Rotation RotationConfig `mapstructure:"rotation"`
 				}{
 					Path: "audit.log",
 				},
@@ -247,7 +251,8 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 					KeyFile  string `mapstructure:"key_file"`
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
-			TrustedProxies []string `mapstructure:"trusted_proxies"`
+			TrustedProxies        []string `mapstructure:"trusted_proxies"`
+				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: "invalid-type", // Error 1: invalid server type
 		},
@@ -268,24 +273,20 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 			},
 		},
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			// No required fields in Audit anymore
 		},
-		AIPolicyValidation: struct {
+		AIRequestValidation: struct {
 			Enabled   *bool      `mapstructure:"enabled"`
 			Mode      PolicyMode `mapstructure:"mode"`
-			Endpoint  string     `mapstructure:"endpoint"`
-			Model     string     `mapstructure:"model"`
 			RulesFile string     `mapstructure:"rules_file"`
-			APIKey    string     `mapstructure:"api_key"`
 			Rules     []AIPolicy `mapstructure:"rules"`
 		}{
 			Mode: PolicyModeEnabled, // Use Mode instead of deprecated Enabled
-			// Missing APIKey - Error 11
-			// Missing Endpoint - Error 12
-			// Missing Model - Error 13
+			// AI credentials are now in validation.ai - Error 11, 12, 13
 		},
 	}
 
@@ -308,9 +309,9 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 	require.Contains(t, errMsg, "downstream_mcp_servers[test2].capability_discovery_delay_ms must be non-negative")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test2].capability_discovery_retries must be less than 10")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test2].capability_retry_delay_ms must be less than 30000ms")
-	require.Contains(t, errMsg, "ai_validation.api_key is required")
-	require.Contains(t, errMsg, "ai_validation.endpoint is required")
-	require.Contains(t, errMsg, "ai_validation.model is required")
+	require.Contains(t, errMsg, "validation.ai.api_key is required")
+	require.Contains(t, errMsg, "validation.ai.endpoint is required")
+	require.Contains(t, errMsg, "validation.ai.model is required")
 }
 
 func TestValidateConfigSuccess(t *testing.T) {
@@ -326,7 +327,8 @@ func TestValidateConfigSuccess(t *testing.T) {
 					KeyFile  string `mapstructure:"key_file"`
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
-			TrustedProxies []string `mapstructure:"trusted_proxies"`
+			TrustedProxies        []string `mapstructure:"trusted_proxies"`
+				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerTypeSTDIO,
 		},
@@ -337,8 +339,9 @@ func TestValidateConfigSuccess(t *testing.T) {
 			},
 		},
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			Path: "audit.log",
 		},
@@ -380,15 +383,18 @@ downstream_mcp_servers:
     type: stdio
     command: echo
 
-# Explicitly disable CEL policy validation (it defaults to enabled)
-policy_validation:
+# Explicitly disable request validation (it defaults to enabled)
+request_validation:
   mode: disabled
 
-ai_validation:
+validation:
+  ai:
+    endpoint: https://api.openai.com/v1
+    model: gpt-4
+
+ai_request_validation:
   enabled: true
-  endpoint: https://api.openai.com/v1
-  model: gpt-4
-  rules_file: ai.rules.yaml
+  rules_file: ai_rules.yaml
 `
 	err := os.WriteFile(configPath, []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -401,14 +407,14 @@ rules:
     prompt: Test prompt
     message: Test message
 `
-	err = os.WriteFile(tmpDir+"/ai.rules.yaml", []byte(rulesContent), 0644)
+	err = os.WriteFile(tmpDir+"/ai_rules.yaml", []byte(rulesContent), 0644)
 	require.NoError(t, err)
 
 	// Set the API key via environment variable
-	err = os.Setenv("MAYBE_DONT_AI_VALIDATION_API_KEY", "test-api-key-from-env")
+	err = os.Setenv("MAYBE_DONT_VALIDATION_AI_API_KEY", "test-api-key-from-env")
 	require.NoError(t, err)
 	defer func() {
-		_ = os.Unsetenv("MAYBE_DONT_AI_VALIDATION_API_KEY")
+		_ = os.Unsetenv("MAYBE_DONT_VALIDATION_AI_API_KEY")
 	}()
 
 	// Load config - need to reset viper to avoid state from previous tests
@@ -419,8 +425,8 @@ rules:
 	require.NoError(t, err)
 
 	// Verify the API key was loaded from the environment variable
-	require.Equal(t, "test-api-key-from-env", config.AIPolicyValidation.APIKey,
-		"API key should be loaded from MAYBE_DONT_AI_VALIDATION_API_KEY environment variable")
+	require.Equal(t, "test-api-key-from-env", config.Validation.AI.APIKey,
+		"API key should be loaded from MAYBE_DONT_VALIDATION_AI_API_KEY environment variable")
 }
 
 // TestApplyEnvironmentOverrides_AllConfigFields uses reflection to discover all settable
@@ -637,19 +643,19 @@ func TestApplyEnvironmentOverrides_InvalidValues(t *testing.T) {
 	// Test that invalid values don't crash and leave defaults unchanged
 
 	t.Run("invalid bool leaves default", func(t *testing.T) {
-		err := os.Setenv("MAYBE_DONT_AUDIT_ENABLED", "not-a-bool")
+		err := os.Setenv("MAYBE_DONT_LOGGER_ROTATION_COMPRESS", "not-a-bool")
 		require.NoError(t, err)
 		defer func() {
-			_ = os.Unsetenv("MAYBE_DONT_AUDIT_ENABLED")
+			_ = os.Unsetenv("MAYBE_DONT_LOGGER_ROTATION_COMPRESS")
 		}()
 
 		config := &Config{}
-		config.Audit.Enabled = true // set a default
+		config.Logger.Rotation.Compress = true // set a default
 
 		applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
 
 		// Should remain unchanged because "not-a-bool" can't be parsed
-		require.True(t, config.Audit.Enabled, "Invalid bool should leave default unchanged")
+		require.True(t, config.Logger.Rotation.Compress, "Invalid bool should leave default unchanged")
 	})
 
 	t.Run("invalid int leaves default", func(t *testing.T) {
@@ -711,16 +717,16 @@ func TestApplyEnvironmentOverrides_DoesNotOverrideWhenNotSet(t *testing.T) {
 	// Ensure that when env var is not set, existing values are preserved
 
 	config := &Config{}
-	config.AIPolicyValidation.APIKey = "original-key"
-	config.Audit.Enabled = true
+	config.Validation.AI.APIKey = "original-key"
+	config.Logger.Rotation.Compress = true
 	config.NativeTools.AuditLog.MaxEntries = 100
 	config.Server.TrustedProxies = []string{"original"}
 
 	// Don't set any environment variables
 	applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
 
-	require.Equal(t, "original-key", config.AIPolicyValidation.APIKey)
-	require.True(t, config.Audit.Enabled)
+	require.Equal(t, "original-key", config.Validation.AI.APIKey)
+	require.True(t, config.Logger.Rotation.Compress)
 	require.Equal(t, 100, config.NativeTools.AuditLog.MaxEntries)
 	require.Equal(t, []string{"original"}, config.Server.TrustedProxies)
 }
@@ -738,8 +744,21 @@ func TestViperConfigPathsMatchStruct(t *testing.T) {
 		"native_tools.list_sessions.enabled",
 		"native_tools.audit_log.max_entries",
 		"native_tools.audit_report.max_entries",
-		"logging.path",
+		"logger.path",
+		"logger.level",
+		"logger.rotation.max_size_mb",
+		"logger.rotation.max_backups",
+		"logger.rotation.max_age_days",
+		"logger.rotation.compress",
 		"audit.path",
+		"audit.filter",
+		"audit.rotation.max_size_mb",
+		"audit.rotation.max_backups",
+		"audit.rotation.max_age_days",
+		"audit.rotation.compress",
+		"validation.max_blocking_ms",
+		"validation.max_rule_evaluation_ms",
+		"server.session_timeout_minutes",
 	}
 
 	for _, path := range viperPaths {
@@ -952,6 +971,12 @@ func TestValidateNativeToolsAuditReportMaxEntries(t *testing.T) {
 			config := createValidBaseConfig()
 			config.NativeTools.AuditReport.Enabled = tt.enabled
 			config.NativeTools.AuditReport.MaxEntries = tt.maxEntries
+			// When audit_report is enabled, AI credentials are required
+			if tt.enabled {
+				config.Validation.AI.APIKey = "test-key"
+				config.Validation.AI.Endpoint = "https://api.example.com"
+				config.Validation.AI.Model = "test-model"
+			}
 
 			err := ValidateConfig(config)
 
@@ -1171,13 +1196,13 @@ func TestValidateRelativePath_CurrentDirectory(t *testing.T) {
 	}
 }
 
-func TestValidateConfig_LoggingPathWithSubdirectory(t *testing.T) {
-	// Test that subdirectories are now allowed in logging.path
+func TestValidateConfig_LoggerPathWithSubdirectory(t *testing.T) {
+	// Test that subdirectories are now allowed in logger.path
 	config := createValidBaseConfig()
-	config.Logging.Path = "logs/subdir/app.log"
+	config.Logger.Path = "logs/subdir/app.log"
 
 	err := ValidateConfig(config)
-	require.NoError(t, err, "Subdirectory paths should be allowed for logging.path")
+	require.NoError(t, err, "Subdirectory paths should be allowed for logger.path")
 }
 
 func TestValidateConfig_AuditPathWithSubdirectory(t *testing.T) {
@@ -1189,14 +1214,14 @@ func TestValidateConfig_AuditPathWithSubdirectory(t *testing.T) {
 	require.NoError(t, err, "Subdirectory paths should be allowed for audit.path")
 }
 
-func TestValidateConfig_LoggingPathTraversalRejected(t *testing.T) {
-	// Test that path traversal is rejected in logging.path
+func TestValidateConfig_LoggerPathTraversalRejected(t *testing.T) {
+	// Test that path traversal is rejected in logger.path
 	config := createValidBaseConfig()
-	config.Logging.Path = "../../../etc/passwd"
+	config.Logger.Path = "../../../etc/passwd"
 
 	err := ValidateConfig(config)
-	require.Error(t, err, "Path traversal should be rejected in logging.path")
-	require.Contains(t, err.Error(), "logging.path")
+	require.Error(t, err, "Path traversal should be rejected in logger.path")
+	require.Contains(t, err.Error(), "logger.path")
 }
 
 func TestValidateConfig_AuditPathTraversalRejected(t *testing.T) {
@@ -1207,6 +1232,227 @@ func TestValidateConfig_AuditPathTraversalRejected(t *testing.T) {
 	err := ValidateConfig(config)
 	require.Error(t, err, "Path traversal should be rejected in audit.path")
 	require.Contains(t, err.Error(), "audit.path")
+}
+
+func TestLoadConfig_RulesFilePathTraversalRejected(t *testing.T) {
+	// Test that path traversal is rejected in rules_file paths during LoadConfig
+	viper.Reset()
+	tmpDir := t.TempDir()
+
+	// Create a config file with path traversal in request_validation.rules_file
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  mode: enabled
+  rules_file: "../../../etc/passwd"
+
+ai_request_validation:
+  mode: disabled
+`
+	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadConfig(tmpDir, "")
+	require.Error(t, err, "Path traversal should be rejected in request_validation.rules_file")
+	require.Contains(t, err.Error(), "request_validation.rules_file")
+	require.Contains(t, err.Error(), "parent directory")
+}
+
+func TestLoadConfig_AIRequestRulesFilePathTraversalRejected(t *testing.T) {
+	// Test that path traversal is rejected in ai_request_validation.rules_file
+	viper.Reset()
+	tmpDir := t.TempDir()
+
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  mode: disabled
+
+ai_request_validation:
+  mode: enabled
+  endpoint: https://api.example.com/v1
+  model: test-model
+  api_key: test-key
+  rules_file: "../../secrets/rules.yaml"
+`
+	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadConfig(tmpDir, "")
+	require.Error(t, err, "Path traversal should be rejected in ai_request_validation.rules_file")
+	require.Contains(t, err.Error(), "ai_request_validation.rules_file")
+	require.Contains(t, err.Error(), "parent directory")
+}
+
+func TestLoadConfig_ResponseRulesFilePathTraversalRejected(t *testing.T) {
+	// Test that path traversal is rejected in response_validation.rules_file
+	viper.Reset()
+	tmpDir := t.TempDir()
+
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  mode: disabled
+
+ai_request_validation:
+  mode: disabled
+
+response_validation:
+  mode: enabled
+  rules_file: "../secret/response_rules.yaml"
+`
+	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadConfig(tmpDir, "")
+	require.Error(t, err, "Path traversal should be rejected in response_validation.rules_file")
+	require.Contains(t, err.Error(), "response_validation.rules_file")
+	require.Contains(t, err.Error(), "parent directory")
+}
+
+func TestLoadConfig_AIResponseRulesFilePathTraversalRejected(t *testing.T) {
+	// Test that path traversal is rejected in ai_response_validation.rules_file
+	viper.Reset()
+	tmpDir := t.TempDir()
+
+	// ai_response_validation shares credentials with ai_request_validation
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  mode: disabled
+
+ai_request_validation:
+  mode: disabled
+  endpoint: https://api.example.com/v1
+  model: test-model
+  api_key: test-key
+
+ai_response_validation:
+  mode: enabled
+  rules_file: "/etc/passwd"
+`
+	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadConfig(tmpDir, "")
+	require.Error(t, err, "Absolute path should be rejected in ai_response_validation.rules_file")
+	require.Contains(t, err.Error(), "ai_response_validation.rules_file")
+	require.Contains(t, err.Error(), "absolute path")
+}
+
+func TestLoadConfig_RulesFileSubdirectoryAllowed(t *testing.T) {
+	// Test that subdirectory paths are allowed for rules_file
+	viper.Reset()
+	tmpDir := t.TempDir()
+
+	// Create subdirectory and rules file
+	err := os.MkdirAll(tmpDir+"/rules/custom", 0755)
+	require.NoError(t, err)
+
+	rulesContent := `
+rules:
+  - name: test-rule
+    description: Test rule
+    match:
+      tools: ["*"]
+    action: allow
+`
+	err = os.WriteFile(tmpDir+"/rules/custom/my-rules.yaml", []byte(rulesContent), 0644)
+	require.NoError(t, err)
+
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  mode: enabled
+  rules_file: "rules/custom/my-rules.yaml"
+
+ai_request_validation:
+  mode: disabled
+
+native_tools:
+  audit_report:
+    enabled: false
+`
+	err = os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	cfg, err := LoadConfig(tmpDir, "")
+	require.NoError(t, err, "Subdirectory paths should be allowed for rules_file")
+	require.Len(t, cfg.RequestValidation.Rules, 1)
+	require.Equal(t, "test-rule", cfg.RequestValidation.Rules[0].Name)
+}
+
+func TestLoadConfig_RulesFileHiddenFileRejected(t *testing.T) {
+	// Test that hidden files are rejected in rules_file paths
+	viper.Reset()
+	tmpDir := t.TempDir()
+
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  mode: enabled
+  rules_file: ".hidden_rules.yaml"
+
+ai_request_validation:
+  mode: disabled
+`
+	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadConfig(tmpDir, "")
+	require.Error(t, err, "Hidden files should be rejected in rules_file")
+	require.Contains(t, err.Error(), "request_validation.rules_file")
+	require.Contains(t, err.Error(), "hidden")
+}
+
+func TestLoadConfig_RulesFileURLEncodedTraversalRejected(t *testing.T) {
+	// Test that URL-encoded path traversal is rejected
+	viper.Reset()
+	tmpDir := t.TempDir()
+
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  mode: enabled
+  rules_file: "%2e%2e/rules.yaml"
+
+ai_request_validation:
+  mode: disabled
+`
+	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadConfig(tmpDir, "")
+	require.Error(t, err, "URL-encoded path traversal should be rejected")
+	require.Contains(t, err.Error(), "request_validation.rules_file")
 }
 
 func TestLoadConfigWithoutConfigFile(t *testing.T) {
@@ -1262,14 +1508,16 @@ func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
 					KeyFile  string `mapstructure:"key_file"`
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
-			TrustedProxies []string `mapstructure:"trusted_proxies"`
+			TrustedProxies        []string `mapstructure:"trusted_proxies"`
+				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerTypeSTDIO,
 		},
 		// Missing DownstreamMCPServers - will cause validation error
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			Path: "audit.log",
 		},
@@ -1300,14 +1548,16 @@ func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
 					KeyFile  string `mapstructure:"key_file"`
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
-			TrustedProxies []string `mapstructure:"trusted_proxies"`
+			TrustedProxies        []string `mapstructure:"trusted_proxies"`
+				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerTypeSTDIO,
 		},
 		// Missing DownstreamMCPServers - will cause validation error
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			Path: "audit.log",
 		},
@@ -1336,17 +1586,22 @@ func TestLoadConfigWithEnvVarsOnly_ValidConfig(t *testing.T) {
 	// Notes:
 	// - policy_validation defaults to enabled, so we must disable it since we have no rules file
 	// - ai_validation defaults to audit_only, so we must disable it since we have no API key
+	// - audit_report defaults to enabled, so we must disable it since we have no AI credentials
 	configContent := `
 downstream_mcp_servers:
   test:
     type: stdio
     command: echo
 
-policy_validation:
+request_validation:
   mode: disabled
 
-ai_validation:
+ai_request_validation:
   mode: disabled
+
+native_tools:
+  audit_report:
+    enabled: false
 `
 	err := os.WriteFile(configPath, []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -1380,7 +1635,8 @@ func createValidBaseConfig() *Config {
 					KeyFile  string `mapstructure:"key_file"`
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
-			TrustedProxies []string `mapstructure:"trusted_proxies"`
+			TrustedProxies        []string `mapstructure:"trusted_proxies"`
+				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerTypeSTDIO,
 		},
@@ -1391,8 +1647,9 @@ func createValidBaseConfig() *Config {
 			},
 		},
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			Path: "audit.log",
 		},
@@ -1403,9 +1660,6 @@ func createValidBaseConfig() *Config {
 			} `mapstructure:"audit_log"`
 			AuditReport struct {
 				Enabled      bool   `mapstructure:"enabled"`
-				Endpoint     string `mapstructure:"endpoint"`
-				Model        string `mapstructure:"model"`
-				APIKey       string `mapstructure:"api_key"`
 				MaxEntries   int    `mapstructure:"max_entries"`
 				SystemPrompt string `mapstructure:"system_prompt"`
 			} `mapstructure:"audit_report"`
@@ -1425,9 +1679,6 @@ func createValidBaseConfig() *Config {
 			},
 			AuditReport: struct {
 				Enabled      bool   `mapstructure:"enabled"`
-				Endpoint     string `mapstructure:"endpoint"`
-				Model        string `mapstructure:"model"`
-				APIKey       string `mapstructure:"api_key"`
 				MaxEntries   int    `mapstructure:"max_entries"`
 				SystemPrompt string `mapstructure:"system_prompt"`
 			}{

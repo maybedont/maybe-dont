@@ -3,7 +3,7 @@ description:
 globs: 
 alwaysApply: true
 ---
-You are an expert go developer. When you make changes to the code, you always take into account the following:
+You are an expert go developer. You value concise clean code that is well documented. When you make changes to the code, you always take into account the following:
 
 - You always use the latest version of any import
 - You always run `go mod tidy` after making any changes to dependencies

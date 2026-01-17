@@ -41,15 +41,18 @@ type AuditReportImpact struct {
 
 // AuditReportStatistics represents aggregate statistics
 type AuditReportStatistics struct {
-	TotalRequests  int            `json:"total_requests"`
-	SuccessCount   int            `json:"success_count"`
-	DeniedCount    int            `json:"denied_count"`
-	ErrorCount     int            `json:"error_count"`
-	UniqueTools    int            `json:"unique_tools"`
-	UniqueClients  int            `json:"unique_clients"`
-	TopTools       map[string]int `json:"top_tools"`
-	TopClients     map[string]int `json:"top_clients"`
-	DeniedByPolicy map[string]int `json:"denied_by_policy"`
+	TotalRequests    int            `json:"total_requests"`
+	SuccessCount     int            `json:"success_count"`
+	DeniedCount      int            `json:"denied_count"`
+	ErrorCount       int            `json:"error_count"`
+	UniqueTools      int            `json:"unique_tools"`
+	UniqueClients    int            `json:"unique_clients"`
+	TopTools         map[string]int `json:"top_tools"`
+	TopClients       map[string]int `json:"top_clients"`
+	DeniedByPolicy   map[string]int `json:"denied_by_policy"`
+	AuditOnlyDenials int            `json:"audit_only_denials"` // Requests that would have been denied if not in audit_only mode
+	TimeoutFailures  int            `json:"timeout_failures"`   // Requests that failed open due to policy evaluation timeouts
+	SuccessfulDenies int            `json:"successful_denies"`  // Requests that were correctly denied by enabled policies
 }
 
 // AuditReportResponse represents the full AI-generated report
@@ -81,8 +84,8 @@ func (h *NativeToolsHandler) handleGenerateAuditReport(ctx context.Context, req 
 	h.logger.Info(ctx, "Processing generate_audit_report request")
 
 	// Check if AI is configured
-	if h.config.NativeTools.AuditReport.APIKey == "" {
-		return mcp.NewToolResultError("Audit report generation requires an API key. Configure native_tools.audit_report.api_key or ai_validation.api_key in your config file."), nil
+	if h.config.Validation.AI.APIKey == "" {
+		return mcp.NewToolResultError("Audit report generation requires an API key. Configure validation.ai.api_key in your config file."), nil
 	}
 
 	// Parse parameters
@@ -223,6 +226,7 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 			stats.SuccessCount++
 		case string(config.PolicyActionDeny):
 			stats.DeniedCount++
+			stats.SuccessfulDenies++ // Track successful denials
 		default:
 			stats.ErrorCount++
 		}
@@ -242,21 +246,47 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 
 		// Track denied policies from request validation
 		if entry.Audit.RequestValidation != nil {
-			if entry.Audit.RequestValidation.CEL != nil && entry.Audit.RequestValidation.CEL.Action == string(config.PolicyActionDeny) {
-				stats.DeniedByPolicy[entry.Audit.RequestValidation.CEL.RuleMatched]++
+			if entry.Audit.RequestValidation.Rules != nil && entry.Audit.RequestValidation.Rules.Action == "deny" {
+				ruleName := entry.Audit.RequestValidation.Rules.DecidingRule
+				if ruleName == "" {
+					ruleName = "Rules Policy"
+				}
+				stats.DeniedByPolicy[ruleName]++
 			}
-			if entry.Audit.RequestValidation.AI != nil && entry.Audit.RequestValidation.AI.Action == string(config.PolicyActionDeny) {
-				stats.DeniedByPolicy["AI Policy"]++
+			if entry.Audit.RequestValidation.AI != nil && entry.Audit.RequestValidation.AI.Action == "deny" {
+				ruleName := entry.Audit.RequestValidation.AI.DecidingRule
+				if ruleName == "" {
+					ruleName = "AI Policy"
+				}
+				stats.DeniedByPolicy[ruleName]++
 			}
+
+			// Check for audit-only denials and timeout failures in request validation
+			auditOnlyDenials, timeoutFailures := countAuditOnlyAndTimeouts(entry.Audit.RequestValidation)
+			stats.AuditOnlyDenials += auditOnlyDenials
+			stats.TimeoutFailures += timeoutFailures
 		}
 		// Track denied policies from response validation
 		if entry.Audit.ResponseValidation != nil {
-			if entry.Audit.ResponseValidation.CEL != nil && entry.Audit.ResponseValidation.CEL.Action == string(config.PolicyActionDeny) {
-				stats.DeniedByPolicy[entry.Audit.ResponseValidation.CEL.RuleMatched]++
+			if entry.Audit.ResponseValidation.Rules != nil && entry.Audit.ResponseValidation.Rules.Action == "deny" {
+				ruleName := entry.Audit.ResponseValidation.Rules.DecidingRule
+				if ruleName == "" {
+					ruleName = "Rules Response Policy"
+				}
+				stats.DeniedByPolicy[ruleName]++
 			}
-			if entry.Audit.ResponseValidation.AI != nil && entry.Audit.ResponseValidation.AI.Action == string(config.PolicyActionDeny) {
-				stats.DeniedByPolicy["AI Response Policy"]++
+			if entry.Audit.ResponseValidation.AI != nil && entry.Audit.ResponseValidation.AI.Action == "deny" {
+				ruleName := entry.Audit.ResponseValidation.AI.DecidingRule
+				if ruleName == "" {
+					ruleName = "AI Response Policy"
+				}
+				stats.DeniedByPolicy[ruleName]++
 			}
+
+			// Check for audit-only denials and timeout failures in response validation
+			auditOnlyDenials, timeoutFailures := countAuditOnlyAndTimeouts(entry.Audit.ResponseValidation)
+			stats.AuditOnlyDenials += auditOnlyDenials
+			stats.TimeoutFailures += timeoutFailures
 		}
 	}
 
@@ -264,6 +294,45 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 	stats.UniqueClients = len(uniqueClients)
 
 	return entries, stats, nil
+}
+
+// countAuditOnlyAndTimeouts analyzes validation results for audit-only denials and timeout failures.
+// An audit-only denial is when a rule with mode="audit_only" returned result="deny".
+// A timeout failure is when a rule returned result="error" (typically due to context deadline exceeded).
+func countAuditOnlyAndTimeouts(validation *AuditValidationInfo) (auditOnlyDenials, timeoutFailures int) {
+	if validation == nil {
+		return 0, 0
+	}
+
+	// Check CEL results
+	if validation.Rules != nil {
+		for _, result := range validation.Rules.Results {
+			// Audit-only denial: mode is "audit_only" and result is "deny"
+			if result.Mode == "audit_only" && result.Result == "deny" {
+				auditOnlyDenials++
+			}
+			// Timeout/error failure
+			if result.Result == "error" {
+				timeoutFailures++
+			}
+		}
+	}
+
+	// Check AI results
+	if validation.AI != nil {
+		for _, result := range validation.AI.Results {
+			// Audit-only denial: mode is "audit_only" and result is "deny"
+			if result.Mode == "audit_only" && result.Result == "deny" {
+				auditOnlyDenials++
+			}
+			// Timeout/error failure
+			if result.Result == "error" {
+				timeoutFailures++
+			}
+		}
+	}
+
+	return auditOnlyDenials, timeoutFailures
 }
 
 // generateAIReport calls the AI to analyze the audit entries
@@ -276,7 +345,7 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 
 	// Create OpenAI client
 	client := openai.NewClient(
-		option.WithAPIKey(h.config.NativeTools.AuditReport.APIKey),
+		option.WithAPIKey(h.config.Validation.AI.APIKey),
 	)
 
 	// Prepare the schema for structured output
@@ -296,7 +365,7 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 			openai.SystemMessage(h.config.NativeTools.AuditReport.SystemPrompt),
 			openai.UserMessage(userPrompt),
 		},
-		Model: openai.ChatModel(h.config.NativeTools.AuditReport.Model),
+		Model: openai.ChatModel(h.config.Validation.AI.Model),
 		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
 			OfJSONSchema: &openai.ResponseFormatJSONSchemaParam{
 				JSONSchema: schemaParam,
@@ -346,6 +415,12 @@ func (h *NativeToolsHandler) prepareEntrySummary(entries []AuditLogEntry, stats 
 	summary += fmt.Sprintf("Success: %d, Denied: %d, Errors: %d\n", stats.SuccessCount, stats.DeniedCount, stats.ErrorCount)
 	summary += fmt.Sprintf("Unique Tools: %d, Unique Clients: %d\n\n", stats.UniqueTools, stats.UniqueClients)
 
+	// Policy effectiveness metrics (important for highlighting)
+	summary += "Policy Effectiveness Metrics:\n"
+	summary += fmt.Sprintf("  - Successful Denials (blocked harmful requests): %d\n", stats.SuccessfulDenies)
+	summary += fmt.Sprintf("  - Audit-Only Denials (would be denied if enabled): %d\n", stats.AuditOnlyDenials)
+	summary += fmt.Sprintf("  - Timeout Failures (failed open due to timeouts): %d\n\n", stats.TimeoutFailures)
+
 	// Top tools
 	summary += "Top Tools by Usage:\n"
 	for tool, count := range stats.TopTools {
@@ -360,8 +435,14 @@ func (h *NativeToolsHandler) prepareEntrySummary(entries []AuditLogEntry, stats 
 		}
 	}
 
-	// Sample of denied entries (for context)
-	summary += "\nSample Denied Requests:\n"
+	// Sample of audit-only denials (HIGH PRIORITY - these would have been blocked)
+	summary += h.collectAuditOnlySamples(entries)
+
+	// Sample of timeout failures (HIGH PRIORITY - potential security gaps)
+	summary += h.collectTimeoutSamples(entries)
+
+	// Sample of denied entries (for context on what we successfully blocked)
+	summary += "\nSample Denied Requests (successfully blocked):\n"
 	deniedCount := 0
 	for _, entry := range entries {
 		if deniedCount >= 5 {
@@ -372,13 +453,144 @@ func (h *NativeToolsHandler) prepareEntrySummary(entries []AuditLogEntry, stats 
 		}
 		if entry.Audit.Action == string(config.PolicyActionDeny) {
 			toolName := entry.Audit.Tool.PrefixedName
-			args, _ := json.Marshal(entry.Audit.Request.Params)
+			args, _ := json.Marshal(entry.Audit.Tool.Params)
 			summary += fmt.Sprintf("  - Tool: %s, Args: %s\n", toolName, string(args))
 			deniedCount++
 		}
 	}
 
 	return summary
+}
+
+// collectAuditOnlySamples gathers sample entries where audit-only policies would have denied the request
+func (h *NativeToolsHandler) collectAuditOnlySamples(entries []AuditLogEntry) string {
+	var summary string
+	summary += "\nSample Audit-Only Denials (would be blocked if policies enabled):\n"
+	count := 0
+
+	for _, entry := range entries {
+		if count >= 5 {
+			break
+		}
+		if entry.Audit == nil {
+			continue
+		}
+
+		// Check request validation for audit-only denials
+		if entry.Audit.RequestValidation != nil {
+			if rule := findAuditOnlyDenial(entry.Audit.RequestValidation); rule != "" {
+				toolName := entry.Audit.Tool.PrefixedName
+				args, _ := json.Marshal(entry.Audit.Tool.Params)
+				summary += fmt.Sprintf("  - Tool: %s, Rule: %s, Args: %s\n", toolName, rule, string(args))
+				count++
+				continue
+			}
+		}
+
+		// Check response validation for audit-only denials
+		if entry.Audit.ResponseValidation != nil {
+			if rule := findAuditOnlyDenial(entry.Audit.ResponseValidation); rule != "" {
+				toolName := entry.Audit.Tool.PrefixedName
+				summary += fmt.Sprintf("  - Tool: %s, Rule: %s (response validation)\n", toolName, rule)
+				count++
+			}
+		}
+	}
+
+	if count == 0 {
+		summary += "  (none found)\n"
+	}
+	return summary
+}
+
+// collectTimeoutSamples gathers sample entries where policies failed due to timeouts
+func (h *NativeToolsHandler) collectTimeoutSamples(entries []AuditLogEntry) string {
+	var summary string
+	summary += "\nSample Timeout Failures (policies failed open due to timeouts):\n"
+	count := 0
+
+	for _, entry := range entries {
+		if count >= 5 {
+			break
+		}
+		if entry.Audit == nil {
+			continue
+		}
+
+		// Check request validation for timeout failures
+		if entry.Audit.RequestValidation != nil {
+			if rule, errMsg := findTimeoutFailure(entry.Audit.RequestValidation); rule != "" {
+				toolName := entry.Audit.Tool.PrefixedName
+				summary += fmt.Sprintf("  - Tool: %s, Rule: %s, Error: %s\n", toolName, rule, errMsg)
+				count++
+				continue
+			}
+		}
+
+		// Check response validation for timeout failures
+		if entry.Audit.ResponseValidation != nil {
+			if rule, errMsg := findTimeoutFailure(entry.Audit.ResponseValidation); rule != "" {
+				toolName := entry.Audit.Tool.PrefixedName
+				summary += fmt.Sprintf("  - Tool: %s, Rule: %s (response), Error: %s\n", toolName, rule, errMsg)
+				count++
+			}
+		}
+	}
+
+	if count == 0 {
+		summary += "  (none found)\n"
+	}
+	return summary
+}
+
+// findAuditOnlyDenial finds the first audit-only rule that returned a deny result
+func findAuditOnlyDenial(validation *AuditValidationInfo) string {
+	if validation == nil {
+		return ""
+	}
+
+	if validation.Rules != nil {
+		for _, result := range validation.Rules.Results {
+			if result.Mode == "audit_only" && result.Result == "deny" {
+				return result.Rule
+			}
+		}
+	}
+
+	if validation.AI != nil {
+		for _, result := range validation.AI.Results {
+			if result.Mode == "audit_only" && result.Result == "deny" {
+				return result.Rule
+			}
+		}
+	}
+
+	return ""
+}
+
+// findTimeoutFailure finds the first rule that failed with an error (typically timeout)
+func findTimeoutFailure(validation *AuditValidationInfo) (rule, errMsg string) {
+	if validation == nil {
+		return "", ""
+	}
+
+	if validation.Rules != nil {
+		for _, result := range validation.Rules.Results {
+			if result.Result == "error" && result.Error != "" {
+				return result.Rule, result.Error
+			}
+		}
+	}
+
+	if validation.AI != nil {
+		for _, result := range validation.AI.Results {
+			if result.Result == "error" && result.Error != "" {
+				return result.Rule, result.Error
+			}
+		}
+	}
+
+	return "", ""
 }
 
 // buildReportPrompt builds the prompt for the AI
@@ -394,16 +606,39 @@ Audit Log Summary:
 
 Please provide:
 1. A concise summary of the findings
+
 2. A list of concerns, prioritized by business impact (HIGH, MEDIUM, LOW)
-   - For each concern, include:
+
+   **IMPORTANT - Pay special attention to these categories:**
+
+   a) **AUDIT-ONLY DENIALS (HIGH PRIORITY)**: Requests that were ALLOWED but would have been DENIED
+      if the policies were not in "audit_only" mode. These represent potential security gaps where
+      harmful requests are getting through because policies haven't been fully enabled yet.
+      Category: "audit_only_gap"
+
+   b) **TIMEOUT FAILURES (HIGH PRIORITY)**: Requests where policy evaluation failed due to timeouts
+      (context deadline exceeded) and the system "failed open" (allowed the request). These indicate
+      that either the AI validation service is too slow, or the timeout configuration needs to be
+      increased. These are security gaps because we don't know if the request would have been denied.
+      Category: "timeout_security_gap"
+
+   c) **SUCCESSFUL DENIALS (SECONDARY)**: Requests that were correctly denied by enabled policies.
+      Highlight these to show the value the gateway is providing - these are harmful requests that
+      were successfully blocked.
+      Category: "successful_protection"
+
+   For each concern, include:
      - severity (HIGH, MEDIUM, or LOW)
-     - category (e.g., "data_breach_risk", "policy_bypass_attempt", "excessive_permissions")
+     - category (use the categories above, or others like "data_breach_risk", "policy_bypass_attempt", "excessive_permissions")
      - description of the concern
      - impact assessment with type (monetary, reputational, or monetary_and_reputational) and reasoning
      - number of occurrences
      - affected tools
      - recommendation for remediation
+
 3. Recommendations for improving security policies
+   - Include recommendations for enabling audit_only policies that are catching issues
+   - Include recommendations for adjusting timeout configuration if timeout failures are occurring
 
 Sort concerns by severity (HIGH first, then MEDIUM, then LOW).
 For each severity level, sort by number of occurrences (highest first).
@@ -434,6 +669,14 @@ func (h *NativeToolsHandler) formatReportAsMarkdown(report *AuditReportResponse,
 	md += fmt.Sprintf("| Errors | %d |\n", report.Statistics.ErrorCount)
 	md += fmt.Sprintf("| Unique Tools | %d |\n", report.Statistics.UniqueTools)
 	md += fmt.Sprintf("| Unique Clients | %d |\n\n", report.Statistics.UniqueClients)
+
+	// Policy effectiveness metrics
+	md += "### Policy Effectiveness\n\n"
+	md += "| Metric | Value | Description |\n"
+	md += "|--------|-------|-------------|\n"
+	md += fmt.Sprintf("| Successful Denials | %d | Harmful requests blocked by enabled policies |\n", report.Statistics.SuccessfulDenies)
+	md += fmt.Sprintf("| Audit-Only Denials | %d | Would be blocked if policies were enabled |\n", report.Statistics.AuditOnlyDenials)
+	md += fmt.Sprintf("| Timeout Failures | %d | Failed open due to policy evaluation timeouts |\n\n", report.Statistics.TimeoutFailures)
 
 	if len(report.Concerns) > 0 {
 		md += "## Concerns (Prioritized by Business Impact)\n\n"

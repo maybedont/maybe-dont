@@ -27,13 +27,14 @@ type AIPolicy struct {
 
 // AIPolicyEngine handles AI policy evaluation
 type AIPolicyEngine struct {
-	logger   *config.SessionLogger
-	policies []AIPolicy
-	mu       sync.RWMutex
-	endpoint string
-	model    string
-	apiKey   string
-	client   *openai.Client
+	logger              *config.SessionLogger
+	policies            []AIPolicy
+	mu                  sync.RWMutex
+	endpoint            string
+	model               string
+	apiKey              string
+	maxRuleEvaluationMs int
+	client              *openai.Client
 }
 
 // InitAIPolicyEngine creates a new AI policy engine
@@ -103,36 +104,72 @@ type AIResponse struct {
 	Message string `json:"message"`
 }
 
-// EvaluateToolCall evaluates a tool call request against all policies
-func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+// aiRuleResult represents the result of a single AI rule evaluation (internal use)
+type aiRuleResult struct {
+	rule         string              // Rule name
+	action       config.PolicyAction // Rule's configured action
+	mode         config.PolicyMode   // Rule's mode
+	result       string              // "allow", "deny", or "error"
+	message      string              // AI response message
+	evaluationMs int64               // Time for this rule to complete
+	err          string              // Error description if result is "error"
+}
+
+// EvaluateToolCall evaluates a tool call request against all policies with early termination.
+// The optional budget parameter enables blocking time tracking for cumulative budget management.
+// When budget is nil, no blocking time is tracked and a default timeout is used.
+func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest, budget *BlockingBudget) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	// Track all policy evaluations
 	var results ValidationResults
 	results.Results = make([]ValidationResult, 0)
 
-	// Create a channel to collect results from goroutines
-	type policyResult struct {
-		result ValidationResult
-		err    error
+	if len(e.policies) == 0 {
+		results.Allowed = true
+		results.Message = "No policies configured"
+		return results, nil
 	}
-	resultChan := make(chan policyResult, len(e.policies))
+
+	// Track timing using shared budget if available
+	var phaseTracker *PhaseTracker
+	if budget != nil {
+		phaseTracker = budget.StartPhase()
+	}
+	evalStartTime := time.Now()
+
+	// Count enabled policies to determine blocking behavior
+	var enabledPolicies int
+	for _, p := range e.policies {
+		if p.Mode == config.PolicyModeEnabled {
+			enabledPolicies++
+		}
+	}
+	allAuditOnly := enabledPolicies == 0
+
+	// Create a cancellable context for early termination
+	evalCtx, cancelEval := context.WithCancel(ctx)
+	defer cancelEval()
+
+	// Channel to collect results from goroutines
+	resultChan := make(chan aiRuleResult, len(e.policies))
 
 	// Format the tool call request for the AI once
 	toolCallStr := fmt.Sprintf("Tool: %s\nArguments: %v", req.Params.Name, req.Params.Arguments)
 
+	// Determine timeout for individual rule evaluation
+	ruleTimeout := time.Duration(e.maxRuleEvaluationMs) * time.Millisecond
+	if ruleTimeout <= 0 {
+		ruleTimeout = 10 * time.Second // Default fallback
+	}
+
 	// Launch a goroutine for each policy
-	// Note, one downside of performing all of these tool calls in parallel is that any single policy
-	// could cause us to deny this request. If we have 10 policies, and the first one instructs us to
-	// deny the request, the remainder are not necessary.
 	for _, policy := range e.policies {
 		go func(p AIPolicy) {
-			// Track timing for this policy evaluation
 			startTime := time.Now()
 
-			// Create a new context for this goroutine
-			policyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			// Create context with rule timeout
+			policyCtx, cancel := context.WithTimeout(evalCtx, ruleTimeout)
 			defer cancel()
 
 			schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
@@ -142,7 +179,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				Strict:      openai.Bool(true),
 			}
 
-			// Call the AI API with the actual tool call request
+			// Call the AI API
 			chatCompletion, err := e.client.Chat.Completions.New(policyCtx, openai.ChatCompletionNewParams{
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					openai.UserMessage(fmt.Sprintf(p.Prompt, toolCallStr)),
@@ -157,150 +194,249 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 
 			durationMs := time.Since(startTime).Milliseconds()
 
+			// Handle errors
 			if err != nil {
-				resultChan <- policyResult{
-					result: ValidationResult{
-						PolicyName: p.Name,
-						PolicyType: "ai",
-						Action:     config.PolicyActionDeny,
-						Mode:       p.Mode,
-						Error:      fmt.Sprintf("Failed to evaluate policy: %v", err),
-						DurationMs: durationMs,
-					},
-					err: err,
+				errMsg := "api_error"
+				if policyCtx.Err() == context.DeadlineExceeded {
+					errMsg = "timeout"
+				} else if policyCtx.Err() == context.Canceled {
+					errMsg = "canceled"
+				}
+				resultChan <- aiRuleResult{
+					rule:         p.Name,
+					action:       p.Action,
+					mode:         p.Mode,
+					result:       "error",
+					evaluationMs: durationMs,
+					err:          errMsg,
 				}
 				return
 			}
 
 			if len(chatCompletion.Choices) == 0 {
-				resultChan <- policyResult{
-					result: ValidationResult{
-						PolicyName: p.Name,
-						PolicyType: "ai",
-						Action:     config.PolicyActionDeny,
-						Mode:       p.Mode,
-						Error:      "No response from AI model",
-						DurationMs: durationMs,
-					},
-					err: fmt.Errorf("no response from AI model"),
+				resultChan <- aiRuleResult{
+					rule:         p.Name,
+					action:       p.Action,
+					mode:         p.Mode,
+					result:       "error",
+					evaluationMs: durationMs,
+					err:          "no_response",
 				}
 				return
 			}
 
 			// Parse the response as JSON
-			var result AIResponse
-			err = json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &result)
-			if err != nil {
-				resultChan <- policyResult{
-					result: ValidationResult{
-						PolicyName: p.Name,
-						PolicyType: "ai",
-						Action:     config.PolicyActionDeny,
-						Mode:       p.Mode,
-						Error:      fmt.Sprintf("Failed to parse result: %v", err),
-						DurationMs: durationMs,
-					},
-					err: err,
+			var aiResp AIResponse
+			if err := json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &aiResp); err != nil {
+				resultChan <- aiRuleResult{
+					rule:         p.Name,
+					action:       p.Action,
+					mode:         p.Mode,
+					result:       "error",
+					evaluationMs: durationMs,
+					err:          "parse_error",
 				}
 				return
 			}
 
-			// Determine if this policy triggers based on action and AI response
-			// - "deny" policies trigger when AI says allowed: false (found something bad)
-			// - "allow" policies trigger when AI says allowed: true (confirmed OK)
-			var validationResult ValidationResult
-
-			if p.Action == config.PolicyActionDeny && !result.Allowed {
-				// Deny policy triggered - AI found a reason to deny
-				validationResult = ValidationResult{
-					PolicyName: p.Name,
-					PolicyType: "ai",
-					Action:     config.PolicyActionDeny,
-					Mode:       p.Mode,
-					Message:    result.Message,
-					DurationMs: durationMs,
+			// Determine result based on rule action and AI response
+			// - deny rule + AI says false -> result is "deny"
+			// - deny rule + AI says true -> result is "allow" (no issue found)
+			// - allow rule + AI says true -> result is "allow" (gate passed)
+			// - allow rule + AI says false -> result is "deny" (gate failed)
+			var resultAction string
+			if p.Action == config.PolicyActionDeny {
+				if aiResp.Allowed {
+					resultAction = "allow" // No issue found
+				} else {
+					resultAction = "deny" // Issue found, deny
 				}
-			} else if p.Action == config.PolicyActionAllow && result.Allowed {
-				// Allow policy triggered - AI confirmed this is OK
-				validationResult = ValidationResult{
-					PolicyName: p.Name,
-					PolicyType: "ai",
-					Action:     config.PolicyActionAllow,
-					Mode:       p.Mode,
-					Message:    result.Message,
-					DurationMs: durationMs,
+			} else { // allow policy
+				if aiResp.Allowed {
+					resultAction = "allow" // Gate passed
+				} else {
+					resultAction = "deny" // Gate failed, implicit deny
 				}
-			} else {
-				// Policy did not trigger (deny policy but AI allowed, or allow policy but AI denied)
-				// Don't record a result - this is consistent with CEL behavior
-				resultChan <- policyResult{
-					result: ValidationResult{},
-					err:    nil,
-				}
-				return
 			}
 
-			resultChan <- policyResult{
-				result: validationResult,
-				err:    nil,
+			resultChan <- aiRuleResult{
+				rule:         p.Name,
+				action:       p.Action,
+				mode:         p.Mode,
+				result:       resultAction,
+				message:      aiResp.Message,
+				evaluationMs: durationMs,
 			}
 		}(policy)
 	}
 
-	// Collect results from all goroutines
-	// This code will block, waiting for all goroutines, to complete.
-	// We could optionally wait for our first deny, and then cancel all remaining goroutines
-	// that have not yet completed to reduce the overall duration of this step.
-	// I think to do this correctly, we would have to ensure we only cancel goroutines that
-	// are being run for policies that would only duplicate the existing answer. For example
-	// if the remaining policies were audit_only, I think we would want to let them complete
-	// because that information will be used laster by the audit report. If we want to change
-	// this behavior we may want to make it a configuration option because it would modify what
-	// we are able to capture in the audit log. Or we let them complete, but we do not block
-	// the request from continuing, and we just delay the creation of the audit log until we have
-	// the results from all goroutines.
-	for i := 0; i < len(e.policies); i++ {
-		result := <-resultChan
-		if result.err != nil {
-			e.logger.Error(ctx, "Policy evaluation failed",
-				zap.String("policy", result.result.PolicyName),
-				zap.Error(result.err),
+	// Collect results with early termination support
+	var auditResults []AuditAIRuleResult
+	var decidingRule string
+	var decidingReason string
+	var blockedMs int64
+	var decided bool
+	var finalAction = "allow"
+
+	// Determine blocking deadline from shared budget or use default
+	var blockingDeadline time.Time
+	if budget != nil {
+		// Check if budget is already exhausted
+		if budget.IsExhausted() {
+			blockedMs = 0
+			decided = true
+			finalAction = "allow"
+			e.logger.Warn(ctx, "AI validation skipping blocking - budget already exhausted")
+		} else {
+			blockingDeadline = budget.BlockingDeadline()
+		}
+	} else {
+		// No budget provided, use a default timeout
+		blockingDeadline = evalStartTime.Add(5 * time.Second)
+	}
+
+	// If all policies are audit_only, don't block at all
+	if allAuditOnly {
+		// Mark phase as decided immediately (with minimal elapsed time) to avoid consuming budget
+		if phaseTracker != nil {
+			phaseTracker.MarkDecided()
+		}
+		blockedMs = 0
+		decided = true
+		finalAction = "allow"
+	}
+
+	// Collect results
+	remainingPolicies := len(e.policies)
+	for remainingPolicies > 0 {
+		// Check if we've exceeded blocking time (only matters if not yet decided)
+		if !decided && !blockingDeadline.IsZero() && time.Now().After(blockingDeadline) {
+			if phaseTracker != nil {
+				phaseTracker.MarkDecided()
+			}
+			blockedMs = time.Since(evalStartTime).Milliseconds()
+			decided = true
+			finalAction = "allow" // Fail open on timeout
+			e.logger.Warn(ctx, "AI validation exceeded max blocking time, failing open",
+				zap.Int64("blocked_ms", blockedMs),
+				zap.Int("remaining_policies", remainingPolicies),
 			)
 		}
 
-		// Skip empty results (policy did not trigger)
-		if result.result.PolicyName == "" {
+		// Use select with timeout to avoid blocking forever
+		select {
+		case result := <-resultChan:
+			remainingPolicies--
+
+			// Build audit result entry
+			auditResult := AuditAIRuleResult{
+				Rule:         result.rule,
+				Action:       string(result.action),
+				Result:       result.result,
+				EvaluationMs: result.evaluationMs,
+			}
+			if result.mode == config.PolicyModeAuditOnly {
+				auditResult.Mode = "audit_only"
+			}
+			if result.err != "" {
+				auditResult.Error = result.err
+			}
+			auditResults = append(auditResults, auditResult)
+
+			// Check if this result should trigger early termination
+			if !decided && result.mode == config.PolicyModeEnabled {
+				switch result.result {
+				case "deny":
+					// Early termination: first enabled deny
+					if phaseTracker != nil {
+						phaseTracker.MarkDecided()
+					}
+					blockedMs = time.Since(evalStartTime).Milliseconds()
+					decided = true
+					finalAction = "deny"
+					decidingRule = result.rule
+					decidingReason = result.message
+					cancelEval() // Cancel remaining goroutines
+				case "error":
+					// Errors on enabled policies fail open (allow) - don't block requests due to AI failures
+					// The error is still logged and recorded in audit, but doesn't affect the decision
+					e.logger.Warn(ctx, "AI policy evaluation failed, failing open",
+						zap.String("rule", result.rule),
+						zap.String("error", result.err),
+					)
+				}
+			}
+
+			// Debug log each rule result
+			e.logger.Debug(ctx, "AI policy evaluation result",
+				zap.String("rule", result.rule),
+				zap.String("action", string(result.action)),
+				zap.String("result", result.result),
+				zap.Int64("evaluation_ms", result.evaluationMs),
+			)
+
+			// Log errors with evaluation_ms
+			if result.err != "" {
+				e.logger.Error(ctx, "AI policy evaluation error",
+					zap.String("rule", result.rule),
+					zap.Int64("evaluation_ms", result.evaluationMs),
+					zap.String("error", result.err),
+				)
+			}
+
+		case <-time.After(100 * time.Millisecond):
+			// Continue checking, allows us to monitor blocking deadline
 			continue
 		}
+	}
 
-		results.Results = append(results.Results, result.result)
-
-		// Only count toward final decision if mode is enabled (not audit_only)
-		if result.result.Mode == config.PolicyModeEnabled {
-			if result.result.Action == config.PolicyActionAllow {
-				results.AllowCount++
-			} else {
-				results.DenyCount++
-			}
+	// Finalize phase tracking and get accurate blocked/evaluation times
+	var evaluationMs int64
+	if phaseTracker != nil {
+		// Use phase tracker for accurate cumulative budget tracking
+		var trackedBlockedMs int64
+		trackedBlockedMs, evaluationMs = phaseTracker.Finalize()
+		// For audit-only policies, we don't block at all, so override blockedMs
+		if !allAuditOnly {
+			blockedMs = trackedBlockedMs
 		}
+		// blockedMs remains 0 for audit-only (already set above)
+	} else {
+		// Fallback when no budget is provided
+		if !decided {
+			blockedMs = time.Since(evalStartTime).Milliseconds()
+		}
+		evaluationMs = time.Since(evalStartTime).Milliseconds()
 	}
 
-	// Set final result
-	if results.DenyCount > 0 {
-		results.Allowed = false
-		results.Message = "Maybe Don't, A policy failed."
-	} else if results.AllowCount > 0 {
-		results.Allowed = true
-		results.Message = "All policies passed, maybe do."
-	} else {
-		results.Allowed = true // Default to allow if no policies matched
-		results.Message = "No policies matched"
+	// Build the AIDetails for audit logging
+	aiDetails := &AuditAIResult{
+		Action:       finalAction,
+		BlockedMs:    blockedMs,
+		EvaluationMs: evaluationMs,
+		Results:      auditResults,
 	}
+	if decidingRule != "" {
+		aiDetails.DecidingRule = decidingRule
+		aiDetails.Reason = decidingReason
+	}
+
+	// Build legacy ValidationResults for compatibility
+	results.Allowed = finalAction == "allow"
+	if finalAction == "deny" {
+		results.Message = "Maybe Don't, A policy failed."
+		results.DenyCount = 1
+	} else {
+		results.Message = "All policies passed, maybe do."
+		results.AllowCount = 1
+	}
+	results.AIDetails = aiDetails
 
 	e.logger.Info(ctx, "Tool call evaluation complete",
-		zap.Any("results", results),
 		zap.Bool("allowed", results.Allowed),
-		zap.String("message", results.Message),
+		zap.String("deciding_rule", decidingRule),
+		zap.Int64("blocked_ms", blockedMs),
+		zap.Int64("evaluation_ms", evaluationMs),
 	)
 
 	return results, nil

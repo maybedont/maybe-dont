@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 	"gopkg.in/yaml.v3"
 )
 
@@ -44,6 +46,25 @@ const (
 // IsValid returns true if the PolicyMode is a valid value
 func (m PolicyMode) IsValid() bool {
 	return m == PolicyModeEnabled || m == PolicyModeAuditOnly || m == PolicyModeDisabled || m == ""
+}
+
+// RotationConfig contains log rotation settings for both logger and audit
+type RotationConfig struct {
+	MaxSizeMB  int  `mapstructure:"max_size_mb"`  // Max size in MB before rotation (default: 100)
+	MaxBackups int  `mapstructure:"max_backups"`  // Max number of rotated files to keep (default: 5)
+	MaxAgeDays int  `mapstructure:"max_age_days"` // Max days before deleting rotated files (default: 180, 0 = no limit)
+	Compress   bool `mapstructure:"compress"`     // Gzip compress rotated files (default: true)
+}
+
+// newLumberjackLogger creates a lumberjack logger with the given rotation config
+func newLumberjackLogger(path string, rotationCfg RotationConfig) io.WriteCloser {
+	return &lumberjack.Logger{
+		Filename:   path,
+		MaxSize:    rotationCfg.MaxSizeMB,
+		MaxBackups: rotationCfg.MaxBackups,
+		MaxAge:     rotationCfg.MaxAgeDays,
+		Compress:   rotationCfg.Compress,
+	}
 }
 
 // ResolveValidationMode resolves the effective mode for a validation config section.
@@ -94,33 +115,46 @@ type Config struct {
 		// If empty or not set, all proxies are trusted and the leftmost (first) IP is used.
 		// Examples: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1", "fc00::/7"]
 		TrustedProxies []string `mapstructure:"trusted_proxies"`
+		// SessionTimeoutMinutes is the idle timeout for sessions in minutes.
+		// Sessions inactive for longer than this will be cleaned up.
+		// Default: 30 minutes. Set to 0 to disable session timeout (not recommended).
+		SessionTimeoutMinutes int `mapstructure:"session_timeout_minutes"`
 	} `mapstructure:"server"`
 
-	// Policy configuration
-	PolicyValidation struct {
-		Enabled   *bool       `mapstructure:"enabled"`    // Deprecated: use Mode instead
-		Mode      PolicyMode  `mapstructure:"mode"`       // enabled, audit_only, disabled (default: enabled)
-		RulesFile string      `mapstructure:"rules_file"`
-		Rules     []CELPolicy `mapstructure:"rules"`
-	} `mapstructure:"policy_validation"`
+	// Global validation settings that apply to all validation phases
+	Validation struct {
+		MaxBlockingMs       int `mapstructure:"max_blocking_ms"`        // Max cumulative time to block request waiting for decisions across all phases (default: 90000ms)
+		MaxRuleEvaluationMs int `mapstructure:"max_rule_evaluation_ms"` // Max time for any single rule to complete (default: 45000ms)
+		// AI settings shared by all AI-powered validation (request, response) and AI tools (audit report)
+		AI struct {
+			Endpoint string `mapstructure:"endpoint"` // OpenAI-compatible API endpoint
+			Model    string `mapstructure:"model"`    // Model to use for AI validation
+			APIKey   string `mapstructure:"api_key"`  // API key for AI endpoint
+		} `mapstructure:"ai"`
+	} `mapstructure:"validation"`
 
-	// AI validation configuration
-	AIPolicyValidation struct {
+	// Request validation configuration (deterministic rules)
+	RequestValidation struct {
+		Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: enabled)
+		RulesFile string     `mapstructure:"rules_file"`
+		Rules     []Policy   `mapstructure:"rules"`
+	} `mapstructure:"request_validation"`
+
+	// AI request validation configuration
+	AIRequestValidation struct {
 		Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
 		Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: audit_only)
-		Endpoint  string     `mapstructure:"endpoint"`
-		Model     string     `mapstructure:"model"`
 		RulesFile string     `mapstructure:"rules_file"`
-		APIKey    string     `mapstructure:"api_key"`
 		Rules     []AIPolicy `mapstructure:"rules"`
-	} `mapstructure:"ai_validation"`
+	} `mapstructure:"ai_request_validation"`
 
-	// Response validation configuration
+	// Response validation configuration (deterministic rules)
 	ResponseValidation struct {
-		Enabled   *bool               `mapstructure:"enabled"` // Deprecated: use Mode instead
-		Mode      PolicyMode          `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
-		RulesFile string              `mapstructure:"rules_file"`
-		Rules     []CELResponsePolicy `mapstructure:"rules"`
+		Enabled   *bool            `mapstructure:"enabled"` // Deprecated: use Mode instead
+		Mode      PolicyMode       `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
+		RulesFile string           `mapstructure:"rules_file"`
+		Rules     []ResponsePolicy `mapstructure:"rules"`
 	} `mapstructure:"response_validation"`
 
 	// AI response validation configuration
@@ -136,15 +170,21 @@ type Config struct {
 
 	// Audit configuration
 	Audit struct {
-		Enabled bool   `mapstructure:"enabled"`
-		Path    string `mapstructure:"path"` // Default: maybedont-audit.log (resolved in log-dir), or stdout/stderr
+		Path   string `mapstructure:"path"`   // Default: maybedont-audit.log (resolved in log-dir), or stdout/stderr
+		Filter string `mapstructure:"filter"` // "all" (default) or "deny_only"
+
+		// Log rotation settings (only applicable when path is a filename)
+		Rotation RotationConfig `mapstructure:"rotation"`
 	} `mapstructure:"audit"`
 
-	// Logging configuration
-	Logging struct {
-		LogLevel string `mapstructure:"level"`
-		Path     string `mapstructure:"path"` // Default: stdout, or filename (resolved in log-dir)
-	} `mapstructure:"logging"`
+	// Logger configuration (application logs)
+	Logger struct {
+		Level string `mapstructure:"level"`
+		Path  string `mapstructure:"path"` // Default: stderr, or filename (resolved in log-dir)
+
+		// Log rotation settings (only applicable when path is a filename)
+		Rotation RotationConfig `mapstructure:"rotation"`
+	} `mapstructure:"logger"`
 
 	// NativeTools configuration for gateway-native tools
 	NativeTools struct {
@@ -155,9 +195,6 @@ type Config struct {
 
 		AuditReport struct {
 			Enabled      bool   `mapstructure:"enabled"`
-			Endpoint     string `mapstructure:"endpoint"`
-			Model        string `mapstructure:"model"`
-			APIKey       string `mapstructure:"api_key"`
 			MaxEntries   int    `mapstructure:"max_entries"`
 			SystemPrompt string `mapstructure:"system_prompt"`
 		} `mapstructure:"audit_report"`
@@ -216,8 +253,8 @@ type CredentialMapping struct {
 	Format       string `mapstructure:"format"`        // Optional. Template for value formatting. Use {value} placeholder. Default: "{value}" (raw value passthrough). Examples: "Bearer {value}", "sha256={value}"
 }
 
-// CELPolicy represents a single CEL policy rule
-type CELPolicy struct {
+// Policy represents a single deterministic policy rule (uses CEL expressions internally)
+type Policy struct {
 	Name        string       `mapstructure:"name"`
 	Description string       `mapstructure:"description"`
 	Expression  string       `mapstructure:"expression"`
@@ -236,8 +273,8 @@ type AIPolicy struct {
 	Mode        PolicyMode   `mapstructure:"mode"` // Optional: overrides top-level mode
 }
 
-// CELResponsePolicy represents a single CEL response policy rule
-type CELResponsePolicy struct {
+// ResponsePolicy represents a single deterministic response policy rule (uses CEL expressions internally)
+type ResponsePolicy struct {
 	Name                 string       `mapstructure:"name"`
 	Description          string       `mapstructure:"description"`
 	Expression           string       `mapstructure:"expression"`
@@ -258,8 +295,8 @@ type AIResponsePolicy struct {
 	Mode        PolicyMode   `mapstructure:"mode"` // Optional: overrides top-level mode
 }
 
-// LoadPoliciesFromFile loads CEL policies from a file
-func LoadCELPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
+// LoadPoliciesFromFile loads deterministic policies from a file
+func LoadPoliciesFromFile(rulesFile string) ([]Policy, error) {
 	if rulesFile == "" {
 		return nil, nil
 	}
@@ -270,7 +307,7 @@ func LoadCELPoliciesFromFile(rulesFile string) ([]CELPolicy, error) {
 	}
 
 	var policies struct {
-		Rules []CELPolicy `yaml:"rules"`
+		Rules []Policy `yaml:"rules"`
 	}
 	if err := yaml.Unmarshal(data, &policies); err != nil {
 		return nil, fmt.Errorf("error unmarshaling rules: %w", err)
@@ -303,8 +340,8 @@ func LoadAIPoliciesFromFile(path string) ([]AIPolicy, error) {
 	return policies.Rules, nil
 }
 
-// LoadCELResponsePoliciesFromFile loads CEL response policies from a file
-func LoadCELResponsePoliciesFromFile(rulesFile string) ([]CELResponsePolicy, error) {
+// LoadResponsePoliciesFromFile loads deterministic response policies from a file
+func LoadResponsePoliciesFromFile(rulesFile string) ([]ResponsePolicy, error) {
 	if rulesFile == "" {
 		return nil, nil
 	}
@@ -315,7 +352,7 @@ func LoadCELResponsePoliciesFromFile(rulesFile string) ([]CELResponsePolicy, err
 	}
 
 	var policies struct {
-		Rules []CELResponsePolicy `yaml:"rules"`
+		Rules []ResponsePolicy `yaml:"rules"`
 	}
 	if err := yaml.Unmarshal(data, &policies); err != nil {
 		return nil, fmt.Errorf("error unmarshaling response rules: %w", err)
@@ -607,8 +644,21 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("native_tools.list_sessions.enabled", true)
 	v.SetDefault("native_tools.audit_log.max_entries", 100)
 	v.SetDefault("native_tools.audit_report.max_entries", 1_000)
-	v.SetDefault("logging.path", "stdout")
+	v.SetDefault("logger.path", "stderr")
+	v.SetDefault("logger.level", "info")
+	v.SetDefault("logger.rotation.max_size_mb", 100)
+	v.SetDefault("logger.rotation.max_backups", 5)
+	v.SetDefault("logger.rotation.max_age_days", 180)
+	v.SetDefault("logger.rotation.compress", true)
 	v.SetDefault("audit.path", "maybedont-audit.log")
+	v.SetDefault("audit.filter", "all")
+	v.SetDefault("audit.rotation.max_size_mb", 100)
+	v.SetDefault("audit.rotation.max_backups", 5)
+	v.SetDefault("audit.rotation.max_age_days", 180)
+	v.SetDefault("audit.rotation.compress", true)
+	v.SetDefault("validation.max_blocking_ms", 90_000)
+	v.SetDefault("validation.max_rule_evaluation_ms", 45_000)
+	v.SetDefault("server.session_timeout_minutes", 30)
 
 	// Try to find config file with fallback logic
 	configFileFound := false
@@ -675,16 +725,6 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	}
 
 	// Set default values for native tools configuration
-	// Inherit AI settings from ai_validation if not specified
-	if config.NativeTools.AuditReport.Endpoint == "" {
-		config.NativeTools.AuditReport.Endpoint = config.AIPolicyValidation.Endpoint
-	}
-	if config.NativeTools.AuditReport.Model == "" {
-		config.NativeTools.AuditReport.Model = config.AIPolicyValidation.Model
-	}
-	if config.NativeTools.AuditReport.APIKey == "" {
-		config.NativeTools.AuditReport.APIKey = config.AIPolicyValidation.APIKey
-	}
 	if config.NativeTools.AuditReport.SystemPrompt == "" {
 		config.NativeTools.AuditReport.SystemPrompt = `You are an AI security analyst reviewing MCP gateway audit logs.
 Analyze the tool calls, validation results, and patterns to provide insights on:
@@ -701,13 +741,13 @@ For each concern, estimate the potential impact category and explain the reasoni
 	}
 
 	// Resolve and store validation modes with their respective defaults
-	// CEL policy validation defaults to enabled
-	config.PolicyValidation.Mode = ResolveValidationMode(
-		config.PolicyValidation.Mode, config.PolicyValidation.Enabled, PolicyModeEnabled)
+	// Request validation defaults to enabled
+	config.RequestValidation.Mode = ResolveValidationMode(
+		config.RequestValidation.Mode, config.RequestValidation.Enabled, PolicyModeEnabled)
 
-	// AI validation defaults to audit_only (non-blocking by default)
-	config.AIPolicyValidation.Mode = ResolveValidationMode(
-		config.AIPolicyValidation.Mode, config.AIPolicyValidation.Enabled, PolicyModeAuditOnly)
+	// AI request validation defaults to audit_only (non-blocking by default)
+	config.AIRequestValidation.Mode = ResolveValidationMode(
+		config.AIRequestValidation.Mode, config.AIRequestValidation.Enabled, PolicyModeAuditOnly)
 
 	// Response validation defaults to disabled
 	config.ResponseValidation.Mode = ResolveValidationMode(
@@ -721,45 +761,51 @@ For each concern, estimate the potential impact category and explain the reasoni
 	// These are collected here so they can be reported alongside validation errors
 	var loadErrors []string
 
-	// Load CEL request policies from rules file (if mode is not disabled)
-	if config.PolicyValidation.Mode != PolicyModeDisabled {
-		if config.PolicyValidation.RulesFile == "" {
-			loadErrors = append(loadErrors, "policy_validation is enabled but rules_file is not specified")
+	// Load request policies from rules file (if mode is not disabled)
+	if config.RequestValidation.Mode != PolicyModeDisabled {
+		if config.RequestValidation.RulesFile == "" {
+			loadErrors = append(loadErrors, "request_validation is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.RequestValidation.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("request_validation.rules_file: %s", err.Error()))
 		} else {
-			resolvedPath := resolveRulesFilePath(config.PolicyValidation.RulesFile, configFileDir)
-			policies, err := LoadCELPoliciesFromFile(resolvedPath)
+			resolvedPath := resolveRulesFilePath(config.RequestValidation.RulesFile, configFileDir)
+			policies, err := LoadPoliciesFromFile(resolvedPath)
 			if err != nil {
-				loadErrors = append(loadErrors, fmt.Sprintf("error loading CEL policies from file: %v", err))
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading request policies from file: %v", err))
 			} else {
-				config.PolicyValidation.Rules = policies
+				config.RequestValidation.Rules = policies
 			}
 		}
 	}
 
 	// Load AI request policies from rules file (if mode is not disabled)
-	if config.AIPolicyValidation.Mode != PolicyModeDisabled {
-		if config.AIPolicyValidation.RulesFile == "" {
-			loadErrors = append(loadErrors, "ai_validation is enabled but rules_file is not specified")
+	if config.AIRequestValidation.Mode != PolicyModeDisabled {
+		if config.AIRequestValidation.RulesFile == "" {
+			loadErrors = append(loadErrors, "ai_request_validation is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.AIRequestValidation.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("ai_request_validation.rules_file: %s", err.Error()))
 		} else {
-			resolvedPath := resolveRulesFilePath(config.AIPolicyValidation.RulesFile, configFileDir)
+			resolvedPath := resolveRulesFilePath(config.AIRequestValidation.RulesFile, configFileDir)
 			aiPolicies, err := LoadAIPoliciesFromFile(resolvedPath)
 			if err != nil {
-				loadErrors = append(loadErrors, fmt.Sprintf("error loading AI policies from file: %v", err))
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading AI request policies from file: %v", err))
 			} else {
-				config.AIPolicyValidation.Rules = aiPolicies
+				config.AIRequestValidation.Rules = aiPolicies
 			}
 		}
 	}
 
-	// Load CEL response policies from rules file (if mode is not disabled)
+	// Load response policies from rules file (if mode is not disabled)
 	if config.ResponseValidation.Mode != PolicyModeDisabled {
 		if config.ResponseValidation.RulesFile == "" {
 			loadErrors = append(loadErrors, "response_validation is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.ResponseValidation.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("response_validation.rules_file: %s", err.Error()))
 		} else {
 			resolvedPath := resolveRulesFilePath(config.ResponseValidation.RulesFile, configFileDir)
-			responsePolicies, err := LoadCELResponsePoliciesFromFile(resolvedPath)
+			responsePolicies, err := LoadResponsePoliciesFromFile(resolvedPath)
 			if err != nil {
-				loadErrors = append(loadErrors, fmt.Sprintf("error loading CEL response policies from file: %v", err))
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading response policies from file: %v", err))
 			} else {
 				config.ResponseValidation.Rules = responsePolicies
 			}
@@ -770,6 +816,8 @@ For each concern, estimate the potential impact category and explain the reasoni
 	if config.AIResponseValidation.Mode != PolicyModeDisabled {
 		if config.AIResponseValidation.RulesFile == "" {
 			loadErrors = append(loadErrors, "ai_response_validation is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.AIResponseValidation.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("ai_response_validation.rules_file: %s", err.Error()))
 		} else {
 			resolvedPath := resolveRulesFilePath(config.AIResponseValidation.RulesFile, configFileDir)
 			aiResponsePolicies, err := LoadAIResponsePoliciesFromFile(resolvedPath)
@@ -973,18 +1021,36 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		}
 	}
 
-	// Validate AI validation configuration (if mode is enabled or audit_only)
-	// Empty mode is treated as disabled for backwards compatibility
-	if cfg.AIPolicyValidation.Mode != PolicyModeDisabled && cfg.AIPolicyValidation.Mode != "" {
-		if cfg.AIPolicyValidation.APIKey == "" {
-			errors = append(errors, "ai_validation.api_key is required when AI validation is enabled")
+	// Validate AI configuration when any AI feature is enabled
+	// AI credentials are required when AI request validation, AI response validation, or audit report is enabled
+	aiRequestEnabled := cfg.AIRequestValidation.Mode != PolicyModeDisabled && cfg.AIRequestValidation.Mode != ""
+	aiResponseEnabled := cfg.AIResponseValidation.Mode != PolicyModeDisabled && cfg.AIResponseValidation.Mode != ""
+	auditReportEnabled := cfg.NativeTools.AuditReport.Enabled
+
+	if aiRequestEnabled || aiResponseEnabled || auditReportEnabled {
+		if cfg.Validation.AI.APIKey == "" {
+			errors = append(errors, "validation.ai.api_key is required when AI validation or audit report is enabled")
 		}
-		if cfg.AIPolicyValidation.Endpoint == "" {
-			errors = append(errors, "ai_validation.endpoint is required when AI validation is enabled")
+		if cfg.Validation.AI.Endpoint == "" {
+			errors = append(errors, "validation.ai.endpoint is required when AI validation or audit report is enabled")
 		}
-		if cfg.AIPolicyValidation.Model == "" {
-			errors = append(errors, "ai_validation.model is required when AI validation is enabled")
+		if cfg.Validation.AI.Model == "" {
+			errors = append(errors, "validation.ai.model is required when AI validation or audit report is enabled")
 		}
+	}
+
+	// Validate global validation timeout values
+	if cfg.Validation.MaxBlockingMs < 0 {
+		errors = append(errors, "validation.max_blocking_ms must be non-negative")
+	}
+	if cfg.Validation.MaxBlockingMs > 120000 {
+		errors = append(errors, "validation.max_blocking_ms must be less than 120000ms (2 minutes)")
+	}
+	if cfg.Validation.MaxRuleEvaluationMs < 0 {
+		errors = append(errors, "validation.max_rule_evaluation_ms must be non-negative")
+	}
+	if cfg.Validation.MaxRuleEvaluationMs > 120000 {
+		errors = append(errors, "validation.max_rule_evaluation_ms must be less than 120000ms (2 minutes)")
 	}
 
 	// Validate native tools
@@ -996,10 +1062,10 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		validateRange(cfg.NativeTools.AuditReport.MaxEntries, 10, 2_000, "native_tools.audit_report.max_entries", &errors)
 	}
 
-	// Validate logging.path - must be stdout, stderr, or a safe relative path
-	if cfg.Logging.Path != "" && cfg.Logging.Path != "stdout" && cfg.Logging.Path != "stderr" {
-		if err := ValidateRelativePath(cfg.Logging.Path); err != nil {
-			errors = append(errors, fmt.Sprintf("logging.path: %s", err.Error()))
+	// Validate logger.path - must be stdout, stderr, or a safe relative path
+	if cfg.Logger.Path != "" && cfg.Logger.Path != "stdout" && cfg.Logger.Path != "stderr" {
+		if err := ValidateRelativePath(cfg.Logger.Path); err != nil {
+			errors = append(errors, fmt.Sprintf("logger.path: %s", err.Error()))
 		}
 	}
 
@@ -1037,41 +1103,38 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 // GetLogger creates a new session-aware logger based on the configuration.
 // logDir: the resolved log directory where log files should be written.
-// If logging.path is "stdout" or "stderr", logs go directly there.
-// Otherwise, logging.path is treated as a filename and resolved within logDir.
+// If logger.path is "stdout" or "stderr", logs go directly there.
+// Otherwise, logger.path is treated as a filename and resolved within logDir with rotation support.
 func GetLogger(cfg *Config, logDir string) (*SessionLogger, error) {
-	config := zap.NewProductionConfig()
-
 	// Set log level
-	level, err := zapcore.ParseLevel(cfg.Logging.LogLevel)
+	level, err := zapcore.ParseLevel(cfg.Logger.Level)
 	if err != nil {
 		return nil, fmt.Errorf("invalid log level: %w", err)
 	}
-	config.Level = zap.NewAtomicLevelAt(level)
 
-	// Set output paths based on configuration
-	logPath := cfg.Logging.Path
+	// Set output based on configuration
+	logPath := cfg.Logger.Path
+
+	var core zapcore.Core
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoder := zapcore.NewJSONEncoder(encoderConfig)
+
 	switch logPath {
-	case "", "stdout":
-		// Default to stdout
-		config.OutputPaths = []string{"stdout"}
-		config.ErrorOutputPaths = []string{"stderr"}
-	case "stderr":
-		// Log to stderr
-		config.OutputPaths = []string{"stderr"}
-		config.ErrorOutputPaths = []string{"stderr"}
+	case "", "stderr":
+		// Default to stderr
+		core = zapcore.NewCore(encoder, zapcore.AddSync(os.Stderr), level)
+	case "stdout":
+		// Log to stdout
+		core = zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), level)
 	default:
-		// Path is a filename - resolve it within logDir
+		// Path is a filename - resolve it within logDir and use lumberjack for rotation
 		fullPath := filepath.Join(logDir, logPath)
-		config.OutputPaths = []string{fullPath}
-		config.ErrorOutputPaths = []string{fullPath}
+		lumberjackLogger := newLumberjackLogger(fullPath, cfg.Logger.Rotation)
+		core = zapcore.NewCore(encoder, zapcore.AddSync(lumberjackLogger), level)
 	}
 
 	// Build the logger
-	logger, err := config.Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build logger: %w", err)
-	}
+	logger := zap.New(core)
 
 	// Add logger type designation and wrap in SessionLogger
 	zapLogger := logger.With(zap.String("logger", "application"))
@@ -1158,12 +1221,12 @@ func ValidateRelativePath(path string) error {
 	// Common encodings: %2e = '.', %2f = '/', %5c = '\', %00 = null
 	lowerPath := strings.ToLower(path)
 	encodedPatterns := []string{
-		"%2e", // .
-		"%2f", // /
-		"%5c", // \
-		"%00", // null
-		"%252e", // double-encoded .
-		"%252f", // double-encoded /
+		"%2e",    // .
+		"%2f",    // /
+		"%5c",    // \
+		"%00",    // null
+		"%252e",  // double-encoded .
+		"%252f",  // double-encoded /
 		"%c0%ae", // overlong UTF-8 encoding of .
 		"%c0%af", // overlong UTF-8 encoding of /
 		"%c1%9c", // overlong UTF-8 encoding of \

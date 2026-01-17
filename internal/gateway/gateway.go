@@ -25,10 +25,28 @@ func (e *PolicyDeniedError) Error() string {
 	return e.Message
 }
 
+// SessionExpiredError indicates that the session is no longer valid and needs to be re-established.
+// This error provides clear guidance to AI agents on how to recover.
+type SessionExpiredError struct {
+	SessionID string
+	Reason    string
+}
+
+// Error implements the error interface
+func (e *SessionExpiredError) Error() string {
+	return fmt.Sprintf("Session expired: %s. To recover, call the 'maybedont__discover_tools' tool to re-establish your connection to downstream MCP servers. This will create a new session and rediscover available tools.", e.Reason)
+}
+
+// IsSessionExpiredError checks if an error is a SessionExpiredError
+func IsSessionExpiredError(err error) bool {
+	_, ok := err.(*SessionExpiredError)
+	return ok
+}
+
 // Gateway represents an MCP security gateway instance
 type Gateway struct {
 	logger           *config.SessionLogger
-	auditLogger      *config.SessionLogger
+	auditWriter      AuditWriter
 	config           *config.Config
 	version          string
 	server           *server.MCPServer
@@ -57,10 +75,14 @@ type Gateway struct {
 // New creates a new gateway instance.
 // logDir: the resolved log directory for audit log file output.
 func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, version string, logDir string) (*Gateway, error) {
-	// Create audit logger with its own configuration
-	auditLogger, err := config.GetAuditLogger(cfg, logDir)
+	// Create audit writer with rotation and filtering support
+	auditPath := cfg.Audit.Path
+	if auditPath == "" {
+		auditPath = "maybedont-audit.log"
+	}
+	auditWriter, err := NewJSONLAuditWriter(auditPath, logDir, cfg.Audit.Rotation, cfg.Audit.Filter)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create audit logger: %w", err)
+		return nil, fmt.Errorf("failed to create audit writer: %w", err)
 	}
 
 	// Initialize policy engines
@@ -68,46 +90,47 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	var aiPolicyEngine *AIPolicyEngine
 
 	// Mode is already resolved during config loading, use it directly
-	celPolicyMode := cfg.PolicyValidation.Mode
-	aiPolicyMode := cfg.AIPolicyValidation.Mode
+	requestPolicyMode := cfg.RequestValidation.Mode
+	aiRequestPolicyMode := cfg.AIRequestValidation.Mode
 
-	// Initialize CEL policy engine only if not disabled
-	if celPolicyMode != config.PolicyModeDisabled {
-		logger.Info(ctx, "Initializing CEL policy engine", zap.String("mode", string(celPolicyMode)))
+	// Initialize request policy engine only if not disabled
+	if requestPolicyMode != config.PolicyModeDisabled {
+		logger.Info(ctx, "Initializing request policy engine", zap.String("mode", string(requestPolicyMode)))
 		policyEngine, err = NewCELPolicyEngine(ctx, logger)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create CEL policy engine: %w", err)
+			return nil, fmt.Errorf("failed to create request policy engine: %w", err)
 		}
 
 		// Load policies from configuration with the resolved mode
-		if err := policyEngine.LoadPolicies(cfg.PolicyValidation.Rules, celPolicyMode); err != nil {
-			return nil, fmt.Errorf("failed to load CEL policies: %w", err)
+		if err := policyEngine.LoadPolicies(cfg.RequestValidation.Rules, requestPolicyMode); err != nil {
+			return nil, fmt.Errorf("failed to load request policies: %w", err)
 		}
 	} else {
-		logger.Info(ctx, "CEL policy validation is disabled")
+		logger.Info(ctx, "Request policy validation is disabled")
 	}
 
-	// Initialize AI policy engine only if not disabled
-	if aiPolicyMode != config.PolicyModeDisabled {
-		logger.Info(ctx, "Initializing AI policy engine", zap.String("mode", string(aiPolicyMode)))
+	// Initialize AI request policy engine only if not disabled
+	if aiRequestPolicyMode != config.PolicyModeDisabled {
+		logger.Info(ctx, "Initializing AI request policy engine", zap.String("mode", string(aiRequestPolicyMode)))
 		aiPolicyEngine = &AIPolicyEngine{
-			endpoint: cfg.AIPolicyValidation.Endpoint,
-			model:    cfg.AIPolicyValidation.Model,
-			apiKey:   cfg.AIPolicyValidation.APIKey,
+			endpoint:            cfg.Validation.AI.Endpoint,
+			model:               cfg.Validation.AI.Model,
+			apiKey:              cfg.Validation.AI.APIKey,
+			maxRuleEvaluationMs: cfg.Validation.MaxRuleEvaluationMs,
 		}
 
-		// Create AI policy engine
+		// Create AI request policy engine
 		err = InitAIPolicyEngine(logger, aiPolicyEngine)
 		if err != nil {
-			return nil, fmt.Errorf("failed to init AI policy engine: %w", err)
+			return nil, fmt.Errorf("failed to init AI request policy engine: %w", err)
 		}
 
 		// Load policies from configuration with the resolved mode
-		if err := aiPolicyEngine.LoadPolicies(cfg.AIPolicyValidation.Rules, aiPolicyMode); err != nil {
-			return nil, fmt.Errorf("failed to load AI policies: %w", err)
+		if err := aiPolicyEngine.LoadPolicies(cfg.AIRequestValidation.Rules, aiRequestPolicyMode); err != nil {
+			return nil, fmt.Errorf("failed to load AI request policies: %w", err)
 		}
 	} else {
-		logger.Info(ctx, "AI policy validation is disabled")
+		logger.Info(ctx, "AI request policy validation is disabled")
 	}
 
 	// Initialize response validation engines
@@ -138,9 +161,10 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	if aiResponseMode != config.PolicyModeDisabled {
 		logger.Info(ctx, "Initializing AI response policy engine", zap.String("mode", string(aiResponseMode)))
 		aiResponsePolicyEngine = &AIResponsePolicyEngine{
-			endpoint: cfg.AIPolicyValidation.Endpoint,
-			model:    cfg.AIPolicyValidation.Model,
-			apiKey:   cfg.AIPolicyValidation.APIKey,
+			endpoint:            cfg.Validation.AI.Endpoint,
+			model:               cfg.Validation.AI.Model,
+			apiKey:              cfg.Validation.AI.APIKey,
+			maxRuleEvaluationMs: cfg.Validation.MaxRuleEvaluationMs,
 		}
 
 		// Create AI response policy engine
@@ -157,12 +181,18 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		logger.Info(ctx, "AI response validation is disabled")
 	}
 
-	// Create client manager
-	clientManager := NewClientManager(ctx, logger)
+	// Create client manager with configured session timeout
+	sessionTimeout := DefaultSessionTimeout
+	if cfg.Server.SessionTimeoutMinutes > 0 {
+		sessionTimeout = time.Duration(cfg.Server.SessionTimeoutMinutes) * time.Minute
+	}
+	logger.Info(ctx, "Session timeout configured", zap.Duration("timeout", sessionTimeout))
+	clientManager := NewClientManagerWithTimeout(ctx, logger, sessionTimeout)
 
 	// Create native tools handler with the resolved audit log path
+	// Note: NativeToolsHandler still uses logger for its internal logging
 	auditLogPath := config.ResolveAuditLogPath(cfg, logDir)
-	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, auditLogger, auditLogPath)
+	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, logger, auditLogPath)
 
 	// Wire up the client config provider for native tools
 	nativeToolsHandler.SetClientConfigProvider(clientManager)
@@ -178,7 +208,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 
 	return &Gateway{
 		logger:                 logger,
-		auditLogger:            auditLogger,
+		auditWriter:            auditWriter,
 		config:                 cfg,
 		version:                version,
 		stopChan:               make(chan struct{}),
@@ -300,6 +330,13 @@ func (g *Gateway) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Close the audit writer
+	if g.auditWriter != nil {
+		if err := g.auditWriter.Close(); err != nil {
+			g.logger.Error(ctx, "Error closing audit writer", zap.Error(err))
+		}
+	}
+
 	return nil
 }
 
@@ -316,9 +353,10 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		return g.nativeToolsHandler.HandleToolCall(ctx, req)
 	}
 
-	// Get session ID, client IP, and request ID for audit logging
+	// Get session ID, client IP, user agent, and request ID for audit logging
 	sessionID, hasSession := GetSessionIDFromContext(ctx)
 	clientIP, _ := GetClientIP(ctx)
+	userAgent, _ := GetUserAgent(ctx)
 	requestID, _ := GetRequestID(ctx)
 
 	// Parse the prefixed tool name early to populate audit context
@@ -331,20 +369,34 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	// Create audit context
 	audit := NewAuditContext(req.Params.Name, clientName, originalToolName, sessionID, clientIP, requestID)
 
+	// Set User-Agent header
+	audit.SetUserAgent(userAgent)
+
 	// Set request params (convert to map for audit)
 	if params, ok := req.Params.Arguments.(map[string]interface{}); ok {
 		audit.SetRequestParams(params)
 	}
 
-	// Helper to write audit log and return
+	// Create blocking budget for cumulative blocking time tracking
+	// Uses max_blocking_ms from global validation config (applies to all validation phases)
+	maxBlockingMs := int64(g.config.Validation.MaxBlockingMs)
+	blockingBudget := NewBlockingBudget(maxBlockingMs)
+
+	// Create context with blocking budget for validation handlers
+	validationCtx := WithBlockingBudget(ctx, blockingBudget)
+
+	// Helper to write audit log
 	writeAuditLog := func() {
+		// Set total blocked time from budget
+		audit.SetTotalBlockedMs(blockingBudget.TotalBlockedMs())
 		entry := audit.Finalize()
-		g.auditLogger.Info(ctx, "Tool call audit",
-			zap.Any("audit", entry))
+		if _, err := g.auditWriter.Write(entry); err != nil {
+			g.logger.Error(ctx, "Failed to write audit log", zap.Error(err))
+		}
 	}
 
 	// Validate request through the chain (timing is captured per-policy)
-	validationResults, err := g.ValidateToolCall(ctx, req)
+	validationResults, err := g.ValidateToolCall(validationCtx, req)
 
 	if err != nil {
 		// Validation error - don't write audit log (infrastructure error)
@@ -382,14 +434,21 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	// Check if we have a valid session
 	if !hasSession {
-		// No session - infrastructure error, skip audit
-		return nil, fmt.Errorf("no session ID in context")
+		// No session - return a helpful error for AI agents
+		return nil, &SessionExpiredError{
+			SessionID: "",
+			Reason:    "no session established",
+		}
 	}
 
 	// Get the appropriate client for this session
 	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
 	if err != nil {
-		// Client not found - infrastructure error, skip audit
+		// Check if this is a session expired error - pass it through directly
+		if IsSessionExpiredError(err) {
+			return nil, err
+		}
+		// Other client errors - wrap with context
 		return nil, fmt.Errorf("client not found for session: %w", err)
 	}
 
@@ -414,8 +473,9 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	audit.SetResponse(len(result.Content), result.IsError)
 
 	// Validate response through the response validation chain (timing is captured per-policy)
+	// Use validationCtx to share the blocking budget with response validation
 	if g.responseValidationChain != nil {
-		responseValidationResults, respErr := g.responseValidationChain.Handle(ctx, req, result)
+		responseValidationResults, respErr := g.responseValidationChain.Handle(validationCtx, req, result)
 
 		if respErr != nil {
 			g.logger.Error(ctx, "Response validation error", zap.Error(respErr))
@@ -429,7 +489,15 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		if !responseValidationResults.Allowed {
 			audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny))
 			writeAuditLog()
-			return nil, fmt.Errorf("response denied by policy: %s", responseValidationResults.Message)
+			errorMessage := g.buildResponseDeniedError(&responseValidationResults, req.Params.Name)
+			return nil, &PolicyDeniedError{
+				Message: errorMessage,
+				Data: map[string]interface{}{
+					"tool_name":    req.Params.Name,
+					"denied_count": responseValidationResults.DenyCount(),
+					"phase":        "response",
+				},
+			}
 		}
 
 		// If response was redacted, update the result
@@ -493,48 +561,41 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 // populateRequestValidationAudit extracts validation results by policy type and populates audit context
 func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results ValidationResults) {
-	if len(results.Results) == 0 {
+	if len(results.Results) == 0 && results.RulesDetails == nil && results.AIDetails == nil {
 		return
 	}
 
-	// Extract CEL and AI results
-	for _, r := range results.Results {
-		if r.PolicyType == "audit" {
-			continue // Skip audit-only policies
-		}
+	// Set rules details if present (deterministic rule evaluation results)
+	if results.RulesDetails != nil {
+		audit.SetRequestValidationRules(results.RulesDetails)
+	}
 
-		switch r.PolicyType {
-		case "cel":
-			audit.SetRequestValidationCEL(string(r.Action), r.PolicyName, r.DurationMs)
-		case "ai":
-			audit.SetRequestValidationAI(string(r.Action), r.Message, r.DurationMs)
-		}
+	// Set AI details if present
+	if results.AIDetails != nil {
+		audit.SetRequestValidationAI(results.AIDetails)
 	}
 }
 
 // populateResponseValidationAudit extracts response validation results by policy type
 func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results ResponseValidationResults) {
-	if len(results.Results) == 0 {
+	if len(results.Results) == 0 && results.RulesDetails == nil && results.AIDetails == nil {
 		return
 	}
 
-	for _, r := range results.Results {
-		if r.PolicyType == "audit" {
-			continue
-		}
+	// Set rules details if present (deterministic rule evaluation results)
+	if results.RulesDetails != nil {
+		audit.SetResponseValidationRules(results.RulesDetails)
+	}
 
-		switch r.PolicyType {
-		case "cel":
-			audit.SetResponseValidationCEL(string(r.Action), r.PolicyName, r.DurationMs)
-		case "ai":
-			audit.SetResponseValidationAI(string(r.Action), r.Message, r.DurationMs)
-		}
+	// Set AI details if present
+	if results.AIDetails != nil {
+		audit.SetResponseValidationAI(results.AIDetails)
 	}
 }
 
-// buildPolicyDeniedError creates a user-friendly error message and structured data for policy failures
+// buildPolicyDeniedError creates an AI-friendly error message and structured data for request policy failures.
+// The message is designed to help AI agents understand why the request was denied and suggest alternatives.
 func (g *Gateway) buildPolicyDeniedError(validationResults *ValidationResults, toolName string) (string, map[string]interface{}) {
-	// Create a user-friendly error message
 	var deniedPolicies []string
 	var deniedMessages []string
 
@@ -547,32 +608,31 @@ func (g *Gateway) buildPolicyDeniedError(validationResults *ValidationResults, t
 		}
 	}
 
-	// Build user-friendly error message
+	// Build AI-friendly error message with guidance
 	var errorMessage string
 	if len(deniedPolicies) > 0 {
 		if len(deniedPolicies) == 1 {
-			// Single policy failure
 			if len(deniedMessages) > 0 {
 				errorMessage = fmt.Sprintf("Request denied by policy '%s': %s", deniedPolicies[0], deniedMessages[0])
 			} else {
 				errorMessage = fmt.Sprintf("Request denied by policy '%s'", deniedPolicies[0])
 			}
 		} else {
-			// Multiple policy failures
 			errorMessage = fmt.Sprintf("Request denied by %d policies:", len(deniedPolicies))
 			for i, policyName := range deniedPolicies {
 				if i < len(deniedMessages) && deniedMessages[i] != "" {
-					errorMessage += fmt.Sprintf("\n- '%s': %s", policyName, deniedMessages[i])
+					errorMessage += fmt.Sprintf("\n- %s: %s", policyName, deniedMessages[i])
 				} else {
-					errorMessage += fmt.Sprintf("\n- '%s'", policyName)
+					errorMessage += fmt.Sprintf("\n- %s", policyName)
 				}
 			}
 		}
+		// Add guidance for AI agents
+		errorMessage += "\n\nTo proceed, consider: using a different tool, modifying parameters to avoid restricted operations, or asking the user for guidance on allowed alternatives."
 	} else {
-		errorMessage = fmt.Sprintf("Request denied by %d policy(ies)", len(deniedPolicies))
+		errorMessage = "Request denied by policy. Please try a different approach or ask the user for guidance."
 	}
 
-	// Create structured error data
 	errorData := map[string]interface{}{
 		"denied_policies": deniedPolicies,
 		"denied_count":    validationResults.DenyCount,
@@ -580,6 +640,91 @@ func (g *Gateway) buildPolicyDeniedError(validationResults *ValidationResults, t
 	}
 
 	return errorMessage, errorData
+}
+
+// buildResponseDeniedError creates an AI-friendly error message for response policy failures.
+// The message helps AI agents understand why the response was blocked and what to try next.
+func (g *Gateway) buildResponseDeniedError(results *ResponseValidationResults, toolName string) string {
+	var deniedPolicies []string
+	var deniedMessages []string
+
+	for _, result := range results.Results {
+		if result.Action == config.PolicyActionDeny {
+			deniedPolicies = append(deniedPolicies, result.PolicyName)
+			if result.Message != "" {
+				deniedMessages = append(deniedMessages, result.Message)
+			}
+		}
+	}
+
+	var errorMessage string
+
+	// Check if this was a validation timeout/error vs explicit denial
+	if results.Message != "" && (len(deniedPolicies) == 0 ||
+		containsAny(results.Message, "timeout", "deadline exceeded", "Failed to evaluate")) {
+		// Translate technical error messages to user-friendly ones
+		friendlyMessage := humanizeErrorMessage(results.Message)
+		errorMessage = fmt.Sprintf("Response validation failed: %s", friendlyMessage)
+		errorMessage += "\n\nThis may be a temporary issue. You can retry the request, or try with simpler parameters that produce a smaller response."
+	} else if len(deniedPolicies) > 0 {
+		if len(deniedPolicies) == 1 {
+			if len(deniedMessages) > 0 {
+				errorMessage = fmt.Sprintf("Response denied by policy '%s': %s", deniedPolicies[0], deniedMessages[0])
+			} else {
+				errorMessage = fmt.Sprintf("Response denied by policy '%s'", deniedPolicies[0])
+			}
+		} else {
+			errorMessage = fmt.Sprintf("Response denied by %d policies:", len(deniedPolicies))
+			for i, policyName := range deniedPolicies {
+				if i < len(deniedMessages) && deniedMessages[i] != "" {
+					errorMessage += fmt.Sprintf("\n- %s: %s", policyName, deniedMessages[i])
+				} else {
+					errorMessage += fmt.Sprintf("\n- %s", policyName)
+				}
+			}
+		}
+		errorMessage += "\n\nThe tool executed but the response was filtered. Consider requesting less sensitive data, using more specific filters, or asking the user about alternative approaches."
+	} else {
+		errorMessage = fmt.Sprintf("Response blocked: %s", humanizeErrorMessage(results.Message))
+		errorMessage += "\n\nConsider trying a different approach or asking the user for guidance."
+	}
+
+	return errorMessage
+}
+
+// humanizeErrorMessage translates technical Go error messages to user-friendly descriptions
+func humanizeErrorMessage(msg string) string {
+	if containsAny(msg, "context deadline exceeded", "deadline exceeded") {
+		return "validation timed out while processing the response"
+	}
+	if containsAny(msg, "context canceled") {
+		return "validation was cancelled"
+	}
+	if containsAny(msg, "connection refused", "connection reset") {
+		return "could not connect to validation service"
+	}
+	if containsAny(msg, "Failed to evaluate response policy") {
+		// Extract the underlying cause if present
+		if containsAny(msg, "deadline exceeded") {
+			return "policy evaluation timed out"
+		}
+		return "policy evaluation failed"
+	}
+	return msg
+}
+
+// containsAny checks if s contains any of the substrings
+func containsAny(s string, substrings ...string) bool {
+	for _, sub := range substrings {
+		if len(sub) > 0 && len(s) >= len(sub) {
+			for i := 0; i <= len(s)-len(sub); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Prompt handler function
@@ -593,12 +738,19 @@ func (g *Gateway) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest
 	// Get session ID from context
 	sessionID, hasSession := GetSessionIDFromContext(ctx)
 	if !hasSession {
-		return nil, fmt.Errorf("no session ID in context")
+		return nil, &SessionExpiredError{
+			SessionID: "",
+			Reason:    "no session established",
+		}
 	}
 
 	// Get the appropriate client for this session
 	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
 	if err != nil {
+		// Check if this is a session expired error - pass it through directly
+		if IsSessionExpiredError(err) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("client not found for session: %w", err)
 	}
 
@@ -620,12 +772,19 @@ func (g *Gateway) handleResourceRequest(ctx context.Context, req mcp.ReadResourc
 	// Get session ID from context
 	sessionID, hasSession := GetSessionIDFromContext(ctx)
 	if !hasSession {
-		return nil, fmt.Errorf("no session ID in context")
+		return nil, &SessionExpiredError{
+			SessionID: "",
+			Reason:    "no session established",
+		}
 	}
 
 	// Get the appropriate client for this session
 	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
 	if err != nil {
+		// Check if this is a session expired error - pass it through directly
+		if IsSessionExpiredError(err) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("client not found for session: %w", err)
 	}
 
@@ -715,21 +874,25 @@ func (g *Gateway) DiscoverPassThroughTools(ctx context.Context, sessionID string
 			continue
 		}
 
-		// Register discovered tools for this session
+		// Register discovered tools globally (not per-session)
+		// Using AddTool instead of AddSessionTool ensures the tool always exists in the SDK's registry,
+		// even after the session expires. This allows our handler to return a helpful error message
+		// guiding the user to reconnect, rather than the SDK returning an unhelpful "tool not found" error.
 		if len(clientInfo.Tools) > 0 {
 			toolNames := make([]string, 0, len(clientInfo.Tools))
 			for _, tool := range clientInfo.Tools {
 				prefixedTool := tool
 				prefixedTool.Name = PrefixName(name, tool.Name)
 
-				err := g.server.AddSessionTool(sessionID, prefixedTool, g.handleToolCallWithErrorHandling)
-				if err != nil {
-					g.logger.Warn(ctx, "Failed to register session tool",
+				// Check if this tool is already registered globally (from a previous session)
+				existingTool := g.server.GetTool(prefixedTool.Name)
+				if existingTool == nil {
+					// Register globally so it persists across session lifecycles
+					g.server.AddTool(prefixedTool, g.handleToolCallWithErrorHandling)
+					g.logger.Debug(ctx, "Registered pass-through tool globally",
 						zap.String("session_id", sessionID),
 						zap.String("client", name),
-						zap.String("tool", prefixedTool.Name),
-						zap.Error(err))
-					continue
+						zap.String("tool", prefixedTool.Name))
 				}
 				toolNames = append(toolNames, tool.Name)
 			}

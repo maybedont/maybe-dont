@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -176,5 +177,150 @@ func TestPolicyDeniedError_MultiplePolicies(t *testing.T) {
 		assert.Equal(t, "deny-system-files", dp[1].(string), "Should include second policy name")
 	} else {
 		t.Errorf("denied_policies should be []string or []interface{}")
+	}
+}
+
+func TestSessionExpiredError(t *testing.T) {
+	// Test SessionExpiredError with session ID
+	sessionErr := &SessionExpiredError{
+		SessionID: "mcp-session-12345",
+		Reason:    "session no longer exists (server may have restarted)",
+	}
+
+	errMsg := sessionErr.Error()
+	assert.Contains(t, errMsg, "Session expired")
+	assert.Contains(t, errMsg, "session no longer exists")
+	assert.Contains(t, errMsg, "maybedont__discover_tools")
+	assert.Contains(t, errMsg, "re-establish your connection")
+}
+
+func TestSessionExpiredError_NoSession(t *testing.T) {
+	// Test SessionExpiredError when no session was established
+	sessionErr := &SessionExpiredError{
+		SessionID: "",
+		Reason:    "no session established",
+	}
+
+	errMsg := sessionErr.Error()
+	assert.Contains(t, errMsg, "Session expired")
+	assert.Contains(t, errMsg, "no session established")
+	assert.Contains(t, errMsg, "maybedont__discover_tools")
+}
+
+func TestIsSessionExpiredError(t *testing.T) {
+	// Test with SessionExpiredError
+	sessionErr := &SessionExpiredError{
+		SessionID: "test-session",
+		Reason:    "test reason",
+	}
+	assert.True(t, IsSessionExpiredError(sessionErr))
+
+	// Test with other errors
+	otherErr := errors.New("some other error")
+	assert.False(t, IsSessionExpiredError(otherErr))
+
+	// Test with PolicyDeniedError
+	policyErr := &PolicyDeniedError{
+		Message: "denied",
+		Data:    nil,
+	}
+	assert.False(t, IsSessionExpiredError(policyErr))
+
+	// Test with nil
+	assert.False(t, IsSessionExpiredError(nil))
+}
+
+func TestJsonRPCRequest_Parsing(t *testing.T) {
+	// Test parsing a tools/call request
+	toolCallJSON := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github__list_issues"}}`
+	var req jsonRPCRequest
+	err := json.Unmarshal([]byte(toolCallJSON), &req)
+	require.NoError(t, err)
+	assert.Equal(t, "tools/call", req.Method)
+
+	// Test parsing a tools/list request
+	toolListJSON := `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`
+	err = json.Unmarshal([]byte(toolListJSON), &req)
+	require.NoError(t, err)
+	assert.Equal(t, "tools/list", req.Method)
+
+	// Test parsing an initialize request
+	initJSON := `{"jsonrpc":"2.0","id":3,"method":"initialize","params":{}}`
+	err = json.Unmarshal([]byte(initJSON), &req)
+	require.NoError(t, err)
+	assert.Equal(t, "initialize", req.Method)
+}
+
+func TestCallToolParams_Parsing(t *testing.T) {
+	// Test parsing tool name from a tools/call request
+	toolCallJSON := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github__list_issues","arguments":{"owner":"test"}}}`
+	var toolReq callToolParams
+	err := json.Unmarshal([]byte(toolCallJSON), &toolReq)
+	require.NoError(t, err)
+	assert.Equal(t, "github__list_issues", toolReq.Params.Name)
+
+	// Test with different tool name
+	toolCallJSON2 := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"aws__describe_instance"}}`
+	err = json.Unmarshal([]byte(toolCallJSON2), &toolReq)
+	require.NoError(t, err)
+	assert.Equal(t, "aws__describe_instance", toolReq.Params.Name)
+
+	// Test with native tool (no prefix)
+	nativeToolJSON := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"maybedont__discover_tools"}}`
+	err = json.Unmarshal([]byte(nativeToolJSON), &toolReq)
+	require.NoError(t, err)
+	assert.Equal(t, "maybedont__discover_tools", toolReq.Params.Name)
+}
+
+func TestStaleSessionDetection_PrefixParsing(t *testing.T) {
+	// Test that we can correctly identify tool prefixes for stale session detection
+	tests := []struct {
+		name           string
+		toolName       string
+		expectedPrefix string
+		isDownstream   bool
+	}{
+		{
+			name:           "GitHub tool",
+			toolName:       "github__list_issues",
+			expectedPrefix: "github",
+			isDownstream:   true,
+		},
+		{
+			name:           "AWS tool",
+			toolName:       "aws__describe_instance",
+			expectedPrefix: "aws",
+			isDownstream:   true,
+		},
+		{
+			name:           "Native tool with prefix",
+			toolName:       "maybedont__discover_tools",
+			expectedPrefix: "maybedont",
+			isDownstream:   true, // Still has prefix format, but "maybedont" won't be a configured client
+		},
+		{
+			name:           "No prefix",
+			toolName:       "some_tool",
+			expectedPrefix: "",
+			isDownstream:   false,
+		},
+		{
+			name:           "Single underscore (not a prefix)",
+			toolName:       "my_tool_name",
+			expectedPrefix: "",
+			isDownstream:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clientName, _, err := ParsePrefixedName(tt.toolName)
+			if tt.isDownstream {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expectedPrefix, clientName)
+			} else {
+				require.Error(t, err)
+			}
+		})
 	}
 }

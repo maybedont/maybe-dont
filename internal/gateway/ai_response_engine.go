@@ -26,13 +26,14 @@ type AIResponsePolicy struct {
 
 // AIResponsePolicyEngine handles AI policy evaluation for responses
 type AIResponsePolicyEngine struct {
-	logger   *config.SessionLogger
-	policies []AIResponsePolicy
-	mu       sync.RWMutex
-	endpoint string
-	model    string
-	apiKey   string
-	client   *openai.Client
+	logger              *config.SessionLogger
+	policies            []AIResponsePolicy
+	mu                  sync.RWMutex
+	endpoint            string
+	model               string
+	apiKey              string
+	client              *openai.Client
+	maxRuleEvaluationMs int // Max time for any single rule to complete
 }
 
 // InitAIResponsePolicyEngine initializes the AI response policy engine
@@ -102,10 +103,28 @@ type AIResponseEvaluation struct {
 	RedactedContent string `json:"redacted_content"`
 }
 
-// EvaluateResponse evaluates a response against all policies
-func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.CallToolRequest, result *mcp.CallToolResult) (ResponseValidationResults, error) {
+// aiResponseRuleResult represents the result of evaluating a single AI response rule
+type aiResponseRuleResult struct {
+	policy       AIResponsePolicy
+	result       string // "allow", "deny", "redact", or "error"
+	message      string
+	redacted     string
+	evaluationMs int64
+	err          error
+}
+
+// EvaluateResponse evaluates a response against all policies.
+// The optional budget parameter enables blocking time tracking for cumulative budget management.
+// When budget is nil, no blocking time is tracked.
+func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.CallToolRequest, toolResult *mcp.CallToolResult, budget *BlockingBudget) (ResponseValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+
+	phaseStart := time.Now()
+	var phaseTracker *PhaseTracker
+	if budget != nil {
+		phaseTracker = budget.StartPhase()
+	}
 
 	e.logger.Info(ctx, "Evaluating response with AI policies",
 		zap.String("tool", req.Params.Name),
@@ -117,15 +136,59 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	results.Results = make([]ResponseValidationResult, 0)
 	results.Allowed = true
 
-	// Create a channel to collect results from goroutines
-	type policyResult struct {
-		result ResponseValidationResult
-		err    error
+	// If no policies, return early
+	if len(e.policies) == 0 {
+		var blockedMs, evaluationMs int64
+		if phaseTracker != nil {
+			blockedMs, evaluationMs = phaseTracker.Finalize()
+		} else {
+			evaluationMs = time.Since(phaseStart).Milliseconds()
+		}
+
+		results.Message = "No AI response policies configured"
+		results.AIDetails = &AuditAIResult{
+			Action:       "allow",
+			BlockedMs:    blockedMs,
+			EvaluationMs: evaluationMs,
+			Results:      []AuditAIRuleResult{},
+		}
+		return results, nil
 	}
-	resultChan := make(chan policyResult, len(e.policies))
+
+	// Create a cancellable context for early termination
+	evalCtx, cancelEval := context.WithCancel(ctx)
+	defer cancelEval()
+
+	// Create a channel to collect results from goroutines
+	resultChan := make(chan aiResponseRuleResult, len(e.policies))
 
 	// Format the response for the AI once
-	responseStr := e.formatResponseForAI(result)
+	responseStr := e.formatResponseForAI(toolResult)
+
+	// Determine timeout for individual rule evaluation
+	// Use the configured max rule evaluation time, but also respect the blocking budget
+	ruleTimeout := time.Duration(e.maxRuleEvaluationMs) * time.Millisecond
+	if ruleTimeout <= 0 {
+		ruleTimeout = 10 * time.Second // Default fallback
+	}
+
+	// If we have a blocking budget, cap the timeout to the remaining budget
+	if budget != nil {
+		remainingMs := budget.RemainingMs()
+		if remainingMs > 0 {
+			remainingDuration := time.Duration(remainingMs) * time.Millisecond
+			if remainingDuration < ruleTimeout {
+				ruleTimeout = remainingDuration
+				e.logger.Debug(ctx, "Capping rule timeout to remaining blocking budget",
+					zap.Int64("remaining_ms", remainingMs),
+					zap.Duration("rule_timeout", ruleTimeout))
+			}
+		} else {
+			// Budget exhausted - use a minimal timeout to allow quick failures
+			ruleTimeout = 100 * time.Millisecond
+			e.logger.Warn(ctx, "Blocking budget exhausted before response AI validation, using minimal timeout")
+		}
+	}
 
 	// Launch a goroutine for each policy
 	for _, policy := range e.policies {
@@ -133,8 +196,8 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 			// Track timing for this policy evaluation
 			startTime := time.Now()
 
-			// Create a new context for this goroutine
-			policyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			// Create a new context for this goroutine with timeout
+			policyCtx, cancel := context.WithTimeout(evalCtx, ruleTimeout)
 			defer cancel()
 
 			schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
@@ -160,31 +223,23 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 			durationMs := time.Since(startTime).Milliseconds()
 
 			if err != nil {
-				resultChan <- policyResult{
-					result: ResponseValidationResult{
-						PolicyName: p.Name,
-						PolicyType: "ai",
-						Action:     config.PolicyActionDeny,
-						Mode:       p.Mode,
-						Error:      fmt.Sprintf("Failed to evaluate response policy: %v", err),
-						DurationMs: durationMs,
-					},
-					err: err,
+				resultChan <- aiResponseRuleResult{
+					policy:       p,
+					result:       "error",
+					message:      fmt.Sprintf("Failed to evaluate response policy: %v", err),
+					evaluationMs: durationMs,
+					err:          err,
 				}
 				return
 			}
 
 			if len(chatCompletion.Choices) == 0 {
-				resultChan <- policyResult{
-					result: ResponseValidationResult{
-						PolicyName: p.Name,
-						PolicyType: "ai",
-						Action:     config.PolicyActionDeny,
-						Mode:       p.Mode,
-						Error:      "No response from AI model",
-						DurationMs: durationMs,
-					},
-					err: fmt.Errorf("no response from AI model"),
+				resultChan <- aiResponseRuleResult{
+					policy:       p,
+					result:       "error",
+					message:      "No response from AI model",
+					evaluationMs: durationMs,
+					err:          fmt.Errorf("no response from AI model"),
 				}
 				return
 			}
@@ -193,74 +248,128 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 			var evaluation AIResponseEvaluation
 			err = json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &evaluation)
 			if err != nil {
-				resultChan <- policyResult{
-					result: ResponseValidationResult{
-						PolicyName: p.Name,
-						PolicyType: "ai",
-						Action:     config.PolicyActionDeny,
-						Mode:       p.Mode,
-						Error:      fmt.Sprintf("Failed to parse AI response: %v", err),
-						DurationMs: durationMs,
-					},
-					err: err,
+				resultChan <- aiResponseRuleResult{
+					policy:       p,
+					result:       "error",
+					message:      fmt.Sprintf("Failed to parse AI response: %v", err),
+					evaluationMs: durationMs,
+					err:          err,
 				}
 				return
 			}
 
-			// Determine action based on AI evaluation and policy configuration
-			var action config.PolicyAction
+			// Determine result based on AI evaluation
+			var resultStr string
 			if !evaluation.Allowed {
-				action = config.PolicyActionDeny
+				resultStr = "deny"
 			} else if p.Action == config.PolicyActionRedact && evaluation.RedactedContent != "" {
-				action = config.PolicyActionRedact
+				resultStr = "redact"
 			} else {
-				action = config.PolicyActionAllow
+				resultStr = "allow"
 			}
 
-			// Create validation result based on policy action and AI response
-			validationResult := ResponseValidationResult{
-				PolicyName: p.Name,
-				PolicyType: "ai",
-				Action:     action,
-				Mode:       p.Mode,
-				Message:    evaluation.Message,
-				DurationMs: durationMs,
-			}
-
-			// Include redacted content if applicable
-			if action == config.PolicyActionRedact {
-				validationResult.RedactedContent = evaluation.RedactedContent
-			}
-
-			resultChan <- policyResult{
-				result: validationResult,
-				err:    nil,
+			resultChan <- aiResponseRuleResult{
+				policy:       p,
+				result:       resultStr,
+				message:      evaluation.Message,
+				redacted:     evaluation.RedactedContent,
+				evaluationMs: durationMs,
+				err:          nil,
 			}
 		}(policy)
 	}
 
-	// Collect results from all goroutines
+	// Collect results with early termination support
+	ruleResults := make([]AuditAIRuleResult, 0, len(e.policies))
+	var decidingRule, decidingReason string
+	finalAction := "allow"
+	earlyTerminated := false
+	decided := false
 	var redactedContent *string
+
 	for i := 0; i < len(e.policies); i++ {
-		result := <-resultChan
-		if result.err != nil {
-			e.logger.Error(ctx, "Response policy evaluation failed",
-				zap.String("policy", result.result.PolicyName),
-				zap.Error(result.err),
+		ruleResult := <-resultChan
+
+		// Build audit result for this rule
+		auditResult := AuditAIRuleResult{
+			Rule:         ruleResult.policy.Name,
+			Action:       string(ruleResult.policy.Action),
+			Mode:         modeToAuditString(ruleResult.policy.Mode),
+			Result:       ruleResult.result,
+			EvaluationMs: ruleResult.evaluationMs,
+		}
+		if ruleResult.err != nil {
+			auditResult.Error = ruleResult.err.Error()
+		}
+		ruleResults = append(ruleResults, auditResult)
+
+		// Also add to legacy results for compatibility
+		results.Results = append(results.Results, ResponseValidationResult{
+			PolicyName:      ruleResult.policy.Name,
+			PolicyType:      "ai",
+			Action:          config.PolicyAction(ruleResult.result),
+			Mode:            ruleResult.policy.Mode,
+			Message:         ruleResult.message,
+			RedactedContent: ruleResult.redacted,
+			DurationMs:      ruleResult.evaluationMs,
+			Error:           func() string { if ruleResult.err != nil { return ruleResult.err.Error() }; return "" }(),
+		})
+
+		// Debug log each rule result
+		e.logger.Debug(ctx, "AI response policy evaluation result",
+			zap.String("rule", ruleResult.policy.Name),
+			zap.String("action", string(ruleResult.policy.Action)),
+			zap.String("result", ruleResult.result),
+			zap.Int64("evaluation_ms", ruleResult.evaluationMs),
+		)
+
+		// Log errors with evaluation_ms
+		if ruleResult.err != nil {
+			e.logger.Error(ctx, "AI response policy evaluation error",
+				zap.String("rule", ruleResult.policy.Name),
+				zap.Int64("evaluation_ms", ruleResult.evaluationMs),
+				zap.Error(ruleResult.err),
 			)
 		}
-		results.Results = append(results.Results, result.result)
 
-		// Only affect final decision if mode is enabled (not audit_only)
-		if result.result.Mode == config.PolicyModeEnabled {
-			switch result.result.Action {
-			case config.PolicyActionDeny:
+		// Check if this rule triggers early termination (for enabled rules only)
+		if !decided && ruleResult.policy.Mode == config.PolicyModeEnabled {
+			switch ruleResult.result {
+			case "deny":
+				if phaseTracker != nil {
+					phaseTracker.MarkDecided()
+				}
+				finalAction = "deny"
+				decidingRule = ruleResult.policy.Name
+				decidingReason = ruleResult.message
 				results.Allowed = false
-			case config.PolicyActionRedact:
-				content := result.result.RedactedContent
-				redactedContent = &content
+				decided = true
+				earlyTerminated = true
+				cancelEval() // Cancel remaining evaluations
+			case "error":
+				// Errors on enabled policies fail open (allow) - don't block responses due to AI failures
+				// The error is still logged and recorded in audit, but doesn't affect the decision
+				e.logger.Warn(ctx, "AI response policy evaluation failed, failing open",
+					zap.String("rule", ruleResult.policy.Name),
+					zap.Error(ruleResult.err),
+				)
+			case "redact":
+				if finalAction == "allow" {
+					finalAction = "redact"
+				}
+				if ruleResult.redacted != "" {
+					redactedContent = &ruleResult.redacted
+				}
 			}
 		}
+	}
+
+	// Finalize phase timing
+	var blockedMs, evaluationMs int64
+	if phaseTracker != nil {
+		blockedMs, evaluationMs = phaseTracker.Finalize()
+	} else {
+		evaluationMs = time.Since(phaseStart).Milliseconds()
 	}
 
 	// Set redacted content if any redaction occurred
@@ -269,22 +378,39 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	}
 
 	// Set final result
-	if results.DenyCount() > 0 {
+	switch finalAction {
+	case "deny":
 		results.Allowed = false
-		results.Message = "Response denied by AI policy"
-	} else if results.RedactCount() > 0 {
+		results.Message = decidingReason
+		if results.Message == "" {
+			results.Message = "Response denied by AI policy"
+		}
+	case "redact":
 		results.Message = "Response content redacted by AI policy"
-	} else if results.AllowCount() > 0 {
+	default:
 		results.Message = "All AI response policies passed"
-	} else {
-		results.Message = "No AI response policies matched"
 	}
+
+	// Build AIDetails for audit
+	aiDetails := &AuditAIResult{
+		Action:       finalAction,
+		BlockedMs:    blockedMs,
+		EvaluationMs: evaluationMs,
+		Results:      ruleResults,
+	}
+	if decidingRule != "" {
+		aiDetails.DecidingRule = decidingRule
+		aiDetails.Reason = decidingReason
+	}
+	results.AIDetails = aiDetails
 
 	e.logger.Info(ctx, "Response evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
-		zap.Int("deny_count", results.DenyCount()),
-		zap.Int("redact_count", results.RedactCount()),
+		zap.String("final_action", finalAction),
+		zap.Bool("early_terminated", earlyTerminated),
+		zap.Int64("blocked_ms", blockedMs),
+		zap.Int64("evaluation_ms", evaluationMs),
 	)
 
 	return results, nil
@@ -331,5 +457,7 @@ func NewResponseAIValidationHandler(logger *config.SessionLogger, engine *AIResp
 
 // HandleResponse implements ResponseValidationHandler
 func (h *ResponseAIValidationHandler) HandleResponse(ctx context.Context, req mcp.CallToolRequest, result *mcp.CallToolResult) (ResponseValidationResults, error) {
-	return h.engine.EvaluateResponse(ctx, req, result)
+	// Extract blocking budget from context if available
+	budget := BlockingBudgetFromContext(ctx)
+	return h.engine.EvaluateResponse(ctx, req, result, budget)
 }

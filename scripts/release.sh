@@ -23,7 +23,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Configuration
-WEBSITE_REPO="maybedont/website"
+WEBSITE_REPO="maybedont/maybedont-site"
 WEBSITE_BRANCH="main"
 DOWNLOAD_DIR="static/download"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"

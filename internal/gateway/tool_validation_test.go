@@ -140,7 +140,7 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 	celEngine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 	require.NoError(t, err)
 
-	policies := []config.CELPolicy{
+	policies := []config.Policy{
 		{
 			Name:       "allow-read-tool",
 			Expression: `request.method == "tools/call" && request.params.name == "read_file"`,
@@ -165,10 +165,11 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 	)
 
 	tests := []struct {
-		name        string
-		req         mcp.CallToolRequest
-		wantAllowed bool
-		wantResults int // Expected number of validation results
+		name           string
+		req            mcp.CallToolRequest
+		wantAllowed    bool
+		wantCELAction  string
+		wantCELRules   int // Number of CEL rules evaluated
 	}{
 		{
 			name: "read_file with CEL and logging handlers",
@@ -179,8 +180,9 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 					Arguments: map[string]any{"target_file": "test.txt"},
 				},
 			},
-			wantAllowed: true,
-			wantResults: 2, // CEL + Logging results
+			wantAllowed:   true,
+			wantCELAction: "allow",
+			wantCELRules:  2, // Both rules evaluated
 		},
 		{
 			name: "delete_file with CEL and logging handlers",
@@ -191,8 +193,9 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 					Arguments: map[string]any{"target_file": "test.txt"},
 				},
 			},
-			wantAllowed: false,
-			wantResults: 2, // CEL + Logging results
+			wantAllowed:   false,
+			wantCELAction: "deny",
+			wantCELRules:  2, // Early termination on deny, but both rules evaluated before match
 		},
 		{
 			name: "unknown tool with CEL and logging handlers",
@@ -203,8 +206,9 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 					Arguments: map[string]any{"arg": "value"},
 				},
 			},
-			wantAllowed: true, // Default allow when no policies match
-			wantResults: 2,    // CEL + Logging results
+			wantAllowed:   true, // Default allow when no policies match
+			wantCELAction: "allow",
+			wantCELRules:  2, // Both rules evaluated, neither matched
 		},
 	}
 
@@ -214,34 +218,20 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantAllowed, results.Allowed)
-			assert.Len(t, results.Results, tt.wantResults)
 
-			// Verify we have both CEL and logging results
-			hasCEL := false
+			// Verify we have logging result
 			hasLogging := false
 			for _, result := range results.Results {
-				if result.PolicyType == "cel" {
-					hasCEL = true
-				}
 				if result.PolicyType == "audit" {
 					hasLogging = true
 				}
 			}
-
-			// CEL result should always be present now, even if no policies match
-			assert.True(t, hasCEL, "Should have CEL validation result")
 			assert.True(t, hasLogging, "Should have audit logging result")
 
-			if tt.name == "unknown tool with CEL and logging handlers" {
-				// Check that the CEL result is the trace result
-				foundTrace := false
-				for _, result := range results.Results {
-					if result.PolicyType == "cel" && result.Message == "No policies matched" {
-						foundTrace = true
-					}
-				}
-				assert.True(t, foundTrace, "Should have CEL trace result for no policies matched")
-			}
+			// CEL results should be in RulesDetails now
+			assert.NotNil(t, results.RulesDetails, "Should have rules details")
+			assert.Equal(t, tt.wantCELAction, results.RulesDetails.Action, "Rules action should match")
+			assert.Len(t, results.RulesDetails.Results, tt.wantCELRules, "Should have expected number of rules results")
 		})
 	}
 }
@@ -279,7 +269,7 @@ func TestCELValidationHandler_Isolation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Load a simple policy
-	policies := []config.CELPolicy{
+	policies := []config.Policy{
 		{
 			Name:       "allow-tools-call",
 			Expression: `request.method == "tools/call"`,

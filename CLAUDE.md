@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Maybe Don't Gateway is a security middleware service built in Go that acts as a protective gateway between LLM/AI agents and Model Context Protocol (MCP) servers. It intercepts and validates MCP requests using both CEL-based policies and AI-powered validation to prevent potentially dangerous operations.
+Maybe Don't Gateway is a security middleware service built in Go that acts as a protective gateway between LLM/AI agents and Model Context Protocol (MCP) servers. It intercepts and validates MCP requests using both deterministic rules (CEL-based policies) and AI-powered validation to prevent potentially dangerous operations.
+
+## User Interaction Preferences
+
+- **Wait for responses**: When asking questions or requesting clarification, always wait for the user's response before continuing. Do not assume answers or proceed without explicit input.
 
 ## Essential Commands
 
@@ -34,8 +38,8 @@ Maybe Don't Gateway is a security middleware service built in Go that acts as a 
 ### Core Structure
 The gateway operates as a transparent proxy between MCP clients and multiple downstream MCP servers, implementing a dual-validation approach:
 
-1. **CEL Engine** (`internal/gateway/cel_engine.go`) - Evaluates deterministic policy rules using Google's Common Expression Language
-2. **AI Engine** (`internal/gateway/ai_engine.go`) - Uses OpenAI API for context-aware validation of potentially dangerous operations
+1. **Request Policy Engine** (`internal/gateway/cel_engine.go`) - Evaluates deterministic policy rules using Google's Common Expression Language (CEL)
+2. **AI Request Policy Engine** (`internal/gateway/ai_engine.go`) - Uses OpenAI API for context-aware validation of potentially dangerous operations
 3. **ClientManager** (`internal/gateway/client_manager.go`) - Manages multiple downstream MCP client connections
 
 ### Multi-Client Architecture
@@ -58,20 +62,101 @@ The gateway supports multiple MCP transport types per client:
 
 ### Configuration Hierarchy
 Configuration is loaded in this order (later overrides earlier):
-1. YAML config file (`gateway-config.yaml`)
+1. YAML config file (`maybedont.yaml`, with fallback to deprecated `gateway-config.yaml`)
 2. Environment variables (prefix: `MAYBE_DONT_`)
 3. Command-line flags
 
+### Validation Policy Modes
+Each validation type supports three modes:
+- **enabled** - Policy is enforced (blocks/allows requests based on rules)
+- **audit_only** - Policy executes and is logged, but doesn't affect the final result
+- **disabled** - Policy is not executed
+
+Default modes:
+- `request_validation`: enabled
+- `ai_request_validation`: audit_only
+- `response_validation`: disabled
+- `ai_response_validation`: disabled
+
+### AI Configuration (Centralized)
+All AI-powered features share a common configuration under `validation.ai`:
+```yaml
+validation:
+  ai:
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    model: "gpt-4o-mini"
+    api_key: "${OPENAI_API_KEY}"
+```
+This configuration is used by:
+- AI request validation
+- AI response validation
+- Audit report generation (native tool)
+
+### Blocking Budget
+The gateway implements a blocking budget to limit cumulative validation latency:
+- **max_blocking_ms** (default: 90000ms) - Maximum cumulative time to block a request waiting for all validation decisions
+- **max_rule_evaluation_ms** (default: 45000ms) - Maximum time for any single rule evaluation
+
+When the blocking budget is exhausted, remaining validations continue asynchronously but the request proceeds (fail-open behavior).
+
 ### Security Rules
-- **CEL Rules**: Loaded from external `cel.rules.yaml` file when `policy_validation` is enabled
-- **AI Rules**: Loaded from external `ai.rules.yaml` file when `ai_validation` is enabled
-- **CEL Response Rules**: Loaded from external `cel_response.rules.yaml` file when `response_validation` is enabled
-- **AI Response Rules**: Loaded from external `ai_response.rules.yaml` file when `ai_response_validation` is enabled
+- **Request Rules**: Loaded from external `rules.yaml` file when `request_validation` mode is not disabled (deterministic CEL-based rules)
+- **AI Request Rules**: Loaded from external `ai_rules.yaml` file when `ai_request_validation` mode is not disabled
+- **Response Rules**: Loaded from external `response_rules.yaml` file when `response_validation` mode is not disabled (deterministic CEL-based rules)
+- **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `ai_response_validation` mode is not disabled
 - **Multi-Client Validation**: Policies can target specific clients using name prefixes
-- **Required When Enabled**: Rules files must be specified in config when their corresponding validation feature is enabled
+- **Required When Not Disabled**: Rules files must be specified in config when their corresponding validation mode is not disabled
+
+### Native Tools
+The gateway provides built-in introspection tools (prefixed with `maybedont__`):
+- **maybedont__get_audit_log** - Access audit log entries with filtering and pagination
+- **maybedont__generate_audit_report** - AI-powered security analysis of audit logs
+- **maybedont__list_downstream_servers** - List configured downstream MCP servers
+- **maybedont__list_sessions** - List active client sessions
+- **maybedont__discover_tools** - Trigger lazy discovery for pass-through auth clients
+
+Each tool can be enabled/disabled in config under `native_tools`.
+
+### Session Management
+- Sessions have configurable idle timeout (`server.session_timeout_minutes`, default: 30)
+- Sessions inactive longer than the timeout are cleaned up
+- When a session expires, clients need to call `maybedont__discover_tools` to reconnect
 
 ## Important Development Notes
 
+### Tool and Plugin Suggestions
+If a plugin, MCP server, or skillset could improve performance, accuracy, or efficiency for a task, proactively suggest it. This includes LSP tools, linters, formatters, or other development aids that aren't currently being used but would be beneficial.
+
+### Feature Development Workflow
+For feature development or any sizeable code change, follow this spec-driven approach:
+
+1. **Build a spec first**: Before implementing, create a specification document. If not explicitly asked to build a spec, ask if one should be created.
+2. **Iterate on the spec**: Collaborate to refine the spec until it's agreed upon, then save it to `docs/specs/`. The goal is to document the plan clearly and minimize context window usage during implementation.
+3. **Implement systematically**: Once the spec is finalized, use todo lists derived from the spec to complete work in smaller chunks. This improves efficiency and accuracy.
+4. **Leverage sub-agents**: When possible, suggest using sub-agents to parallelize work and improve accuracy.
+5. **Version control specs**: Commit specs to source control and keep them updated so they remain useful for future reference.
+6. **Check existing specs**: Before starting a new spec or feature, review `docs/specs/` for relevant existing specs. Consider updating an existing spec rather than creating a new one. When modifying an existing spec, you can create a temporary worklist file in `docs/specs/` to track implementation progress.
+
+### Code Navigation with LSP
+When exploring or navigating Go code, **prefer using `gopls` commands** over manual searching with grep/glob. The LSP provides accurate, semantic understanding of the code.
+
+**Common gopls commands** (format: `gopls <command> <file>:<line>:<column>`):
+- `gopls definition main.go:21:6` - Jump to where a symbol is defined
+- `gopls references main.go:21:6` - Find all usages of a symbol
+- `gopls implementation main.go:50:6` - Find all types implementing an interface
+- `gopls call_hierarchy main.go:21:6` - Show callers/callees of a function
+- `gopls symbols main.go` - List all symbols in a file
+- `gopls workspace_symbol MyFunc` - Search for symbols across the workspace
+
+Use LSP operations first when you need to:
+- Understand how a function or type is used
+- Navigate between related code (callers/callees)
+- Find where a struct field or method is defined
+- Trace through code paths
+
+Fall back to grep/glob only when gopls is unavailable or when searching for non-code patterns (comments, strings, config values).
+
+### Go Development Standards
 From `.cursor/rules/golang.mdc`:
 - Always use the latest version of imports
 - Run `go mod tidy` after dependency changes
@@ -81,13 +166,92 @@ From `.cursor/rules/golang.mdc`:
 - Write unit tests where applicable
 - CLI configuration goes in `cmd/` folder
 
+### Code Style Preferences
+- **Clean and concise**: Code should be straightforward and avoid unnecessary complexity
+- **Meaningful names**: Variable, function, and type names should clearly convey their purpose to make code self-documenting
+- **Informational comments**: Comments should explain the "why" and help developers understand the workflow, not just restate what the code does
+- **DRY (Don't Repeat Yourself)**: Favor reusable code and avoid duplication. Exception: some duplication in tests is acceptable for clarity and test isolation
+- **Always keep code formatted**: Run formatters before committing
+- **Consider edge cases**: When writing new code, think through edge cases and ensure test coverage addresses them
+- **Error equality**: Favor `errors.Is` instead of the legacy equality checks. When you find the legacy usage, please update it.
+
+### Adding Configuration Fields
+When adding new configuration fields:
+- **Naming consistency**: Follow existing naming conventions in the config structs
+- **Sensible defaults**: Provide reasonable defaults to minimize required user configuration
+- **Environment variable support**: Ensure the field can be overridden via environment variable (follows `MAYBE_DONT_` prefix pattern)
+- **Test coverage**: Add tests to verify the config value is loaded correctly and can be overridden via environment variable
+
+### Logging Conventions
+**Log level guidelines:**
+- **DEBUG**: Use for code path tracing and expected conditions. Debug logs can be verbose (e.g., "discovered 5 tools: [tool1, tool2, ...]"). Use when handling expected errors or showing detailed flow.
+- **INFO**: Use sparingly for significant events that won't spam logs. Appropriate for: startup/shutdown, new client connections, session timeouts. Avoid for frequently-executed code paths.
+- **ERROR**: Use only for unexpected errors that indicate something went wrong.
+
+### Security
+**Security considerations:**
+- **Never log sensitive information**: Do not log Authorization headers, API keys, or tool parameters (they may contain secrets)
+- When in doubt about whether data is sensitive, err on the side of not logging it
+
+### Commit and PR Guidelines
+**Before committing**, perform a brief self-review:
+- Check for bugs or logic errors introduced by your changes
+- Verify no regression in existing functionality
+- Ensure adequate test coverage for new or modified code
+
+**Before opening a PR**, conduct a thorough review as if you had dedicated reviewers:
+- **Security review**: Look for potential vulnerabilities (injection, auth issues, data exposure, etc.)
+- **Performance review**: Identify potential bottlenecks, unnecessary allocations, or inefficient patterns
+- **Documentation review**: For larger features or behavior changes, ask if the documentation at https://maybedont.ai/docs should be reviewed for needed updates. If documentation changes are needed, create a checklist in the PR description for the developer to review.
+
+### Common Pitfalls
+- **Unintended behavior changes**: When modifying existing code, bolster test coverage around the affected areas to catch regressions
+- **Naming inconsistencies**: If breaking or changing a naming convention, flag it for review and discussion
+- **Missing config validation**: New config fields need validation logic, defaults, and environment variable override support
+- **Name prefixing edge cases**: Remember that tools/prompts/resources use `{client_name}__{original_name}` format
+
 ## Testing Approach
 
 The project uses Go's standard testing framework with testify for assertions. Key test files:
-- `internal/gateway/cel_engine_test.go` - CEL policy engine tests
-- `internal/gateway/tool_validation_test.go` - Tool validation logic tests
+- `internal/gateway/cel_engine_test.go` - Classic deterministic policy engine tests
+- `internal/gateway/ai_engine_test.go` - AI policy engine tests
+- `internal/gateway/tool_validation_test.go` - Tool validation chain tests
 - `internal/gateway/gateway_test.go` - Main gateway integration tests
+- `internal/gateway/session_test.go` - Session management tests
+- `internal/gateway/stale_session_test.go` - Session timeout tests
+- `internal/gateway/audit_entry_test.go` - Audit entry tests
+- `internal/gateway/audit_log_tool_test.go` - Audit log tool tests
 - `internal/config/config_test.go` - Configuration loading tests
+
+### Testing Patterns
+- **Use table-driven tests (data provider pattern)**: Structure tests with a slice of test cases that can be easily extended as new inputs need coverage. This promotes code reuse and ensures comprehensive input testing.
+- **Avoid single-input tests**: When writing a test, evaluate whether the test structure can accommodate multiple inputs rather than testing only one value.
+- **Check for existing coverage**: Before writing a new test, check if the use case is already covered by another test to avoid unnecessary duplication.
+- **Document test purpose**: Add a comment at the top of each test describing the use case being tested and the expected result. This is especially helpful when the test method name alone doesn't fully convey the intent.
+- **Test driven style**: When fixing a bug, prefer to write a test first to assert the error condition and expect the test to fail. Then fix the code, and ensure the test passes. This helps us ensure we are writing the correct tests. This strategy can also be used when building larger features if we have built a well defined spec with expected behaviors. In this case, you can write the tests first to assert the expected behaviors and this will help to ensure we delivered code that met these expectations. 
+
+Example table-driven test structure:
+```go
+func TestSomething(t *testing.T) {
+    // Tests that [describe what we're testing] behaves correctly
+    // for various [inputs/conditions].
+    tests := []struct {
+        name     string
+        input    string
+        expected string
+        wantErr  bool
+    }{
+        {"valid input", "foo", "bar", false},
+        {"empty input", "", "", true},
+        // Easy to add more cases here
+    }
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // test implementation
+        })
+    }
+}
+```
 
 ## Key Dependencies
 
@@ -117,7 +281,7 @@ The following anonymized metrics are collected:
 - **Tool Invocations**: Count of tool calls processed by the gateway
 - **Gateway Starts**: Number of times the gateway has been started
 - **MCP Server Count**: Number of configured downstream MCP servers
-- **Rule Usage Flags**: Boolean flags indicating if AI rules, CEL rules, AI response rules, and CEL response rules are enabled
+- **Rule Usage Flags**: Boolean flags indicating if AI request rules, request rules, AI response rules, and response rules are enabled
 
 ### How It Works
 
@@ -169,19 +333,28 @@ downstream_mcp_servers:
   github:
     type: http
     url: "https://api.githubcopilot.com/mcp/"
-    http:
-      headers:
-        Authorization: "${GITHUB_TOKEN}"
+    auth:
+      pass_through:
+        enabled: true
+        headers:
+          - source_header: "X-GitHub-Token"
+            target_header: "Authorization"
+            format: "Bearer {value}"
 
-  aws:
-    type: stdio
-    command: "uvx"
-    args: ["awslabs.aws-documentation-mcp-server@latest"]
+  aws-docs:
+    type: http
+    url: "https://knowledge-mcp.global.api.aws"
 ```
 
 This configuration results in tools being exposed with prefixed names:
 - GitHub tools: `github__create_issue`, `github__search_code`
-- AWS tools: `aws__describe_instance`, `aws__list_buckets`
+- AWS tools: `aws-docs__search_documentation`, `aws-docs__read_documentation`
+
+### Pass-Through Authentication
+For HTTP/SSE clients, pass-through authentication allows extracting credentials from incoming request headers and forwarding them to downstream servers:
+- **source_header**: Header name to extract from incoming requests
+- **target_header**: Header name to send to downstream server
+- **format**: Optional template for value formatting (e.g., `"Bearer {value}"`)
 
 ## Request Flow Architecture
 

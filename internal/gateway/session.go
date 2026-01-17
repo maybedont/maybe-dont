@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -14,6 +15,12 @@ import (
 	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
+
+// DefaultSessionTimeout is the default idle timeout for sessions (30 minutes)
+const DefaultSessionTimeout = 30 * time.Minute
+
+// SessionCleanupInterval is how often we check for expired sessions
+const SessionCleanupInterval = 1 * time.Minute
 
 // SessionClientInfo holds a downstream client instance for a specific session
 type SessionClientInfo struct {
@@ -29,19 +36,45 @@ type SessionClientInfo struct {
 
 // Session represents an upstream client session with its downstream clients
 type Session struct {
-	ID       string
-	ClientIP string // IP address of the upstream client
-	mu       sync.RWMutex
-	clients  map[string]*SessionClientInfo // clientName -> downstream client for this session
-	closing  bool                          // true if session is being closed, prevents new clients
+	ID           string
+	ClientIP     string // IP address of the upstream client
+	CreatedAt    time.Time
+	lastActivity time.Time
+	mu           sync.RWMutex
+	clients      map[string]*SessionClientInfo // clientName -> downstream client for this session
+	closing      bool                          // true if session is being closed, prevents new clients
 }
 
 // NewSession creates a new session
 func NewSession(id string) *Session {
+	now := time.Now()
 	return &Session{
-		ID:      id,
-		clients: make(map[string]*SessionClientInfo),
+		ID:           id,
+		CreatedAt:    now,
+		lastActivity: now,
+		clients:      make(map[string]*SessionClientInfo),
 	}
+}
+
+// TouchActivity updates the last activity timestamp for this session
+func (s *Session) TouchActivity() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastActivity = time.Now()
+}
+
+// LastActivity returns the last activity timestamp for this session
+func (s *Session) LastActivity() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastActivity
+}
+
+// IsExpired returns true if the session has been idle longer than the timeout
+func (s *Session) IsExpired(timeout time.Duration) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return time.Since(s.lastActivity) > timeout
 }
 
 // SetClientIP sets the client IP address for this session
@@ -118,17 +151,91 @@ func (s *Session) Close() error {
 
 // SessionManager manages upstream client sessions and their downstream clients
 type SessionManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session // sessionID -> session
-	logger   *config.SessionLogger
+	mu             sync.RWMutex
+	sessions       map[string]*Session // sessionID -> session
+	logger         *config.SessionLogger
+	sessionTimeout time.Duration
+	stopCleanup    chan struct{}
+	cleanupDone    chan struct{}
 }
 
-// NewSessionManager creates a new session manager
+// NewSessionManager creates a new session manager with the default timeout
 func NewSessionManager(logger *config.SessionLogger) *SessionManager {
-	return &SessionManager{
-		sessions: make(map[string]*Session),
-		logger:   logger,
+	return NewSessionManagerWithTimeout(logger, DefaultSessionTimeout)
+}
+
+// NewSessionManagerWithTimeout creates a new session manager with a custom timeout
+func NewSessionManagerWithTimeout(logger *config.SessionLogger, timeout time.Duration) *SessionManager {
+	sm := &SessionManager{
+		sessions:       make(map[string]*Session),
+		logger:         logger,
+		sessionTimeout: timeout,
+		stopCleanup:    make(chan struct{}),
+		cleanupDone:    make(chan struct{}),
 	}
+	go sm.cleanupLoop()
+	return sm
+}
+
+// cleanupLoop periodically checks for and removes expired sessions
+func (sm *SessionManager) cleanupLoop() {
+	defer close(sm.cleanupDone)
+	ticker := time.NewTicker(SessionCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-sm.stopCleanup:
+			return
+		case <-ticker.C:
+			sm.cleanupExpiredSessions()
+		}
+	}
+}
+
+// cleanupExpiredSessions removes all expired sessions
+func (sm *SessionManager) cleanupExpiredSessions() {
+	sm.mu.Lock()
+	var expiredSessions []*Session
+	var expiredIDs []string
+
+	for id, session := range sm.sessions {
+		if session.IsExpired(sm.sessionTimeout) {
+			expiredSessions = append(expiredSessions, session)
+			expiredIDs = append(expiredIDs, id)
+			delete(sm.sessions, id)
+		}
+	}
+	sm.mu.Unlock()
+
+	// Close expired sessions outside the lock
+	for i, session := range expiredSessions {
+		idleTime := time.Since(session.LastActivity())
+		clientCount := len(session.GetAllClients())
+
+		if err := session.Close(); err != nil {
+			sm.logger.Error(context.Background(), "Error closing expired session",
+				zap.String("session_id", expiredIDs[i]),
+				zap.Duration("idle_time", idleTime),
+				zap.Error(err))
+		} else {
+			sm.logger.Info(context.Background(), "Session expired and closed due to inactivity",
+				zap.String("session_id", expiredIDs[i]),
+				zap.Duration("idle_time", idleTime),
+				zap.Int("client_count", clientCount))
+		}
+	}
+}
+
+// StopCleanup stops the cleanup goroutine. Call this when shutting down.
+func (sm *SessionManager) StopCleanup() {
+	close(sm.stopCleanup)
+	<-sm.cleanupDone
+}
+
+// GetSessionTimeout returns the configured session timeout
+func (sm *SessionManager) GetSessionTimeout() time.Duration {
+	return sm.sessionTimeout
 }
 
 // CreateSession creates a new session
@@ -141,11 +248,15 @@ func (sm *SessionManager) CreateSession(sessionID string) *Session {
 	return session
 }
 
-// GetSession retrieves a session by ID
+// GetSession retrieves a session by ID and updates its last activity time
 func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
 	sm.mu.RLock()
-	defer sm.mu.RUnlock()
 	session, ok := sm.sessions[sessionID]
+	sm.mu.RUnlock()
+
+	if ok {
+		session.TouchActivity()
+	}
 	return session, ok
 }
 
@@ -173,7 +284,7 @@ func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) e
 	return nil
 }
 
-// GetSessionClient retrieves a specific downstream client for a session
+// GetSessionClient retrieves a specific downstream client for a session and updates its last activity time
 func (sm *SessionManager) GetSessionClient(sessionID, clientName string) (*SessionClientInfo, bool) {
 	sm.mu.RLock()
 	session, ok := sm.sessions[sessionID]
@@ -183,6 +294,7 @@ func (sm *SessionManager) GetSessionClient(sessionID, clientName string) (*Sessi
 		return nil, false
 	}
 
+	session.TouchActivity()
 	return session.GetClient(clientName)
 }
 

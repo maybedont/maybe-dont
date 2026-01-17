@@ -28,8 +28,8 @@ func TestGenerateAuditReport_EmptyFile(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditReport.Enabled = true
-	cfg.NativeTools.AuditReport.APIKey = "test-key" // Required to get past the API key check
 	cfg.NativeTools.AuditReport.MaxEntries = 1000
+	cfg.Validation.AI.APIKey = "test-key" // Required to get past the API key check
 
 	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
@@ -59,8 +59,8 @@ func TestGenerateAuditReport_FileDoesNotExist(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditReport.Enabled = true
-	cfg.NativeTools.AuditReport.APIKey = "test-key"
 	cfg.NativeTools.AuditReport.MaxEntries = 1000
+	cfg.Validation.AI.APIKey = "test-key"
 
 	// Ensure file doesn't exist
 	_ = os.Remove(auditPath)
@@ -107,8 +107,8 @@ func TestGenerateAuditReport_AllEntriesOlderThanTimeWindow(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditReport.Enabled = true
-	cfg.NativeTools.AuditReport.APIKey = "test-key"
 	cfg.NativeTools.AuditReport.MaxEntries = 1000
+	cfg.Validation.AI.APIKey = "test-key"
 
 	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
@@ -174,8 +174,8 @@ func TestGetEntriesForReport_LimitReturnsMostRecentEntries(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditReport.Enabled = true
-	cfg.NativeTools.AuditReport.APIKey = "test-key"
 	cfg.NativeTools.AuditReport.MaxEntries = 2 // Limit to 2 entries
+	cfg.Validation.AI.APIKey = "test-key"
 
 	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 
@@ -230,8 +230,8 @@ func TestGetEntriesForReport_AllTimeRange(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	cfg.NativeTools.AuditReport.Enabled = true
-	cfg.NativeTools.AuditReport.APIKey = "test-key"
 	cfg.NativeTools.AuditReport.MaxEntries = 1000
+	cfg.Validation.AI.APIKey = "test-key"
 
 	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
 

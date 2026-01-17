@@ -14,15 +14,221 @@ import (
 	"go.uber.org/zap"
 )
 
-// AuditLogEntry represents a parsed audit log entry from the zap-formatted log file.
-// Session/client info is in Audit.IncomingRequest (not duplicated at top level).
+// AuditLogEntry represents a parsed audit log entry.
+// For the new direct JSONL format, only Audit is populated.
+// For legacy zap-formatted log entries, Level/Timestamp/Caller/Message/Logger are also populated.
 type AuditLogEntry struct {
-	Level     string      `json:"level"`
-	Timestamp float64     `json:"ts"`
-	Caller    string      `json:"caller"`
-	Message   string      `json:"msg"`
-	Logger    string      `json:"logger"`
-	Audit     *AuditEntry `json:"audit"`
+	Level     string      `json:"level,omitempty"`
+	Timestamp float64     `json:"ts,omitempty"`
+	Caller    string      `json:"caller,omitempty"`
+	Message   string      `json:"msg,omitempty"`
+	Logger    string      `json:"logger,omitempty"`
+	Audit     *AuditEntry `json:"audit,omitempty"`
+}
+
+// legacyAuditEntry represents the old audit entry format for backwards compatibility
+type legacyAuditEntry struct {
+	CreatedAt string `json:"created_at"`
+	Tool      struct {
+		Name         string `json:"name"`
+		Client       string `json:"client"`
+		PrefixedName string `json:"prefixed_name"`
+	} `json:"tool"`
+	// Old format had Request as separate struct
+	Request *struct {
+		Params     map[string]interface{} `json:"params,omitempty"`
+		CalledAt   string                 `json:"called_at,omitempty"`
+		DurationMs *int64                 `json:"duration_ms,omitempty"`
+	} `json:"request,omitempty"`
+	// Old format had IncomingRequest
+	IncomingRequest *struct {
+		RequestID string `json:"id,omitempty"`
+		SessionID string `json:"session_id,omitempty"`
+		ClientIP  string `json:"client_ip,omitempty"`
+	} `json:"incoming_request,omitempty"`
+	// Old format used cel instead of rules
+	RequestValidation *struct {
+		CEL *AuditRulesResult `json:"cel,omitempty"`
+		AI  *AuditAIResult    `json:"ai,omitempty"`
+	} `json:"request_validation,omitempty"`
+	Response *struct {
+		ContentItems int  `json:"content_items"`
+		IsError      bool `json:"is_error"`
+	} `json:"response,omitempty"`
+	ResponseValidation *struct {
+		CEL *AuditRulesResult `json:"cel,omitempty"`
+		AI  *AuditAIResult    `json:"ai,omitempty"`
+	} `json:"response_validation,omitempty"`
+	RecommendedAction string `json:"recommended_action"`
+	Action            string `json:"action"`
+	DurationMs        int64  `json:"duration_ms"`
+	TotalBlockedMs    int64  `json:"total_blocked_ms"`
+}
+
+// legacyLogEntry represents the old zap-formatted log entry
+type legacyLogEntry struct {
+	Level     string            `json:"level"`
+	Timestamp float64           `json:"ts"`
+	Caller    string            `json:"caller"`
+	Message   string            `json:"msg"`
+	Logger    string            `json:"logger"`
+	Audit     *legacyAuditEntry `json:"audit"`
+}
+
+// parseAuditLine parses a line from the audit log, handling both new and legacy formats.
+// New format: Direct AuditEntry JSON (from JSONLAuditWriter)
+// Legacy format: Zap log entry with embedded audit field
+// Returns the parsed entry and timestamp (for time-based filtering).
+func parseAuditLine(line []byte) (*AuditLogEntry, time.Time, error) {
+	// First, try to parse as new direct JSONL format (AuditEntry directly)
+	// This format has validation_started field which is unique to new format
+	var directEntry AuditEntry
+	if err := json.Unmarshal(line, &directEntry); err == nil {
+		// Check if this looks like a direct AuditEntry (has validation_started which is unique to new format)
+		if directEntry.ValidationStarted != "" && directEntry.Tool.PrefixedName != "" {
+			// Parse timestamp from created_at
+			var entryTime time.Time
+			if directEntry.CreatedAt != "" {
+				if t, err := time.Parse(time.RFC3339Nano, directEntry.CreatedAt); err == nil {
+					entryTime = t
+				}
+			}
+			return &AuditLogEntry{Audit: &directEntry}, entryTime, nil
+		}
+	}
+
+	// Try parsing as zap-formatted log entry
+	// First check if it's a legacy format by looking for the "request" or "incoming_request" fields
+	var rawEntry map[string]json.RawMessage
+	if err := json.Unmarshal(line, &rawEntry); err == nil {
+		if auditRaw, hasAudit := rawEntry["audit"]; hasAudit {
+			// Parse the audit field to check for legacy markers
+			var auditFields map[string]json.RawMessage
+			if json.Unmarshal(auditRaw, &auditFields) == nil {
+				_, hasRequest := auditFields["request"]
+				_, hasIncomingRequest := auditFields["incoming_request"]
+				_, hasCELValidation := auditFields["request_validation"]
+
+				// If has legacy-specific fields, parse as legacy
+				if hasRequest || hasIncomingRequest {
+					var legacyEntry legacyLogEntry
+					if err := json.Unmarshal(line, &legacyEntry); err == nil {
+						if legacyEntry.Audit != nil && legacyEntry.Audit.Tool.PrefixedName != "" {
+							// Convert legacy format to new format
+							convertedAudit := convertLegacyEntry(legacyEntry.Audit)
+							entryTime := timestampToTime(legacyEntry.Timestamp)
+							return &AuditLogEntry{
+								Level:     legacyEntry.Level,
+								Timestamp: legacyEntry.Timestamp,
+								Caller:    legacyEntry.Caller,
+								Message:   legacyEntry.Message,
+								Logger:    legacyEntry.Logger,
+								Audit:     convertedAudit,
+							}, entryTime, nil
+						}
+					}
+				}
+
+				// Check for legacy CEL field in request_validation
+				if hasCELValidation {
+					var validationFields map[string]json.RawMessage
+					if json.Unmarshal(auditFields["request_validation"], &validationFields) == nil {
+						if _, hasCEL := validationFields["cel"]; hasCEL {
+							// Has legacy CEL field, parse as legacy
+							var legacyEntry legacyLogEntry
+							if err := json.Unmarshal(line, &legacyEntry); err == nil {
+								if legacyEntry.Audit != nil && legacyEntry.Audit.Tool.PrefixedName != "" {
+									convertedAudit := convertLegacyEntry(legacyEntry.Audit)
+									entryTime := timestampToTime(legacyEntry.Timestamp)
+									return &AuditLogEntry{
+										Level:     legacyEntry.Level,
+										Timestamp: legacyEntry.Timestamp,
+										Caller:    legacyEntry.Caller,
+										Message:   legacyEntry.Message,
+										Logger:    legacyEntry.Logger,
+										Audit:     convertedAudit,
+									}, entryTime, nil
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Try parsing as new zap-formatted log entry with new AuditEntry schema
+	var newEntry AuditLogEntry
+	if err := json.Unmarshal(line, &newEntry); err == nil {
+		if newEntry.Audit != nil && newEntry.Audit.Tool.PrefixedName != "" {
+			entryTime := timestampToTime(newEntry.Timestamp)
+			return &newEntry, entryTime, nil
+		}
+	}
+
+	return nil, time.Time{}, fmt.Errorf("unable to parse audit entry")
+}
+
+// convertLegacyEntry converts a legacy audit entry to the new format
+func convertLegacyEntry(legacy *legacyAuditEntry) *AuditEntry {
+	if legacy == nil {
+		return nil
+	}
+
+	entry := &AuditEntry{
+		CreatedAt: legacy.CreatedAt,
+		Tool: AuditToolInfo{
+			Name:         legacy.Tool.Name,
+			Client:       legacy.Tool.Client,
+			PrefixedName: legacy.Tool.PrefixedName,
+		},
+		RecommendedAction: legacy.RecommendedAction,
+		Action:            legacy.Action,
+		DurationMs:        legacy.DurationMs,
+		TotalBlockedMs:    legacy.TotalBlockedMs,
+	}
+
+	// Convert Request -> Tool params
+	if legacy.Request != nil {
+		entry.Tool.Params = legacy.Request.Params
+		entry.Tool.CalledAt = legacy.Request.CalledAt
+		entry.Tool.DurationMs = legacy.Request.DurationMs
+	}
+
+	// Convert IncomingRequest -> UpstreamRequest
+	if legacy.IncomingRequest != nil {
+		entry.UpstreamRequest = UpstreamRequestInfo{
+			RequestID: legacy.IncomingRequest.RequestID,
+			SessionID: legacy.IncomingRequest.SessionID,
+			ClientIP:  legacy.IncomingRequest.ClientIP,
+		}
+	}
+
+	// Convert RequestValidation with CEL -> Rules
+	if legacy.RequestValidation != nil {
+		entry.RequestValidation = &AuditValidationInfo{
+			Rules: legacy.RequestValidation.CEL,
+			AI:    legacy.RequestValidation.AI,
+		}
+	}
+
+	// Copy Response
+	if legacy.Response != nil {
+		entry.Response = &AuditResponseInfo{
+			ContentItems: legacy.Response.ContentItems,
+			IsError:      legacy.Response.IsError,
+		}
+	}
+
+	// Convert ResponseValidation with CEL -> Rules
+	if legacy.ResponseValidation != nil {
+		entry.ResponseValidation = &AuditValidationInfo{
+			Rules: legacy.ResponseValidation.CEL,
+			AI:    legacy.ResponseValidation.AI,
+		}
+	}
+
+	return entry
 }
 
 // AuditLogFilter represents filters for audit log queries
@@ -193,17 +399,16 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 				continue
 			}
 
-			var entry AuditLogEntry
-			if err := json.Unmarshal(line, &entry); err != nil {
-				h.logger.Debug(ctx, "Skipping unparseable audit log line (may be old format)", zap.Error(err))
+			// Parse the line, handling both new and legacy formats
+			entry, entryTime, err := parseAuditLine(line)
+			if err != nil {
+				h.logger.Debug(ctx, "Skipping unparseable audit log line", zap.Error(err))
 				continue
 			}
 
 			// Check time range - if entry is too old, we can stop
 			// (assuming log entries are chronologically ordered)
-			// Use full precision: extract nanoseconds from fractional timestamp
-			if !cutoffTime.IsZero() {
-				entryTime := timestampToTime(entry.Timestamp)
+			if !cutoffTime.IsZero() && !entryTime.IsZero() {
 				if entryTime.Before(cutoffTime) {
 					// Entry is too old, and all earlier entries will be older too
 					return entries, totalCount, nil
@@ -211,13 +416,13 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 			}
 
 			// Apply filters
-			if !h.matchesFilter(entry, filter) {
+			if !h.matchesFilter(*entry, filter) {
 				continue
 			}
 
 			totalCount++
 			if len(entries) < limit {
-				entries = append(entries, entry)
+				entries = append(entries, *entry)
 			}
 		}
 
@@ -226,14 +431,13 @@ func (h *NativeToolsHandler) readAuditLogEntries(ctx context.Context, limit int,
 
 	// Process any remaining leftover (first line of file)
 	if len(leftover) > 0 && len(entries) < limit {
-		var entry AuditLogEntry
-		if err := json.Unmarshal(leftover, &entry); err == nil {
-			entryTime := timestampToTime(entry.Timestamp)
-			if cutoffTime.IsZero() || !entryTime.Before(cutoffTime) {
-				if h.matchesFilter(entry, filter) {
+		entry, entryTime, err := parseAuditLine(leftover)
+		if err == nil {
+			if cutoffTime.IsZero() || entryTime.IsZero() || !entryTime.Before(cutoffTime) {
+				if h.matchesFilter(*entry, filter) {
 					totalCount++
 					if len(entries) < limit {
-						entries = append(entries, entry)
+						entries = append(entries, *entry)
 					}
 				}
 			}

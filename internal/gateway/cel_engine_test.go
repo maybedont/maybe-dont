@@ -17,7 +17,7 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 	engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 	require.NoError(t, err)
 
-	policies := []config.CELPolicy{
+	policies := []config.Policy{
 		{
 			Name:       "allow-read-tool",
 			Expression: `request.method == "tools/call" && request.params.name == "read_file"`,
@@ -36,12 +36,14 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name        string
-		req         mcp.CallToolRequest
-		wantAllowed bool
-		wantMessage string
-		denyCount   int
-		allowCount  int
+		name           string
+		req            mcp.CallToolRequest
+		wantAllowed    bool
+		wantMessage    string
+		wantCELAction  string
+		wantRuleCount  int
+		denyCount      int
+		allowCount     int
 	}{
 		{
 			name: "allow read_file",
@@ -56,10 +58,12 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 					},
 				},
 			},
-			wantAllowed: true,
-			wantMessage: "Allowed to call read_file",
-			denyCount:   0,
-			allowCount:  1,
+			wantAllowed:   true,
+			wantMessage:   "Allowed to call read_file",
+			wantCELAction: "allow",
+			wantRuleCount: 2,
+			denyCount:     0,
+			allowCount:    1,
 		},
 		{
 			name: "deny delete_file",
@@ -74,10 +78,12 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 					},
 				},
 			},
-			wantAllowed: false,
-			wantMessage: "delete_file is not allowed",
-			denyCount:   1,
-			allowCount:  0,
+			wantAllowed:   false,
+			wantMessage:   "delete_file is not allowed",
+			wantCELAction: "deny",
+			wantRuleCount: 2, // Both rules evaluated before early termination
+			denyCount:     1,
+			allowCount:    0,
 		},
 		{
 			name: "no policies matched",
@@ -86,28 +92,29 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 					Method: "tools/call",
 				},
 			},
-			wantAllowed: true,
-			wantMessage: "No policies matched",
-			denyCount:   0,
-			allowCount:  0,
+			wantAllowed:   true,
+			wantMessage:   "No policies matched",
+			wantCELAction: "allow",
+			wantRuleCount: 2, // Both rules evaluated, neither matched
+			denyCount:     0,
+			allowCount:    0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, err := engine.EvaluateToolCall(context.Background(), tt.req)
+			results, err := engine.EvaluateToolCall(context.Background(), tt.req, nil)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAllowed, results.Allowed)
 			assert.Equal(t, tt.wantMessage, results.Message)
-			assert.NotEmpty(t, results.Results)
 
-			if len(results.Results) > 0 {
-				assert.Equal(t, tt.wantMessage, results.Results[0].Message)
-			}
+			// Check RulesDetails (new schema)
+			require.NotNil(t, results.RulesDetails, "RulesDetails should be populated")
+			assert.Equal(t, tt.wantCELAction, results.RulesDetails.Action)
+			assert.Len(t, results.RulesDetails.Results, tt.wantRuleCount)
 
 			assert.Equal(t, tt.allowCount, results.AllowCount)
 			assert.Equal(t, tt.denyCount, results.DenyCount)
-
 		})
 	}
 }

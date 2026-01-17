@@ -453,3 +453,213 @@ func TestSessionCleanup_ConcurrentDeleteAndSetClient(t *testing.T) {
 
 	t.Logf("Accepted: %d, Rejected: %d", acceptedCount, rejectedCount)
 }
+
+func TestSession_ActivityTracking(t *testing.T) {
+	session := NewSession("test-session")
+
+	// New session should have recent activity
+	initialActivity := session.LastActivity()
+	assert.WithinDuration(t, time.Now(), initialActivity, time.Second)
+
+	// Wait a bit and touch activity
+	time.Sleep(10 * time.Millisecond)
+	session.TouchActivity()
+
+	// Activity should be updated
+	newActivity := session.LastActivity()
+	assert.True(t, newActivity.After(initialActivity))
+}
+
+func TestSession_IsExpired(t *testing.T) {
+	session := NewSession("test-session")
+
+	// New session should not be expired
+	assert.False(t, session.IsExpired(time.Hour))
+	assert.False(t, session.IsExpired(time.Second))
+
+	// Wait and check expiration with very short timeout
+	time.Sleep(20 * time.Millisecond)
+	assert.True(t, session.IsExpired(10*time.Millisecond))
+	assert.False(t, session.IsExpired(time.Hour))
+}
+
+func TestSessionManager_CleanupExpiredSessions(t *testing.T) {
+	logger := newTestLogger(t)
+	// Use a very short timeout for testing
+	timeout := 100 * time.Millisecond
+	sm := NewSessionManagerWithTimeout(logger, timeout)
+	defer sm.StopCleanup()
+
+	// Create two sessions
+	session1 := sm.CreateSession("session-1")
+	sm.CreateSession("session-2")
+
+	// Wait past the timeout
+	time.Sleep(150 * time.Millisecond)
+
+	// Touch session-1 to keep it alive (reset its activity)
+	session1.TouchActivity()
+
+	// Trigger cleanup - session-2 should expire, session-1 should stay
+	sm.cleanupExpiredSessions()
+
+	// session-1 should still exist (was just touched)
+	assert.True(t, sm.HasSession("session-1"), "session-1 should still exist after touch")
+
+	// session-2 should be gone (not touched since creation, past timeout)
+	assert.False(t, sm.HasSession("session-2"), "session-2 should have been cleaned up")
+}
+
+func TestSessionManager_GetSessionTouchesActivity(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManagerWithTimeout(logger, time.Hour)
+	defer sm.StopCleanup()
+
+	// Create a session
+	session := sm.CreateSession("test-session")
+	initialActivity := session.LastActivity()
+
+	// Wait a bit
+	time.Sleep(10 * time.Millisecond)
+
+	// Get the session - this should touch activity
+	retrieved, ok := sm.GetSession("test-session")
+	require.True(t, ok)
+	require.NotNil(t, retrieved)
+
+	// Activity should be updated
+	assert.True(t, session.LastActivity().After(initialActivity))
+}
+
+func TestSessionManager_GetSessionClientTouchesActivity(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManagerWithTimeout(logger, time.Hour)
+	defer sm.StopCleanup()
+
+	// Create a session and add a client
+	session := sm.CreateSession("test-session")
+	clientInfo := &SessionClientInfo{Name: "test-client"}
+	session.SetClient("test-client", clientInfo)
+
+	initialActivity := session.LastActivity()
+
+	// Wait a bit
+	time.Sleep(10 * time.Millisecond)
+
+	// Get the client - this should touch activity
+	retrieved, ok := sm.GetSessionClient("test-session", "test-client")
+	require.True(t, ok)
+	require.NotNil(t, retrieved)
+
+	// Activity should be updated
+	assert.True(t, session.LastActivity().After(initialActivity))
+}
+
+func TestSessionManager_StopCleanup(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManagerWithTimeout(logger, time.Hour)
+
+	// Stop cleanup should not block
+	done := make(chan struct{})
+	go func() {
+		sm.StopCleanup()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(time.Second):
+		t.Fatal("StopCleanup blocked for too long")
+	}
+}
+
+func TestSessionManager_GetSessionTimeout(t *testing.T) {
+	logger := newTestLogger(t)
+
+	// Test default timeout
+	sm1 := NewSessionManager(logger)
+	defer sm1.StopCleanup()
+	assert.Equal(t, DefaultSessionTimeout, sm1.GetSessionTimeout())
+
+	// Test custom timeout
+	customTimeout := 5 * time.Minute
+	sm2 := NewSessionManagerWithTimeout(logger, customTimeout)
+	defer sm2.StopCleanup()
+	assert.Equal(t, customTimeout, sm2.GetSessionTimeout())
+}
+
+func TestClientManager_IsClientConfigured(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// Initialize with some clients
+	configs := map[string]config.ClientConfig{
+		"github": {
+			Type:    "http",
+			URL:     "https://api.github.com",
+			Command: "",
+		},
+		"aws": {
+			Type:    "stdio",
+			Command: "aws-mcp",
+		},
+	}
+	require.NoError(t, cm.InitializeClients(ctx, configs))
+
+	// Test configured clients
+	assert.True(t, cm.IsClientConfigured("github"))
+	assert.True(t, cm.IsClientConfigured("aws"))
+
+	// Test non-configured clients
+	assert.False(t, cm.IsClientConfigured("azure"))
+	assert.False(t, cm.IsClientConfigured("maybedont")) // Native tool prefix, not a downstream client
+	assert.False(t, cm.IsClientConfigured(""))
+}
+
+func TestClientManager_GetConfiguredClientNames(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// Empty initially
+	assert.Empty(t, cm.GetConfiguredClientNames())
+
+	// Initialize with some clients
+	configs := map[string]config.ClientConfig{
+		"github": {Type: "http", URL: "https://api.github.com"},
+		"aws":    {Type: "stdio", Command: "aws-mcp"},
+	}
+	require.NoError(t, cm.InitializeClients(ctx, configs))
+
+	// Should return all configured names
+	names := cm.GetConfiguredClientNames()
+	assert.Len(t, names, 2)
+	assert.Contains(t, names, "github")
+	assert.Contains(t, names, "aws")
+}
+
+func TestClientManager_HasSession(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// No sessions initially
+	assert.False(t, cm.HasSession("session-1"))
+	assert.False(t, cm.HasSession("session-2"))
+
+	// Create a session via the session manager
+	cm.sessionManager.CreateSession("session-1")
+
+	// Now should have session-1 but not session-2
+	assert.True(t, cm.HasSession("session-1"))
+	assert.False(t, cm.HasSession("session-2"))
+
+	// Delete session-1
+	require.NoError(t, cm.sessionManager.DeleteSession(ctx, "session-1"))
+	assert.False(t, cm.HasSession("session-1"))
+}
