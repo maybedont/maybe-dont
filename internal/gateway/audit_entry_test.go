@@ -268,21 +268,20 @@ func TestAuditContext_SetRequestValidationAI(t *testing.T) {
 func TestAuditEntry_FullSerialization(t *testing.T) {
 	t.Run("complete_entry_with_ai_validation", func(t *testing.T) {
 		entry := &AuditEntry{
-			CreatedAt: "2026-01-14T16:00:00Z",
+			ValidationStarted: "2026-01-14T15:59:58Z",
+			CreatedAt:         "2026-01-14T16:00:00Z",
 			Tool: AuditToolInfo{
 				Name:         "create_issue",
 				Client:       "github",
 				PrefixedName: "github__create_issue",
-			},
-			IncomingRequest: IncomingRequestInfo{
-				RequestID: "req-123",
-				SessionID: "sess-456",
-				ClientIP:  "127.0.0.1",
-			},
-			Request: AuditRequestInfo{
 				Params: map[string]interface{}{
 					"title": "Test issue",
 				},
+			},
+			UpstreamRequest: UpstreamRequestInfo{
+				RequestID: "req-123",
+				SessionID: "sess-456",
+				ClientIP:  "127.0.0.1",
 			},
 			RequestValidation: &AuditValidationInfo{
 				AI: &AuditAIResult{

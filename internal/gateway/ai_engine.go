@@ -33,7 +33,6 @@ type AIPolicyEngine struct {
 	endpoint            string
 	model               string
 	apiKey              string
-	maxBlockingMs       int
 	maxRuleEvaluationMs int
 	client              *openai.Client
 }
@@ -116,8 +115,10 @@ type aiRuleResult struct {
 	err          string              // Error description if result is "error"
 }
 
-// EvaluateToolCall evaluates a tool call request against all policies with early termination
-func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
+// EvaluateToolCall evaluates a tool call request against all policies with early termination.
+// The optional budget parameter enables blocking time tracking for cumulative budget management.
+// When budget is nil, no blocking time is tracked and a default timeout is used.
+func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest, budget *BlockingBudget) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -130,7 +131,11 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		return results, nil
 	}
 
-	// Track timing
+	// Track timing using shared budget if available
+	var phaseTracker *PhaseTracker
+	if budget != nil {
+		phaseTracker = budget.StartPhase()
+	}
 	evalStartTime := time.Now()
 
 	// Count enabled policies to determine blocking behavior
@@ -273,15 +278,29 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	var decided bool
 	var finalAction = "allow"
 
-	// Determine max blocking time
-	maxBlockingDuration := time.Duration(e.maxBlockingMs) * time.Millisecond
-	if maxBlockingDuration <= 0 {
-		maxBlockingDuration = 5 * time.Second // Default fallback
+	// Determine blocking deadline from shared budget or use default
+	var blockingDeadline time.Time
+	if budget != nil {
+		// Check if budget is already exhausted
+		if budget.IsExhausted() {
+			blockedMs = 0
+			decided = true
+			finalAction = "allow"
+			e.logger.Warn(ctx, "AI validation skipping blocking - budget already exhausted")
+		} else {
+			blockingDeadline = budget.BlockingDeadline()
+		}
+	} else {
+		// No budget provided, use a default timeout
+		blockingDeadline = evalStartTime.Add(5 * time.Second)
 	}
-	blockingDeadline := evalStartTime.Add(maxBlockingDuration)
 
 	// If all policies are audit_only, don't block at all
 	if allAuditOnly {
+		// Mark phase as decided immediately (with minimal elapsed time) to avoid consuming budget
+		if phaseTracker != nil {
+			phaseTracker.MarkDecided()
+		}
 		blockedMs = 0
 		decided = true
 		finalAction = "allow"
@@ -291,7 +310,10 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	remainingPolicies := len(e.policies)
 	for remainingPolicies > 0 {
 		// Check if we've exceeded blocking time (only matters if not yet decided)
-		if !decided && time.Now().After(blockingDeadline) {
+		if !decided && !blockingDeadline.IsZero() && time.Now().After(blockingDeadline) {
+			if phaseTracker != nil {
+				phaseTracker.MarkDecided()
+			}
 			blockedMs = time.Since(evalStartTime).Milliseconds()
 			decided = true
 			finalAction = "allow" // Fail open on timeout
@@ -326,6 +348,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				switch result.result {
 				case "deny":
 					// Early termination: first enabled deny
+					if phaseTracker != nil {
+						phaseTracker.MarkDecided()
+					}
 					blockedMs = time.Since(evalStartTime).Milliseconds()
 					decided = true
 					finalAction = "deny"
@@ -365,13 +390,24 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		}
 	}
 
-	// If we never decided (all enabled policies passed), record blocking time now
-	if !decided {
-		blockedMs = time.Since(evalStartTime).Milliseconds()
+	// Finalize phase tracking and get accurate blocked/evaluation times
+	var evaluationMs int64
+	if phaseTracker != nil {
+		// Use phase tracker for accurate cumulative budget tracking
+		var trackedBlockedMs int64
+		trackedBlockedMs, evaluationMs = phaseTracker.Finalize()
+		// For audit-only policies, we don't block at all, so override blockedMs
+		if !allAuditOnly {
+			blockedMs = trackedBlockedMs
+		}
+		// blockedMs remains 0 for audit-only (already set above)
+	} else {
+		// Fallback when no budget is provided
+		if !decided {
+			blockedMs = time.Since(evalStartTime).Milliseconds()
+		}
+		evaluationMs = time.Since(evalStartTime).Milliseconds()
 	}
-
-	// Calculate total evaluation time
-	evaluationMs := time.Since(evalStartTime).Milliseconds()
 
 	// Build the AIDetails for audit logging
 	aiDetails := &AuditAIResult{

@@ -17,6 +17,10 @@ const (
 	// ClientIPKey stores the IP address of the upstream client
 	// Value type: string
 	ClientIPKey contextKey = "client_ip"
+
+	// UserAgentKey stores the User-Agent header from the upstream client
+	// Value type: string
+	UserAgentKey contextKey = "user_agent"
 )
 
 // RequestIDKey stores the request ID for tracking capabilities per session
@@ -33,6 +37,17 @@ func WithClientIP(ctx context.Context, ip string) context.Context {
 func GetClientIP(ctx context.Context) (string, bool) {
 	ip, ok := ctx.Value(ClientIPKey).(string)
 	return ip, ok
+}
+
+// WithUserAgent adds the User-Agent header to the context
+func WithUserAgent(ctx context.Context, userAgent string) context.Context {
+	return context.WithValue(ctx, UserAgentKey, userAgent)
+}
+
+// GetUserAgent retrieves the User-Agent header from the context
+func GetUserAgent(ctx context.Context) (string, bool) {
+	ua, ok := ctx.Value(UserAgentKey).(string)
+	return ua, ok
 }
 
 // ServiceCredentials stores authentication credentials for all downstream MCP clients.

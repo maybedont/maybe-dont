@@ -246,10 +246,10 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 
 		// Track denied policies from request validation
 		if entry.Audit.RequestValidation != nil {
-			if entry.Audit.RequestValidation.CEL != nil && entry.Audit.RequestValidation.CEL.Action == "deny" {
-				ruleName := entry.Audit.RequestValidation.CEL.DecidingRule
+			if entry.Audit.RequestValidation.Rules != nil && entry.Audit.RequestValidation.Rules.Action == "deny" {
+				ruleName := entry.Audit.RequestValidation.Rules.DecidingRule
 				if ruleName == "" {
-					ruleName = "CEL Policy"
+					ruleName = "Rules Policy"
 				}
 				stats.DeniedByPolicy[ruleName]++
 			}
@@ -268,10 +268,10 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 		}
 		// Track denied policies from response validation
 		if entry.Audit.ResponseValidation != nil {
-			if entry.Audit.ResponseValidation.CEL != nil && entry.Audit.ResponseValidation.CEL.Action == "deny" {
-				ruleName := entry.Audit.ResponseValidation.CEL.DecidingRule
+			if entry.Audit.ResponseValidation.Rules != nil && entry.Audit.ResponseValidation.Rules.Action == "deny" {
+				ruleName := entry.Audit.ResponseValidation.Rules.DecidingRule
 				if ruleName == "" {
-					ruleName = "CEL Response Policy"
+					ruleName = "Rules Response Policy"
 				}
 				stats.DeniedByPolicy[ruleName]++
 			}
@@ -305,8 +305,8 @@ func countAuditOnlyAndTimeouts(validation *AuditValidationInfo) (auditOnlyDenial
 	}
 
 	// Check CEL results
-	if validation.CEL != nil {
-		for _, result := range validation.CEL.Results {
+	if validation.Rules != nil {
+		for _, result := range validation.Rules.Results {
 			// Audit-only denial: mode is "audit_only" and result is "deny"
 			if result.Mode == "audit_only" && result.Result == "deny" {
 				auditOnlyDenials++
@@ -453,7 +453,7 @@ func (h *NativeToolsHandler) prepareEntrySummary(entries []AuditLogEntry, stats 
 		}
 		if entry.Audit.Action == string(config.PolicyActionDeny) {
 			toolName := entry.Audit.Tool.PrefixedName
-			args, _ := json.Marshal(entry.Audit.Request.Params)
+			args, _ := json.Marshal(entry.Audit.Tool.Params)
 			summary += fmt.Sprintf("  - Tool: %s, Args: %s\n", toolName, string(args))
 			deniedCount++
 		}
@@ -480,7 +480,7 @@ func (h *NativeToolsHandler) collectAuditOnlySamples(entries []AuditLogEntry) st
 		if entry.Audit.RequestValidation != nil {
 			if rule := findAuditOnlyDenial(entry.Audit.RequestValidation); rule != "" {
 				toolName := entry.Audit.Tool.PrefixedName
-				args, _ := json.Marshal(entry.Audit.Request.Params)
+				args, _ := json.Marshal(entry.Audit.Tool.Params)
 				summary += fmt.Sprintf("  - Tool: %s, Rule: %s, Args: %s\n", toolName, rule, string(args))
 				count++
 				continue
@@ -549,8 +549,8 @@ func findAuditOnlyDenial(validation *AuditValidationInfo) string {
 		return ""
 	}
 
-	if validation.CEL != nil {
-		for _, result := range validation.CEL.Results {
+	if validation.Rules != nil {
+		for _, result := range validation.Rules.Results {
 			if result.Mode == "audit_only" && result.Result == "deny" {
 				return result.Rule
 			}
@@ -574,8 +574,8 @@ func findTimeoutFailure(validation *AuditValidationInfo) (rule, errMsg string) {
 		return "", ""
 	}
 
-	if validation.CEL != nil {
-		for _, result := range validation.CEL.Results {
+	if validation.Rules != nil {
+		for _, result := range validation.Rules.Results {
 			if result.Result == "error" && result.Error != "" {
 				return result.Rule, result.Error
 			}

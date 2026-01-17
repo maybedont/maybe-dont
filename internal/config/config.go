@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 	"gopkg.in/yaml.v3"
 )
 
@@ -44,6 +46,25 @@ const (
 // IsValid returns true if the PolicyMode is a valid value
 func (m PolicyMode) IsValid() bool {
 	return m == PolicyModeEnabled || m == PolicyModeAuditOnly || m == PolicyModeDisabled || m == ""
+}
+
+// RotationConfig contains log rotation settings for both logger and audit
+type RotationConfig struct {
+	MaxSizeMB  int  `mapstructure:"max_size_mb"`  // Max size in MB before rotation (default: 100)
+	MaxBackups int  `mapstructure:"max_backups"`  // Max number of rotated files to keep (default: 5)
+	MaxAgeDays int  `mapstructure:"max_age_days"` // Max days before deleting rotated files (default: 180, 0 = no limit)
+	Compress   bool `mapstructure:"compress"`     // Gzip compress rotated files (default: true)
+}
+
+// newLumberjackLogger creates a lumberjack logger with the given rotation config
+func newLumberjackLogger(path string, rotationCfg RotationConfig) io.WriteCloser {
+	return &lumberjack.Logger{
+		Filename:   path,
+		MaxSize:    rotationCfg.MaxSizeMB,
+		MaxBackups: rotationCfg.MaxBackups,
+		MaxAge:     rotationCfg.MaxAgeDays,
+		Compress:   rotationCfg.Compress,
+	}
 }
 
 // ResolveValidationMode resolves the effective mode for a validation config section.
@@ -102,8 +123,8 @@ type Config struct {
 
 	// Global validation settings that apply to all validation phases
 	Validation struct {
-		MaxBlockingMs       int `mapstructure:"max_blocking_ms"`        // Max cumulative time to block request waiting for decisions across all phases (default: 5000ms)
-		MaxRuleEvaluationMs int `mapstructure:"max_rule_evaluation_ms"` // Max time for any single rule to complete (default: 10000ms)
+		MaxBlockingMs       int `mapstructure:"max_blocking_ms"`        // Max cumulative time to block request waiting for decisions across all phases (default: 90000ms)
+		MaxRuleEvaluationMs int `mapstructure:"max_rule_evaluation_ms"` // Max time for any single rule to complete (default: 45000ms)
 		// AI settings shared by all AI-powered validation (request, response) and AI tools (audit report)
 		AI struct {
 			Endpoint string `mapstructure:"endpoint"` // OpenAI-compatible API endpoint
@@ -149,15 +170,21 @@ type Config struct {
 
 	// Audit configuration
 	Audit struct {
-		Enabled bool   `mapstructure:"enabled"`
-		Path    string `mapstructure:"path"` // Default: maybedont-audit.log (resolved in log-dir), or stdout/stderr
+		Path   string `mapstructure:"path"`   // Default: maybedont-audit.log (resolved in log-dir), or stdout/stderr
+		Filter string `mapstructure:"filter"` // "all" (default) or "deny_only"
+
+		// Log rotation settings (only applicable when path is a filename)
+		Rotation RotationConfig `mapstructure:"rotation"`
 	} `mapstructure:"audit"`
 
-	// Logging configuration
-	Logging struct {
-		LogLevel string `mapstructure:"level"`
-		Path     string `mapstructure:"path"` // Default: stdout, or filename (resolved in log-dir)
-	} `mapstructure:"logging"`
+	// Logger configuration (application logs)
+	Logger struct {
+		Level string `mapstructure:"level"`
+		Path  string `mapstructure:"path"` // Default: stderr, or filename (resolved in log-dir)
+
+		// Log rotation settings (only applicable when path is a filename)
+		Rotation RotationConfig `mapstructure:"rotation"`
+	} `mapstructure:"logger"`
 
 	// NativeTools configuration for gateway-native tools
 	NativeTools struct {
@@ -617,8 +644,18 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("native_tools.list_sessions.enabled", true)
 	v.SetDefault("native_tools.audit_log.max_entries", 100)
 	v.SetDefault("native_tools.audit_report.max_entries", 1_000)
-	v.SetDefault("logging.path", "stdout")
+	v.SetDefault("logger.path", "stderr")
+	v.SetDefault("logger.level", "info")
+	v.SetDefault("logger.rotation.max_size_mb", 100)
+	v.SetDefault("logger.rotation.max_backups", 5)
+	v.SetDefault("logger.rotation.max_age_days", 180)
+	v.SetDefault("logger.rotation.compress", true)
 	v.SetDefault("audit.path", "maybedont-audit.log")
+	v.SetDefault("audit.filter", "all")
+	v.SetDefault("audit.rotation.max_size_mb", 100)
+	v.SetDefault("audit.rotation.max_backups", 5)
+	v.SetDefault("audit.rotation.max_age_days", 180)
+	v.SetDefault("audit.rotation.compress", true)
 	v.SetDefault("validation.max_blocking_ms", 90_000)
 	v.SetDefault("validation.max_rule_evaluation_ms", 45_000)
 	v.SetDefault("server.session_timeout_minutes", 30)
@@ -1025,10 +1062,10 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		validateRange(cfg.NativeTools.AuditReport.MaxEntries, 10, 2_000, "native_tools.audit_report.max_entries", &errors)
 	}
 
-	// Validate logging.path - must be stdout, stderr, or a safe relative path
-	if cfg.Logging.Path != "" && cfg.Logging.Path != "stdout" && cfg.Logging.Path != "stderr" {
-		if err := ValidateRelativePath(cfg.Logging.Path); err != nil {
-			errors = append(errors, fmt.Sprintf("logging.path: %s", err.Error()))
+	// Validate logger.path - must be stdout, stderr, or a safe relative path
+	if cfg.Logger.Path != "" && cfg.Logger.Path != "stdout" && cfg.Logger.Path != "stderr" {
+		if err := ValidateRelativePath(cfg.Logger.Path); err != nil {
+			errors = append(errors, fmt.Sprintf("logger.path: %s", err.Error()))
 		}
 	}
 
@@ -1066,41 +1103,38 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 // GetLogger creates a new session-aware logger based on the configuration.
 // logDir: the resolved log directory where log files should be written.
-// If logging.path is "stdout" or "stderr", logs go directly there.
-// Otherwise, logging.path is treated as a filename and resolved within logDir.
+// If logger.path is "stdout" or "stderr", logs go directly there.
+// Otherwise, logger.path is treated as a filename and resolved within logDir with rotation support.
 func GetLogger(cfg *Config, logDir string) (*SessionLogger, error) {
-	config := zap.NewProductionConfig()
-
 	// Set log level
-	level, err := zapcore.ParseLevel(cfg.Logging.LogLevel)
+	level, err := zapcore.ParseLevel(cfg.Logger.Level)
 	if err != nil {
 		return nil, fmt.Errorf("invalid log level: %w", err)
 	}
-	config.Level = zap.NewAtomicLevelAt(level)
 
-	// Set output paths based on configuration
-	logPath := cfg.Logging.Path
+	// Set output based on configuration
+	logPath := cfg.Logger.Path
+
+	var core zapcore.Core
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoder := zapcore.NewJSONEncoder(encoderConfig)
+
 	switch logPath {
-	case "", "stdout":
-		// Default to stdout
-		config.OutputPaths = []string{"stdout"}
-		config.ErrorOutputPaths = []string{"stderr"}
-	case "stderr":
-		// Log to stderr
-		config.OutputPaths = []string{"stderr"}
-		config.ErrorOutputPaths = []string{"stderr"}
+	case "", "stderr":
+		// Default to stderr
+		core = zapcore.NewCore(encoder, zapcore.AddSync(os.Stderr), level)
+	case "stdout":
+		// Log to stdout
+		core = zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), level)
 	default:
-		// Path is a filename - resolve it within logDir
+		// Path is a filename - resolve it within logDir and use lumberjack for rotation
 		fullPath := filepath.Join(logDir, logPath)
-		config.OutputPaths = []string{fullPath}
-		config.ErrorOutputPaths = []string{fullPath}
+		lumberjackLogger := newLumberjackLogger(fullPath, cfg.Logger.Rotation)
+		core = zapcore.NewCore(encoder, zapcore.AddSync(lumberjackLogger), level)
 	}
 
 	// Build the logger
-	logger, err := config.Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build logger: %w", err)
-	}
+	logger := zap.New(core)
 
 	// Add logger type designation and wrap in SessionLogger
 	zapLogger := logger.With(zap.String("logger", "application"))

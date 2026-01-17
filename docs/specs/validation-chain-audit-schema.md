@@ -2,12 +2,12 @@
 
 ## Overview
 
-This specification defines the audit log schema for the complete validation chain, including both request and response validation with CEL and AI policies. It introduces a cumulative blocking budget that spans the entire tool call lifecycle.
+This specification defines the audit log schema for the complete validation chain, including both request and response validation with deterministic rules and AI policies. It introduces a cumulative blocking budget that spans the entire tool call lifecycle.
 
 ## Goals
 
 1. **Predictable latency**: A single `max_blocking_ms` config controls the maximum added latency for any tool call
-2. **Unified blocking budget**: All validation phases (CEL request, AI request, CEL response, AI response) share a common budget
+2. **Unified blocking budget**: All validation phases (rules request, AI request, rules response, AI response) share a common budget
 3. **Fail-open on timeout**: When budget is exhausted, remaining validations continue async but don't block
 4. **Comprehensive audit trail**: Capture complete timing and decision information regardless of blocking state
 5. **Early termination**: Stop blocking as soon as a decision is made (deny or all enabled rules pass)
@@ -17,24 +17,27 @@ This specification defines the audit log schema for the complete validation chai
 ### Timeout Configuration
 
 ```yaml
-ai_validation:
-  mode: enabled
-  max_blocking_ms: 10000         # Max cumulative time to block tool call (default: 10000ms)
-  max_rule_evaluation_ms: 10000 # Max time for any single AI rule (default: 10000ms)
+validation:
+  max_blocking_ms: 90000         # Max cumulative time to block tool call (default: 90000ms)
+  max_rule_evaluation_ms: 45000  # Max time for any single rule (default: 45000ms)
+  ai:
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    model: "gpt-4o-mini"
+    api_key: "${OPENAI_API_KEY}"
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_blocking_ms` | int | 5000 | Maximum cumulative time in milliseconds to block a tool call across ALL validation phases. Once exhausted, remaining validations run non-blocking. |
-| `max_rule_evaluation_ms` | int | 10000 | Maximum time in milliseconds for any single AI rule to complete. Rules exceeding this return `result: "error"` with `error: "timeout"`. |
+| `max_blocking_ms` | int | 90000 | Maximum cumulative time in milliseconds to block a tool call across ALL validation phases. Once exhausted, remaining validations run non-blocking. |
+| `max_rule_evaluation_ms` | int | 45000 | Maximum time in milliseconds for any single rule to complete. Rules exceeding this return `result: "error"` with `error: "timeout"`. |
 
 ### Blocking Budget Flow
 
 ```
 Tool call starts
-├── blocking_budget = max_blocking_ms (e.g., 10000ms)
+├── blocking_budget = max_blocking_ms (e.g., 90000ms)
 │
-├── CEL request validation
+├── Rules request validation
 │   ├── Consumes X ms from budget
 │   └── Early terminate on first enabled deny
 │
@@ -46,7 +49,7 @@ Tool call starts
 │
 ├── Downstream tool call execution
 │
-├── CEL response validation
+├── Rules response validation
 │   ├── Consumes Z ms from remaining budget
 │   └── Early terminate on first enabled deny
 │
@@ -63,23 +66,24 @@ Audit log written after all validations complete (blocking or not)
 
 ```json
 {
-  "created_at": "2026-01-14T20:30:00Z",
+  "validation_started": "2026-01-14T20:30:00.000000000Z",
+  "created_at": "2026-01-14T20:30:02.650000000Z",
   "tool": {
     "name": "create_issue",
     "client": "github",
-    "prefixed_name": "github__create_issue"
-  },
-  "incoming_request": {
-    "id": "req-abc123",
-    "session_id": "sess-xyz789",
-    "client_ip": "127.0.0.1"
-  },
-  "request": {
+    "prefixed_name": "github__create_issue",
     "params": {"title": "New feature", "body": "Description"},
+    "called_at": "2026-01-14T20:30:00.855000000Z",
     "duration_ms": 150
   },
+  "upstream_request": {
+    "id": "req-abc123",
+    "session_id": "sess-xyz789",
+    "client_ip": "127.0.0.1",
+    "user_agent": "claude-code/1.0.0"
+  },
   "request_validation": {
-    "cel": {
+    "rules": {
       "action": "allow",
       "blocked_ms": 5,
       "evaluation_ms": 5,
@@ -94,14 +98,14 @@ Audit log written after all validations complete (blocking or not)
     },
     "ai": {
       "action": "allow",
-      "blocked_ms": 847,
+      "blocked_ms": 700,
       "evaluation_ms": 2341,
       "results": [
         {
           "rule": "block_destructive_ops",
           "action": "deny",
           "result": "allow",
-          "evaluation_ms": 847
+          "evaluation_ms": 700
         },
         {
           "rule": "check_permissions",
@@ -118,7 +122,7 @@ Audit log written after all validations complete (blocking or not)
     "is_error": false
   },
   "response_validation": {
-    "cel": {
+    "rules": {
       "action": "allow",
       "blocked_ms": 3,
       "evaluation_ms": 3,
@@ -142,20 +146,46 @@ Audit log written after all validations complete (blocking or not)
   "recommended_action": "allow",
   "action": "allow",
   "duration_ms": 2650,
-  "total_blocked_ms": 855
+  "total_blocked_ms": 858
 }
 ```
 
-### Top-Level Timing Fields
+In this example:
+- `total_blocked_ms` (858ms) = rules.blocked (5) + ai.blocked (700) + tool.duration (150) + response rules.blocked (3)
+- Gateway overhead = 858 - 150 = 708ms
+
+### Top-Level Fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `duration_ms` | int | Yes | Total wall-clock time for the entire tool call |
-| `total_blocked_ms` | int | Yes | Cumulative time the tool call was blocked across all validation phases |
+| `validation_started` | string | Yes | RFC3339Nano timestamp when the tool call was received and validation began |
+| `created_at` | string | Yes | RFC3339Nano timestamp when the audit entry was finalized and written |
+| `duration_ms` | int | Yes | Total wall-clock time from `validation_started` to `created_at` |
+| `total_blocked_ms` | int | Yes | Time caller was blocked (validation blocking + tool call duration) |
 
-### Validation Block Fields (CEL and AI)
+### Tool Object Fields
 
-Both `request_validation.cel`, `request_validation.ai`, `response_validation.cel`, and `response_validation.ai` share this structure:
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Original tool name |
+| `client` | string | Yes | Downstream client name |
+| `prefixed_name` | string | Yes | Full prefixed tool name (`{client}__{name}`) |
+| `params` | object | No | Tool call parameters |
+| `called_at` | string | No | RFC3339Nano timestamp when downstream tool was invoked (omitted if denied) |
+| `duration_ms` | int | No | Downstream call duration in milliseconds (omitted if denied) |
+
+### Upstream Request Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | No | Request ID |
+| `session_id` | string | No | Session ID |
+| `client_ip` | string | No | Client IP address |
+| `user_agent` | string | No | User-Agent header from incoming request (useful for identifying AI agents) |
+
+### Validation Block Fields (Rules and AI)
+
+Both `request_validation.rules`, `request_validation.ai`, `response_validation.rules`, and `response_validation.ai` share this structure:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -181,7 +211,7 @@ Both `request_validation.cel`, `request_validation.ai`, `response_validation.cel
 
 ### Budget Consumption
 
-1. **CEL validation**: Typically very fast (<10ms), consumes minimal budget
+1. **Rules validation**: Typically very fast (<10ms), consumes minimal budget
 2. **AI validation**: Each rule runs in parallel, budget consumed until decision is made
 3. **Response validation**: Uses remaining budget after request validation and tool execution
 
@@ -200,7 +230,7 @@ When `blocked_ms` across all phases reaches `max_blocking_ms`:
 ```json
 {
   "request_validation": {
-    "cel": {
+    "rules": {
       "action": "allow",
       "blocked_ms": 5,
       "evaluation_ms": 5,
@@ -271,9 +301,9 @@ In this example:
 - Early deny in response validation: Response is blocked/modified
 - Budget exhaustion: Continue to next phase but non-blocking
 
-## CEL vs AI Validation Differences
+## Rules vs AI Validation Differences
 
-### CEL Validation
+### Rules Validation (Deterministic)
 
 - **Synchronous**: Rules evaluated sequentially (no goroutines)
 - **Fast**: Typically <10ms per rule
@@ -322,7 +352,7 @@ In this example:
 ```json
 {
   "request_validation": {
-    "cel": {
+    "rules": {
       "action": "allow",
       "blocked_ms": 3,
       "evaluation_ms": 3,
@@ -345,12 +375,12 @@ In this example:
 }
 ```
 
-### Example 2: Early Deny on CEL
+### Example 2: Early Deny on Rules
 
 ```json
 {
   "request_validation": {
-    "cel": {
+    "rules": {
       "action": "deny",
       "blocked_ms": 2,
       "evaluation_ms": 2,
@@ -366,7 +396,7 @@ In this example:
 }
 ```
 
-Note: AI request validation was skipped because CEL denied.
+Note: AI request validation was skipped because rules validation denied.
 
 ### Example 3: All Audit-Only (Non-Blocking)
 
@@ -423,12 +453,12 @@ Note: AI request validation was skipped because CEL denied.
 }
 ```
 
-### Example 5: Mixed CEL and AI with Redaction
+### Example 5: Mixed Rules and AI with Redaction
 
 ```json
 {
   "request_validation": {
-    "cel": {
+    "rules": {
       "action": "allow",
       "blocked_ms": 5,
       "evaluation_ms": 5,
@@ -438,7 +468,7 @@ Note: AI request validation was skipped because CEL denied.
     }
   },
   "response_validation": {
-    "cel": {
+    "rules": {
       "action": "redact",
       "blocked_ms": 10,
       "evaluation_ms": 10,
@@ -481,7 +511,7 @@ func (b *BlockingBudget) ConsumeBlocking(ms int64) int64  // Returns actual cons
 ### Audit Entry Updates
 
 1. Add `total_blocked_ms` to top-level `AuditEntry`
-2. Update `AuditCELResult` to match `AuditAIResult` structure
+2. Update `AuditRulesResult` to match `AuditAIResult` structure
 3. Both include `blocked_ms`, `evaluation_ms`, `deciding_rule`, `reason`, `results[]`
 
 ### Native Tool Updates
@@ -492,8 +522,13 @@ func (b *BlockingBudget) ConsumeBlocking(ms int64) int64  // Returns actual cons
 ## Backwards Compatibility
 
 This schema change is **not backwards compatible**. Key changes:
-- `AuditCELResult` expanded from simple to detailed format
-- New `total_blocked_ms` field at top level
+- New `validation_started` field at top level
+- `incoming_request` renamed to `upstream_request`
+- `request` object merged into `tool` (params, called_at, duration_ms now under `tool`)
+- Validation blocks use `rules` instead of `cel`
+- `AuditRulesResult` (formerly `AuditCELResult`) expanded from simple to detailed format
+- `total_blocked_ms` now includes tool call duration
 - New `blocked_ms` field in each validation result
+- New `user_agent` field in `upstream_request`
 
 Existing audit logs will not match the new schema.

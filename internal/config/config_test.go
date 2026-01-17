@@ -64,8 +64,9 @@ func TestServerTypeValidation(t *testing.T) {
 					},
 				},
 				Audit: struct {
-					Enabled bool   `mapstructure:"enabled"`
-					Path    string `mapstructure:"path"`
+					Path     string         `mapstructure:"path"`
+					Filter   string         `mapstructure:"filter"`
+					Rotation RotationConfig `mapstructure:"rotation"`
 				}{
 					Path: "audit.log",
 				},
@@ -123,8 +124,9 @@ func TestListenAddrValidation(t *testing.T) {
 					},
 				},
 				Audit: struct {
-					Enabled bool   `mapstructure:"enabled"`
-					Path    string `mapstructure:"path"`
+					Path     string         `mapstructure:"path"`
+					Filter   string         `mapstructure:"filter"`
+					Rotation RotationConfig `mapstructure:"rotation"`
 				}{
 					Path: "audit.log",
 				},
@@ -271,8 +273,9 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 			},
 		},
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			// No required fields in Audit anymore
 		},
@@ -336,8 +339,9 @@ func TestValidateConfigSuccess(t *testing.T) {
 			},
 		},
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			Path: "audit.log",
 		},
@@ -639,19 +643,19 @@ func TestApplyEnvironmentOverrides_InvalidValues(t *testing.T) {
 	// Test that invalid values don't crash and leave defaults unchanged
 
 	t.Run("invalid bool leaves default", func(t *testing.T) {
-		err := os.Setenv("MAYBE_DONT_AUDIT_ENABLED", "not-a-bool")
+		err := os.Setenv("MAYBE_DONT_LOGGER_ROTATION_COMPRESS", "not-a-bool")
 		require.NoError(t, err)
 		defer func() {
-			_ = os.Unsetenv("MAYBE_DONT_AUDIT_ENABLED")
+			_ = os.Unsetenv("MAYBE_DONT_LOGGER_ROTATION_COMPRESS")
 		}()
 
 		config := &Config{}
-		config.Audit.Enabled = true // set a default
+		config.Logger.Rotation.Compress = true // set a default
 
 		applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
 
 		// Should remain unchanged because "not-a-bool" can't be parsed
-		require.True(t, config.Audit.Enabled, "Invalid bool should leave default unchanged")
+		require.True(t, config.Logger.Rotation.Compress, "Invalid bool should leave default unchanged")
 	})
 
 	t.Run("invalid int leaves default", func(t *testing.T) {
@@ -714,7 +718,7 @@ func TestApplyEnvironmentOverrides_DoesNotOverrideWhenNotSet(t *testing.T) {
 
 	config := &Config{}
 	config.Validation.AI.APIKey = "original-key"
-	config.Audit.Enabled = true
+	config.Logger.Rotation.Compress = true
 	config.NativeTools.AuditLog.MaxEntries = 100
 	config.Server.TrustedProxies = []string{"original"}
 
@@ -722,7 +726,7 @@ func TestApplyEnvironmentOverrides_DoesNotOverrideWhenNotSet(t *testing.T) {
 	applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
 
 	require.Equal(t, "original-key", config.Validation.AI.APIKey)
-	require.True(t, config.Audit.Enabled)
+	require.True(t, config.Logger.Rotation.Compress)
 	require.Equal(t, 100, config.NativeTools.AuditLog.MaxEntries)
 	require.Equal(t, []string{"original"}, config.Server.TrustedProxies)
 }
@@ -740,8 +744,18 @@ func TestViperConfigPathsMatchStruct(t *testing.T) {
 		"native_tools.list_sessions.enabled",
 		"native_tools.audit_log.max_entries",
 		"native_tools.audit_report.max_entries",
-		"logging.path",
+		"logger.path",
+		"logger.level",
+		"logger.rotation.max_size_mb",
+		"logger.rotation.max_backups",
+		"logger.rotation.max_age_days",
+		"logger.rotation.compress",
 		"audit.path",
+		"audit.filter",
+		"audit.rotation.max_size_mb",
+		"audit.rotation.max_backups",
+		"audit.rotation.max_age_days",
+		"audit.rotation.compress",
 		"validation.max_blocking_ms",
 		"validation.max_rule_evaluation_ms",
 		"server.session_timeout_minutes",
@@ -1182,13 +1196,13 @@ func TestValidateRelativePath_CurrentDirectory(t *testing.T) {
 	}
 }
 
-func TestValidateConfig_LoggingPathWithSubdirectory(t *testing.T) {
-	// Test that subdirectories are now allowed in logging.path
+func TestValidateConfig_LoggerPathWithSubdirectory(t *testing.T) {
+	// Test that subdirectories are now allowed in logger.path
 	config := createValidBaseConfig()
-	config.Logging.Path = "logs/subdir/app.log"
+	config.Logger.Path = "logs/subdir/app.log"
 
 	err := ValidateConfig(config)
-	require.NoError(t, err, "Subdirectory paths should be allowed for logging.path")
+	require.NoError(t, err, "Subdirectory paths should be allowed for logger.path")
 }
 
 func TestValidateConfig_AuditPathWithSubdirectory(t *testing.T) {
@@ -1200,14 +1214,14 @@ func TestValidateConfig_AuditPathWithSubdirectory(t *testing.T) {
 	require.NoError(t, err, "Subdirectory paths should be allowed for audit.path")
 }
 
-func TestValidateConfig_LoggingPathTraversalRejected(t *testing.T) {
-	// Test that path traversal is rejected in logging.path
+func TestValidateConfig_LoggerPathTraversalRejected(t *testing.T) {
+	// Test that path traversal is rejected in logger.path
 	config := createValidBaseConfig()
-	config.Logging.Path = "../../../etc/passwd"
+	config.Logger.Path = "../../../etc/passwd"
 
 	err := ValidateConfig(config)
-	require.Error(t, err, "Path traversal should be rejected in logging.path")
-	require.Contains(t, err.Error(), "logging.path")
+	require.Error(t, err, "Path traversal should be rejected in logger.path")
+	require.Contains(t, err.Error(), "logger.path")
 }
 
 func TestValidateConfig_AuditPathTraversalRejected(t *testing.T) {
@@ -1501,8 +1515,9 @@ func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
 		},
 		// Missing DownstreamMCPServers - will cause validation error
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			Path: "audit.log",
 		},
@@ -1540,8 +1555,9 @@ func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
 		},
 		// Missing DownstreamMCPServers - will cause validation error
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			Path: "audit.log",
 		},
@@ -1631,8 +1647,9 @@ func createValidBaseConfig() *Config {
 			},
 		},
 		Audit: struct {
-			Enabled bool   `mapstructure:"enabled"`
-			Path    string `mapstructure:"path"`
+			Path     string         `mapstructure:"path"`
+			Filter   string         `mapstructure:"filter"`
+			Rotation RotationConfig `mapstructure:"rotation"`
 		}{
 			Path: "audit.log",
 		},

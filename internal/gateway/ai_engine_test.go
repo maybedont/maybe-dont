@@ -228,7 +228,7 @@ func TestAIPolicyEngine_NoPolicies(t *testing.T) {
 	require.NoError(t, err)
 
 	// Don't load any policies
-	results, err := engine.EvaluateToolCall(context.Background(), createTestToolRequest("test_tool"))
+	results, err := engine.EvaluateToolCall(context.Background(), createTestToolRequest("test_tool"), nil)
 	require.NoError(t, err)
 
 	assert.True(t, results.Allowed)
@@ -566,6 +566,116 @@ func TestAuditAIRuleResult_ErrorHandling(t *testing.T) {
 
 		assert.Equal(t, "error", result.Result)
 		assert.Equal(t, "canceled", result.Error)
+	})
+}
+
+// TestAIPolicyEngine_UsesSharedBlockingBudget verifies that the AI engine
+// respects the shared BlockingBudget passed to it, rather than using its own
+// independent maxBlockingMs timeout. This ensures cumulative budget tracking
+// across all validation phases (CEL + AI).
+func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	t.Run("respects_exhausted_budget", func(t *testing.T) {
+		// Create an engine with a large maxRuleEvaluationMs
+		engine := &AIPolicyEngine{
+			apiKey:              "test-key",
+			model:               "gpt-4o-mini",
+			maxRuleEvaluationMs: 30000, // 30 seconds per rule
+		}
+		err := InitAIPolicyEngine(sessionLogger, engine)
+		require.NoError(t, err)
+
+		// Load a policy that would normally take time to evaluate
+		policies := []config.AIPolicy{
+			{
+				Name:   "test_policy",
+				Prompt: "Check: %s",
+				Action: config.PolicyActionDeny,
+				Mode:   config.PolicyModeEnabled,
+			},
+		}
+		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		require.NoError(t, err)
+
+		// Create a budget that is already exhausted
+		budget := NewBlockingBudget(1000) // 1 second total
+		budget.ConsumeBlocking(1001)      // Consume more than budget (simulating prior CEL validation)
+
+		assert.True(t, budget.IsExhausted(), "Budget should be exhausted before AI evaluation")
+		assert.Equal(t, int64(0), budget.RemainingMs(), "No remaining budget")
+
+		// Call EvaluateToolCall with the exhausted budget
+		// The engine should fail-open immediately without blocking
+		ctx := context.Background()
+		results, err := engine.EvaluateToolCall(ctx, createTestToolRequest("test_tool"), budget)
+		require.NoError(t, err)
+
+		// With exhausted budget, should allow (fail-open) and not block
+		assert.True(t, results.Allowed, "Should allow when budget is exhausted (fail-open)")
+		assert.NotNil(t, results.AIDetails, "Should have AI details")
+		assert.Equal(t, int64(0), results.AIDetails.BlockedMs, "Should not block when budget is exhausted")
+	})
+
+	t.Run("uses_remaining_budget_not_maxBlockingMs", func(t *testing.T) {
+		// This test verifies the engine uses the shared budget's remaining time,
+		// not its own maxBlockingMs field
+		engine := &AIPolicyEngine{
+			apiKey:              "test-key",
+			model:               "gpt-4o-mini",
+			maxRuleEvaluationMs: 30000,
+		}
+		err := InitAIPolicyEngine(sessionLogger, engine)
+		require.NoError(t, err)
+
+		// Load an audit-only policy (so we don't actually call the AI)
+		policies := []config.AIPolicy{
+			{
+				Name:   "audit_policy",
+				Prompt: "Check: %s",
+				Action: config.PolicyActionDeny,
+				Mode:   config.PolicyModeAuditOnly,
+			},
+		}
+		err = engine.LoadPolicies(policies, config.PolicyModeAuditOnly)
+		require.NoError(t, err)
+
+		// Create a budget with some remaining time
+		budget := NewBlockingBudget(5000) // 5 seconds total
+		budget.ConsumeBlocking(3000)      // 3 seconds consumed by prior validation
+
+		assert.Equal(t, int64(2000), budget.RemainingMs(), "Should have 2 seconds remaining")
+
+		// Call EvaluateToolCall - since all policies are audit_only,
+		// it shouldn't block regardless, but the budget should be passed through
+		ctx := context.Background()
+		results, err := engine.EvaluateToolCall(ctx, createTestToolRequest("test_tool"), budget)
+		require.NoError(t, err)
+
+		// Audit-only policies don't block
+		assert.True(t, results.Allowed)
+		assert.NotNil(t, results.AIDetails)
+		assert.Equal(t, int64(0), results.AIDetails.BlockedMs, "Audit-only should not block")
+	})
+
+	t.Run("nil_budget_still_works", func(t *testing.T) {
+		// Backward compatibility: when budget is nil, engine should still function
+		engine := &AIPolicyEngine{
+			apiKey:              "test-key",
+			model:               "gpt-4o-mini",
+			maxRuleEvaluationMs: 5000,
+		}
+		err := InitAIPolicyEngine(sessionLogger, engine)
+		require.NoError(t, err)
+
+		// No policies loaded - should return quickly
+		ctx := context.Background()
+		results, err := engine.EvaluateToolCall(ctx, createTestToolRequest("test_tool"), nil)
+		require.NoError(t, err)
+
+		assert.True(t, results.Allowed)
+		assert.Equal(t, "No policies configured", results.Message)
 	})
 }
 

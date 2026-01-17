@@ -790,3 +790,102 @@ func TestGetAuditLog_TimeRangeWithFractionalTimestamps(t *testing.T) {
 	assert.Equal(t, "test__new_tool", response.Entries[0].Audit.Tool.PrefixedName)
 	assert.Equal(t, "test__cutoff_tool", response.Entries[1].Audit.Tool.PrefixedName)
 }
+
+func TestParseAuditLine_NewDirectFormat(t *testing.T) {
+	// Tests parsing the new direct JSONL format (AuditEntry written directly)
+	directJSON := `{"validation_started":"2024-01-15T12:00:00Z","created_at":"2024-01-15T12:00:01Z","tool":{"name":"test_tool","client":"test_client","prefixed_name":"test_client__test_tool"},"upstream_request":{"id":"req-123","session_id":"sess-456","client_ip":"192.168.1.1","user_agent":"TestAgent/1.0"},"action":"allow","recommended_action":"allow","duration_ms":100,"total_blocked_ms":50}`
+
+	entry, entryTime, err := parseAuditLine([]byte(directJSON))
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.Audit)
+
+	assert.Equal(t, "test_client__test_tool", entry.Audit.Tool.PrefixedName)
+	assert.Equal(t, "test_client", entry.Audit.Tool.Client)
+	assert.Equal(t, "test_tool", entry.Audit.Tool.Name)
+	assert.Equal(t, "allow", entry.Audit.Action)
+	assert.Equal(t, "2024-01-15T12:00:01Z", entry.Audit.CreatedAt)
+	assert.Equal(t, "2024-01-15T12:00:00Z", entry.Audit.ValidationStarted)
+	assert.Equal(t, "TestAgent/1.0", entry.Audit.UpstreamRequest.UserAgent)
+	assert.False(t, entryTime.IsZero(), "Entry time should be parsed from created_at")
+}
+
+func TestParseAuditLine_LegacyZapFormat(t *testing.T) {
+	// Tests parsing the legacy zap-formatted log entry with old schema
+	legacyJSON := `{"level":"info","ts":1705320000.123,"caller":"gateway/gateway.go:100","msg":"Tool call audit","logger":"audit","audit":{"created_at":"2024-01-15T12:00:00Z","tool":{"name":"legacy_tool","client":"legacy_client","prefixed_name":"legacy_client__legacy_tool"},"request":{"params":{"arg1":"value1"},"called_at":"2024-01-15T12:00:00.001Z","duration_ms":50},"incoming_request":{"id":"req-old","session_id":"sess-old","client_ip":"10.0.0.1"},"request_validation":{"cel":{"action":"allow","evaluation_ms":10,"results":[]}},"action":"allow","recommended_action":"allow","duration_ms":100,"total_blocked_ms":20}}`
+
+	entry, entryTime, err := parseAuditLine([]byte(legacyJSON))
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.Audit)
+
+	// Verify the entry was converted to new format
+	assert.Equal(t, "legacy_client__legacy_tool", entry.Audit.Tool.PrefixedName)
+	assert.Equal(t, "legacy_client", entry.Audit.Tool.Client)
+	assert.Equal(t, "legacy_tool", entry.Audit.Tool.Name)
+	assert.Equal(t, "allow", entry.Audit.Action)
+
+	// Verify legacy Request was merged into Tool
+	assert.Equal(t, "value1", entry.Audit.Tool.Params["arg1"])
+	assert.Equal(t, "2024-01-15T12:00:00.001Z", entry.Audit.Tool.CalledAt)
+
+	// Verify legacy IncomingRequest was converted to UpstreamRequest
+	assert.Equal(t, "req-old", entry.Audit.UpstreamRequest.RequestID)
+	assert.Equal(t, "sess-old", entry.Audit.UpstreamRequest.SessionID)
+	assert.Equal(t, "10.0.0.1", entry.Audit.UpstreamRequest.ClientIP)
+
+	// Verify legacy CEL was converted to Rules
+	require.NotNil(t, entry.Audit.RequestValidation)
+	require.NotNil(t, entry.Audit.RequestValidation.Rules)
+	assert.Equal(t, "allow", entry.Audit.RequestValidation.Rules.Action)
+
+	// Verify zap metadata was preserved
+	assert.Equal(t, "info", entry.Level)
+	assert.InDelta(t, 1705320000.123, entry.Timestamp, 0.001)
+
+	// Verify entry time was parsed from zap timestamp
+	assert.False(t, entryTime.IsZero())
+}
+
+func TestParseAuditLine_InvalidJSON(t *testing.T) {
+	invalidJSON := `not valid json at all`
+
+	entry, entryTime, err := parseAuditLine([]byte(invalidJSON))
+	require.Error(t, err)
+	assert.Nil(t, entry)
+	assert.True(t, entryTime.IsZero())
+}
+
+func TestParseAuditLine_EmptyToolPrefixedName(t *testing.T) {
+	// Entry with validation_started but no prefixed_name should fail
+	// because we require prefixed_name to be non-empty for valid entries
+	emptyPrefixedNameJSON := `{"validation_started":"2024-01-15T12:00:00Z","created_at":"2024-01-15T12:00:01Z","tool":{"name":"","client":"","prefixed_name":""},"action":"allow"}`
+
+	entry, _, err := parseAuditLine([]byte(emptyPrefixedNameJSON))
+	// The entry should fail because prefixed_name is empty
+	require.Error(t, err, "Entry without prefixed_name should fail to parse")
+	assert.Nil(t, entry)
+}
+
+func TestParseAuditLine_ZapFormatWithNewSchema(t *testing.T) {
+	// Tests parsing a zap-formatted entry that uses the new schema (has rules, not cel)
+	zapNewJSON := `{"level":"info","ts":1705320000.5,"caller":"gateway/gateway.go:200","msg":"Tool call audit","logger":"audit","audit":{"validation_started":"2024-01-15T12:00:00Z","created_at":"2024-01-15T12:00:01Z","tool":{"name":"new_tool","client":"new_client","prefixed_name":"new_client__new_tool","params":{"key":"value"}},"upstream_request":{"id":"req-new","session_id":"sess-new","client_ip":"172.16.0.1","user_agent":"NewAgent/2.0"},"request_validation":{"rules":{"action":"allow","evaluation_ms":5}},"action":"allow","recommended_action":"allow","duration_ms":80,"total_blocked_ms":30}}`
+
+	entry, entryTime, err := parseAuditLine([]byte(zapNewJSON))
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.Audit)
+
+	assert.Equal(t, "new_client__new_tool", entry.Audit.Tool.PrefixedName)
+	assert.Equal(t, "new_client", entry.Audit.Tool.Client)
+	assert.Equal(t, "allow", entry.Audit.Action)
+	assert.Equal(t, "NewAgent/2.0", entry.Audit.UpstreamRequest.UserAgent)
+	assert.Equal(t, "req-new", entry.Audit.UpstreamRequest.RequestID)
+
+	// Verify zap metadata was preserved
+	assert.Equal(t, "info", entry.Level)
+	assert.InDelta(t, 1705320000.5, entry.Timestamp, 0.001)
+
+	// Entry time should come from zap timestamp
+	assert.False(t, entryTime.IsZero())
+}

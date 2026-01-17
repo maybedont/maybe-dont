@@ -228,10 +228,10 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 			}
 			assert.True(t, hasLogging, "Should have audit logging result")
 
-			// CEL results should be in CELDetails now
-			assert.NotNil(t, results.CELDetails, "Should have CEL details")
-			assert.Equal(t, tt.wantCELAction, results.CELDetails.Action, "CEL action should match")
-			assert.Len(t, results.CELDetails.Results, tt.wantCELRules, "Should have expected number of CEL rule results")
+			// CEL results should be in RulesDetails now
+			assert.NotNil(t, results.RulesDetails, "Should have rules details")
+			assert.Equal(t, tt.wantCELAction, results.RulesDetails.Action, "Rules action should match")
+			assert.Len(t, results.RulesDetails.Results, tt.wantCELRules, "Should have expected number of rules results")
 		})
 	}
 }

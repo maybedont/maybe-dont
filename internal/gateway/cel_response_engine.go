@@ -148,7 +148,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	}
 
 	// Track per-rule results for audit
-	ruleResults := make([]AuditCELRuleResult, 0, len(e.policies))
+	ruleResults := make([]AuditRulesRuleResult, 0, len(e.policies))
 	var decidingRule, decidingReason string
 	finalAction := "allow"
 	earlyTerminated := false
@@ -174,7 +174,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				zap.Int64("evaluation_ms", ruleDurationMs),
 				zap.Error(issues.Err()),
 			)
-			ruleResults = append(ruleResults, AuditCELRuleResult{
+			ruleResults = append(ruleResults, AuditRulesRuleResult{
 				Rule:         policy.Name,
 				Action:       string(policy.Action),
 				Mode:         modeToAuditString(policy.Mode),
@@ -206,7 +206,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				zap.Int64("evaluation_ms", ruleDurationMs),
 				zap.Error(err),
 			)
-			ruleResults = append(ruleResults, AuditCELRuleResult{
+			ruleResults = append(ruleResults, AuditRulesRuleResult{
 				Rule:         policy.Name,
 				Action:       string(policy.Action),
 				Mode:         modeToAuditString(policy.Mode),
@@ -239,7 +239,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				zap.Int64("evaluation_ms", ruleDurationMs),
 				zap.Error(err),
 			)
-			ruleResults = append(ruleResults, AuditCELRuleResult{
+			ruleResults = append(ruleResults, AuditRulesRuleResult{
 				Rule:         policy.Name,
 				Action:       string(policy.Action),
 				Mode:         modeToAuditString(policy.Mode),
@@ -265,7 +265,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		// Check result
 		matched, ok := out.Value().(bool)
 		if !ok {
-			ruleResults = append(ruleResults, AuditCELRuleResult{
+			ruleResults = append(ruleResults, AuditRulesRuleResult{
 				Rule:         policy.Name,
 				Action:       string(policy.Action),
 				Mode:         modeToAuditString(policy.Mode),
@@ -303,7 +303,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			ruleResult = string(policy.Action) // "allow", "deny", or "redact"
 		}
 
-		ruleResults = append(ruleResults, AuditCELRuleResult{
+		ruleResults = append(ruleResults, AuditRulesRuleResult{
 			Rule:         policy.Name,
 			Action:       string(policy.Action),
 			Mode:         modeToAuditString(policy.Mode),
@@ -396,7 +396,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	}
 
 	// Build CELDetails for audit
-	celDetails := &AuditCELResult{
+	celDetails := &AuditRulesResult{
 		Action:       finalAction,
 		BlockedMs:    blockedMs,
 		EvaluationMs: evaluationMs,
@@ -406,7 +406,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		celDetails.DecidingRule = decidingRule
 		celDetails.Reason = decidingReason
 	}
-	results.CELDetails = celDetails
+	results.RulesDetails = celDetails
 
 	e.logger.Info(ctx, "CEL response policy evaluation complete",
 		zap.Bool("allowed", results.Allowed),

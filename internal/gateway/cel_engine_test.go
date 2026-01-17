@@ -108,10 +108,10 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 			assert.Equal(t, tt.wantAllowed, results.Allowed)
 			assert.Equal(t, tt.wantMessage, results.Message)
 
-			// Check CELDetails (new schema)
-			require.NotNil(t, results.CELDetails, "CELDetails should be populated")
-			assert.Equal(t, tt.wantCELAction, results.CELDetails.Action)
-			assert.Len(t, results.CELDetails.Results, tt.wantRuleCount)
+			// Check RulesDetails (new schema)
+			require.NotNil(t, results.RulesDetails, "RulesDetails should be populated")
+			assert.Equal(t, tt.wantCELAction, results.RulesDetails.Action)
+			assert.Len(t, results.RulesDetails.Results, tt.wantRuleCount)
 
 			assert.Equal(t, tt.allowCount, results.AllowCount)
 			assert.Equal(t, tt.denyCount, results.DenyCount)

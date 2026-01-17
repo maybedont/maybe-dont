@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Maybe Don't Gateway is a security middleware service built in Go that acts as a protective gateway between LLM/AI agents and Model Context Protocol (MCP) servers. It intercepts and validates MCP requests using both deterministic rules (CEL-based policies) and AI-powered validation to prevent potentially dangerous operations.
 
+## User Interaction Preferences
+
+- **Wait for responses**: When asking questions or requesting clarification, always wait for the user's response before continuing. Do not assume answers or proceed without explicit input.
+
 ## Essential Commands
 
 ### Build and Development
@@ -134,11 +138,15 @@ For feature development or any sizeable code change, follow this spec-driven app
 6. **Check existing specs**: Before starting a new spec or feature, review `docs/specs/` for relevant existing specs. Consider updating an existing spec rather than creating a new one. When modifying an existing spec, you can create a temporary worklist file in `docs/specs/` to track implementation progress.
 
 ### Code Navigation with LSP
-When exploring or navigating Go code, **prefer using the go-lsp plugin** over manual searching with grep/glob. The LSP provides accurate, semantic understanding of the code:
-- **go-to-definition**: Jump directly to where a function, type, or variable is defined (instead of grepping for `func FunctionName`)
-- **find-references**: Find all usages of a symbol across the codebase (more accurate than text search)
-- **hover**: Get type information and documentation for symbols
-- **find-implementations**: Find all types that implement an interface
+When exploring or navigating Go code, **prefer using `gopls` commands** over manual searching with grep/glob. The LSP provides accurate, semantic understanding of the code.
+
+**Common gopls commands** (format: `gopls <command> <file>:<line>:<column>`):
+- `gopls definition main.go:21:6` - Jump to where a symbol is defined
+- `gopls references main.go:21:6` - Find all usages of a symbol
+- `gopls implementation main.go:50:6` - Find all types implementing an interface
+- `gopls call_hierarchy main.go:21:6` - Show callers/callees of a function
+- `gopls symbols main.go` - List all symbols in a file
+- `gopls workspace_symbol MyFunc` - Search for symbols across the workspace
 
 Use LSP operations first when you need to:
 - Understand how a function or type is used
@@ -146,7 +154,7 @@ Use LSP operations first when you need to:
 - Find where a struct field or method is defined
 - Trace through code paths
 
-Fall back to grep/glob only when LSP is unavailable or when searching for non-code patterns (comments, strings, config values).
+Fall back to grep/glob only when gopls is unavailable or when searching for non-code patterns (comments, strings, config values).
 
 ### Go Development Standards
 From `.cursor/rules/golang.mdc`:
@@ -180,6 +188,7 @@ When adding new configuration fields:
 - **INFO**: Use sparingly for significant events that won't spam logs. Appropriate for: startup/shutdown, new client connections, session timeouts. Avoid for frequently-executed code paths.
 - **ERROR**: Use only for unexpected errors that indicate something went wrong.
 
+### Security
 **Security considerations:**
 - **Never log sensitive information**: Do not log Authorization headers, API keys, or tool parameters (they may contain secrets)
 - When in doubt about whether data is sensitive, err on the side of not logging it
@@ -219,6 +228,7 @@ The project uses Go's standard testing framework with testify for assertions. Ke
 - **Avoid single-input tests**: When writing a test, evaluate whether the test structure can accommodate multiple inputs rather than testing only one value.
 - **Check for existing coverage**: Before writing a new test, check if the use case is already covered by another test to avoid unnecessary duplication.
 - **Document test purpose**: Add a comment at the top of each test describing the use case being tested and the expected result. This is especially helpful when the test method name alone doesn't fully convey the intent.
+- **Test driven style**: When fixing a bug, prefer to write a test first to assert the error condition and expect the test to fail. Then fix the code, and ensure the test passes. This helps us ensure we are writing the correct tests. This strategy can also be used when building larger features if we have built a well defined spec with expected behaviors. In this case, you can write the tests first to assert the expected behaviors and this will help to ensure we delivered code that met these expectations. 
 
 Example table-driven test structure:
 ```go

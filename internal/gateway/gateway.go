@@ -46,7 +46,7 @@ func IsSessionExpiredError(err error) bool {
 // Gateway represents an MCP security gateway instance
 type Gateway struct {
 	logger           *config.SessionLogger
-	auditLogger      *config.SessionLogger
+	auditWriter      AuditWriter
 	config           *config.Config
 	version          string
 	server           *server.MCPServer
@@ -75,10 +75,14 @@ type Gateway struct {
 // New creates a new gateway instance.
 // logDir: the resolved log directory for audit log file output.
 func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, version string, logDir string) (*Gateway, error) {
-	// Create audit logger with its own configuration
-	auditLogger, err := config.GetAuditLogger(cfg, logDir)
+	// Create audit writer with rotation and filtering support
+	auditPath := cfg.Audit.Path
+	if auditPath == "" {
+		auditPath = "maybedont-audit.log"
+	}
+	auditWriter, err := NewJSONLAuditWriter(auditPath, logDir, cfg.Audit.Rotation, cfg.Audit.Filter)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create audit logger: %w", err)
+		return nil, fmt.Errorf("failed to create audit writer: %w", err)
 	}
 
 	// Initialize policy engines
@@ -112,7 +116,6 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 			endpoint:            cfg.Validation.AI.Endpoint,
 			model:               cfg.Validation.AI.Model,
 			apiKey:              cfg.Validation.AI.APIKey,
-			maxBlockingMs:       cfg.Validation.MaxBlockingMs,
 			maxRuleEvaluationMs: cfg.Validation.MaxRuleEvaluationMs,
 		}
 
@@ -187,8 +190,9 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	clientManager := NewClientManagerWithTimeout(ctx, logger, sessionTimeout)
 
 	// Create native tools handler with the resolved audit log path
+	// Note: NativeToolsHandler still uses logger for its internal logging
 	auditLogPath := config.ResolveAuditLogPath(cfg, logDir)
-	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, auditLogger, auditLogPath)
+	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, logger, auditLogPath)
 
 	// Wire up the client config provider for native tools
 	nativeToolsHandler.SetClientConfigProvider(clientManager)
@@ -204,7 +208,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 
 	return &Gateway{
 		logger:                 logger,
-		auditLogger:            auditLogger,
+		auditWriter:            auditWriter,
 		config:                 cfg,
 		version:                version,
 		stopChan:               make(chan struct{}),
@@ -326,6 +330,13 @@ func (g *Gateway) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Close the audit writer
+	if g.auditWriter != nil {
+		if err := g.auditWriter.Close(); err != nil {
+			g.logger.Error(ctx, "Error closing audit writer", zap.Error(err))
+		}
+	}
+
 	return nil
 }
 
@@ -342,9 +353,10 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		return g.nativeToolsHandler.HandleToolCall(ctx, req)
 	}
 
-	// Get session ID, client IP, and request ID for audit logging
+	// Get session ID, client IP, user agent, and request ID for audit logging
 	sessionID, hasSession := GetSessionIDFromContext(ctx)
 	clientIP, _ := GetClientIP(ctx)
+	userAgent, _ := GetUserAgent(ctx)
 	requestID, _ := GetRequestID(ctx)
 
 	// Parse the prefixed tool name early to populate audit context
@@ -356,6 +368,9 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	// Create audit context
 	audit := NewAuditContext(req.Params.Name, clientName, originalToolName, sessionID, clientIP, requestID)
+
+	// Set User-Agent header
+	audit.SetUserAgent(userAgent)
 
 	// Set request params (convert to map for audit)
 	if params, ok := req.Params.Arguments.(map[string]interface{}); ok {
@@ -370,13 +385,14 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	// Create context with blocking budget for validation handlers
 	validationCtx := WithBlockingBudget(ctx, blockingBudget)
 
-	// Helper to write audit log and return
+	// Helper to write audit log
 	writeAuditLog := func() {
 		// Set total blocked time from budget
 		audit.SetTotalBlockedMs(blockingBudget.TotalBlockedMs())
 		entry := audit.Finalize()
-		g.auditLogger.Info(ctx, "Tool call audit",
-			zap.Any("audit", entry))
+		if _, err := g.auditWriter.Write(entry); err != nil {
+			g.logger.Error(ctx, "Failed to write audit log", zap.Error(err))
+		}
 	}
 
 	// Validate request through the chain (timing is captured per-policy)
@@ -545,16 +561,16 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 // populateRequestValidationAudit extracts validation results by policy type and populates audit context
 func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results ValidationResults) {
-	if len(results.Results) == 0 && results.CELDetails == nil && results.AIDetails == nil {
+	if len(results.Results) == 0 && results.RulesDetails == nil && results.AIDetails == nil {
 		return
 	}
 
-	// Set CEL details if present (new detailed format with per-rule results)
-	if results.CELDetails != nil {
-		audit.SetRequestValidationCEL(results.CELDetails)
+	// Set rules details if present (deterministic rule evaluation results)
+	if results.RulesDetails != nil {
+		audit.SetRequestValidationRules(results.RulesDetails)
 	}
 
-	// Set AI details if present (new detailed format)
+	// Set AI details if present
 	if results.AIDetails != nil {
 		audit.SetRequestValidationAI(results.AIDetails)
 	}
@@ -562,16 +578,16 @@ func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results Va
 
 // populateResponseValidationAudit extracts response validation results by policy type
 func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results ResponseValidationResults) {
-	if len(results.Results) == 0 && results.CELDetails == nil && results.AIDetails == nil {
+	if len(results.Results) == 0 && results.RulesDetails == nil && results.AIDetails == nil {
 		return
 	}
 
-	// Set CEL details if present (new detailed format with per-rule results)
-	if results.CELDetails != nil {
-		audit.SetResponseValidationCEL(results.CELDetails)
+	// Set rules details if present (deterministic rule evaluation results)
+	if results.RulesDetails != nil {
+		audit.SetResponseValidationRules(results.RulesDetails)
 	}
 
-	// Set AI details if present (new detailed format)
+	// Set AI details if present
 	if results.AIDetails != nil {
 		audit.SetResponseValidationAI(results.AIDetails)
 	}

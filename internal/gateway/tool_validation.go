@@ -27,9 +27,9 @@ type ValidationResults struct {
 	Error      string             `json:"error,omitempty"`
 	AllowCount int                `json:"allow_count"`
 	DenyCount  int                `json:"deny_count"`
-	// CELDetails contains detailed CEL validation results for audit logging
-	// This is only populated by the CEL validation handler
-	CELDetails *AuditCELResult `json:"cel_details,omitempty"`
+	// RulesDetails contains detailed deterministic rules validation results for audit logging
+	// This is only populated by the rules validation handler
+	RulesDetails *AuditRulesResult `json:"rules_details,omitempty"`
 	// AIDetails contains detailed AI validation results for audit logging
 	// This is only populated by the AI validation handler
 	AIDetails *AuditAIResult `json:"ai_details,omitempty"`
@@ -79,8 +79,8 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.DenyCount += results.DenyCount
 
 		// Propagate CEL and AI details from handlers
-		if results.CELDetails != nil {
-			finalResults.CELDetails = results.CELDetails
+		if results.RulesDetails != nil {
+			finalResults.RulesDetails = results.RulesDetails
 		}
 		if results.AIDetails != nil {
 			finalResults.AIDetails = results.AIDetails
@@ -164,7 +164,9 @@ func NewToolAIValidationHandler(logger *config.SessionLogger, engine *AIPolicyEn
 
 // HandleToolCall implements ToolValidationHandler
 func (h *ToolAIValidationHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (ValidationResults, error) {
-	return h.engine.EvaluateToolCall(ctx, req)
+	// Extract blocking budget from context if available
+	budget, _ := ctx.Value(blockingBudgetKey).(*BlockingBudget)
+	return h.engine.EvaluateToolCall(ctx, req, budget)
 }
 
 // ValidateToolCall validates a tool call request

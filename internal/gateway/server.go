@@ -814,6 +814,10 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 	)
 	ctx = WithClientIP(ctx, clientIP)
 
+	// Extract and store User-Agent header
+	userAgent := r.Header.Get("User-Agent")
+	ctx = WithUserAgent(ctx, userAgent)
+
 	if r.Header.Get("X-Request-ID") == "" {
 		g.logger.Debug(ctx, "Generated new request ID")
 	} else {
