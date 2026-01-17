@@ -37,12 +37,20 @@ jobs:
           CUTOFF_DATE=$(date -d "$DAYS_TO_KEEP days ago" -Iseconds)
           echo "Cutoff date: $CUTOFF_DATE"
 
-          # Get all package versions
+          # Get all package versions (handle case where package doesn't exist yet)
           VERSIONS=$(gh api \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             /orgs/maybedont/packages/container/maybedont/versions \
-            --paginate)
+            --paginate 2>&1) || {
+            if echo "$VERSIONS" | grep -q "Package not found"; then
+              echo "Package 'maybedont' does not exist yet - nothing to clean up"
+              exit 0
+            else
+              echo "Error fetching package versions: $VERSIONS"
+              exit 1
+            fi
+          }
 
           # Get all dev-* images sorted by created_at (newest first)
           ALL_DEV_IMAGES=$(echo "$VERSIONS" | jq -s '

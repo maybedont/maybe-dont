@@ -20,7 +20,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: maybedont/maybe-dont
+  IMAGE_NAME: maybedont/maybedont
 
 jobs:
   setup:
