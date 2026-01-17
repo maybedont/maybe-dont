@@ -41,7 +41,7 @@ jobs:
           VERSIONS=$(gh api \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            /orgs/maybedont/packages/container/maybe-dont/versions \
+            /orgs/maybedont/packages/container/maybedont/versions \
             --paginate)
 
           # Get all dev-* images sorted by created_at (newest first)
@@ -101,7 +101,7 @@ jobs:
               --method DELETE \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              /orgs/maybedont/packages/container/maybe-dont/versions/$VERSION_ID
+              /orgs/maybedont/packages/container/maybedont/versions/$VERSION_ID
 
             echo "  Deleted"
           done
