@@ -69,10 +69,10 @@ archives:
 dockers:
   # AMD64 image
   - image_templates:
-      - "ghcr.io/maybedont/maybedont:{{ .Tag }}-amd64"
-      - "ghcr.io/maybedont/maybedont:v{{ .Major }}-amd64"
-      - "ghcr.io/maybedont/maybedont:v{{ .Major }}.{{ .Minor }}-amd64"
-      - "ghcr.io/maybedont/maybedont:latest-amd64"
+      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:latest-amd64"
     use: buildx
     goos: linux
     goarch: amd64
@@ -82,10 +82,10 @@ dockers:
 
   # ARM64 image
   - image_templates:
-      - "ghcr.io/maybedont/maybedont:{{ .Tag }}-arm64"
-      - "ghcr.io/maybedont/maybedont:v{{ .Major }}-arm64"
-      - "ghcr.io/maybedont/maybedont:v{{ .Major }}.{{ .Minor }}-arm64"
-      - "ghcr.io/maybedont/maybedont:latest-arm64"
+      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}-arm64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}-arm64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}-arm64"
+      - "ghcr.io/maybedont/maybe-dont:latest-arm64"
     use: buildx
     goos: linux
     goarch: arm64
@@ -94,19 +94,19 @@ dockers:
       - "--build-arg=TARGETPLATFORM=linux/arm64"
 
 docker_manifests:
-  - name_template: "ghcr.io/maybedont/maybedont:{{ .Tag }}"
+  - name_template: "ghcr.io/maybedont/maybe-dont:{{ .Tag }}"
     image_templates:
-      - "ghcr.io/maybedont/maybedont:{{ .Tag }}-amd64"
-      - "ghcr.io/maybedont/maybedont:{{ .Tag }}-arm64"
-  - name_template: "ghcr.io/maybedont/maybedont:v{{ .Major }}"
+      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/maybedont/maybe-dont:v{{ .Major }}"
     image_templates:
-      - "ghcr.io/maybedont/maybedont:v{{ .Major }}-amd64"
-      - "ghcr.io/maybedont/maybedont:v{{ .Major }}-arm64"
-  - name_template: "ghcr.io/maybedont/maybedont:v{{ .Major }}.{{ .Minor }}"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}-arm64"
+  - name_template: "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}"
     image_templates:
-      - "ghcr.io/maybedont/maybedont:v{{ .Major }}.{{ .Minor }}-amd64"
-      - "ghcr.io/maybedont/maybedont:v{{ .Major }}.{{ .Minor }}-arm64"
-  - name_template: "ghcr.io/maybedont/maybedont:latest"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}-amd64"
+      - "ghcr.io/maybedont/maybe-dont:v{{ .Major }}.{{ .Minor }}-arm64"
+  - name_template: "ghcr.io/maybedont/maybe-dont:latest"
     image_templates:
-      - "ghcr.io/maybedont/maybedont:latest-amd64"
-      - "ghcr.io/maybedont/maybedont:latest-arm64"
+      - "ghcr.io/maybedont/maybe-dont:latest-amd64"
+      - "ghcr.io/maybedont/maybe-dont:latest-arm64"
