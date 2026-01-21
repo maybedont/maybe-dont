@@ -11,6 +11,7 @@ This specification defines the audit log schema for the complete validation chai
 3. **Fail-open on timeout**: When budget is exhausted, remaining validations continue async but don't block
 4. **Comprehensive audit trail**: Capture complete timing and decision information regardless of blocking state
 5. **Early termination**: Stop blocking as soon as a decision is made (deny or all enabled rules pass)
+6. **True async for audit-only**: Policies in `audit_only` mode must never block the caller; evaluation runs entirely in the background
 
 ## Configuration
 
@@ -301,6 +302,247 @@ In this example:
 - Early deny in response validation: Response is blocked/modified
 - Budget exhaustion: Continue to next phase but non-blocking
 
+## Policy Mode Behavior
+
+This section defines the precise behavior for each policy mode combination. The key principle is that `audit_only` policies must **never** cause the caller to wait—they execute entirely asynchronously.
+
+### Policy Modes
+
+| Mode | Executed? | Blocks Caller? | Affects Decision? | Appears in Audit Log? |
+|------|-----------|----------------|-------------------|----------------------|
+| `enabled` | Yes | Yes | Yes | Yes |
+| `audit_only` | Yes | **No** | No | Yes |
+| `disabled` | **No** | No | No | **No** |
+
+### Mode Combinations and Expected Behavior
+
+#### 1. All Policies Disabled
+
+When the validation mode is set to `disabled` at the top level (e.g., `ai_request_validation: disabled`):
+
+- **Behavior**: The engine returns immediately without executing any policies
+- **Blocking**: 0ms
+- **Audit Log**: The validation block is omitted entirely (e.g., no `request_validation.ai` field)
+- **Policies Executed**: 0
+
+```json
+{
+  "request_validation": {
+    "rules": {
+      "action": "allow",
+      "blocked_ms": 5,
+      "evaluation_ms": 5,
+      "results": [...]
+    }
+  },
+  "action": "allow",
+  "total_blocked_ms": 5
+}
+```
+
+Note: `request_validation.ai` is absent because AI validation is disabled.
+
+#### 2. All Policies Enabled
+
+When all loaded policies have `mode: enabled`:
+
+- **Behavior**: Engine blocks until either:
+  - An enabled policy returns `deny` (early termination), OR
+  - All enabled policies complete evaluation
+- **Blocking**: `blocked_ms` equals the time until decision is made (longest running policy if all allow)
+- **Audit Log**: All policy results included with their evaluation times
+- **Decision**: Based on policy results
+
+```json
+{
+  "request_validation": {
+    "ai": {
+      "action": "allow",
+      "blocked_ms": 1500,
+      "evaluation_ms": 1500,
+      "results": [
+        {"rule": "check_safe", "action": "deny", "result": "allow", "evaluation_ms": 800},
+        {"rule": "verify_params", "action": "deny", "result": "allow", "evaluation_ms": 1500}
+      ]
+    }
+  },
+  "action": "allow",
+  "total_blocked_ms": 1500
+}
+```
+
+#### 3. All Policies Audit-Only
+
+When all loaded policies have `mode: audit_only`:
+
+- **Behavior**: Engine returns **immediately** with `allow` decision. Policy evaluation continues asynchronously in background goroutines.
+- **Blocking**: 0ms (caller is not blocked at all)
+- **Audit Log**: Written asynchronously after all background evaluations complete. Results include all policy outcomes.
+- **Decision**: Always `allow` (audit-only policies cannot affect the decision)
+
+**Critical Implementation Requirement**: The `EvaluateToolCall` function must return immediately when all policies are `audit_only`. The goroutines continue running in the background, and results are collected via a callback mechanism that writes to the audit log when complete.
+
+```json
+{
+  "request_validation": {
+    "ai": {
+      "action": "allow",
+      "blocked_ms": 0,
+      "evaluation_ms": 3500,
+      "results": [
+        {"rule": "log_access", "action": "deny", "mode": "audit_only", "result": "deny", "evaluation_ms": 2000},
+        {"rule": "log_params", "action": "deny", "mode": "audit_only", "result": "allow", "evaluation_ms": 3500}
+      ]
+    }
+  },
+  "action": "allow",
+  "total_blocked_ms": 0
+}
+```
+
+Note: `evaluation_ms` (3500) reflects when results were collected asynchronously, but `blocked_ms` is 0 because the caller was never blocked.
+
+#### 4. Mixed Modes (Enabled + Audit-Only)
+
+When policies have a mix of `enabled` and `audit_only` modes:
+
+- **Behavior**: Engine blocks only until all `enabled` policies complete (or one denies). Then returns immediately. Any `audit_only` policies still running continue in the background.
+- **Blocking**: Time until all `enabled` policies complete
+- **Audit Log**: Written after ALL policies (including async audit_only) complete
+- **Decision**: Based only on `enabled` policy results
+
+```json
+{
+  "request_validation": {
+    "ai": {
+      "action": "allow",
+      "blocked_ms": 800,
+      "evaluation_ms": 3500,
+      "results": [
+        {"rule": "block_destructive", "action": "deny", "result": "allow", "evaluation_ms": 800},
+        {"rule": "audit_access", "action": "deny", "mode": "audit_only", "result": "deny", "evaluation_ms": 3500}
+      ]
+    }
+  },
+  "action": "allow",
+  "total_blocked_ms": 800
+}
+```
+
+In this example:
+- `block_destructive` (enabled) completed in 800ms → caller was blocked for 800ms
+- `audit_access` (audit_only) completed in 3500ms → ran async, didn't block caller
+- `evaluation_ms` (3500) reflects total time for all policies
+- `blocked_ms` (800) reflects only the time waiting for enabled policies
+
+#### 5. Mixed Modes with Early Deny
+
+When an enabled policy denies early while audit_only policies are still running:
+
+- **Behavior**: Engine returns `deny` immediately when the enabled policy denies. Remaining enabled policies are cancelled. Audit-only policies continue in the background.
+- **Blocking**: Time until the denying policy completed
+- **Audit Log**: Includes the deny result plus any audit_only results that complete (may include `error: "canceled"` for cancelled policies)
+
+```json
+{
+  "request_validation": {
+    "ai": {
+      "action": "deny",
+      "blocked_ms": 500,
+      "evaluation_ms": 2000,
+      "deciding_rule": "block_destructive",
+      "reason": "Destructive operation detected",
+      "results": [
+        {"rule": "block_destructive", "action": "deny", "result": "deny", "evaluation_ms": 500},
+        {"rule": "slow_enabled_check", "action": "deny", "result": "error", "evaluation_ms": 500, "error": "canceled"},
+        {"rule": "audit_access", "action": "deny", "mode": "audit_only", "result": "allow", "evaluation_ms": 2000}
+      ]
+    }
+  },
+  "action": "deny",
+  "total_blocked_ms": 500
+}
+```
+
+### Disabled Policies Are Not Loaded
+
+Policies with `mode: disabled` (either explicitly or inherited from the top-level default) are filtered out during `LoadPolicies()`:
+
+- They are **not** added to the engine's policy list
+- They are **never** executed
+- They do **not** appear in audit log results
+- They consume zero resources
+
+This is distinct from `audit_only` policies which ARE loaded and executed, just asynchronously.
+
+### Async Audit Log Writing
+
+To support true async behavior for audit-only policies, the audit system must handle delayed result collection:
+
+1. **Immediate Return Path**: When the decision is made (all enabled policies complete or early deny), the validation function returns immediately with:
+   - The decision (`allow` or `deny`)
+   - A handle/callback for receiving async results
+
+2. **Background Completion**: Audit-only policies (and any other async work) continue running. When complete, results are sent via the callback.
+
+3. **Audit Entry Finalization**: The audit entry is written only after ALL results are collected:
+   - `blocked_ms` reflects actual blocking time (excludes async work)
+   - `evaluation_ms` reflects total wall-clock time for all evaluations
+   - `created_at` is set when the entry is written (after async completion)
+
+### Implementation Requirements
+
+#### AsyncValidationResult
+
+The AI engine must return both immediate results and a mechanism for async completion:
+
+```go
+type AsyncValidationResult struct {
+    // Immediate results (available when function returns)
+    Results     ValidationResults
+
+    // For async completion (nil if no async work pending)
+    Completion  <-chan AsyncCompletion
+}
+
+type AsyncCompletion struct {
+    AIDetails    *AuditAIResult  // Complete AI results including async policies
+    EvaluationMs int64           // Total evaluation time
+}
+```
+
+#### AuditContext Updates
+
+The `AuditContext` must support deferred finalization:
+
+```go
+// SetAIResultsAsync registers a callback for async AI results
+func (ac *AuditContext) SetAIResultsAsync(completion <-chan AsyncCompletion)
+
+// FinalizeAsync waits for async results before writing audit entry
+// Should be called in a goroutine to not block the response
+func (ac *AuditContext) FinalizeAsync() *AuditEntry
+```
+
+#### Gateway Integration
+
+The gateway must handle async audit writing:
+
+```go
+// After validation completes
+if asyncResult.Completion != nil {
+    // Audit-only policies still running - finalize async
+    go func() {
+        entry := auditCtx.FinalizeAsync()  // Waits for completion
+        auditWriter.Write(entry)
+    }()
+} else {
+    // All work complete - finalize immediately
+    entry := auditCtx.Finalize()
+    auditWriter.Write(entry)
+}
+```
+
 ## Rules vs AI Validation Differences
 
 ### Rules Validation (Deterministic)
@@ -309,6 +551,7 @@ In this example:
 - **Fast**: Typically <10ms per rule
 - **Deterministic**: No external API calls
 - **Early termination**: First enabled deny stops evaluation
+- **No async for audit_only**: See "Async Behavior Scope" below
 
 ### AI Validation
 
@@ -317,6 +560,28 @@ In this example:
 - **Non-deterministic**: External LLM API calls
 - **Early termination**: First enabled deny cancels remaining goroutines
 - **Per-rule timeout**: `max_rule_evaluation_ms` applies to each rule
+- **True async for audit_only**: Returns immediately, evaluation continues in background
+
+### Async Behavior Scope
+
+**The true async behavior for `audit_only` policies applies ONLY to AI engines**, not to CEL/deterministic rules engines.
+
+| Engine | Async for audit_only? | Rationale |
+|--------|----------------------|-----------|
+| AI Request (`ai_engine.go`) | **Yes** | Slow (500ms-5s), external API calls |
+| AI Response (`ai_response_engine.go`) | **Yes** | Same as request |
+| CEL Request (`cel_engine.go`) | No | Fast (<10ms), complexity not justified |
+| CEL Response (`cel_response_engine.go`) | No | Same as request |
+
+**Why CEL remains synchronous:**
+
+1. CEL evaluation is deterministic and fast (sub-millisecond to ~10ms total)
+2. No external API calls - purely in-memory expression evaluation
+3. The "blocking" from `audit_only` CEL rules is negligible (<10ms)
+4. Adding async infrastructure for <10ms operations adds code complexity without meaningful user benefit
+5. Simpler synchronous code is easier to maintain, debug, and reason about
+
+**Future Consideration:** If CEL rule execution time increases significantly (e.g., due to complex expressions, large datasets, or external data lookups), this decision should be revisited. The same async pattern used for AI engines could be applied to CEL engines if needed.
 
 ## Policy Action and Result Mapping
 
@@ -532,3 +797,157 @@ This schema change is **not backwards compatible**. Key changes:
 - New `user_agent` field in `upstream_request`
 
 Existing audit logs will not match the new schema.
+
+## Testing Requirements
+
+The following test cases must be implemented to verify correct policy mode behavior. Tests should verify both the blocking behavior (timing) and audit log correctness.
+
+### Unit Tests for AI Engine
+
+#### Test: All Policies Disabled
+- **Setup**: Top-level `ai_request_validation: disabled`
+- **Assertions**:
+  - `EvaluateToolCall` returns immediately (< 10ms)
+  - `ValidationResults.Allowed` is `true`
+  - `AIDetails` is `nil` (no AI validation occurred)
+  - No goroutines spawned for policy evaluation
+
+#### Test: All Policies Enabled - All Allow
+- **Setup**: Multiple policies with `mode: enabled`, mock AI to return `allowed: true`
+- **Assertions**:
+  - Function blocks until all policies complete
+  - `blocked_ms` approximately equals `evaluation_ms`
+  - `blocked_ms` approximately equals the slowest policy's evaluation time
+  - All policy results appear in `AIDetails.Results`
+  - `AIDetails.Action` is `"allow"`
+
+#### Test: All Policies Enabled - Early Deny
+- **Setup**: Multiple policies with `mode: enabled`, one fast policy returns deny
+- **Assertions**:
+  - Function returns after first deny (doesn't wait for slower policies)
+  - `blocked_ms` approximately equals the denying policy's time
+  - `AIDetails.DecidingRule` is set to the denying policy name
+  - Slower policies show `error: "canceled"` in results
+
+#### Test: All Policies Audit-Only - True Async
+- **Setup**: All policies with `mode: audit_only`, policies take 1-2 seconds each
+- **Assertions**:
+  - `EvaluateToolCall` returns immediately (< 50ms, well before policies complete)
+  - `ValidationResults.Allowed` is `true`
+  - `blocked_ms` is `0`
+  - `Completion` channel is non-nil
+  - After waiting on `Completion`, `AIDetails` contains all policy results
+  - `evaluation_ms` reflects actual completion time (1-2 seconds)
+
+#### Test: Mixed Modes - Enabled Completes First
+- **Setup**: One `enabled` policy (fast), one `audit_only` policy (slow)
+- **Assertions**:
+  - Function returns after enabled policy completes
+  - `blocked_ms` reflects only enabled policy time
+  - `Completion` channel provides audit_only results later
+  - Final `evaluation_ms` includes audit_only time
+
+#### Test: Mixed Modes - Early Deny with Pending Audit-Only
+- **Setup**: One `enabled` policy that denies quickly, one slow `audit_only` policy
+- **Assertions**:
+  - Function returns `deny` immediately
+  - `blocked_ms` reflects only the denying policy time
+  - Audit-only policy continues and completes in background
+  - Final audit entry includes both results
+
+#### Test: Disabled Policies Not In Audit Log
+- **Setup**: Mix of `enabled`, `audit_only`, and `disabled` policies
+- **Assertions**:
+  - Disabled policies do not appear in `engine.policies` after `LoadPolicies()`
+  - Disabled policies do not appear in `AIDetails.Results`
+  - Only enabled and audit_only policies are executed and logged
+
+#### Test: Audit-Only Never Causes Waiting
+- **Setup**: One `enabled` policy (100ms), one `audit_only` policy (5000ms)
+- **Assertions**:
+  - Total blocking time is ~100ms (not 5000ms)
+  - Function returns in ~100ms
+  - `blocked_ms` is ~100ms
+  - `evaluation_ms` (after async completion) is ~5000ms
+
+### Integration Tests
+
+#### Test: End-to-End Async Audit Writing
+- **Setup**: Gateway with all `audit_only` AI policies, make a tool call
+- **Assertions**:
+  - Tool call response returns immediately
+  - Audit log entry is written after AI policies complete (check file timestamps)
+  - Audit entry contains complete AI results
+
+#### Test: Gateway Handles Async Completion Correctly
+- **Setup**: Gateway with mixed mode policies
+- **Assertions**:
+  - Response returned to caller after enabled policies complete
+  - Audit entry written after all policies (including async) complete
+  - No race conditions or missing results
+
+#### Test: Multiple Concurrent Requests with Async Policies
+- **Setup**: Multiple simultaneous tool calls with audit_only policies
+- **Assertions**:
+  - Each request gets independent async handling
+  - Audit entries are correctly associated with their requests
+  - No cross-contamination of results between requests
+
+### Test Helpers
+
+To support these tests, create mock AI clients that can:
+- Return configurable responses (`allowed: true/false`)
+- Simulate configurable delays
+- Track whether they were called and when
+- Support cancellation detection
+
+```go
+type MockAIPolicy struct {
+    Name        string
+    Response    AIResponse
+    Delay       time.Duration
+    Called      bool
+    CalledAt    time.Time
+    CompletedAt time.Time
+    WasCanceled bool
+}
+```
+
+## Implementation Checklist
+
+The following tasks should be completed sequentially to implement the async audit-only behavior:
+
+### Phase 1: Core Types and Infrastructure
+
+- [x] **1.1** Create `AsyncValidationResult` and `AsyncCompletion` types in `tool_validation.go`
+- [x] **1.2** Add mock AI client for testing with configurable delays and responses
+- [x] **1.3** Add `SetAIResultsAsync` and `FinalizeAsync` methods to `AuditContext`
+
+### Phase 2: AI Engine Refactoring
+
+- [x] **2.1** Refactor `AIPolicyEngine.EvaluateToolCall` (`ai_engine.go`) to return immediately for audit_only policies
+- [x] **2.2** Refactor `AIResponsePolicyEngine.EvaluateResponse` (`ai_response_engine.go`) with same async pattern
+- [x] **2.3** Update `ToolAIValidationHandler` to handle async completion channel
+- [x] **2.4** Update `ResponseAIValidationHandler` to handle async completion channel
+
+### Phase 3: Gateway Integration
+
+- [x] **3.1** Update Gateway tool call handler to support async audit writing
+- [x] **3.2** Ensure proper cleanup of background goroutines on gateway shutdown
+
+### Phase 4: Unit Tests
+
+- [x] **4.1** Test: All Policies Disabled - no execution, immediate return
+- [x] **4.2** Test: All Policies Enabled - blocks until completion
+- [x] **4.3** Test: All Policies Audit-Only - true async, immediate return
+- [x] **4.4** Test: Mixed Modes - enabled blocks, audit_only async
+- [x] **4.5** Test: Disabled policies not in audit log
+- [x] **4.6** Test: Audit-only never causes waiting (timing assertion)
+- [x] **4.7** Test: Early deny with pending audit_only policies
+
+### Phase 5: Integration Tests and Validation
+
+- [x] **5.1** Integration test: End-to-end async audit writing
+- [x] **5.2** Integration test: Multiple concurrent requests with async policies
+- [x] **5.3** Run full test suite and fix any regressions
+- [ ] **5.4** Manual testing with real AI policies in audit_only mode

@@ -25,7 +25,16 @@ type CELPolicy struct {
 	Mode        config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
 }
 
-// CELPolicyEngine handles CEL policy evaluation
+// CELPolicyEngine handles CEL policy evaluation.
+//
+// NOTE: Unlike AI engines, CEL evaluation is synchronous even for audit_only policies.
+// This is intentional because CEL evaluation is fast (<10ms) and deterministic with no
+// external API calls. The minimal blocking from audit_only rules is acceptable given
+// the complexity cost of async infrastructure for sub-10ms operations.
+//
+// If CEL execution time increases significantly in the future (e.g., complex expressions,
+// large datasets, or external data lookups), consider implementing async behavior similar
+// to AI engines. See docs/specs/validation-chain-audit-schema.md "Async Behavior Scope".
 type CELPolicyEngine struct {
 	logger   *config.SessionLogger
 	env      *cel.Env

@@ -107,6 +107,10 @@ type AuditAIRuleResult struct {
 type AuditContext struct {
 	entry           *AuditEntry
 	validationStart time.Time
+
+	// Async AI validation support
+	requestAICompletion  <-chan AsyncCompletion // For async request AI validation
+	responseAICompletion <-chan AsyncCompletion // For async response AI validation
 }
 
 // NewAuditContext creates a new audit context for a tool call
@@ -201,12 +205,56 @@ func (ac *AuditContext) SetTotalBlockedMs(totalBlockedMs int64) {
 	ac.entry.TotalBlockedMs = totalBlockedMs
 }
 
-// Finalize calculates duration and sets created_at timestamp
+// SetRequestAIResultsAsync registers a completion channel for async request AI validation.
+// The channel will be read during FinalizeAsync to get the final AI results.
+func (ac *AuditContext) SetRequestAIResultsAsync(completion <-chan AsyncCompletion) {
+	ac.requestAICompletion = completion
+}
+
+// SetResponseAIResultsAsync registers a completion channel for async response AI validation.
+// The channel will be read during FinalizeAsync to get the final AI results.
+func (ac *AuditContext) SetResponseAIResultsAsync(completion <-chan AsyncCompletion) {
+	ac.responseAICompletion = completion
+}
+
+// HasAsyncWork returns true if there are any pending async completions to wait for.
+func (ac *AuditContext) HasAsyncWork() bool {
+	return ac.requestAICompletion != nil || ac.responseAICompletion != nil
+}
+
+// Finalize calculates duration and sets created_at timestamp.
+// This should only be called when there is no async work pending.
+// For async workflows, use FinalizeAsync instead.
 func (ac *AuditContext) Finalize() *AuditEntry {
 	now := time.Now().UTC()
 	ac.entry.CreatedAt = now.Format(time.RFC3339Nano)
 	ac.entry.DurationMs = now.Sub(ac.validationStart).Milliseconds()
 	return ac.entry
+}
+
+// FinalizeAsync waits for all async AI results before finalizing the audit entry.
+// This should be called in a goroutine to avoid blocking the response.
+// It waits for both request and response AI completions if they are registered,
+// then calculates the final duration and returns the completed entry.
+func (ac *AuditContext) FinalizeAsync() *AuditEntry {
+	// Wait for async request AI results
+	if ac.requestAICompletion != nil {
+		completion := <-ac.requestAICompletion
+		if completion.AIDetails != nil {
+			ac.SetRequestValidationAI(completion.AIDetails)
+		}
+	}
+
+	// Wait for async response AI results
+	if ac.responseAICompletion != nil {
+		completion := <-ac.responseAICompletion
+		if completion.AIDetails != nil {
+			ac.SetResponseValidationAI(completion.AIDetails)
+		}
+	}
+
+	// Finalize with the updated results
+	return ac.Finalize()
 }
 
 // Entry returns the current audit entry (for inspection)
