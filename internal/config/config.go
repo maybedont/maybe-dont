@@ -912,10 +912,10 @@ func ResolveLogDir(logDir, configDir string) string {
 
 // LoadConfig loads the configuration from all sources.
 // configDir: directory containing config files (resolved via ResolveConfigDir if empty)
-// configFileName: name of config file (defaults to "maybedont.yaml", falls back to "gateway-config.yaml")
+// configFileName: name of config file (defaults to "maybe-dont.yaml", falls back to deprecated names)
 //
 // Configuration can be provided via:
-// 1. A YAML config file (maybedont.yaml or gateway-config.yaml)
+// 1. A YAML config file (maybe-dont.yaml, or deprecated: maybedont.yaml, gateway-config.yaml)
 // 2. Environment variables with MAYBE_DONT_ prefix (e.g., MAYBE_DONT_SERVER_TYPE)
 // 3. A combination of both (environment variables override config file values)
 //
@@ -976,18 +976,23 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 			configFileFound = true
 		}
 	} else {
-		// Try maybedont.yaml first, then fall back to gateway-config.yaml (deprecated)
-		v.SetConfigName("maybedont")
+		// Try maybe-dont.yaml first, then fall back to deprecated names
+		v.SetConfigName("maybe-dont")
 		if err := v.ReadInConfig(); err == nil {
 			configFileFound = true
 		} else {
-			// Fall back to deprecated config file - gateway-config.yaml
-			v.SetConfigName("gateway-config")
+			// Fall back to deprecated config file - maybedont.yaml
+			v.SetConfigName("maybedont")
 			if err := v.ReadInConfig(); err == nil {
 				configFileFound = true
-
-				// Warn the user if they are using a deprecated config file
-				fmt.Printf("Filename gateway-config.yaml is deprecated, rename config file to maybedont.yaml\n")
+				fmt.Printf("Filename maybedont.yaml is deprecated, rename config file to maybe-dont.yaml\n")
+			} else {
+				// Fall back to deprecated config file - gateway-config.yaml
+				v.SetConfigName("gateway-config")
+				if err := v.ReadInConfig(); err == nil {
+					configFileFound = true
+					fmt.Printf("Filename gateway-config.yaml is deprecated, rename config file to maybe-dont.yaml\n")
+				}
 			}
 		}
 	}
@@ -1411,7 +1416,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 			errMsg += "For example:\n"
 			errMsg += "  - MAYBE_DONT_SERVER_TYPE=stdio\n"
 			errMsg += "  - MAYBE_DONT_AI_VALIDATION_API_KEY=your-api-key\n"
-			errMsg += "\nAlternatively, create a config file (maybedont.yaml) in one of these locations:\n"
+			errMsg += "\nAlternatively, create a config file (maybe-dont.yaml) in one of these locations:\n"
 			errMsg += "  - ./config/\n"
 			errMsg += "  - ~/.maybe-dont/config/\n"
 			errMsg += "  - Current directory\n"

@@ -1253,7 +1253,7 @@ request_validation:
   ai:
     mode: disabled
 `
-	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1286,7 +1286,7 @@ request_validation:
     mode: enabled
     rules_file: "../../secrets/rules.yaml"
 `
-	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1317,7 +1317,7 @@ response_validation:
     mode: enabled
     rules_file: "../secret/response_rules.yaml"
 `
-	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1354,7 +1354,7 @@ response_validation:
     mode: enabled
     rules_file: "/etc/passwd"
 `
-	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1400,7 +1400,7 @@ native_tools:
   audit_report:
     enabled: false
 `
-	err = os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	err = os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	cfg, err := LoadConfig(tmpDir, "")
@@ -1427,7 +1427,7 @@ request_validation:
   ai:
     mode: disabled
 `
-	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1454,7 +1454,7 @@ request_validation:
   ai:
     mode: disabled
 `
-	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1538,7 +1538,7 @@ func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
 	errMsg := err.Error()
 	require.Contains(t, errMsg, "No configuration file was found")
 	require.Contains(t, errMsg, "MAYBE_DONT_")
-	require.Contains(t, errMsg, "maybedont.yaml")
+	require.Contains(t, errMsg, "maybe-dont.yaml")
 }
 
 func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
@@ -1577,7 +1577,7 @@ func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
 	// Should NOT contain guidance about environment variables
 	errMsg := err.Error()
 	require.NotContains(t, errMsg, "No configuration file was found")
-	require.NotContains(t, errMsg, "maybedont.yaml")
+	require.NotContains(t, errMsg, "maybe-dont.yaml")
 }
 
 func TestLoadConfigWithEnvVarsOnly_ValidConfig(t *testing.T) {
@@ -1587,7 +1587,7 @@ func TestLoadConfigWithEnvVarsOnly_ValidConfig(t *testing.T) {
 	// Create a temporary directory with a minimal config file
 	// that only has the downstream MCP servers (since they can't be set via env vars)
 	tmpDir := t.TempDir()
-	configPath := tmpDir + "/maybedont.yaml"
+	configPath := tmpDir + "/maybe-dont.yaml"
 
 	// Minimal config with just downstream MCP servers
 	// Notes:
