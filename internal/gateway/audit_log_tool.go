@@ -40,13 +40,20 @@ type legacyAuditEntry struct {
 		CalledAt   string                 `json:"called_at,omitempty"`
 		DurationMs *int64                 `json:"duration_ms,omitempty"`
 	} `json:"request,omitempty"`
-	// Old format had IncomingRequest
+	// Old format had IncomingRequest, new format uses UpstreamRequest
 	IncomingRequest *struct {
 		RequestID string `json:"id,omitempty"`
 		SessionID string `json:"session_id,omitempty"`
 		ClientIP  string `json:"client_ip,omitempty"`
 	} `json:"incoming_request,omitempty"`
-	// Old format used cel instead of rules
+	// New format uses UpstreamRequest
+	UpstreamRequest *struct {
+		RequestID string `json:"id,omitempty"`
+		SessionID string `json:"session_id,omitempty"`
+		ClientIP  string `json:"client_ip,omitempty"`
+		UserAgent string `json:"user_agent,omitempty"`
+	} `json:"upstream_request,omitempty"`
+	// Legacy zap format uses "cel" key (same as current JSONL format)
 	RequestValidation *struct {
 		CEL *AuditRulesResult `json:"cel,omitempty"`
 		AI  *AuditAIResult    `json:"ai,omitempty"`
@@ -195,7 +202,7 @@ func convertLegacyEntry(legacy *legacyAuditEntry) *AuditEntry {
 		entry.Tool.DurationMs = legacy.Request.DurationMs
 	}
 
-	// Convert IncomingRequest -> UpstreamRequest
+	// Convert IncomingRequest -> UpstreamRequest (old format)
 	if legacy.IncomingRequest != nil {
 		entry.UpstreamRequest = UpstreamRequestInfo{
 			RequestID: legacy.IncomingRequest.RequestID,
@@ -203,12 +210,21 @@ func convertLegacyEntry(legacy *legacyAuditEntry) *AuditEntry {
 			ClientIP:  legacy.IncomingRequest.ClientIP,
 		}
 	}
+	// Copy UpstreamRequest directly (new format)
+	if legacy.UpstreamRequest != nil {
+		entry.UpstreamRequest = UpstreamRequestInfo{
+			RequestID: legacy.UpstreamRequest.RequestID,
+			SessionID: legacy.UpstreamRequest.SessionID,
+			ClientIP:  legacy.UpstreamRequest.ClientIP,
+			UserAgent: legacy.UpstreamRequest.UserAgent,
+		}
+	}
 
-	// Convert RequestValidation with CEL -> Rules
+	// Copy RequestValidation (legacy format used "cel" key, which matches current format)
 	if legacy.RequestValidation != nil {
 		entry.RequestValidation = &AuditValidationInfo{
-			Rules: legacy.RequestValidation.CEL,
-			AI:    legacy.RequestValidation.AI,
+			CEL: legacy.RequestValidation.CEL,
+			AI:  legacy.RequestValidation.AI,
 		}
 	}
 
@@ -220,11 +236,11 @@ func convertLegacyEntry(legacy *legacyAuditEntry) *AuditEntry {
 		}
 	}
 
-	// Convert ResponseValidation with CEL -> Rules
+	// Copy ResponseValidation (legacy format used "cel" key, which matches current format)
 	if legacy.ResponseValidation != nil {
 		entry.ResponseValidation = &AuditValidationInfo{
-			Rules: legacy.ResponseValidation.CEL,
-			AI:    legacy.ResponseValidation.AI,
+			CEL: legacy.ResponseValidation.CEL,
+			AI:  legacy.ResponseValidation.AI,
 		}
 	}
 
