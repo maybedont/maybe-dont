@@ -92,23 +92,23 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	var aiPolicyEngine *AIPolicyEngine
 
 	// Mode is already resolved during config loading, use it directly
-	requestPolicyMode := cfg.RequestValidation.Mode
-	aiRequestPolicyMode := cfg.AIRequestValidation.Mode
+	celRequestPolicyMode := cfg.RequestValidation.CEL.Mode
+	aiRequestPolicyMode := cfg.RequestValidation.AI.Mode
 
-	// Initialize request policy engine only if not disabled
-	if requestPolicyMode != config.PolicyModeDisabled {
-		logger.Info(ctx, "Initializing request policy engine", zap.String("mode", string(requestPolicyMode)))
+	// Initialize CEL request policy engine only if not disabled
+	if celRequestPolicyMode != config.PolicyModeDisabled {
+		logger.Info(ctx, "Initializing CEL request policy engine", zap.String("mode", string(celRequestPolicyMode)))
 		policyEngine, err = NewCELPolicyEngine(ctx, logger)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create request policy engine: %w", err)
+			return nil, fmt.Errorf("failed to create CEL request policy engine: %w", err)
 		}
 
 		// Load policies from configuration with the resolved mode
-		if err := policyEngine.LoadPolicies(cfg.RequestValidation.Rules, requestPolicyMode); err != nil {
-			return nil, fmt.Errorf("failed to load request policies: %w", err)
+		if err := policyEngine.LoadPolicies(cfg.RequestValidation.CEL.Rules, celRequestPolicyMode); err != nil {
+			return nil, fmt.Errorf("failed to load CEL request policies: %w", err)
 		}
 	} else {
-		logger.Info(ctx, "Request policy validation is disabled")
+		logger.Info(ctx, "CEL request policy validation is disabled")
 	}
 
 	// Initialize AI request policy engine only if not disabled
@@ -128,7 +128,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		}
 
 		// Load policies from configuration with the resolved mode
-		if err := aiPolicyEngine.LoadPolicies(cfg.AIRequestValidation.Rules, aiRequestPolicyMode); err != nil {
+		if err := aiPolicyEngine.LoadPolicies(cfg.RequestValidation.AI.Rules, aiRequestPolicyMode); err != nil {
 			return nil, fmt.Errorf("failed to load AI request policies: %w", err)
 		}
 	} else {
@@ -140,8 +140,8 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	var aiResponsePolicyEngine *AIResponsePolicyEngine
 
 	// Mode is already resolved during config loading, use it directly
-	celResponseMode := cfg.ResponseValidation.Mode
-	aiResponseMode := cfg.AIResponseValidation.Mode
+	celResponseMode := cfg.ResponseValidation.CEL.Mode
+	aiResponseMode := cfg.ResponseValidation.AI.Mode
 
 	// Initialize CEL response policy engine only if not disabled
 	if celResponseMode != config.PolicyModeDisabled {
@@ -152,7 +152,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		}
 
 		// Load policies from configuration with the resolved mode
-		if err := responsePolicyEngine.LoadPolicies(cfg.ResponseValidation.Rules, celResponseMode); err != nil {
+		if err := responsePolicyEngine.LoadPolicies(cfg.ResponseValidation.CEL.Rules, celResponseMode); err != nil {
 			return nil, fmt.Errorf("failed to load CEL response policies: %w", err)
 		}
 	} else {
@@ -176,7 +176,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		}
 
 		// Load policies from configuration with the resolved mode
-		if err := aiResponsePolicyEngine.LoadPolicies(cfg.AIResponseValidation.Rules, aiResponseMode); err != nil {
+		if err := aiResponsePolicyEngine.LoadPolicies(cfg.ResponseValidation.AI.Rules, aiResponseMode); err != nil {
 			return nil, fmt.Errorf("failed to load AI response policies: %w", err)
 		}
 	} else {

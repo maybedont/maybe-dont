@@ -133,37 +133,11 @@ type Config struct {
 		} `mapstructure:"ai"`
 	} `mapstructure:"validation"`
 
-	// Request validation configuration (deterministic rules)
-	RequestValidation struct {
-		Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
-		Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: enabled)
-		RulesFile string     `mapstructure:"rules_file"`
-		Rules     []Policy   `mapstructure:"rules"`
-	} `mapstructure:"request_validation"`
+	// Request validation configuration (CEL and AI)
+	RequestValidation RequestValidationConfig `mapstructure:"request_validation"`
 
-	// AI request validation configuration
-	AIRequestValidation struct {
-		Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
-		Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: audit_only)
-		RulesFile string     `mapstructure:"rules_file"`
-		Rules     []AIPolicy `mapstructure:"rules"`
-	} `mapstructure:"ai_request_validation"`
-
-	// Response validation configuration (deterministic rules)
-	ResponseValidation struct {
-		Enabled   *bool            `mapstructure:"enabled"` // Deprecated: use Mode instead
-		Mode      PolicyMode       `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
-		RulesFile string           `mapstructure:"rules_file"`
-		Rules     []ResponsePolicy `mapstructure:"rules"`
-	} `mapstructure:"response_validation"`
-
-	// AI response validation configuration
-	AIResponseValidation struct {
-		Enabled   *bool              `mapstructure:"enabled"` // Deprecated: use Mode instead
-		Mode      PolicyMode         `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
-		RulesFile string             `mapstructure:"rules_file"`
-		Rules     []AIResponsePolicy `mapstructure:"rules"`
-	} `mapstructure:"ai_response_validation"`
+	// Response validation configuration (CEL and AI)
+	ResponseValidation ResponseValidationConfig `mapstructure:"response_validation"`
 
 	// Downstream MCP servers configuration
 	DownstreamMCPServers map[string]ClientConfig `mapstructure:"downstream_mcp_servers"`
@@ -293,6 +267,50 @@ type AIResponsePolicy struct {
 	Action      PolicyAction `mapstructure:"action"` // allow, deny, or redact
 	Message     string       `mapstructure:"message"`
 	Mode        PolicyMode   `mapstructure:"mode"` // Optional: overrides top-level mode
+}
+
+// RequestValidationConfig contains all request validation settings (CEL and AI)
+type RequestValidationConfig struct {
+	CEL CELRequestValidationConfig `mapstructure:"cel"`
+	AI  AIRequestValidationConfig  `mapstructure:"ai"`
+}
+
+// ResponseValidationConfig contains all response validation settings (CEL and AI)
+type ResponseValidationConfig struct {
+	CEL CELResponseValidationConfig `mapstructure:"cel"`
+	AI  AIResponseValidationConfig  `mapstructure:"ai"`
+}
+
+// CELRequestValidationConfig for deterministic CEL-based request validation
+type CELRequestValidationConfig struct {
+	Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
+	Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: enabled)
+	RulesFile string     `mapstructure:"rules_file"`
+	Rules     []Policy   `mapstructure:"rules"`
+}
+
+// AIRequestValidationConfig for AI-powered request validation
+type AIRequestValidationConfig struct {
+	Enabled   *bool      `mapstructure:"enabled"` // Deprecated: use Mode instead
+	Mode      PolicyMode `mapstructure:"mode"`    // enabled, audit_only, disabled (default: audit_only)
+	RulesFile string     `mapstructure:"rules_file"`
+	Rules     []AIPolicy `mapstructure:"rules"`
+}
+
+// CELResponseValidationConfig for deterministic CEL-based response validation
+type CELResponseValidationConfig struct {
+	Enabled   *bool            `mapstructure:"enabled"` // Deprecated: use Mode instead
+	Mode      PolicyMode       `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
+	RulesFile string           `mapstructure:"rules_file"`
+	Rules     []ResponsePolicy `mapstructure:"rules"`
+}
+
+// AIResponseValidationConfig for AI-powered response validation
+type AIResponseValidationConfig struct {
+	Enabled   *bool              `mapstructure:"enabled"` // Deprecated: use Mode instead
+	Mode      PolicyMode         `mapstructure:"mode"`    // enabled, audit_only, disabled (default: disabled)
+	RulesFile string             `mapstructure:"rules_file"`
+	Rules     []AIResponsePolicy `mapstructure:"rules"`
 }
 
 // LoadPoliciesFromFile loads deterministic policies from a file
@@ -741,90 +759,90 @@ For each concern, estimate the potential impact category and explain the reasoni
 	}
 
 	// Resolve and store validation modes with their respective defaults
-	// Request validation defaults to enabled
-	config.RequestValidation.Mode = ResolveValidationMode(
-		config.RequestValidation.Mode, config.RequestValidation.Enabled, PolicyModeEnabled)
+	// CEL request validation defaults to enabled
+	config.RequestValidation.CEL.Mode = ResolveValidationMode(
+		config.RequestValidation.CEL.Mode, config.RequestValidation.CEL.Enabled, PolicyModeEnabled)
 
 	// AI request validation defaults to audit_only (non-blocking by default)
-	config.AIRequestValidation.Mode = ResolveValidationMode(
-		config.AIRequestValidation.Mode, config.AIRequestValidation.Enabled, PolicyModeAuditOnly)
+	config.RequestValidation.AI.Mode = ResolveValidationMode(
+		config.RequestValidation.AI.Mode, config.RequestValidation.AI.Enabled, PolicyModeAuditOnly)
 
-	// Response validation defaults to disabled
-	config.ResponseValidation.Mode = ResolveValidationMode(
-		config.ResponseValidation.Mode, config.ResponseValidation.Enabled, PolicyModeDisabled)
+	// CEL response validation defaults to disabled
+	config.ResponseValidation.CEL.Mode = ResolveValidationMode(
+		config.ResponseValidation.CEL.Mode, config.ResponseValidation.CEL.Enabled, PolicyModeDisabled)
 
 	// AI response validation defaults to disabled
-	config.AIResponseValidation.Mode = ResolveValidationMode(
-		config.AIResponseValidation.Mode, config.AIResponseValidation.Enabled, PolicyModeDisabled)
+	config.ResponseValidation.AI.Mode = ResolveValidationMode(
+		config.ResponseValidation.AI.Mode, config.ResponseValidation.AI.Enabled, PolicyModeDisabled)
 
 	// Collect errors from loading policy rules files
 	// These are collected here so they can be reported alongside validation errors
 	var loadErrors []string
 
-	// Load request policies from rules file (if mode is not disabled)
-	if config.RequestValidation.Mode != PolicyModeDisabled {
-		if config.RequestValidation.RulesFile == "" {
-			loadErrors = append(loadErrors, "request_validation is enabled but rules_file is not specified")
-		} else if err := ValidateRelativePath(config.RequestValidation.RulesFile); err != nil {
-			loadErrors = append(loadErrors, fmt.Sprintf("request_validation.rules_file: %s", err.Error()))
+	// Load CEL request policies from rules file (if mode is not disabled)
+	if config.RequestValidation.CEL.Mode != PolicyModeDisabled {
+		if config.RequestValidation.CEL.RulesFile == "" {
+			loadErrors = append(loadErrors, "request_validation.cel is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.RequestValidation.CEL.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("request_validation.cel.rules_file: %s", err.Error()))
 		} else {
-			resolvedPath := resolveRulesFilePath(config.RequestValidation.RulesFile, configFileDir)
+			resolvedPath := resolveRulesFilePath(config.RequestValidation.CEL.RulesFile, configFileDir)
 			policies, err := LoadPoliciesFromFile(resolvedPath)
 			if err != nil {
-				loadErrors = append(loadErrors, fmt.Sprintf("error loading request policies from file: %v", err))
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading CEL request policies from file: %v", err))
 			} else {
-				config.RequestValidation.Rules = policies
+				config.RequestValidation.CEL.Rules = policies
 			}
 		}
 	}
 
 	// Load AI request policies from rules file (if mode is not disabled)
-	if config.AIRequestValidation.Mode != PolicyModeDisabled {
-		if config.AIRequestValidation.RulesFile == "" {
-			loadErrors = append(loadErrors, "ai_request_validation is enabled but rules_file is not specified")
-		} else if err := ValidateRelativePath(config.AIRequestValidation.RulesFile); err != nil {
-			loadErrors = append(loadErrors, fmt.Sprintf("ai_request_validation.rules_file: %s", err.Error()))
+	if config.RequestValidation.AI.Mode != PolicyModeDisabled {
+		if config.RequestValidation.AI.RulesFile == "" {
+			loadErrors = append(loadErrors, "request_validation.ai is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.RequestValidation.AI.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("request_validation.ai.rules_file: %s", err.Error()))
 		} else {
-			resolvedPath := resolveRulesFilePath(config.AIRequestValidation.RulesFile, configFileDir)
+			resolvedPath := resolveRulesFilePath(config.RequestValidation.AI.RulesFile, configFileDir)
 			aiPolicies, err := LoadAIPoliciesFromFile(resolvedPath)
 			if err != nil {
 				loadErrors = append(loadErrors, fmt.Sprintf("error loading AI request policies from file: %v", err))
 			} else {
-				config.AIRequestValidation.Rules = aiPolicies
+				config.RequestValidation.AI.Rules = aiPolicies
 			}
 		}
 	}
 
-	// Load response policies from rules file (if mode is not disabled)
-	if config.ResponseValidation.Mode != PolicyModeDisabled {
-		if config.ResponseValidation.RulesFile == "" {
-			loadErrors = append(loadErrors, "response_validation is enabled but rules_file is not specified")
-		} else if err := ValidateRelativePath(config.ResponseValidation.RulesFile); err != nil {
-			loadErrors = append(loadErrors, fmt.Sprintf("response_validation.rules_file: %s", err.Error()))
+	// Load CEL response policies from rules file (if mode is not disabled)
+	if config.ResponseValidation.CEL.Mode != PolicyModeDisabled {
+		if config.ResponseValidation.CEL.RulesFile == "" {
+			loadErrors = append(loadErrors, "response_validation.cel is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.ResponseValidation.CEL.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("response_validation.cel.rules_file: %s", err.Error()))
 		} else {
-			resolvedPath := resolveRulesFilePath(config.ResponseValidation.RulesFile, configFileDir)
+			resolvedPath := resolveRulesFilePath(config.ResponseValidation.CEL.RulesFile, configFileDir)
 			responsePolicies, err := LoadResponsePoliciesFromFile(resolvedPath)
 			if err != nil {
-				loadErrors = append(loadErrors, fmt.Sprintf("error loading response policies from file: %v", err))
+				loadErrors = append(loadErrors, fmt.Sprintf("error loading CEL response policies from file: %v", err))
 			} else {
-				config.ResponseValidation.Rules = responsePolicies
+				config.ResponseValidation.CEL.Rules = responsePolicies
 			}
 		}
 	}
 
 	// Load AI response policies from rules file (if mode is not disabled)
-	if config.AIResponseValidation.Mode != PolicyModeDisabled {
-		if config.AIResponseValidation.RulesFile == "" {
-			loadErrors = append(loadErrors, "ai_response_validation is enabled but rules_file is not specified")
-		} else if err := ValidateRelativePath(config.AIResponseValidation.RulesFile); err != nil {
-			loadErrors = append(loadErrors, fmt.Sprintf("ai_response_validation.rules_file: %s", err.Error()))
+	if config.ResponseValidation.AI.Mode != PolicyModeDisabled {
+		if config.ResponseValidation.AI.RulesFile == "" {
+			loadErrors = append(loadErrors, "response_validation.ai is enabled but rules_file is not specified")
+		} else if err := ValidateRelativePath(config.ResponseValidation.AI.RulesFile); err != nil {
+			loadErrors = append(loadErrors, fmt.Sprintf("response_validation.ai.rules_file: %s", err.Error()))
 		} else {
-			resolvedPath := resolveRulesFilePath(config.AIResponseValidation.RulesFile, configFileDir)
+			resolvedPath := resolveRulesFilePath(config.ResponseValidation.AI.RulesFile, configFileDir)
 			aiResponsePolicies, err := LoadAIResponsePoliciesFromFile(resolvedPath)
 			if err != nil {
 				loadErrors = append(loadErrors, fmt.Sprintf("error loading AI response policies from file: %v", err))
 			} else {
-				config.AIResponseValidation.Rules = aiResponsePolicies
+				config.ResponseValidation.AI.Rules = aiResponsePolicies
 			}
 		}
 	}
@@ -1023,8 +1041,8 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 	// Validate AI configuration when any AI feature is enabled
 	// AI credentials are required when AI request validation, AI response validation, or audit report is enabled
-	aiRequestEnabled := cfg.AIRequestValidation.Mode != PolicyModeDisabled && cfg.AIRequestValidation.Mode != ""
-	aiResponseEnabled := cfg.AIResponseValidation.Mode != PolicyModeDisabled && cfg.AIResponseValidation.Mode != ""
+	aiRequestEnabled := cfg.RequestValidation.AI.Mode != PolicyModeDisabled && cfg.RequestValidation.AI.Mode != ""
+	aiResponseEnabled := cfg.ResponseValidation.AI.Mode != PolicyModeDisabled && cfg.ResponseValidation.AI.Mode != ""
 	auditReportEnabled := cfg.NativeTools.AuditReport.Enabled
 
 	if aiRequestEnabled || aiResponseEnabled || auditReportEnabled {

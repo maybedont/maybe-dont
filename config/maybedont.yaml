@@ -64,37 +64,37 @@ validation:
     api_key: "${OPENAI_API_KEY}"
 
 # Request validation configuration
-# Deterministic rules evaluated locally using CEL expressions
+# Contains both CEL (deterministic) and AI-powered request validation
 request_validation:
-  # Enable deterministic request validation
-  mode: enabled
-  # Path to rules file (required when enabled)
-  rules_file: "rules.yaml"
-
-# AI request validation configuration
-# AI-powered validation using an LLM to evaluate requests
-ai_request_validation:
-  # Enable AI-powered request validation
-  mode: audit_only
-  # Path to AI rules file (required when enabled)
-  rules_file: "ai_rules.yaml"
+  # CEL-based deterministic request validation using CEL expressions
+  cel:
+    # Mode: enabled, audit_only, disabled (default: enabled)
+    mode: enabled
+    # Path to CEL rules file (required when mode is not disabled)
+    rules_file: "cel_request_rules.yaml"
+  # AI-powered request validation using an LLM
+  ai:
+    # Mode: enabled, audit_only, disabled (default: audit_only)
+    mode: audit_only
+    # Path to AI rules file (required when mode is not disabled)
+    rules_file: "ai_request_rules.yaml"
 
 # Response validation configuration
-# Deterministic rules to validate and filter tool call RESPONSES before returning to the client
+# Contains both CEL (deterministic) and AI-powered response validation
 response_validation:
-  # Enable deterministic response validation
-  mode: disabled
-  # Path to response rules file (required when enabled)
-  rules_file: "response_rules.yaml"
-
-# AI response validation configuration
-# Uses AI to detect and filter sensitive information in responses
-ai_response_validation:
-  # Enable AI-powered response validation
-  mode: disabled
-  # Path to AI response rules file (required when enabled)
-  rules_file: "ai_response_rules.yaml"
-  # Note: Uses the shared AI configuration from validation.ai above
+  # CEL-based deterministic response validation using CEL expressions
+  cel:
+    # Mode: enabled, audit_only, disabled (default: disabled)
+    mode: disabled
+    # Path to CEL response rules file (required when mode is not disabled)
+    rules_file: "cel_response_rules.yaml"
+  # AI-powered response validation to detect sensitive information
+  ai:
+    # Mode: enabled, audit_only, disabled (default: disabled)
+    mode: disabled
+    # Path to AI response rules file (required when mode is not disabled)
+    rules_file: "ai_response_rules.yaml"
+    # Note: Uses the shared AI configuration from validation.ai above
 
 # Native gateway tools configuration
 # These tools are implemented directly in the gateway for introspection

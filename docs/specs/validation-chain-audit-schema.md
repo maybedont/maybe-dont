@@ -318,7 +318,7 @@ This section defines the precise behavior for each policy mode combination. The 
 
 #### 1. All Policies Disabled
 
-When the validation mode is set to `disabled` at the top level (e.g., `ai_request_validation: disabled`):
+When the validation mode is set to `disabled` (e.g., `request_validation.ai.mode: disabled`):
 
 - **Behavior**: The engine returns immediately without executing any policies
 - **Blocking**: 0ms
@@ -805,7 +805,7 @@ The following test cases must be implemented to verify correct policy mode behav
 ### Unit Tests for AI Engine
 
 #### Test: All Policies Disabled
-- **Setup**: Top-level `ai_request_validation: disabled`
+- **Setup**: `request_validation.ai.mode: disabled`
 - **Assertions**:
   - `EvaluateToolCall` returns immediately (< 10ms)
   - `ValidationResults.Allowed` is `true`

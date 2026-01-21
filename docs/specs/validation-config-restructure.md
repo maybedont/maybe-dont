@@ -247,19 +247,19 @@ No backwards compatibility layer will be provided - this is a clean break.
 
 ## Implementation Checklist
 
-- [ ] Rename config files in `config/` directory
-- [ ] Update `Config` struct in `internal/config/config.go`
-- [ ] Update `LoadConfig()` function
-- [ ] Update `validateConfigWithOptions()` function
-- [ ] Update `internal/gateway/gateway.go`
-- [ ] Update `internal/gateway/tool_validation.go`
-- [ ] Update `internal/gateway/cel_engine.go`
-- [ ] Update `internal/gateway/ai_engine.go`
-- [ ] Update `internal/gateway/response_validation.go`
-- [ ] Update `internal/config/config_test.go`
-- [ ] Update gateway test files
-- [ ] Update `config/maybedont.yaml`
-- [ ] Update `CLAUDE.md`
-- [ ] Review and update specs in `docs/specs/`
-- [ ] Run `make test` and fix any failures
-- [ ] Run `make lint` and fix any issues
+- [x] Rename config files in `config/` directory
+- [x] Update `Config` struct in `internal/config/config.go`
+- [x] Update `LoadConfig()` function
+- [x] Update `validateConfigWithOptions()` function
+- [x] Update `internal/gateway/gateway.go`
+- [x] Update `internal/gateway/tool_validation.go`
+- [x] Update `internal/gateway/cel_engine.go`
+- [x] Update `internal/gateway/ai_engine.go`
+- [x] Update `internal/gateway/response_validation.go`
+- [x] Update `internal/config/config_test.go`
+- [x] Update gateway test files
+- [x] Update `config/maybedont.yaml`
+- [x] Update `CLAUDE.md`
+- [x] Review and update specs in `docs/specs/`
+- [x] Run `make test` and fix any failures
+- [x] Run `make lint` and fix any issues

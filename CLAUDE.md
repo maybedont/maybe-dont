@@ -73,10 +73,10 @@ Each validation type supports three modes:
 - **disabled** - Policy is not executed
 
 Default modes:
-- `request_validation`: enabled
-- `ai_request_validation`: audit_only
-- `response_validation`: disabled
-- `ai_response_validation`: disabled
+- `request_validation.cel`: enabled
+- `request_validation.ai`: audit_only
+- `response_validation.cel`: disabled
+- `response_validation.ai`: disabled
 
 ### AI Configuration (Centralized)
 All AI-powered features share a common configuration under `validation.ai`:
@@ -100,10 +100,10 @@ The gateway implements a blocking budget to limit cumulative validation latency:
 When the blocking budget is exhausted, remaining validations continue asynchronously but the request proceeds (fail-open behavior).
 
 ### Security Rules
-- **Request Rules**: Loaded from external `rules.yaml` file when `request_validation` mode is not disabled (deterministic CEL-based rules)
-- **AI Request Rules**: Loaded from external `ai_rules.yaml` file when `ai_request_validation` mode is not disabled
-- **Response Rules**: Loaded from external `response_rules.yaml` file when `response_validation` mode is not disabled (deterministic CEL-based rules)
-- **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `ai_response_validation` mode is not disabled
+- **CEL Request Rules**: Loaded from external `cel_request_rules.yaml` file when `request_validation.cel` mode is not disabled (deterministic CEL-based rules)
+- **AI Request Rules**: Loaded from external `ai_request_rules.yaml` file when `request_validation.ai` mode is not disabled
+- **CEL Response Rules**: Loaded from external `cel_response_rules.yaml` file when `response_validation.cel` mode is not disabled (deterministic CEL-based rules)
+- **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `response_validation.ai` mode is not disabled
 - **Multi-Client Validation**: Policies can target specific clients using name prefixes
 - **Required When Not Disabled**: Rules files must be specified in config when their corresponding validation mode is not disabled
 

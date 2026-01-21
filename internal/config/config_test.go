@@ -279,14 +279,11 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 		}{
 			// No required fields in Audit anymore
 		},
-		AIRequestValidation: struct {
-			Enabled   *bool      `mapstructure:"enabled"`
-			Mode      PolicyMode `mapstructure:"mode"`
-			RulesFile string     `mapstructure:"rules_file"`
-			Rules     []AIPolicy `mapstructure:"rules"`
-		}{
-			Mode: PolicyModeEnabled, // Use Mode instead of deprecated Enabled
-			// AI credentials are now in validation.ai - Error 11, 12, 13
+		RequestValidation: RequestValidationConfig{
+			AI: AIRequestValidationConfig{
+				Mode: PolicyModeEnabled, // Use Mode instead of deprecated Enabled
+				// AI credentials are now in validation.ai - Error 11, 12, 13
+			},
 		},
 	}
 
@@ -383,18 +380,18 @@ downstream_mcp_servers:
     type: stdio
     command: echo
 
-# Explicitly disable request validation (it defaults to enabled)
+# Request validation with CEL disabled, AI enabled
 request_validation:
-  mode: disabled
+  cel:
+    mode: disabled
+  ai:
+    enabled: true
+    rules_file: ai_request_rules.yaml
 
 validation:
   ai:
     endpoint: https://api.openai.com/v1
     model: gpt-4
-
-ai_request_validation:
-  enabled: true
-  rules_file: ai_rules.yaml
 `
 	err := os.WriteFile(configPath, []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -407,7 +404,7 @@ rules:
     prompt: Test prompt
     message: Test message
 `
-	err = os.WriteFile(tmpDir+"/ai_rules.yaml", []byte(rulesContent), 0644)
+	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0644)
 	require.NoError(t, err)
 
 	// Set the API key via environment variable
@@ -1247,23 +1244,23 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: enabled
-  rules_file: "../../../etc/passwd"
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: enabled
+    rules_file: "../../../etc/passwd"
+  ai:
+    mode: disabled
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
-	require.Error(t, err, "Path traversal should be rejected in request_validation.rules_file")
-	require.Contains(t, err.Error(), "request_validation.rules_file")
+	require.Error(t, err, "Path traversal should be rejected in request_validation.cel.rules_file")
+	require.Contains(t, err.Error(), "request_validation.cel.rules_file")
 	require.Contains(t, err.Error(), "parent directory")
 }
 
 func TestLoadConfig_AIRequestRulesFilePathTraversalRejected(t *testing.T) {
-	// Test that path traversal is rejected in ai_request_validation.rules_file
+	// Test that path traversal is rejected in request_validation.ai.rules_file
 	viper.Reset()
 	tmpDir := t.TempDir()
 
@@ -1273,27 +1270,30 @@ downstream_mcp_servers:
     type: stdio
     command: echo
 
-request_validation:
-  mode: disabled
+validation:
+  ai:
+    endpoint: https://api.example.com/v1
+    model: test-model
+    api_key: test-key
 
-ai_request_validation:
-  mode: enabled
-  endpoint: https://api.example.com/v1
-  model: test-model
-  api_key: test-key
-  rules_file: "../../secrets/rules.yaml"
+request_validation:
+  cel:
+    mode: disabled
+  ai:
+    mode: enabled
+    rules_file: "../../secrets/rules.yaml"
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
-	require.Error(t, err, "Path traversal should be rejected in ai_request_validation.rules_file")
-	require.Contains(t, err.Error(), "ai_request_validation.rules_file")
+	require.Error(t, err, "Path traversal should be rejected in request_validation.ai.rules_file")
+	require.Contains(t, err.Error(), "request_validation.ai.rules_file")
 	require.Contains(t, err.Error(), "parent directory")
 }
 
 func TestLoadConfig_ResponseRulesFilePathTraversalRejected(t *testing.T) {
-	// Test that path traversal is rejected in response_validation.rules_file
+	// Test that path traversal is rejected in response_validation.cel.rules_file
 	viper.Reset()
 	tmpDir := t.TempDir()
 
@@ -1304,55 +1304,59 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: disabled
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: disabled
+  ai:
+    mode: disabled
 
 response_validation:
-  mode: enabled
-  rules_file: "../secret/response_rules.yaml"
+  cel:
+    mode: enabled
+    rules_file: "../secret/response_rules.yaml"
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
-	require.Error(t, err, "Path traversal should be rejected in response_validation.rules_file")
-	require.Contains(t, err.Error(), "response_validation.rules_file")
+	require.Error(t, err, "Path traversal should be rejected in response_validation.cel.rules_file")
+	require.Contains(t, err.Error(), "response_validation.cel.rules_file")
 	require.Contains(t, err.Error(), "parent directory")
 }
 
 func TestLoadConfig_AIResponseRulesFilePathTraversalRejected(t *testing.T) {
-	// Test that path traversal is rejected in ai_response_validation.rules_file
+	// Test that path traversal is rejected in response_validation.ai.rules_file
 	viper.Reset()
 	tmpDir := t.TempDir()
 
-	// ai_response_validation shares credentials with ai_request_validation
 	configContent := `
 downstream_mcp_servers:
   test:
     type: stdio
     command: echo
 
+validation:
+  ai:
+    endpoint: https://api.example.com/v1
+    model: test-model
+    api_key: test-key
+
 request_validation:
-  mode: disabled
+  cel:
+    mode: disabled
+  ai:
+    mode: disabled
 
-ai_request_validation:
-  mode: disabled
-  endpoint: https://api.example.com/v1
-  model: test-model
-  api_key: test-key
-
-ai_response_validation:
-  mode: enabled
-  rules_file: "/etc/passwd"
+response_validation:
+  ai:
+    mode: enabled
+    rules_file: "/etc/passwd"
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
-	require.Error(t, err, "Absolute path should be rejected in ai_response_validation.rules_file")
-	require.Contains(t, err.Error(), "ai_response_validation.rules_file")
+	require.Error(t, err, "Absolute path should be rejected in response_validation.ai.rules_file")
+	require.Contains(t, err.Error(), "response_validation.ai.rules_file")
 	require.Contains(t, err.Error(), "absolute path")
 }
 
@@ -1383,11 +1387,11 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: enabled
-  rules_file: "rules/custom/my-rules.yaml"
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: enabled
+    rules_file: "rules/custom/my-rules.yaml"
+  ai:
+    mode: disabled
 
 native_tools:
   audit_report:
@@ -1398,8 +1402,8 @@ native_tools:
 
 	cfg, err := LoadConfig(tmpDir, "")
 	require.NoError(t, err, "Subdirectory paths should be allowed for rules_file")
-	require.Len(t, cfg.RequestValidation.Rules, 1)
-	require.Equal(t, "test-rule", cfg.RequestValidation.Rules[0].Name)
+	require.Len(t, cfg.RequestValidation.CEL.Rules, 1)
+	require.Equal(t, "test-rule", cfg.RequestValidation.CEL.Rules[0].Name)
 }
 
 func TestLoadConfig_RulesFileHiddenFileRejected(t *testing.T) {
@@ -1414,18 +1418,18 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: enabled
-  rules_file: ".hidden_rules.yaml"
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: enabled
+    rules_file: ".hidden_rules.yaml"
+  ai:
+    mode: disabled
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
 	require.Error(t, err, "Hidden files should be rejected in rules_file")
-	require.Contains(t, err.Error(), "request_validation.rules_file")
+	require.Contains(t, err.Error(), "request_validation.cel.rules_file")
 	require.Contains(t, err.Error(), "hidden")
 }
 
@@ -1441,18 +1445,18 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: enabled
-  rules_file: "%2e%2e/rules.yaml"
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: enabled
+    rules_file: "%2e%2e/rules.yaml"
+  ai:
+    mode: disabled
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
 	require.Error(t, err, "URL-encoded path traversal should be rejected")
-	require.Contains(t, err.Error(), "request_validation.rules_file")
+	require.Contains(t, err.Error(), "request_validation.cel.rules_file")
 }
 
 func TestLoadConfigWithoutConfigFile(t *testing.T) {
@@ -1584,8 +1588,8 @@ func TestLoadConfigWithEnvVarsOnly_ValidConfig(t *testing.T) {
 
 	// Minimal config with just downstream MCP servers
 	// Notes:
-	// - policy_validation defaults to enabled, so we must disable it since we have no rules file
-	// - ai_validation defaults to audit_only, so we must disable it since we have no API key
+	// - request_validation.cel defaults to enabled, so we must disable it since we have no rules file
+	// - request_validation.ai defaults to audit_only, so we must disable it since we have no API key
 	// - audit_report defaults to enabled, so we must disable it since we have no AI credentials
 	configContent := `
 downstream_mcp_servers:
@@ -1594,10 +1598,10 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: disabled
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: disabled
+  ai:
+    mode: disabled
 
 native_tools:
   audit_report:
