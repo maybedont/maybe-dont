@@ -40,6 +40,7 @@ type RegisteredToolsProvider interface {
 type SessionInfo struct {
 	SessionID       string   `json:"session_id"`
 	ClientIP        string   `json:"client_ip,omitempty"`
+	UserAgent       string   `json:"user_agent,omitempty"`
 	DownstreamNames []string `json:"downstream_clients"`
 }
 
