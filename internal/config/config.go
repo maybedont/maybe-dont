@@ -517,6 +517,292 @@ func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix strin
 	}
 }
 
+// knownClientConfigFields contains the valid field path suffixes for ClientConfig.
+// These are derived from the mapstructure tags and used to identify where the client name
+// ends and the field path begins when parsing environment variables.
+var knownClientConfigFields = map[string]bool{
+	"TYPE":                           true,
+	"URL":                            true,
+	"DOWNSTREAM_URL":                 true,
+	"COMMAND":                        true,
+	"ARGS":                           true,
+	"COMMAND_ARGS":                   true,
+	"STARTUP_TIMEOUT_MS":             true,
+	"INITIALIZATION_RETRIES":         true,
+	"RETRY_DELAY_MS":                 true,
+	"CAPABILITY_DISCOVERY_DELAY_MS":  true,
+	"CAPABILITY_DISCOVERY_RETRIES":   true,
+	"CAPABILITY_RETRY_DELAY_MS":      true,
+	"AUTH_PASS_THROUGH_ENABLED":      true,
+	"AUTH_PASS_THROUGH_HEADERS":      true, // compact format
+	"SSE_HEADERS":                    true, // prefix for SSE headers
+	"HTTP_HEADERS":                   true, // prefix for HTTP headers
+}
+
+// parseCompactHeaders parses the compact header format: "source:target[:format][;...]"
+// Returns a slice of CredentialMapping or an error if the format is invalid.
+func parseCompactHeaders(value string) ([]CredentialMapping, error) {
+	if value == "" {
+		return nil, nil
+	}
+
+	var mappings []CredentialMapping
+	headerParts := strings.Split(value, ";")
+
+	for i, headerPart := range headerParts {
+		headerPart = strings.TrimSpace(headerPart)
+		if headerPart == "" {
+			continue
+		}
+
+		// Check for at least one colon
+		if !strings.Contains(headerPart, ":") {
+			return nil, fmt.Errorf("header mapping %d must contain at least one colon (format: source_header:target_header[:format])", i)
+		}
+
+		// Split by colon, max 3 parts (source:target:format)
+		parts := strings.SplitN(headerPart, ":", 3)
+
+		mapping := CredentialMapping{
+			SourceHeader: strings.TrimSpace(parts[0]),
+			TargetHeader: strings.TrimSpace(parts[1]),
+		}
+
+		if len(parts) > 2 {
+			mapping.Format = strings.TrimSpace(parts[2])
+		}
+
+		if mapping.SourceHeader == "" {
+			return nil, fmt.Errorf("header mapping %d: source_header cannot be empty", i)
+		}
+		if mapping.TargetHeader == "" {
+			return nil, fmt.Errorf("header mapping %d: target_header cannot be empty", i)
+		}
+
+		mappings = append(mappings, mapping)
+	}
+
+	return mappings, nil
+}
+
+// extractClientNameAndPath extracts the client name and remaining field path from an env var suffix.
+// For example: "GITHUB_AUTH_PASS_THROUGH_ENABLED" -> ("github", "AUTH_PASS_THROUGH_ENABLED")
+// Client names use underscores in env vars, converted to hyphens: "AWS_DOCS" -> "aws-docs"
+func extractClientNameAndPath(suffix string) (clientName string, fieldPath string, ok bool) {
+	// Try progressively longer prefixes until we find a valid field path
+	parts := strings.Split(suffix, "_")
+
+	for i := 1; i <= len(parts); i++ {
+		candidateClient := strings.Join(parts[:i], "_")
+		candidatePath := strings.Join(parts[i:], "_")
+
+		// Check if the remaining path starts with a known field
+		if isValidFieldPath(candidatePath) {
+			// Convert underscores to hyphens for client name, lowercase
+			clientName = strings.ToLower(strings.ReplaceAll(candidateClient, "_", "-"))
+			return clientName, candidatePath, true
+		}
+	}
+
+	return "", "", false
+}
+
+// isValidFieldPath checks if a path starts with a known ClientConfig field.
+func isValidFieldPath(path string) bool {
+	if path == "" {
+		return false
+	}
+
+	// Direct match
+	if knownClientConfigFields[path] {
+		return true
+	}
+
+	// Check for prefix match (e.g., "AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER" starts with known field)
+	for field := range knownClientConfigFields {
+		if strings.HasPrefix(path, field+"_") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// parseDownstreamServersFromEnv scans environment variables and builds/updates
+// the DownstreamMCPServers map from MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_* vars.
+func parseDownstreamServersFromEnv(servers map[string]ClientConfig, envPrefix string) map[string]ClientConfig {
+	if servers == nil {
+		servers = make(map[string]ClientConfig)
+	}
+
+	prefix := envPrefix + "_DOWNSTREAM_MCP_SERVERS_"
+
+	// Collect all relevant env vars
+	envVars := make(map[string]string)
+	for _, env := range os.Environ() {
+		if idx := strings.Index(env, "="); idx > 0 {
+			key := env[:idx]
+			value := env[idx+1:]
+			if strings.HasPrefix(key, prefix) {
+				envVars[key] = value
+			}
+		}
+	}
+
+	// Group by client name
+	clientEnvVars := make(map[string]map[string]string)
+	for envKey, envValue := range envVars {
+		suffix := strings.TrimPrefix(envKey, prefix)
+		clientName, fieldPath, ok := extractClientNameAndPath(suffix)
+		if !ok {
+			continue // Skip unrecognized patterns
+		}
+
+		if clientEnvVars[clientName] == nil {
+			clientEnvVars[clientName] = make(map[string]string)
+		}
+		clientEnvVars[clientName][fieldPath] = envValue
+	}
+
+	// Process each client
+	for clientName, fields := range clientEnvVars {
+		client := servers[clientName] // Get existing or zero value
+
+		// Process each field
+		for fieldPath, value := range fields {
+			applyClientConfigField(&client, fieldPath, value)
+		}
+
+		servers[clientName] = client
+	}
+
+	return servers
+}
+
+// applyClientConfigField applies a single field value to a ClientConfig based on the field path.
+func applyClientConfigField(client *ClientConfig, fieldPath, value string) {
+	switch {
+	case fieldPath == "TYPE":
+		client.Type = value
+	case fieldPath == "URL":
+		client.URL = value
+	case fieldPath == "DOWNSTREAM_URL":
+		client.DownstreamURL = value
+	case fieldPath == "COMMAND":
+		client.Command = value
+	case fieldPath == "ARGS":
+		client.Args = splitCommaSeparated(value)
+	case fieldPath == "COMMAND_ARGS":
+		client.CommandArgs = splitCommaSeparated(value)
+	case fieldPath == "STARTUP_TIMEOUT_MS":
+		if v, err := strconv.Atoi(value); err == nil {
+			client.StartupTimeoutMs = v
+		}
+	case fieldPath == "INITIALIZATION_RETRIES":
+		if v, err := strconv.Atoi(value); err == nil {
+			client.InitializationRetries = v
+		}
+	case fieldPath == "RETRY_DELAY_MS":
+		if v, err := strconv.Atoi(value); err == nil {
+			client.RetryDelayMs = v
+		}
+	case fieldPath == "CAPABILITY_DISCOVERY_DELAY_MS":
+		if v, err := strconv.Atoi(value); err == nil {
+			client.CapabilityDiscoveryDelayMs = v
+		}
+	case fieldPath == "CAPABILITY_DISCOVERY_RETRIES":
+		if v, err := strconv.Atoi(value); err == nil {
+			client.CapabilityDiscoveryRetries = v
+		}
+	case fieldPath == "CAPABILITY_RETRY_DELAY_MS":
+		if v, err := strconv.Atoi(value); err == nil {
+			client.CapabilityRetryDelayMs = v
+		}
+	case fieldPath == "AUTH_PASS_THROUGH_ENABLED":
+		if v, err := strconv.ParseBool(value); err == nil {
+			client.Auth.PassThrough.Enabled = v
+		}
+	case fieldPath == "AUTH_PASS_THROUGH_HEADERS":
+		// Compact format
+		if headers, err := parseCompactHeaders(value); err == nil {
+			client.Auth.PassThrough.Headers = headers
+		}
+	case strings.HasPrefix(fieldPath, "AUTH_PASS_THROUGH_HEADERS_"):
+		// Indexed format: AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER
+		applyIndexedHeader(client, fieldPath, value)
+	case strings.HasPrefix(fieldPath, "HTTP_HEADERS_"):
+		headerName := strings.TrimPrefix(fieldPath, "HTTP_HEADERS_")
+		if client.HTTPConfig.Headers == nil {
+			client.HTTPConfig.Headers = make(map[string]string)
+		}
+		client.HTTPConfig.Headers[headerName] = value
+	case strings.HasPrefix(fieldPath, "SSE_HEADERS_"):
+		headerName := strings.TrimPrefix(fieldPath, "SSE_HEADERS_")
+		if client.SSEConfig.Headers == nil {
+			client.SSEConfig.Headers = make(map[string]string)
+		}
+		client.SSEConfig.Headers[headerName] = value
+	}
+}
+
+// applyIndexedHeader handles indexed header format: AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER
+func applyIndexedHeader(client *ClientConfig, fieldPath, value string) {
+	// Remove the prefix to get "0_SOURCE_HEADER"
+	remainder := strings.TrimPrefix(fieldPath, "AUTH_PASS_THROUGH_HEADERS_")
+	parts := strings.SplitN(remainder, "_", 2)
+	if len(parts) != 2 {
+		return
+	}
+
+	index, err := strconv.Atoi(parts[0])
+	if err != nil || index < 0 {
+		return
+	}
+
+	fieldName := parts[1]
+
+	// Ensure the slice is large enough
+	for len(client.Auth.PassThrough.Headers) <= index {
+		client.Auth.PassThrough.Headers = append(client.Auth.PassThrough.Headers, CredentialMapping{})
+	}
+
+	switch fieldName {
+	case "SOURCE_HEADER":
+		client.Auth.PassThrough.Headers[index].SourceHeader = value
+	case "TARGET_HEADER":
+		client.Auth.PassThrough.Headers[index].TargetHeader = value
+	case "FORMAT":
+		client.Auth.PassThrough.Headers[index].Format = value
+	}
+}
+
+// splitCommaSeparated splits a comma-separated string into a slice, trimming whitespace.
+func splitCommaSeparated(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+// ConfigPathToEnvVar converts a YAML config path to its environment variable equivalent.
+// e.g., "downstream_mcp_servers[github].url" -> "MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL"
+func ConfigPathToEnvVar(path string) string {
+	// Remove brackets and replace with underscores
+	result := strings.ReplaceAll(path, "[", "_")
+	result = strings.ReplaceAll(result, "]", "")
+	result = strings.ReplaceAll(result, ".", "_")
+	result = strings.ReplaceAll(result, "-", "_")
+	return "MAYBE_DONT_" + strings.ToUpper(result)
+}
+
 // expandEnvironmentVariables recursively expands environment variables in string fields
 // of a struct using os.ExpandEnv. This processes ${VAR} and $VAR syntax.
 func expandEnvironmentVariables(v reflect.Value) {
@@ -732,6 +1018,10 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	// MAYBE_DONT_AI_VALIDATION_API_KEY, MAYBE_DONT_SERVER_LISTEN_ADDR, etc.
 	applyEnvironmentOverrides(reflect.ValueOf(&config).Elem(), reflect.TypeOf(config), "", v.GetEnvPrefix())
 
+	// Parse downstream MCP servers from environment variables
+	// This allows configuring the map-based downstream_mcp_servers entirely via env vars
+	config.DownstreamMCPServers = parseDownstreamServersFromEnv(config.DownstreamMCPServers, v.GetEnvPrefix())
+
 	// Set default server type to stdio if not configured
 	if config.Server.Type == "" {
 		config.Server.Type = ServerTypeSTDIO
@@ -916,6 +1206,19 @@ func ValidateConfigWithContext(cfg *Config, configFileFound bool) error {
 	return validateConfigWithOptions(cfg, configFileFound, nil)
 }
 
+// configError creates an error message with optional env var hint.
+// path is the YAML config path (e.g., "downstream_mcp_servers[github].url")
+// message is the error description
+func configError(path, message string) string {
+	envVar := ConfigPathToEnvVar(path)
+	return fmt.Sprintf("%s: %s\n     (env var: %s)", path, message, envVar)
+}
+
+// configErrorSimple creates an error message without a specific path.
+func configErrorSimple(message string) string {
+	return message
+}
+
 // validateConfigWithOptions is the internal implementation that validates the configuration,
 // collects all errors (including any pre-existing load errors), and provides contextual guidance.
 func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []string) error {
@@ -933,7 +1236,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 	// Validate server configuration
 	if cfg.Server.Type != ServerTypeSTDIO && cfg.Server.ListenAddr == "" {
-		errors = append(errors, fmt.Sprintf("server.listen_addr is required for %s server type", cfg.Server.Type))
+		errors = append(errors, configError("server.listen_addr", fmt.Sprintf("required for %s server type", cfg.Server.Type)))
 	}
 
 	// Validate SSE server configuration if SSE type
@@ -959,14 +1262,14 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		switch client.Type {
 		case "stdio":
 			if client.Command == "" {
-				errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].command is required when type is stdio", name))
+				errors = append(errors, configError(fmt.Sprintf("downstream_mcp_servers[%s].command", name), "required when type is stdio"))
 			}
 		case "sse", "http":
 			if client.DownstreamURL == "" {
-				errors = append(errors, fmt.Sprintf("downstream_mcp_servers[%s].downstream_url (or url) is required when type is %s", name, client.Type))
+				errors = append(errors, configError(fmt.Sprintf("downstream_mcp_servers[%s].url", name), fmt.Sprintf("required when type is %s", client.Type)))
 			}
 		default:
-			errors = append(errors, fmt.Sprintf("invalid client type for downstream_mcp_servers[%s]: %s", name, client.Type))
+			errors = append(errors, configError(fmt.Sprintf("downstream_mcp_servers[%s].type", name), fmt.Sprintf("invalid value: %s", client.Type)))
 		}
 
 		// Validate timeout/retry values
@@ -1014,27 +1317,27 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 				// HTTP/SSE requires header mappings
 				if len(client.Auth.PassThrough.Headers) == 0 {
 					errors = append(errors,
-						fmt.Sprintf("downstream_mcp_servers[%s]: pass_through enabled but no headers configured for %s transport",
-							name, client.Type))
+						configError(fmt.Sprintf("downstream_mcp_servers[%s].auth.pass_through.headers", name),
+							fmt.Sprintf("required when pass_through is enabled for %s transport", client.Type)))
 				}
 
 				// Validate each header mapping
 				for i, mapping := range client.Auth.PassThrough.Headers {
 					if mapping.SourceHeader == "" {
 						errors = append(errors,
-							fmt.Sprintf("downstream_mcp_servers[%s].auth.pass_through.headers[%d]: source_header is required",
-								name, i))
+							configError(fmt.Sprintf("downstream_mcp_servers[%s].auth.pass_through.headers[%d].source_header", name, i),
+								"required"))
 					}
 					if mapping.TargetHeader == "" {
 						errors = append(errors,
-							fmt.Sprintf("downstream_mcp_servers[%s].auth.pass_through.headers[%d]: target_header is required",
-								name, i))
+							configError(fmt.Sprintf("downstream_mcp_servers[%s].auth.pass_through.headers[%d].target_header", name, i),
+								"required"))
 					}
 				}
 			} else {
 				errors = append(errors,
-					fmt.Sprintf("downstream_mcp_servers[%s]: pass_through auth is only supported for http and sse transports, not %s",
-						name, client.Type))
+					configErrorSimple(fmt.Sprintf("downstream_mcp_servers[%s]: pass_through auth is only supported for http and sse transports, not %s",
+						name, client.Type)))
 			}
 		}
 	}
@@ -1047,13 +1350,13 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 	if aiRequestEnabled || aiResponseEnabled || auditReportEnabled {
 		if cfg.Validation.AI.APIKey == "" {
-			errors = append(errors, "validation.ai.api_key is required when AI validation or audit report is enabled")
+			errors = append(errors, configError("validation.ai.api_key", "required when AI validation or audit report is enabled"))
 		}
 		if cfg.Validation.AI.Endpoint == "" {
-			errors = append(errors, "validation.ai.endpoint is required when AI validation or audit report is enabled")
+			errors = append(errors, configError("validation.ai.endpoint", "required when AI validation or audit report is enabled"))
 		}
 		if cfg.Validation.AI.Model == "" {
-			errors = append(errors, "validation.ai.model is required when AI validation or audit report is enabled")
+			errors = append(errors, configError("validation.ai.model", "required when AI validation or audit report is enabled"))
 		}
 	}
 

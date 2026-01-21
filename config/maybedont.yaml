@@ -5,14 +5,15 @@
 # Extract credentials from incoming request headers and forward to downstream servers.
 # Enable per-client via auth.pass_through config with header mappings.
 
-# Logging configuration
-logging:
+# Application logging configuration
+logger:
   level: info  # debug, info, warn, error
   path: stderr # filename, stderr, stdout
 
+# Audit log configuration
 audit:
-  enabled: true
   path: maybedont-audit.log # filename, stderr, stdout
+  filter: all # all or deny_only
 
 # Downstream MCP servers configuration
 downstream_mcp_servers:
@@ -126,3 +127,5 @@ native_tools:
   list_sessions:
     # Enable the maybedont__list_sessions tool (default: true)
     enabled: true
+
+  # Note: maybedont__discover_tools is always enabled (required for pass-through auth)
