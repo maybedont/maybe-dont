@@ -97,10 +97,10 @@ and providing comprehensive audit logging.`,
 			} else {
 				// Set rule usage flags based on config (mode is already resolved during config loading)
 				MetricsCollector.SetRuleUsage(
-					cfg.AIRequestValidation.Mode != config.PolicyModeDisabled,
-					cfg.RequestValidation.Mode != config.PolicyModeDisabled,
-					cfg.AIResponseValidation.Mode != config.PolicyModeDisabled,
-					cfg.ResponseValidation.Mode != config.PolicyModeDisabled,
+					cfg.RequestValidation.AI.Mode != config.PolicyModeDisabled,
+					cfg.RequestValidation.CEL.Mode != config.PolicyModeDisabled,
+					cfg.ResponseValidation.AI.Mode != config.PolicyModeDisabled,
+					cfg.ResponseValidation.CEL.Mode != config.PolicyModeDisabled,
 				)
 				// Set MCP server count
 				MetricsCollector.SetMCPServerCount(len(cfg.DownstreamMCPServers))

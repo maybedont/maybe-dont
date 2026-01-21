@@ -9,6 +9,7 @@ Maybe Don't Gateway is a security middleware service built in Go that acts as a 
 ## User Interaction Preferences
 
 - **Wait for responses**: When asking questions or requesting clarification, always wait for the user's response before continuing. Do not assume answers or proceed without explicit input.
+- **Challenge ideas**: Be careful to agree just to be agreeable. Be prepared to defend your position, and communicate why a recommendation from the developer may not be a good idea. If the idea sounds good, see if you can find a reason why it is not based upon current conventions, code quality, risk or external specifications.  
 
 ## Essential Commands
 
@@ -73,10 +74,10 @@ Each validation type supports three modes:
 - **disabled** - Policy is not executed
 
 Default modes:
-- `request_validation`: enabled
-- `ai_request_validation`: audit_only
-- `response_validation`: disabled
-- `ai_response_validation`: disabled
+- `request_validation.cel`: enabled
+- `request_validation.ai`: audit_only
+- `response_validation.cel`: disabled
+- `response_validation.ai`: disabled
 
 ### AI Configuration (Centralized)
 All AI-powered features share a common configuration under `validation.ai`:
@@ -100,10 +101,10 @@ The gateway implements a blocking budget to limit cumulative validation latency:
 When the blocking budget is exhausted, remaining validations continue asynchronously but the request proceeds (fail-open behavior).
 
 ### Security Rules
-- **Request Rules**: Loaded from external `rules.yaml` file when `request_validation` mode is not disabled (deterministic CEL-based rules)
-- **AI Request Rules**: Loaded from external `ai_rules.yaml` file when `ai_request_validation` mode is not disabled
-- **Response Rules**: Loaded from external `response_rules.yaml` file when `response_validation` mode is not disabled (deterministic CEL-based rules)
-- **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `ai_response_validation` mode is not disabled
+- **CEL Request Rules**: Loaded from external `cel_request_rules.yaml` file when `request_validation.cel` mode is not disabled (deterministic CEL-based rules)
+- **AI Request Rules**: Loaded from external `ai_request_rules.yaml` file when `request_validation.ai` mode is not disabled
+- **CEL Response Rules**: Loaded from external `cel_response_rules.yaml` file when `response_validation.cel` mode is not disabled (deterministic CEL-based rules)
+- **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `response_validation.ai` mode is not disabled
 - **Multi-Client Validation**: Policies can target specific clients using name prefixes
 - **Required When Not Disabled**: Rules files must be specified in config when their corresponding validation mode is not disabled
 
@@ -181,6 +182,7 @@ When adding new configuration fields:
 - **Sensible defaults**: Provide reasonable defaults to minimize required user configuration
 - **Environment variable support**: Ensure the field can be overridden via environment variable (follows `MAYBE_DONT_` prefix pattern)
 - **Test coverage**: Add tests to verify the config value is loaded correctly and can be overridden via environment variable
+- **Keep example config in sync**: When adding or changing defaults in `internal/config/config.go`, update `config/maybedont.yaml` to reflect the actual defaults. The shipped config file should represent what you'd get if you omitted the config file entirely.
 
 ### Logging Conventions
 **Log level guidelines:**
@@ -268,6 +270,39 @@ Key environment variables for configuration:
 - `MAYBEDONT_METRICS_OPTOUT` - Set to any value to disable anonymous usage metrics collection
 - Environment variables follow the pattern: `MAYBE_DONT_{CONFIG_PATH}` where CONFIG_PATH uses underscores
 - Use `${VAR_NAME}` syntax in config files for environment variable substitution (e.g., `api_key: "${OPENAI_API_KEY}"`)
+
+### Downstream MCP Server Configuration via Environment Variables
+
+Configure downstream servers entirely via environment variables (no YAML file required):
+
+```bash
+# Basic HTTP client
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE=http
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL=https://api.githubcopilot.com/mcp/
+
+# STDIO client with arguments
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_TYPE=stdio
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_COMMAND=/usr/local/bin/mcp-server
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_ARGS=--verbose,--port=8080
+
+# Pass-through auth (compact format - single header)
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_ENABLED=true
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS=X-Token:Authorization:Bearer {value}
+
+# Pass-through auth (compact format - multiple headers, semicolon-separated)
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_MYAPI_AUTH_PASS_THROUGH_HEADERS=X-Token:Authorization:Bearer {value};X-Tenant:X-Downstream-Tenant
+
+# Pass-through auth (indexed format - mirrors YAML structure)
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER=X-Token
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_TARGET_HEADER=Authorization
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_FORMAT=Bearer {value}
+```
+
+**Client naming:** Underscores in env vars are converted to hyphens: `AWS_DOCS` → `aws-docs`
+
+**Limitation:** Client names with literal underscores (e.g., `aws_docs` in YAML) cannot be configured via env vars. Use YAML for these edge cases.
+
+**Compact header format:** `source:target[:format]` with multiple headers separated by `;`
 
 ## Anonymous Usage Metrics
 

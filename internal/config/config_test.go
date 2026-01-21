@@ -279,14 +279,11 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 		}{
 			// No required fields in Audit anymore
 		},
-		AIRequestValidation: struct {
-			Enabled   *bool      `mapstructure:"enabled"`
-			Mode      PolicyMode `mapstructure:"mode"`
-			RulesFile string     `mapstructure:"rules_file"`
-			Rules     []AIPolicy `mapstructure:"rules"`
-		}{
-			Mode: PolicyModeEnabled, // Use Mode instead of deprecated Enabled
-			// AI credentials are now in validation.ai - Error 11, 12, 13
+		RequestValidation: RequestValidationConfig{
+			AI: AIRequestValidationConfig{
+				Mode: PolicyModeEnabled, // Use Mode instead of deprecated Enabled
+				// AI credentials are now in validation.ai - Error 11, 12, 13
+			},
 		},
 	}
 
@@ -299,19 +296,22 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 	// Check for multiple errors reported
 	require.Contains(t, errMsg, "13 error(s)")
 
-	// Check for specific errors
+	// Check for specific errors (new format includes env var hints for key errors)
 	require.Contains(t, errMsg, "invalid server type: invalid-type")
-	require.Contains(t, errMsg, "downstream_mcp_servers[test1].command is required")
+	require.Contains(t, errMsg, "downstream_mcp_servers[test1].command")
+	require.Contains(t, errMsg, "required when type is stdio")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test1].startup_timeout_ms must be non-negative")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test1].initialization_retries must be less than 10")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test1].retry_delay_ms must be non-negative")
-	require.Contains(t, errMsg, "downstream_mcp_servers[test2].downstream_url")
+	require.Contains(t, errMsg, "downstream_mcp_servers[test2].url")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test2].capability_discovery_delay_ms must be non-negative")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test2].capability_discovery_retries must be less than 10")
 	require.Contains(t, errMsg, "downstream_mcp_servers[test2].capability_retry_delay_ms must be less than 30000ms")
-	require.Contains(t, errMsg, "validation.ai.api_key is required")
-	require.Contains(t, errMsg, "validation.ai.endpoint is required")
-	require.Contains(t, errMsg, "validation.ai.model is required")
+	require.Contains(t, errMsg, "validation.ai.api_key")
+	require.Contains(t, errMsg, "required when AI validation or audit report is enabled")
+	// Verify env var hints are included in error messages
+	require.Contains(t, errMsg, "MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST1_COMMAND")
+	require.Contains(t, errMsg, "MAYBE_DONT_VALIDATION_AI_API_KEY")
 }
 
 func TestValidateConfigSuccess(t *testing.T) {
@@ -383,18 +383,18 @@ downstream_mcp_servers:
     type: stdio
     command: echo
 
-# Explicitly disable request validation (it defaults to enabled)
+# Request validation with CEL disabled, AI enabled
 request_validation:
-  mode: disabled
+  cel:
+    mode: disabled
+  ai:
+    enabled: true
+    rules_file: ai_request_rules.yaml
 
 validation:
   ai:
     endpoint: https://api.openai.com/v1
     model: gpt-4
-
-ai_request_validation:
-  enabled: true
-  rules_file: ai_rules.yaml
 `
 	err := os.WriteFile(configPath, []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -407,7 +407,7 @@ rules:
     prompt: Test prompt
     message: Test message
 `
-	err = os.WriteFile(tmpDir+"/ai_rules.yaml", []byte(rulesContent), 0644)
+	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0644)
 	require.NoError(t, err)
 
 	// Set the API key via environment variable
@@ -1247,23 +1247,23 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: enabled
-  rules_file: "../../../etc/passwd"
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: enabled
+    rules_file: "../../../etc/passwd"
+  ai:
+    mode: disabled
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
-	require.Error(t, err, "Path traversal should be rejected in request_validation.rules_file")
-	require.Contains(t, err.Error(), "request_validation.rules_file")
+	require.Error(t, err, "Path traversal should be rejected in request_validation.cel.rules_file")
+	require.Contains(t, err.Error(), "request_validation.cel.rules_file")
 	require.Contains(t, err.Error(), "parent directory")
 }
 
 func TestLoadConfig_AIRequestRulesFilePathTraversalRejected(t *testing.T) {
-	// Test that path traversal is rejected in ai_request_validation.rules_file
+	// Test that path traversal is rejected in request_validation.ai.rules_file
 	viper.Reset()
 	tmpDir := t.TempDir()
 
@@ -1273,27 +1273,30 @@ downstream_mcp_servers:
     type: stdio
     command: echo
 
-request_validation:
-  mode: disabled
+validation:
+  ai:
+    endpoint: https://api.example.com/v1
+    model: test-model
+    api_key: test-key
 
-ai_request_validation:
-  mode: enabled
-  endpoint: https://api.example.com/v1
-  model: test-model
-  api_key: test-key
-  rules_file: "../../secrets/rules.yaml"
+request_validation:
+  cel:
+    mode: disabled
+  ai:
+    mode: enabled
+    rules_file: "../../secrets/rules.yaml"
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
-	require.Error(t, err, "Path traversal should be rejected in ai_request_validation.rules_file")
-	require.Contains(t, err.Error(), "ai_request_validation.rules_file")
+	require.Error(t, err, "Path traversal should be rejected in request_validation.ai.rules_file")
+	require.Contains(t, err.Error(), "request_validation.ai.rules_file")
 	require.Contains(t, err.Error(), "parent directory")
 }
 
 func TestLoadConfig_ResponseRulesFilePathTraversalRejected(t *testing.T) {
-	// Test that path traversal is rejected in response_validation.rules_file
+	// Test that path traversal is rejected in response_validation.cel.rules_file
 	viper.Reset()
 	tmpDir := t.TempDir()
 
@@ -1304,55 +1307,59 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: disabled
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: disabled
+  ai:
+    mode: disabled
 
 response_validation:
-  mode: enabled
-  rules_file: "../secret/response_rules.yaml"
+  cel:
+    mode: enabled
+    rules_file: "../secret/response_rules.yaml"
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
-	require.Error(t, err, "Path traversal should be rejected in response_validation.rules_file")
-	require.Contains(t, err.Error(), "response_validation.rules_file")
+	require.Error(t, err, "Path traversal should be rejected in response_validation.cel.rules_file")
+	require.Contains(t, err.Error(), "response_validation.cel.rules_file")
 	require.Contains(t, err.Error(), "parent directory")
 }
 
 func TestLoadConfig_AIResponseRulesFilePathTraversalRejected(t *testing.T) {
-	// Test that path traversal is rejected in ai_response_validation.rules_file
+	// Test that path traversal is rejected in response_validation.ai.rules_file
 	viper.Reset()
 	tmpDir := t.TempDir()
 
-	// ai_response_validation shares credentials with ai_request_validation
 	configContent := `
 downstream_mcp_servers:
   test:
     type: stdio
     command: echo
 
+validation:
+  ai:
+    endpoint: https://api.example.com/v1
+    model: test-model
+    api_key: test-key
+
 request_validation:
-  mode: disabled
+  cel:
+    mode: disabled
+  ai:
+    mode: disabled
 
-ai_request_validation:
-  mode: disabled
-  endpoint: https://api.example.com/v1
-  model: test-model
-  api_key: test-key
-
-ai_response_validation:
-  mode: enabled
-  rules_file: "/etc/passwd"
+response_validation:
+  ai:
+    mode: enabled
+    rules_file: "/etc/passwd"
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
-	require.Error(t, err, "Absolute path should be rejected in ai_response_validation.rules_file")
-	require.Contains(t, err.Error(), "ai_response_validation.rules_file")
+	require.Error(t, err, "Absolute path should be rejected in response_validation.ai.rules_file")
+	require.Contains(t, err.Error(), "response_validation.ai.rules_file")
 	require.Contains(t, err.Error(), "absolute path")
 }
 
@@ -1383,11 +1390,11 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: enabled
-  rules_file: "rules/custom/my-rules.yaml"
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: enabled
+    rules_file: "rules/custom/my-rules.yaml"
+  ai:
+    mode: disabled
 
 native_tools:
   audit_report:
@@ -1398,8 +1405,8 @@ native_tools:
 
 	cfg, err := LoadConfig(tmpDir, "")
 	require.NoError(t, err, "Subdirectory paths should be allowed for rules_file")
-	require.Len(t, cfg.RequestValidation.Rules, 1)
-	require.Equal(t, "test-rule", cfg.RequestValidation.Rules[0].Name)
+	require.Len(t, cfg.RequestValidation.CEL.Rules, 1)
+	require.Equal(t, "test-rule", cfg.RequestValidation.CEL.Rules[0].Name)
 }
 
 func TestLoadConfig_RulesFileHiddenFileRejected(t *testing.T) {
@@ -1414,18 +1421,18 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: enabled
-  rules_file: ".hidden_rules.yaml"
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: enabled
+    rules_file: ".hidden_rules.yaml"
+  ai:
+    mode: disabled
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
 	require.Error(t, err, "Hidden files should be rejected in rules_file")
-	require.Contains(t, err.Error(), "request_validation.rules_file")
+	require.Contains(t, err.Error(), "request_validation.cel.rules_file")
 	require.Contains(t, err.Error(), "hidden")
 }
 
@@ -1441,18 +1448,18 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: enabled
-  rules_file: "%2e%2e/rules.yaml"
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: enabled
+    rules_file: "%2e%2e/rules.yaml"
+  ai:
+    mode: disabled
 `
 	err := os.WriteFile(tmpDir+"/maybedont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
 	require.Error(t, err, "URL-encoded path traversal should be rejected")
-	require.Contains(t, err.Error(), "request_validation.rules_file")
+	require.Contains(t, err.Error(), "request_validation.cel.rules_file")
 }
 
 func TestLoadConfigWithoutConfigFile(t *testing.T) {
@@ -1584,8 +1591,8 @@ func TestLoadConfigWithEnvVarsOnly_ValidConfig(t *testing.T) {
 
 	// Minimal config with just downstream MCP servers
 	// Notes:
-	// - policy_validation defaults to enabled, so we must disable it since we have no rules file
-	// - ai_validation defaults to audit_only, so we must disable it since we have no API key
+	// - request_validation.cel defaults to enabled, so we must disable it since we have no rules file
+	// - request_validation.ai defaults to audit_only, so we must disable it since we have no API key
 	// - audit_report defaults to enabled, so we must disable it since we have no AI credentials
 	configContent := `
 downstream_mcp_servers:
@@ -1594,10 +1601,10 @@ downstream_mcp_servers:
     command: echo
 
 request_validation:
-  mode: disabled
-
-ai_request_validation:
-  mode: disabled
+  cel:
+    mode: disabled
+  ai:
+    mode: disabled
 
 native_tools:
   audit_report:
@@ -1686,5 +1693,375 @@ func createValidBaseConfig() *Config {
 				MaxEntries: 1000,
 			},
 		},
+	}
+}
+
+// TestParseCompactHeaders tests the compact header format parsing
+func TestParseCompactHeaders(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []CredentialMapping
+		wantErr  bool
+		errMsg   string
+	}{
+		{
+			name:  "single header with source and target only",
+			input: "X-GitHub-Token:Authorization",
+			expected: []CredentialMapping{
+				{SourceHeader: "X-GitHub-Token", TargetHeader: "Authorization"},
+			},
+		},
+		{
+			name:  "single header with format",
+			input: "X-GitHub-Token:Authorization:Bearer {value}",
+			expected: []CredentialMapping{
+				{SourceHeader: "X-GitHub-Token", TargetHeader: "Authorization", Format: "Bearer {value}"},
+			},
+		},
+		{
+			name:  "multiple headers with semicolon separator",
+			input: "X-Token:Authorization:Bearer {value};X-Tenant:X-Downstream-Tenant",
+			expected: []CredentialMapping{
+				{SourceHeader: "X-Token", TargetHeader: "Authorization", Format: "Bearer {value}"},
+				{SourceHeader: "X-Tenant", TargetHeader: "X-Downstream-Tenant"},
+			},
+		},
+		{
+			name:  "format containing colon",
+			input: "X-Token:Authorization:Prefix: {value}",
+			expected: []CredentialMapping{
+				{SourceHeader: "X-Token", TargetHeader: "Authorization", Format: "Prefix: {value}"},
+			},
+		},
+		{
+			name:    "missing colon - error",
+			input:   "X-GitHub-Token",
+			wantErr: true,
+			errMsg:  "must contain at least one colon",
+		},
+		{
+			name:    "empty source header - error",
+			input:   ":Authorization",
+			wantErr: true,
+			errMsg:  "source_header cannot be empty",
+		},
+		{
+			name:    "empty target header - error",
+			input:   "X-Token:",
+			wantErr: true,
+			errMsg:  "target_header cannot be empty",
+		},
+		{
+			name:     "empty input",
+			input:    "",
+			expected: nil,
+		},
+		{
+			name:  "whitespace handling",
+			input: " X-Token : Authorization : Bearer {value} ",
+			expected: []CredentialMapping{
+				{SourceHeader: "X-Token", TargetHeader: "Authorization", Format: "Bearer {value}"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseCompactHeaders(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errMsg)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestExtractClientNameAndPath tests client name and field path extraction
+func TestExtractClientNameAndPath(t *testing.T) {
+	tests := []struct {
+		name           string
+		suffix         string
+		expectedClient string
+		expectedPath   string
+		expectedOk     bool
+	}{
+		{
+			name:           "simple client with TYPE",
+			suffix:         "GITHUB_TYPE",
+			expectedClient: "github",
+			expectedPath:   "TYPE",
+			expectedOk:     true,
+		},
+		{
+			name:           "multi-word client name",
+			suffix:         "AWS_DOCS_TYPE",
+			expectedClient: "aws-docs",
+			expectedPath:   "TYPE",
+			expectedOk:     true,
+		},
+		{
+			name:           "client with URL field",
+			suffix:         "GITHUB_URL",
+			expectedClient: "github",
+			expectedPath:   "URL",
+			expectedOk:     true,
+		},
+		{
+			name:           "nested auth config",
+			suffix:         "GITHUB_AUTH_PASS_THROUGH_ENABLED",
+			expectedClient: "github",
+			expectedPath:   "AUTH_PASS_THROUGH_ENABLED",
+			expectedOk:     true,
+		},
+		{
+			name:           "indexed headers",
+			suffix:         "GITHUB_AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER",
+			expectedClient: "github",
+			expectedPath:   "AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER",
+			expectedOk:     true,
+		},
+		{
+			name:           "compact headers",
+			suffix:         "MY_SERVER_AUTH_PASS_THROUGH_HEADERS",
+			expectedClient: "my-server",
+			expectedPath:   "AUTH_PASS_THROUGH_HEADERS",
+			expectedOk:     true,
+		},
+		{
+			name:           "http headers",
+			suffix:         "GITHUB_HTTP_HEADERS_AUTHORIZATION",
+			expectedClient: "github",
+			expectedPath:   "HTTP_HEADERS_AUTHORIZATION",
+			expectedOk:     true,
+		},
+		{
+			name:       "unrecognized field path",
+			suffix:     "GITHUB_UNKNOWN_FIELD",
+			expectedOk: false,
+		},
+		{
+			name:       "empty suffix",
+			suffix:     "",
+			expectedOk: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clientName, fieldPath, ok := extractClientNameAndPath(tt.suffix)
+			require.Equal(t, tt.expectedOk, ok, "ok mismatch")
+			if tt.expectedOk {
+				require.Equal(t, tt.expectedClient, clientName, "client name mismatch")
+				require.Equal(t, tt.expectedPath, fieldPath, "field path mismatch")
+			}
+		})
+	}
+}
+
+// TestParseDownstreamServersFromEnv tests parsing downstream servers from environment variables
+func TestParseDownstreamServersFromEnv(t *testing.T) {
+	// Helper to set and clean up env vars
+	setEnvVars := func(vars map[string]string) func() {
+		for k, v := range vars {
+			_ = os.Setenv(k, v)
+		}
+		return func() {
+			for k := range vars {
+				_ = os.Unsetenv(k)
+			}
+		}
+	}
+
+	t.Run("basic client configuration", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE": "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL":  "https://api.github.com/mcp/",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(nil, "MAYBE_DONT")
+		require.Len(t, servers, 1)
+		require.Equal(t, "http", servers["github"].Type)
+		require.Equal(t, "https://api.github.com/mcp/", servers["github"].URL)
+	})
+
+	t.Run("multi-word client name with underscore to hyphen conversion", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_AWS_DOCS_TYPE": "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_AWS_DOCS_URL":  "https://aws.example.com/",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(nil, "MAYBE_DONT")
+		require.Len(t, servers, 1)
+		require.Equal(t, "http", servers["aws-docs"].Type)
+		require.Equal(t, "https://aws.example.com/", servers["aws-docs"].URL)
+	})
+
+	t.Run("pass-through auth with compact headers", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE":                      "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL":                       "https://api.github.com/",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_ENABLED": "true",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS": "X-Token:Authorization:Bearer {value}",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(nil, "MAYBE_DONT")
+		require.Len(t, servers, 1)
+		require.True(t, servers["github"].Auth.PassThrough.Enabled)
+		require.Len(t, servers["github"].Auth.PassThrough.Headers, 1)
+		require.Equal(t, "X-Token", servers["github"].Auth.PassThrough.Headers[0].SourceHeader)
+		require.Equal(t, "Authorization", servers["github"].Auth.PassThrough.Headers[0].TargetHeader)
+		require.Equal(t, "Bearer {value}", servers["github"].Auth.PassThrough.Headers[0].Format)
+	})
+
+	t.Run("pass-through auth with indexed headers", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE":                                            "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL":                                             "https://api.github.com/",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_ENABLED":                       "true",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER":       "X-Token",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_TARGET_HEADER":       "Authorization",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_FORMAT":              "Bearer {value}",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_1_SOURCE_HEADER":       "X-Tenant",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_1_TARGET_HEADER":       "X-Downstream-Tenant",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(nil, "MAYBE_DONT")
+		require.Len(t, servers, 1)
+		require.True(t, servers["github"].Auth.PassThrough.Enabled)
+		require.Len(t, servers["github"].Auth.PassThrough.Headers, 2)
+		require.Equal(t, "X-Token", servers["github"].Auth.PassThrough.Headers[0].SourceHeader)
+		require.Equal(t, "Authorization", servers["github"].Auth.PassThrough.Headers[0].TargetHeader)
+		require.Equal(t, "Bearer {value}", servers["github"].Auth.PassThrough.Headers[0].Format)
+		require.Equal(t, "X-Tenant", servers["github"].Auth.PassThrough.Headers[1].SourceHeader)
+		require.Equal(t, "X-Downstream-Tenant", servers["github"].Auth.PassThrough.Headers[1].TargetHeader)
+	})
+
+	t.Run("stdio client with command and args", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_TYPE":    "stdio",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_COMMAND": "/usr/local/bin/mcp-server",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_ARGS":    "--verbose,--port=8080",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(nil, "MAYBE_DONT")
+		require.Len(t, servers, 1)
+		require.Equal(t, "stdio", servers["local"].Type)
+		require.Equal(t, "/usr/local/bin/mcp-server", servers["local"].Command)
+		require.Equal(t, []string{"--verbose", "--port=8080"}, servers["local"].Args)
+	})
+
+	t.Run("multiple clients", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE": "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL":  "https://api.github.com/",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_TYPE":  "stdio",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_COMMAND": "/usr/bin/mcp",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(nil, "MAYBE_DONT")
+		require.Len(t, servers, 2)
+		require.Equal(t, "http", servers["github"].Type)
+		require.Equal(t, "stdio", servers["local"].Type)
+	})
+
+	t.Run("env vars override existing YAML config", func(t *testing.T) {
+		existing := map[string]ClientConfig{
+			"github": {
+				Type: "http",
+				URL:  "https://old-url.com/",
+			},
+		}
+
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL": "https://new-url.com/",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(existing, "MAYBE_DONT")
+		require.Len(t, servers, 1)
+		require.Equal(t, "http", servers["github"].Type) // Unchanged
+		require.Equal(t, "https://new-url.com/", servers["github"].URL) // Overridden
+	})
+
+	t.Run("http headers configuration", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_API_TYPE":                     "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_API_URL":                      "https://api.example.com/",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_API_HTTP_HEADERS_X_API_KEY":   "secret123",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_API_HTTP_HEADERS_X_CLIENT_ID": "my-client",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(nil, "MAYBE_DONT")
+		require.Len(t, servers, 1)
+		require.Equal(t, "secret123", servers["api"].HTTPConfig.Headers["X_API_KEY"])
+		require.Equal(t, "my-client", servers["api"].HTTPConfig.Headers["X_CLIENT_ID"])
+	})
+
+	t.Run("integer fields", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_TYPE":               "stdio",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_COMMAND":            "echo",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_STARTUP_TIMEOUT_MS": "5000",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_INITIALIZATION_RETRIES": "3",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(nil, "MAYBE_DONT")
+		require.Len(t, servers, 1)
+		require.Equal(t, 5000, servers["test"].StartupTimeoutMs)
+		require.Equal(t, 3, servers["test"].InitializationRetries)
+	})
+}
+
+// TestConfigPathToEnvVar tests the YAML path to env var conversion
+func TestConfigPathToEnvVar(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "simple path",
+			path:     "server.type",
+			expected: "MAYBE_DONT_SERVER_TYPE",
+		},
+		{
+			name:     "path with brackets",
+			path:     "downstream_mcp_servers[github].url",
+			expected: "MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL",
+		},
+		{
+			name:     "path with hyphen in client name",
+			path:     "downstream_mcp_servers[aws-docs].type",
+			expected: "MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_AWS_DOCS_TYPE",
+		},
+		{
+			name:     "nested path with index",
+			path:     "downstream_mcp_servers[github].auth.pass_through.headers[0].source_header",
+			expected: "MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER",
+		},
+		{
+			name:     "validation ai config",
+			path:     "validation.ai.api_key",
+			expected: "MAYBE_DONT_VALIDATION_AI_API_KEY",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ConfigPathToEnvVar(tt.path)
+			require.Equal(t, tt.expected, result)
+		})
 	}
 }
