@@ -33,6 +33,10 @@ type ResponseValidationResults struct {
 	// AIDetails contains detailed AI validation results for audit logging
 	// This is only populated by the AI response validation handler
 	AIDetails *AuditAIResult `json:"ai_details,omitempty"`
+	// AsyncCompletion is set when there are audit_only policies still evaluating in the background.
+	// The caller should read from this channel in a goroutine to receive complete AI results.
+	// This field is not serialized.
+	AsyncCompletion <-chan AsyncCompletion `json:"-"`
 }
 
 // AllowCount returns the number of results with allow action
@@ -130,6 +134,18 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 				}
 			}
 			finalResults.RedactedContent = results.RedactedContent
+		}
+
+		// Propagate rules and AI details from handlers
+		if results.RulesDetails != nil {
+			finalResults.RulesDetails = results.RulesDetails
+		}
+		if results.AIDetails != nil {
+			finalResults.AIDetails = results.AIDetails
+		}
+		// Propagate async completion channel from AI handler
+		if results.AsyncCompletion != nil {
+			finalResults.AsyncCompletion = results.AsyncCompletion
 		}
 	}
 

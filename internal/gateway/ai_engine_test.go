@@ -648,15 +648,20 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 		assert.Equal(t, int64(2000), budget.RemainingMs(), "Should have 2 seconds remaining")
 
 		// Call EvaluateToolCall - since all policies are audit_only,
-		// it shouldn't block regardless, but the budget should be passed through
+		// it returns immediately with AsyncCompletion channel
 		ctx := context.Background()
 		results, err := engine.EvaluateToolCall(ctx, createTestToolRequest("test_tool"), budget)
 		require.NoError(t, err)
 
-		// Audit-only policies don't block
+		// Audit-only policies don't block and return immediately
 		assert.True(t, results.Allowed)
-		assert.NotNil(t, results.AIDetails)
-		assert.Equal(t, int64(0), results.AIDetails.BlockedMs, "Audit-only should not block")
+		// With all audit_only policies, AIDetails comes via async channel
+		assert.NotNil(t, results.AsyncCompletion, "Should have async completion channel")
+
+		// Wait for async completion to get AIDetails
+		completion := <-results.AsyncCompletion
+		assert.NotNil(t, completion.AIDetails)
+		assert.Equal(t, int64(0), completion.AIDetails.BlockedMs, "Audit-only should not block")
 	})
 
 	t.Run("nil_budget_still_works", func(t *testing.T) {

@@ -19,6 +19,29 @@ type ValidationResult struct {
 	DurationMs int64               `json:"duration_ms"` // Time taken to evaluate this policy in milliseconds
 }
 
+// AsyncValidationResult wraps ValidationResults with optional async completion support.
+// When all policies are audit_only, the Completion channel allows deferred collection
+// of results while the main request proceeds immediately.
+type AsyncValidationResult struct {
+	// Immediate results (available when function returns)
+	Results ValidationResults
+
+	// For async completion (nil if no async work pending)
+	// When non-nil, the caller should read from this channel in a goroutine
+	// to receive complete AI results after all async policies finish.
+	Completion <-chan AsyncCompletion
+}
+
+// AsyncCompletion contains the final results from async policy evaluation.
+// This is sent on the Completion channel after all background evaluations complete.
+type AsyncCompletion struct {
+	// AIDetails contains complete AI validation results including async policies
+	AIDetails *AuditAIResult
+
+	// EvaluationMs is the total wall-clock time for all policies to complete
+	EvaluationMs int64
+}
+
 // ValidationResults represents all validation results for a request
 type ValidationResults struct {
 	Results    []ValidationResult `json:"results"`
@@ -33,6 +56,10 @@ type ValidationResults struct {
 	// AIDetails contains detailed AI validation results for audit logging
 	// This is only populated by the AI validation handler
 	AIDetails *AuditAIResult `json:"ai_details,omitempty"`
+	// AsyncCompletion is set when there are audit_only policies still evaluating in the background.
+	// The caller should read from this channel in a goroutine to receive complete AI results.
+	// This field is not serialized.
+	AsyncCompletion <-chan AsyncCompletion `json:"-"`
 }
 
 // ToolValidationHandler defines the interface for tool validation handlers
@@ -84,6 +111,10 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		}
 		if results.AIDetails != nil {
 			finalResults.AIDetails = results.AIDetails
+		}
+		// Propagate async completion channel from AI handler
+		if results.AsyncCompletion != nil {
+			finalResults.AsyncCompletion = results.AsyncCompletion
 		}
 
 		if !foundDeny && results.DenyCount > 0 && results.Message != "" {

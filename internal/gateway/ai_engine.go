@@ -11,7 +11,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
 	"go.uber.org/zap"
 )
 
@@ -34,7 +33,7 @@ type AIPolicyEngine struct {
 	model               string
 	apiKey              string
 	maxRuleEvaluationMs int
-	client              *openai.Client
+	client              AIClient
 }
 
 // InitAIPolicyEngine creates a new AI policy engine
@@ -42,10 +41,10 @@ func InitAIPolicyEngine(logger *config.SessionLogger, engine *AIPolicyEngine) er
 	// Set the logger
 	engine.logger = logger
 
-	client := openai.NewClient(
-		option.WithAPIKey(engine.apiKey),
-	)
-	engine.client = &client
+	// Only create client if not already set (allows injecting mock for tests)
+	if engine.client == nil {
+		engine.client = NewOpenAIClient(engine.apiKey)
+	}
 	return nil
 }
 
@@ -118,6 +117,13 @@ type aiRuleResult struct {
 // EvaluateToolCall evaluates a tool call request against all policies with early termination.
 // The optional budget parameter enables blocking time tracking for cumulative budget management.
 // When budget is nil, no blocking time is tracked and a default timeout is used.
+//
+// Async behavior for audit_only policies:
+// - When ALL policies are audit_only, the function returns immediately with Allowed=true
+//   and a non-nil AsyncCompletion channel. Results are collected in the background.
+// - When there are ENABLED policies, the function blocks until all enabled policies complete
+//   (or one denies). If audit_only policies are still running, they continue in the background
+//   and results are sent on the AsyncCompletion channel.
 func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest, budget *BlockingBudget) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -138,18 +144,20 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	}
 	evalStartTime := time.Now()
 
-	// Count enabled policies to determine blocking behavior
-	var enabledPolicies int
+	// Count enabled and audit_only policies
+	var enabledPolicies, auditOnlyPolicies int
 	for _, p := range e.policies {
-		if p.Mode == config.PolicyModeEnabled {
+		switch p.Mode {
+		case config.PolicyModeEnabled:
 			enabledPolicies++
+		case config.PolicyModeAuditOnly:
+			auditOnlyPolicies++
 		}
 	}
-	allAuditOnly := enabledPolicies == 0
+	allAuditOnly := enabledPolicies == 0 && auditOnlyPolicies > 0
 
 	// Create a cancellable context for early termination
 	evalCtx, cancelEval := context.WithCancel(ctx)
-	defer cancelEval()
 
 	// Channel to collect results from goroutines
 	resultChan := make(chan aiRuleResult, len(e.policies))
@@ -180,7 +188,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			}
 
 			// Call the AI API
-			chatCompletion, err := e.client.Chat.Completions.New(policyCtx, openai.ChatCompletionNewParams{
+			chatCompletion, err := e.client.CreateChatCompletion(policyCtx, openai.ChatCompletionNewParams{
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					openai.UserMessage(fmt.Sprintf(p.Prompt, toolCallStr)),
 				},
@@ -270,7 +278,84 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		}(policy)
 	}
 
-	// Collect results with early termination support
+	// If all policies are audit_only, return immediately with async completion
+	if allAuditOnly {
+		// Mark phase as decided immediately to avoid consuming budget
+		if phaseTracker != nil {
+			phaseTracker.MarkDecided()
+		}
+
+		// Create completion channel for async results
+		completionChan := make(chan AsyncCompletion, 1)
+
+		// Start background goroutine to collect all results
+		go func() {
+			defer cancelEval()
+			defer close(completionChan)
+
+			auditResults := make([]AuditAIRuleResult, 0, len(e.policies))
+			for i := 0; i < len(e.policies); i++ {
+				result := <-resultChan
+				auditResult := AuditAIRuleResult{
+					Rule:         result.rule,
+					Action:       string(result.action),
+					Mode:         "audit_only",
+					Result:       result.result,
+					EvaluationMs: result.evaluationMs,
+				}
+				if result.err != "" {
+					auditResult.Error = result.err
+				}
+				auditResults = append(auditResults, auditResult)
+
+				// Log result
+				e.logger.Debug(context.Background(), "AI policy evaluation result (async)",
+					zap.String("rule", result.rule),
+					zap.String("action", string(result.action)),
+					zap.String("result", result.result),
+					zap.Int64("evaluation_ms", result.evaluationMs),
+				)
+			}
+
+			evaluationMs := time.Since(evalStartTime).Milliseconds()
+
+			// Finalize phase tracking
+			if phaseTracker != nil {
+				_, evaluationMs = phaseTracker.Finalize()
+			}
+
+			aiDetails := &AuditAIResult{
+				Action:       "allow",
+				BlockedMs:    0,
+				EvaluationMs: evaluationMs,
+				Results:      auditResults,
+			}
+
+			completionChan <- AsyncCompletion{
+				AIDetails:    aiDetails,
+				EvaluationMs: evaluationMs,
+			}
+
+			e.logger.Info(context.Background(), "Tool call evaluation complete (async)",
+				zap.Bool("allowed", true),
+				zap.Int64("blocked_ms", int64(0)),
+				zap.Int64("evaluation_ms", evaluationMs),
+			)
+		}()
+
+		// Return immediately with allow decision and async completion channel
+		results.Allowed = true
+		results.Message = "All policies are audit_only, proceeding without blocking"
+		results.AllowCount = 1
+		results.AsyncCompletion = completionChan
+
+		e.logger.Debug(ctx, "AI validation returning immediately - all policies are audit_only")
+		return results, nil
+	}
+
+	// Regular synchronous flow for enabled policies
+	defer cancelEval()
+
 	var auditResults []AuditAIRuleResult
 	var decidingRule string
 	var decidingReason string
@@ -295,20 +380,12 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		blockingDeadline = evalStartTime.Add(5 * time.Second)
 	}
 
-	// If all policies are audit_only, don't block at all
-	if allAuditOnly {
-		// Mark phase as decided immediately (with minimal elapsed time) to avoid consuming budget
-		if phaseTracker != nil {
-			phaseTracker.MarkDecided()
-		}
-		blockedMs = 0
-		decided = true
-		finalAction = "allow"
-	}
+	// Track how many enabled policies we're waiting for
+	remainingEnabled := enabledPolicies
+	remainingTotal := len(e.policies)
 
-	// Collect results
-	remainingPolicies := len(e.policies)
-	for remainingPolicies > 0 {
+	// Collect results - block only until all enabled policies complete or deny
+	for remainingTotal > 0 {
 		// Check if we've exceeded blocking time (only matters if not yet decided)
 		if !decided && !blockingDeadline.IsZero() && time.Now().After(blockingDeadline) {
 			if phaseTracker != nil {
@@ -319,14 +396,93 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			finalAction = "allow" // Fail open on timeout
 			e.logger.Warn(ctx, "AI validation exceeded max blocking time, failing open",
 				zap.Int64("blocked_ms", blockedMs),
-				zap.Int("remaining_policies", remainingPolicies),
+				zap.Int("remaining_policies", remainingTotal),
 			)
+		}
+
+		// Check if all enabled policies have completed (decision can be made)
+		if !decided && remainingEnabled == 0 {
+			if phaseTracker != nil {
+				phaseTracker.MarkDecided()
+			}
+			blockedMs = time.Since(evalStartTime).Milliseconds()
+			decided = true
+			// finalAction remains "allow" since no enabled policy denied
+		}
+
+		// If decided and there are still audit_only policies running, continue async
+		if decided && remainingTotal > 0 {
+			// Create completion channel for remaining audit_only results
+			if auditOnlyPolicies > 0 && remainingTotal > 0 {
+				completionChan := make(chan AsyncCompletion, 1)
+
+				// Capture current state for background goroutine
+				capturedResults := make([]AuditAIRuleResult, len(auditResults))
+				copy(capturedResults, auditResults)
+				capturedRemaining := remainingTotal
+				capturedDecidingRule := decidingRule
+				capturedDecidingReason := decidingReason
+				capturedFinalAction := finalAction
+				capturedBlockedMs := blockedMs
+
+				go func() {
+					defer close(completionChan)
+
+					asyncResults := capturedResults
+					for i := 0; i < capturedRemaining; i++ {
+						result := <-resultChan
+						auditResult := AuditAIRuleResult{
+							Rule:         result.rule,
+							Action:       string(result.action),
+							Result:       result.result,
+							EvaluationMs: result.evaluationMs,
+						}
+						if result.mode == config.PolicyModeAuditOnly {
+							auditResult.Mode = "audit_only"
+						}
+						if result.err != "" {
+							auditResult.Error = result.err
+						}
+						asyncResults = append(asyncResults, auditResult)
+
+						e.logger.Debug(context.Background(), "AI policy evaluation result (async continuation)",
+							zap.String("rule", result.rule),
+							zap.String("result", result.result),
+							zap.Int64("evaluation_ms", result.evaluationMs),
+						)
+					}
+
+					evaluationMs := time.Since(evalStartTime).Milliseconds()
+
+					aiDetails := &AuditAIResult{
+						Action:       capturedFinalAction,
+						BlockedMs:    capturedBlockedMs,
+						EvaluationMs: evaluationMs,
+						Results:      asyncResults,
+					}
+					if capturedDecidingRule != "" {
+						aiDetails.DecidingRule = capturedDecidingRule
+						aiDetails.Reason = capturedDecidingReason
+					}
+
+					completionChan <- AsyncCompletion{
+						AIDetails:    aiDetails,
+						EvaluationMs: evaluationMs,
+					}
+				}()
+
+				results.AsyncCompletion = completionChan
+			}
+			break
 		}
 
 		// Use select with timeout to avoid blocking forever
 		select {
 		case result := <-resultChan:
-			remainingPolicies--
+			remainingTotal--
+			if result.mode == config.PolicyModeEnabled {
+				remainingEnabled--
+			}
 
 			// Build audit result entry
 			auditResult := AuditAIRuleResult{
@@ -356,10 +512,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					finalAction = "deny"
 					decidingRule = result.rule
 					decidingReason = result.message
-					cancelEval() // Cancel remaining goroutines
+					cancelEval() // Cancel remaining enabled goroutines
 				case "error":
-					// Errors on enabled policies fail open (allow) - don't block requests due to AI failures
-					// The error is still logged and recorded in audit, but doesn't affect the decision
+					// Errors on enabled policies fail open (allow)
 					e.logger.Warn(ctx, "AI policy evaluation failed, failing open",
 						zap.String("rule", result.rule),
 						zap.String("error", result.err),
@@ -375,7 +530,6 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				zap.Int64("evaluation_ms", result.evaluationMs),
 			)
 
-			// Log errors with evaluation_ms
 			if result.err != "" {
 				e.logger.Error(ctx, "AI policy evaluation error",
 					zap.String("rule", result.rule),
@@ -393,35 +547,34 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	// Finalize phase tracking and get accurate blocked/evaluation times
 	var evaluationMs int64
 	if phaseTracker != nil {
-		// Use phase tracker for accurate cumulative budget tracking
 		var trackedBlockedMs int64
 		trackedBlockedMs, evaluationMs = phaseTracker.Finalize()
-		// For audit-only policies, we don't block at all, so override blockedMs
 		if !allAuditOnly {
 			blockedMs = trackedBlockedMs
 		}
-		// blockedMs remains 0 for audit-only (already set above)
 	} else {
-		// Fallback when no budget is provided
 		if !decided {
 			blockedMs = time.Since(evalStartTime).Milliseconds()
 		}
 		evaluationMs = time.Since(evalStartTime).Milliseconds()
 	}
 
-	// Build the AIDetails for audit logging
-	aiDetails := &AuditAIResult{
-		Action:       finalAction,
-		BlockedMs:    blockedMs,
-		EvaluationMs: evaluationMs,
-		Results:      auditResults,
-	}
-	if decidingRule != "" {
-		aiDetails.DecidingRule = decidingRule
-		aiDetails.Reason = decidingReason
+	// Build the AIDetails for audit logging (only if not using async completion)
+	if results.AsyncCompletion == nil {
+		aiDetails := &AuditAIResult{
+			Action:       finalAction,
+			BlockedMs:    blockedMs,
+			EvaluationMs: evaluationMs,
+			Results:      auditResults,
+		}
+		if decidingRule != "" {
+			aiDetails.DecidingRule = decidingRule
+			aiDetails.Reason = decidingReason
+		}
+		results.AIDetails = aiDetails
 	}
 
-	// Build legacy ValidationResults for compatibility
+	// Build ValidationResults
 	results.Allowed = finalAction == "allow"
 	if finalAction == "deny" {
 		results.Message = "Maybe Don't, A policy failed."
@@ -430,13 +583,13 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		results.Message = "All policies passed, maybe do."
 		results.AllowCount = 1
 	}
-	results.AIDetails = aiDetails
 
 	e.logger.Info(ctx, "Tool call evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("deciding_rule", decidingRule),
 		zap.Int64("blocked_ms", blockedMs),
 		zap.Int64("evaluation_ms", evaluationMs),
+		zap.Bool("has_async", results.AsyncCompletion != nil),
 	)
 
 	return results, nil

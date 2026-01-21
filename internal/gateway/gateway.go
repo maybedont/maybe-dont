@@ -70,6 +70,8 @@ type Gateway struct {
 	nativeToolsHandler *NativeToolsHandler
 	// Trusted proxy checker for extracting client IPs
 	trustedProxyChecker *TrustedProxyChecker
+	// WaitGroup for tracking pending async audit writes
+	pendingAuditWrites sync.WaitGroup
 }
 
 // New creates a new gateway instance.
@@ -330,6 +332,10 @@ func (g *Gateway) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Wait for pending async audit writes to complete before closing the writer
+	g.logger.Debug(ctx, "Waiting for pending async audit writes to complete")
+	g.pendingAuditWrites.Wait()
+
 	// Close the audit writer
 	if g.auditWriter != nil {
 		if err := g.auditWriter.Close(); err != nil {
@@ -385,13 +391,29 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	// Create context with blocking budget for validation handlers
 	validationCtx := WithBlockingBudget(ctx, blockingBudget)
 
-	// Helper to write audit log
+	// Helper to write audit log - handles both sync and async cases
 	writeAuditLog := func() {
 		// Set total blocked time from budget
 		audit.SetTotalBlockedMs(blockingBudget.TotalBlockedMs())
-		entry := audit.Finalize()
-		if _, err := g.auditWriter.Write(entry); err != nil {
-			g.logger.Error(ctx, "Failed to write audit log", zap.Error(err))
+
+		// Check if there's async work pending (audit_only policies still running)
+		if audit.HasAsyncWork() {
+			// Track this async write for graceful shutdown
+			g.pendingAuditWrites.Add(1)
+			// Write audit log asynchronously after all background work completes
+			go func() {
+				defer g.pendingAuditWrites.Done()
+				entry := audit.FinalizeAsync()
+				if _, err := g.auditWriter.Write(entry); err != nil {
+					g.logger.Error(context.Background(), "Failed to write audit log (async)", zap.Error(err))
+				}
+			}()
+		} else {
+			// Synchronous audit log write
+			entry := audit.Finalize()
+			if _, err := g.auditWriter.Write(entry); err != nil {
+				g.logger.Error(ctx, "Failed to write audit log", zap.Error(err))
+			}
 		}
 	}
 
@@ -561,7 +583,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 // populateRequestValidationAudit extracts validation results by policy type and populates audit context
 func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results ValidationResults) {
-	if len(results.Results) == 0 && results.RulesDetails == nil && results.AIDetails == nil {
+	if len(results.Results) == 0 && results.RulesDetails == nil && results.AIDetails == nil && results.AsyncCompletion == nil {
 		return
 	}
 
@@ -570,15 +592,20 @@ func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results Va
 		audit.SetRequestValidationRules(results.RulesDetails)
 	}
 
-	// Set AI details if present
+	// Set AI details if present (for synchronous completion)
 	if results.AIDetails != nil {
 		audit.SetRequestValidationAI(results.AIDetails)
+	}
+
+	// Register async completion channel if present (for audit_only policies still running)
+	if results.AsyncCompletion != nil {
+		audit.SetRequestAIResultsAsync(results.AsyncCompletion)
 	}
 }
 
 // populateResponseValidationAudit extracts response validation results by policy type
 func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results ResponseValidationResults) {
-	if len(results.Results) == 0 && results.RulesDetails == nil && results.AIDetails == nil {
+	if len(results.Results) == 0 && results.RulesDetails == nil && results.AIDetails == nil && results.AsyncCompletion == nil {
 		return
 	}
 
@@ -587,9 +614,14 @@ func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results R
 		audit.SetResponseValidationRules(results.RulesDetails)
 	}
 
-	// Set AI details if present
+	// Set AI details if present (for synchronous completion)
 	if results.AIDetails != nil {
 		audit.SetResponseValidationAI(results.AIDetails)
+	}
+
+	// Register async completion channel if present (for audit_only policies still running)
+	if results.AsyncCompletion != nil {
+		audit.SetResponseAIResultsAsync(results.AsyncCompletion)
 	}
 }
 
