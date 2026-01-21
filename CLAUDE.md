@@ -63,7 +63,7 @@ The gateway supports multiple MCP transport types per client:
 
 ### Configuration Hierarchy
 Configuration is loaded in this order (later overrides earlier):
-1. YAML config file (`maybedont.yaml`, with fallback to deprecated `gateway-config.yaml`)
+1. YAML config file (`maybe-dont.yaml`, with fallback to deprecated `maybedont.yaml` and `gateway-config.yaml`)
 2. Environment variables (prefix: `MAYBE_DONT_`)
 3. Command-line flags
 
@@ -182,7 +182,7 @@ When adding new configuration fields:
 - **Sensible defaults**: Provide reasonable defaults to minimize required user configuration
 - **Environment variable support**: Ensure the field can be overridden via environment variable (follows `MAYBE_DONT_` prefix pattern)
 - **Test coverage**: Add tests to verify the config value is loaded correctly and can be overridden via environment variable
-- **Keep example config in sync**: When adding or changing defaults in `internal/config/config.go`, update `config/maybedont.yaml` to reflect the actual defaults. The shipped config file should represent what you'd get if you omitted the config file entirely.
+- **Keep example config in sync**: When adding or changing defaults in `internal/config/config.go`, update `config/maybe-dont.yaml` to reflect the actual defaults. The shipped config file should represent what you'd get if you omitted the config file entirely.
 
 ### Logging Conventions
 **Log level guidelines:**

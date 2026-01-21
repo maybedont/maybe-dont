@@ -132,7 +132,7 @@ func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&cfgDir, "config-dir", "", "Config directory (env: MAYBE_DONT_CONFIG_DIR, default: ./config or $HOME/.maybe-dont/config)")
 	rootCmd.PersistentFlags().StringVar(&logDir, "log-dir", "", "Log directory (env: MAYBE_DONT_LOG_DIR, default: <config-dir>/logs)")
-	rootCmd.PersistentFlags().StringVar(&cfgFileName, "config-file-name", "", "Config file name (env: MAYBE_DONT_CONFIG_FILE_NAME, default: maybedont.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFileName, "config-file-name", "", "Config file name (env: MAYBE_DONT_CONFIG_FILE_NAME, default: maybe-dont.yaml)")
 
 	// Deprecated flags for backwards compatibility
 	rootCmd.PersistentFlags().StringVar(&cfgPath, "config-path", "", "Deprecated: use --config-dir instead")
