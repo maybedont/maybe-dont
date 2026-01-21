@@ -8,14 +8,9 @@ before:
     # you may remove this if you don't need 'go generate'
     - go generate ./...
 
-after:
-  hooks:
-    # Generate individual .sha256 checksum files for each archive
-    - cmd: sh -c 'for f in dist/*.tar.gz dist/*.zip; do [ -f "$f" ] && (cd dist && shasum -a 256 "$(basename "$f")") > "$f.sha256"; done'
-
-release:
-  extra_files:
-    - glob: dist/*.sha256
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  split: true
 
 upx:
   - enabled: true
