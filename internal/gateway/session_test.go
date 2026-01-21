@@ -470,6 +470,30 @@ func TestSession_ActivityTracking(t *testing.T) {
 	assert.True(t, newActivity.After(initialActivity))
 }
 
+func TestSession_ClientIPAndUserAgent(t *testing.T) {
+	session := NewSession("test-session")
+
+	// New session should have empty ClientIP and UserAgent
+	assert.Empty(t, session.GetClientIP())
+	assert.Empty(t, session.GetUserAgent())
+
+	// Set ClientIP and UserAgent
+	session.SetClientIP("192.168.1.100")
+	session.SetUserAgent("Claude-Code/1.0.0")
+
+	// Verify values are stored and retrieved correctly
+	assert.Equal(t, "192.168.1.100", session.GetClientIP())
+	assert.Equal(t, "Claude-Code/1.0.0", session.GetUserAgent())
+
+	// Update values
+	session.SetClientIP("10.0.0.50")
+	session.SetUserAgent("MCP-Client/2.0")
+
+	// Verify updated values
+	assert.Equal(t, "10.0.0.50", session.GetClientIP())
+	assert.Equal(t, "MCP-Client/2.0", session.GetUserAgent())
+}
+
 func TestSession_IsExpired(t *testing.T) {
 	session := NewSession("test-session")
 

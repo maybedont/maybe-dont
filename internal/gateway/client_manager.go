@@ -501,6 +501,15 @@ func (cm *ClientManager) SetSessionClientIP(sessionID, clientIP string) {
 	session.SetClientIP(clientIP)
 }
 
+// SetSessionUserAgent sets the User-Agent for a session
+func (cm *ClientManager) SetSessionUserAgent(sessionID, userAgent string) {
+	session, ok := cm.sessionManager.GetSession(sessionID)
+	if !ok {
+		return
+	}
+	session.SetUserAgent(userAgent)
+}
+
 // GetActiveSessions returns information about all active sessions
 func (cm *ClientManager) GetActiveSessions() []SessionInfo {
 	sessionIDs := cm.sessionManager.GetAllSessions()
@@ -522,6 +531,7 @@ func (cm *ClientManager) GetActiveSessions() []SessionInfo {
 		sessions = append(sessions, SessionInfo{
 			SessionID:       sessionID,
 			ClientIP:        session.GetClientIP(),
+			UserAgent:       session.GetUserAgent(),
 			DownstreamNames: clientNames,
 		})
 	}

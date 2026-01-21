@@ -50,6 +50,7 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 	// The request context (ctx) may be cancelled when the HTTP request ends,
 	// so we need to capture these values and create a new context for async work.
 	clientIP, hasClientIP := GetClientIP(ctx)
+	userAgent, hasUserAgent := GetUserAgent(ctx)
 	serviceCreds, _ := ctx.Value(ServiceCredentialsKey).(*ServiceCredentials)
 
 	// Determine if this session has credentials (helps identify initialization vs SSE sessions)
@@ -64,6 +65,14 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 		g.logger.Debug(ctx, "Stored client IP for session",
 			zap.String("session_id", sessionID),
 			zap.String("client_ip", clientIP))
+	}
+
+	// Store User-Agent in session immediately (this is fast, no network I/O)
+	if hasUserAgent && userAgent != "" {
+		g.clientManager.SetSessionUserAgent(sessionID, userAgent)
+		g.logger.Debug(ctx, "Stored User-Agent for session",
+			zap.String("session_id", sessionID),
+			zap.String("user_agent", userAgent))
 	}
 
 	// Only trigger tool discovery if credentials are present.

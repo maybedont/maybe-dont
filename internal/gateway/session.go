@@ -38,6 +38,7 @@ type SessionClientInfo struct {
 type Session struct {
 	ID           string
 	ClientIP     string // IP address of the upstream client
+	UserAgent    string // User-Agent header from the upstream client
 	CreatedAt    time.Time
 	lastActivity time.Time
 	mu           sync.RWMutex
@@ -89,6 +90,20 @@ func (s *Session) GetClientIP() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ClientIP
+}
+
+// SetUserAgent sets the User-Agent header for this session
+func (s *Session) SetUserAgent(userAgent string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.UserAgent = userAgent
+}
+
+// GetUserAgent returns the User-Agent header for this session
+func (s *Session) GetUserAgent() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.UserAgent
 }
 
 // GetClient returns a downstream client for this session
