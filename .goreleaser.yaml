@@ -8,8 +8,14 @@ before:
     # you may remove this if you don't need 'go generate'
     - go generate ./...
 
+after:
+  hooks:
+    # Reformat checksum files to be sha256sum -c compatible
+    - cmd: sh -c 'for f in dist/*.sha256; do [ -f "$f" ] || continue; artifact=$(basename "$f" .sha256); hash=$(cat "$f"); echo "$hash  $artifact" > "$f"; done'
+      output: true
+
 checksum:
-  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  name_template: "{{ .ArtifactName }}.sha256"
   split: true
 
 upx:

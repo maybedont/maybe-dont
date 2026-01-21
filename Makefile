@@ -33,7 +33,7 @@ bump-version:
 	git push --tags
 
 snapshot:
-	goreleaser release --snapshot --skip=docker --clean
+	METRICS_DATASET= METRICS_API_TOKEN= goreleaser release --snapshot --skip=docker --clean
 
 run: build
 	./$(BINARY_NAME) start --config-path ~/.maybe-dont/
