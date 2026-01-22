@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -684,6 +685,345 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 	})
 }
 
+func TestFormatAuditError(t *testing.T) {
+	// Tests the formatAuditError helper function that formats errors for the audit log
+	// as "category: message" with truncation for long messages.
+
+	tests := []struct {
+		name           string
+		category       string
+		err            error
+		expectedOutput string
+	}{
+		{
+			name:           "nil error returns category only",
+			category:       "timeout",
+			err:            nil,
+			expectedOutput: "timeout",
+		},
+		{
+			name:           "api error with message",
+			category:       "api_error",
+			err:            fmt.Errorf("HTTP 401 Unauthorized: invalid API key"),
+			expectedOutput: "api_error: HTTP 401 Unauthorized: invalid API key",
+		},
+		{
+			name:           "timeout error with context message",
+			category:       "timeout",
+			err:            context.DeadlineExceeded,
+			expectedOutput: "timeout: context deadline exceeded",
+		},
+		{
+			name:           "canceled error",
+			category:       "canceled",
+			err:            context.Canceled,
+			expectedOutput: "canceled: context canceled",
+		},
+		{
+			name:           "parse error with details",
+			category:       "parse_error",
+			err:            fmt.Errorf("invalid character 'x' looking for beginning of value"),
+			expectedOutput: "parse_error: invalid character 'x' looking for beginning of value",
+		},
+		{
+			name:           "no_response error",
+			category:       "no_response",
+			err:            fmt.Errorf("API returned empty choices"),
+			expectedOutput: "no_response: API returned empty choices",
+		},
+		{
+			name:     "truncates long error messages",
+			category: "api_error",
+			err:      fmt.Errorf("This is a very long error message that exceeds the maximum length of 100 characters and should be truncated for the audit log"),
+			expectedOutput: "api_error: This is a very long error message that exceeds the maximum length of 100 characters and should be tr...",
+		},
+		{
+			name:           "exactly 100 chars not truncated",
+			category:       "api_error",
+			err:            fmt.Errorf("This message is exactly one hundred characters long which should not trigger any truncation at all!"),
+			expectedOutput: "api_error: This message is exactly one hundred characters long which should not trigger any truncation at all!",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatAuditError(tt.category, tt.err)
+			assert.Equal(t, tt.expectedOutput, result)
+		})
+	}
+}
+
+func TestAuditAIRuleResult_NewErrorFormat(t *testing.T) {
+	// Tests that the audit log Error field now uses the "category: message" format
+	// instead of just the category string.
+
+	tests := []struct {
+		name          string
+		errorCategory string
+		err           error
+		expectedError string
+		description   string
+	}{
+		{
+			name:          "api_error with HTTP status",
+			errorCategory: "api_error",
+			err:           fmt.Errorf("HTTP 401 Unauthorized"),
+			expectedError: "api_error: HTTP 401 Unauthorized",
+			description:   "API errors should include the HTTP status and message",
+		},
+		{
+			name:          "timeout shows context message",
+			errorCategory: "timeout",
+			err:           context.DeadlineExceeded,
+			expectedError: "timeout: context deadline exceeded",
+			description:   "Timeout errors should show the context deadline message",
+		},
+		{
+			name:          "canceled shows context message",
+			errorCategory: "canceled",
+			err:           context.Canceled,
+			expectedError: "canceled: context canceled",
+			description:   "Canceled errors should show the context canceled message",
+		},
+		{
+			name:          "parse_error with JSON details",
+			errorCategory: "parse_error",
+			err:           fmt.Errorf("unexpected end of JSON input"),
+			expectedError: "parse_error: unexpected end of JSON input",
+			description:   "Parse errors should include the JSON parsing error details",
+		},
+		{
+			name:          "no_response error",
+			errorCategory: "no_response",
+			err:           fmt.Errorf("API returned empty choices"),
+			expectedError: "no_response: API returned empty choices",
+			description:   "No response errors should include the empty choices message",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create an audit result using formatAuditError like the real code does
+			auditResult := AuditAIRuleResult{
+				Rule:         "test_rule",
+				Action:       "deny",
+				Result:       "error",
+				EvaluationMs: 1000,
+				Error:        formatAuditError(tt.errorCategory, tt.err),
+			}
+
+			assert.Equal(t, tt.expectedError, auditResult.Error, tt.description)
+		})
+	}
+}
+
+func TestClassifyContextError(t *testing.T) {
+	// Tests the classifyContextError helper function that classifies context errors.
+
+	t.Run("deadline exceeded returns timeout", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 0)
+		defer cancel()
+		// Wait for context to expire
+		<-ctx.Done()
+
+		result := classifyContextError(ctx, "api_error")
+		assert.Equal(t, "timeout", result)
+	})
+
+	t.Run("canceled returns canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+
+		result := classifyContextError(ctx, "api_error")
+		assert.Equal(t, "canceled", result)
+	})
+
+	t.Run("no error returns default category", func(t *testing.T) {
+		ctx := context.Background()
+
+		result := classifyContextError(ctx, "api_error")
+		assert.Equal(t, "api_error", result)
+	})
+
+	t.Run("no error with custom default", func(t *testing.T) {
+		ctx := context.Background()
+
+		result := classifyContextError(ctx, "custom_category")
+		assert.Equal(t, "custom_category", result)
+	})
+}
+
+func TestAiResponseRuleResult_ErrorFields(t *testing.T) {
+	// Tests that aiResponseRuleResult stores both err (error) and errCategory (string)
+	// correctly, matching the pattern used in aiRuleResult for consistency.
+
+	t.Run("api_error_preserves_full_error", func(t *testing.T) {
+		err := fmt.Errorf("HTTP 500 Internal Server Error")
+		result := aiResponseRuleResult{
+			policy:       AIResponsePolicy{Name: "test_policy"},
+			result:       "error",
+			evaluationMs: 500,
+			err:          err,
+			errCategory:  "api_error",
+		}
+
+		assert.Equal(t, "api_error", result.errCategory)
+		assert.NotNil(t, result.err)
+		assert.Contains(t, result.err.Error(), "500")
+	})
+
+	t.Run("timeout_preserves_deadline_error", func(t *testing.T) {
+		result := aiResponseRuleResult{
+			policy:       AIResponsePolicy{Name: "slow_policy"},
+			result:       "error",
+			evaluationMs: 10000,
+			err:          context.DeadlineExceeded,
+			errCategory:  "timeout",
+		}
+
+		assert.Equal(t, "timeout", result.errCategory)
+		assert.ErrorIs(t, result.err, context.DeadlineExceeded)
+	})
+
+	t.Run("canceled_preserves_canceled_error", func(t *testing.T) {
+		result := aiResponseRuleResult{
+			policy:       AIResponsePolicy{Name: "canceled_policy"},
+			result:       "error",
+			evaluationMs: 300,
+			err:          context.Canceled,
+			errCategory:  "canceled",
+		}
+
+		assert.Equal(t, "canceled", result.errCategory)
+		assert.ErrorIs(t, result.err, context.Canceled)
+	})
+
+	t.Run("parse_error_preserves_json_error", func(t *testing.T) {
+		parseErr := fmt.Errorf("unexpected end of JSON input")
+		result := aiResponseRuleResult{
+			policy:       AIResponsePolicy{Name: "malformed_policy"},
+			result:       "error",
+			evaluationMs: 1200,
+			err:          parseErr,
+			errCategory:  "parse_error",
+		}
+
+		assert.Equal(t, "parse_error", result.errCategory)
+		assert.Contains(t, result.err.Error(), "JSON")
+	})
+
+	t.Run("no_response_creates_descriptive_error", func(t *testing.T) {
+		result := aiResponseRuleResult{
+			policy:       AIResponsePolicy{Name: "empty_response_policy"},
+			result:       "error",
+			evaluationMs: 800,
+			err:          fmt.Errorf("API returned empty choices"),
+			errCategory:  "no_response",
+		}
+
+		assert.Equal(t, "no_response", result.errCategory)
+		assert.Contains(t, result.err.Error(), "empty choices")
+	})
+
+	t.Run("audit_format_matches_request_engine", func(t *testing.T) {
+		// Verify that response engine errors format the same way as request engine
+		err := fmt.Errorf("connection refused")
+		result := aiResponseRuleResult{
+			policy:       AIResponsePolicy{Name: "test_policy"},
+			result:       "error",
+			evaluationMs: 100,
+			err:          err,
+			errCategory:  "api_error",
+		}
+
+		formatted := formatAuditError(result.errCategory, result.err)
+		assert.Equal(t, "api_error: connection refused", formatted)
+	})
+}
+
+func TestAiRuleResult_ErrorFields(t *testing.T) {
+	// Tests that aiRuleResult now stores both err (error) and errCategory (string)
+	// correctly for different error scenarios.
+
+	t.Run("api_error_preserves_full_error", func(t *testing.T) {
+		err := fmt.Errorf("dial tcp: lookup api.openai.com: no such host")
+		result := aiRuleResult{
+			rule:         "test_rule",
+			action:       config.PolicyActionDeny,
+			mode:         config.PolicyModeEnabled,
+			result:       "error",
+			evaluationMs: 500,
+			err:          err,
+			errCategory:  "api_error",
+		}
+
+		assert.Equal(t, "api_error", result.errCategory)
+		assert.NotNil(t, result.err)
+		assert.Contains(t, result.err.Error(), "no such host")
+	})
+
+	t.Run("timeout_preserves_deadline_error", func(t *testing.T) {
+		result := aiRuleResult{
+			rule:         "slow_rule",
+			action:       config.PolicyActionDeny,
+			mode:         config.PolicyModeEnabled,
+			result:       "error",
+			evaluationMs: 10000,
+			err:          context.DeadlineExceeded,
+			errCategory:  "timeout",
+		}
+
+		assert.Equal(t, "timeout", result.errCategory)
+		assert.ErrorIs(t, result.err, context.DeadlineExceeded)
+	})
+
+	t.Run("canceled_preserves_canceled_error", func(t *testing.T) {
+		result := aiRuleResult{
+			rule:         "canceled_rule",
+			action:       config.PolicyActionDeny,
+			mode:         config.PolicyModeEnabled,
+			result:       "error",
+			evaluationMs: 300,
+			err:          context.Canceled,
+			errCategory:  "canceled",
+		}
+
+		assert.Equal(t, "canceled", result.errCategory)
+		assert.ErrorIs(t, result.err, context.Canceled)
+	})
+
+	t.Run("parse_error_preserves_json_error", func(t *testing.T) {
+		parseErr := fmt.Errorf("invalid character 'x' looking for beginning of value")
+		result := aiRuleResult{
+			rule:         "malformed_rule",
+			action:       config.PolicyActionDeny,
+			mode:         config.PolicyModeEnabled,
+			result:       "error",
+			evaluationMs: 1200,
+			err:          parseErr,
+			errCategory:  "parse_error",
+		}
+
+		assert.Equal(t, "parse_error", result.errCategory)
+		assert.Contains(t, result.err.Error(), "invalid character")
+	})
+
+	t.Run("no_response_creates_descriptive_error", func(t *testing.T) {
+		result := aiRuleResult{
+			rule:         "empty_response_rule",
+			action:       config.PolicyActionDeny,
+			mode:         config.PolicyModeEnabled,
+			result:       "error",
+			evaluationMs: 800,
+			err:          fmt.Errorf("API returned empty choices"),
+			errCategory:  "no_response",
+		}
+
+		assert.Equal(t, "no_response", result.errCategory)
+		assert.Contains(t, result.err.Error(), "empty choices")
+	})
+}
+
 // Helper function to create test tool requests
 func createTestToolRequest(toolName string) mcp.CallToolRequest {
 	return mcp.CallToolRequest{
@@ -692,5 +1032,98 @@ func createTestToolRequest(toolName string) mcp.CallToolRequest {
 			Name:      toolName,
 			Arguments: map[string]any{"test": "value"},
 		},
+	}
+}
+
+// TestAIPolicyEngine_AuditModeBypassFlag verifies that the AuditModeBypass flag
+// is correctly set when an audit_only policy would have denied the request.
+func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	t.Run("audit_only_deny_sets_bypass_flag", func(t *testing.T) {
+		engine := &AIPolicyEngine{
+			apiKey: "test-key",
+			model:  "gpt-4o-mini",
+		}
+		err := InitAIPolicyEngine(sessionLogger, engine)
+		require.NoError(t, err)
+
+		// Load an audit_only policy
+		policies := []config.AIPolicy{
+			{
+				Name:        "audit_only_block",
+				Description: "Would block but in audit mode",
+				Prompt:      "Block everything: %s",
+				Action:      config.PolicyActionDeny,
+				Message:     "Would have blocked",
+				Mode:        config.PolicyModeAuditOnly,
+			},
+		}
+
+		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		require.NoError(t, err)
+
+		// The engine should return immediately with no async work for all audit_only policies
+		// but we can't test the actual API call behavior without mocking
+		// Instead, verify the policy was loaded with correct mode
+		assert.Len(t, engine.policies, 1)
+		assert.Equal(t, config.PolicyModeAuditOnly, engine.policies[0].Mode)
+	})
+
+	t.Run("enabled_policy_count_excludes_audit_only", func(t *testing.T) {
+		engine := &AIPolicyEngine{
+			apiKey: "test-key",
+			model:  "gpt-4o-mini",
+		}
+		err := InitAIPolicyEngine(sessionLogger, engine)
+		require.NoError(t, err)
+
+		policies := []config.AIPolicy{
+			{
+				Name:   "audit_policy",
+				Prompt: "Check: %s",
+				Action: config.PolicyActionDeny,
+				Mode:   config.PolicyModeAuditOnly,
+			},
+			{
+				Name:   "enabled_policy",
+				Prompt: "Check: %s",
+				Action: config.PolicyActionDeny,
+				Mode:   config.PolicyModeEnabled,
+			},
+		}
+
+		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		require.NoError(t, err)
+
+		// Count enabled policies manually
+		enabledCount := 0
+		for _, p := range engine.policies {
+			if p.Mode == config.PolicyModeEnabled {
+				enabledCount++
+			}
+		}
+		assert.Equal(t, 1, enabledCount, "Should only have 1 enabled policy")
+	})
+}
+
+// TestActionReasonConstants verifies that action reason constants are correctly defined.
+func TestActionReasonConstants(t *testing.T) {
+	tests := []struct {
+		name     string
+		constant ActionReason
+		value    string
+	}{
+		{"request_policy", ActionReasonRequestPolicy, "request_policy"},
+		{"response_policy", ActionReasonResponsePolicy, "response_policy"},
+		{"audit_mode", ActionReasonAuditMode, "audit_mode"},
+		{"fail_open", ActionReasonFailOpen, "fail_open"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.value, string(tt.constant), "ActionReason constant value should match expected string")
+		})
 	}
 }

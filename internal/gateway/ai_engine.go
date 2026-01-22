@@ -111,7 +111,8 @@ type aiRuleResult struct {
 	result       string              // "allow", "deny", or "error"
 	message      string              // AI response message
 	evaluationMs int64               // Time for this rule to complete
-	err          string              // Error description if result is "error"
+	err          error               // Actual error if result is "error"
+	errCategory  string              // Error classification: "api_error", "timeout", "canceled", "parse_error", "no_response"
 }
 
 // EvaluateToolCall evaluates a tool call request against all policies with early termination.
@@ -156,9 +157,6 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	}
 	allAuditOnly := enabledPolicies == 0 && auditOnlyPolicies > 0
 
-	// Create a cancellable context for early termination
-	evalCtx, cancelEval := context.WithCancel(ctx)
-
 	// Channel to collect results from goroutines
 	resultChan := make(chan aiRuleResult, len(e.policies))
 
@@ -176,8 +174,10 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		go func(p AIPolicy) {
 			startTime := time.Now()
 
-			// Create context with rule timeout
-			policyCtx, cancel := context.WithTimeout(evalCtx, ruleTimeout)
+			// Use a detached context (not derived from request context) so all policies
+			// complete even after the request returns or an early decision is made.
+			// This ensures the audit log captures complete results from all policies.
+			policyCtx, cancel := context.WithTimeout(context.Background(), ruleTimeout)
 			defer cancel()
 
 			schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
@@ -204,19 +204,15 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 
 			// Handle errors
 			if err != nil {
-				errMsg := "api_error"
-				if policyCtx.Err() == context.DeadlineExceeded {
-					errMsg = "timeout"
-				} else if policyCtx.Err() == context.Canceled {
-					errMsg = "canceled"
-				}
+				errCategory := classifyContextError(policyCtx, "api_error")
 				resultChan <- aiRuleResult{
 					rule:         p.Name,
 					action:       p.Action,
 					mode:         p.Mode,
 					result:       "error",
 					evaluationMs: durationMs,
-					err:          errMsg,
+					err:          err,
+					errCategory:  errCategory,
 				}
 				return
 			}
@@ -228,7 +224,8 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					mode:         p.Mode,
 					result:       "error",
 					evaluationMs: durationMs,
-					err:          "no_response",
+					err:          fmt.Errorf("API returned empty choices"),
+					errCategory:  "no_response",
 				}
 				return
 			}
@@ -242,7 +239,8 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					mode:         p.Mode,
 					result:       "error",
 					evaluationMs: durationMs,
-					err:          "parse_error",
+					err:          err,
+					errCategory:  "parse_error",
 				}
 				return
 			}
@@ -290,7 +288,6 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 
 		// Start background goroutine to collect all results
 		go func() {
-			defer cancelEval()
 			defer close(completionChan)
 
 			auditResults := make([]AuditAIRuleResult, 0, len(e.policies))
@@ -303,18 +300,26 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					Result:       result.result,
 					EvaluationMs: result.evaluationMs,
 				}
-				if result.err != "" {
-					auditResult.Error = result.err
+				if result.err != nil {
+					auditResult.Error = formatAuditError(result.errCategory, result.err)
 				}
 				auditResults = append(auditResults, auditResult)
 
 				// Log result
-				e.logger.Debug(context.Background(), "AI policy evaluation result (async)",
-					zap.String("rule", result.rule),
-					zap.String("action", string(result.action)),
-					zap.String("result", result.result),
-					zap.Int64("evaluation_ms", result.evaluationMs),
-				)
+				if result.err != nil {
+					e.logger.Debug(context.Background(), "AI policy evaluation error (async)",
+						zap.String("rule", result.rule),
+						zap.String("error", formatAuditError(result.errCategory, result.err)),
+						zap.Int64("evaluation_ms", result.evaluationMs),
+					)
+				} else {
+					e.logger.Debug(context.Background(), "AI policy evaluation result (async)",
+						zap.String("rule", result.rule),
+						zap.String("action", string(result.action)),
+						zap.String("result", result.result),
+						zap.Int64("evaluation_ms", result.evaluationMs),
+					)
+				}
 			}
 
 			evaluationMs := time.Since(evalStartTime).Milliseconds()
@@ -354,14 +359,14 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	}
 
 	// Regular synchronous flow for enabled policies
-	defer cancelEval()
-
 	var auditResults []AuditAIRuleResult
 	var decidingRule string
 	var decidingReason string
 	var blockedMs int64
 	var decided bool
 	var finalAction = "allow"
+	var auditOnlyDeny bool // Track if any audit_only policy returned deny
+	var failedOpen bool    // Track if we failed open due to errors
 
 	// Determine blocking deadline from shared budget or use default
 	var blockingDeadline time.Time
@@ -371,6 +376,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			blockedMs = 0
 			decided = true
 			finalAction = "allow"
+			failedOpen = true
 			e.logger.Warn(ctx, "AI validation skipping blocking - budget already exhausted")
 		} else {
 			blockingDeadline = budget.BlockingDeadline()
@@ -394,6 +400,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			blockedMs = time.Since(evalStartTime).Milliseconds()
 			decided = true
 			finalAction = "allow" // Fail open on timeout
+			failedOpen = true
 			e.logger.Warn(ctx, "AI validation exceeded max blocking time, failing open",
 				zap.Int64("blocked_ms", blockedMs),
 				zap.Int("remaining_policies", remainingTotal),
@@ -440,16 +447,24 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 						if result.mode == config.PolicyModeAuditOnly {
 							auditResult.Mode = "audit_only"
 						}
-						if result.err != "" {
-							auditResult.Error = result.err
+						if result.err != nil {
+							auditResult.Error = formatAuditError(result.errCategory, result.err)
 						}
 						asyncResults = append(asyncResults, auditResult)
 
-						e.logger.Debug(context.Background(), "AI policy evaluation result (async continuation)",
-							zap.String("rule", result.rule),
-							zap.String("result", result.result),
-							zap.Int64("evaluation_ms", result.evaluationMs),
-						)
+						if result.err != nil {
+							e.logger.Debug(context.Background(), "AI policy evaluation error (async continuation)",
+								zap.String("rule", result.rule),
+								zap.String("error", formatAuditError(result.errCategory, result.err)),
+								zap.Int64("evaluation_ms", result.evaluationMs),
+							)
+						} else {
+							e.logger.Debug(context.Background(), "AI policy evaluation result (async continuation)",
+								zap.String("rule", result.rule),
+								zap.String("result", result.result),
+								zap.Int64("evaluation_ms", result.evaluationMs),
+							)
+						}
 					}
 
 					evaluationMs := time.Since(evalStartTime).Milliseconds()
@@ -494,16 +509,23 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			if result.mode == config.PolicyModeAuditOnly {
 				auditResult.Mode = "audit_only"
 			}
-			if result.err != "" {
-				auditResult.Error = result.err
+			if result.err != nil {
+				auditResult.Error = formatAuditError(result.errCategory, result.err)
 			}
 			auditResults = append(auditResults, auditResult)
+
+			// Track audit_only denies for AuditModeBypass
+			if result.mode == config.PolicyModeAuditOnly && result.result == "deny" {
+				auditOnlyDeny = true
+			}
 
 			// Check if this result should trigger early termination
 			if !decided && result.mode == config.PolicyModeEnabled {
 				switch result.result {
 				case "deny":
 					// Early termination: first enabled deny
+					// Note: We don't cancel remaining goroutines - they continue to completion
+					// so the audit log captures complete results from all policies
 					if phaseTracker != nil {
 						phaseTracker.MarkDecided()
 					}
@@ -512,29 +534,40 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					finalAction = "deny"
 					decidingRule = result.rule
 					decidingReason = result.message
-					cancelEval() // Cancel remaining enabled goroutines
 				case "error":
 					// Errors on enabled policies fail open (allow)
+					failedOpen = true
 					e.logger.Warn(ctx, "AI policy evaluation failed, failing open",
 						zap.String("rule", result.rule),
-						zap.String("error", result.err),
+						zap.Error(result.err),
 					)
 				}
 			}
 
-			// Debug log each rule result
-			e.logger.Debug(ctx, "AI policy evaluation result",
-				zap.String("rule", result.rule),
-				zap.String("action", string(result.action)),
-				zap.String("result", result.result),
-				zap.Int64("evaluation_ms", result.evaluationMs),
-			)
-
-			if result.err != "" {
-				e.logger.Error(ctx, "AI policy evaluation error",
+			// Log results
+			if result.err != nil {
+				// DEBUG: Concise summary for all error results
+				e.logger.Debug(ctx, "AI policy evaluation error",
 					zap.String("rule", result.rule),
+					zap.String("error", formatAuditError(result.errCategory, result.err)),
 					zap.Int64("evaluation_ms", result.evaluationMs),
-					zap.String("error", result.err),
+				)
+
+				// ERROR: Full error details for all errors
+				// With detached contexts, cancellations should only occur due to external factors
+				// like gateway shutdown, not from early termination logic
+				e.logger.Error(ctx, "AI policy evaluation failed",
+					zap.String("rule", result.rule),
+					zap.String("category", result.errCategory),
+					zap.Int64("evaluation_ms", result.evaluationMs),
+					zap.Error(result.err),
+				)
+			} else {
+				e.logger.Debug(ctx, "AI policy evaluation result",
+					zap.String("rule", result.rule),
+					zap.String("action", string(result.action)),
+					zap.String("result", result.result),
+					zap.Int64("evaluation_ms", result.evaluationMs),
 				)
 			}
 
@@ -576,23 +609,67 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 
 	// Build ValidationResults
 	results.Allowed = finalAction == "allow"
+	results.FailedOpen = failedOpen
 	if finalAction == "deny" {
 		results.Message = "Maybe Don't, A policy failed."
 		results.DenyCount = 1
+		results.RecommendedAction = config.PolicyActionDeny
+	} else if failedOpen {
+		results.Message = "AI validation failed, allowing request (fail-open)"
+		results.AllowCount = 1
+		// RecommendedAction stays empty for fail-open (unknown recommendation)
+	} else if auditOnlyDeny {
+		results.AuditModeBypass = true
+		results.RecommendedAction = config.PolicyActionDeny
+		results.Message = "AI policy would deny but mode is audit_only"
+		results.AllowCount = 1
 	} else {
 		results.Message = "All policies passed, maybe do."
 		results.AllowCount = 1
+		results.RecommendedAction = config.PolicyActionAllow
 	}
 
 	e.logger.Info(ctx, "Tool call evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("deciding_rule", decidingRule),
+		zap.Bool("failed_open", failedOpen),
+		zap.Bool("audit_mode_bypass", auditOnlyDeny),
 		zap.Int64("blocked_ms", blockedMs),
 		zap.Int64("evaluation_ms", evaluationMs),
 		zap.Bool("has_async", results.AsyncCompletion != nil),
 	)
 
 	return results, nil
+}
+
+// classifyContextError returns the error category based on context state.
+// Returns "timeout" for deadline exceeded, "canceled" for context cancellation,
+// or the provided defaultCategory otherwise.
+func classifyContextError(ctx context.Context, defaultCategory string) string {
+	if ctx.Err() == context.DeadlineExceeded {
+		return "timeout"
+	} else if ctx.Err() == context.Canceled {
+		return "canceled"
+	}
+	return defaultCategory
+}
+
+// formatAuditError formats an error for the audit log as "category: message".
+// The message is truncated to 100 characters to keep audit logs concise.
+func formatAuditError(category string, err error) string {
+	if err == nil {
+		return category
+	}
+
+	msg := err.Error()
+
+	// Truncate long messages for audit log (keep concise)
+	const maxLen = 100
+	if len(msg) > maxLen {
+		msg = msg[:maxLen] + "..."
+	}
+
+	return fmt.Sprintf("%s: %s", category, msg)
 }
 
 func GenerateSchema[T any]() interface{} {

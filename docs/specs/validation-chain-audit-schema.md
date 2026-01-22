@@ -290,7 +290,7 @@ In this example:
 
 | Scenario | Can Terminate Early? | Behavior |
 |----------|---------------------|----------|
-| First `enabled` rule returns `deny` | Yes | Stop blocking, cancel remaining, continue async for audit |
+| First `enabled` rule returns `deny` | Yes | Stop blocking, all remaining rules continue async for complete audit |
 | All `enabled` rules return `allow` | Yes | Stop blocking, remaining `audit_only` rules continue async |
 | All rules are `audit_only` | Yes | Phase is non-blocking from start |
 | Error on `enabled` rule | Yes | Treat as deny (fail-closed), stop blocking |
@@ -437,11 +437,11 @@ In this example:
 
 #### 5. Mixed Modes with Early Deny
 
-When an enabled policy denies early while audit_only policies are still running:
+When an enabled policy denies early while other policies are still running:
 
-- **Behavior**: Engine returns `deny` immediately when the enabled policy denies. Remaining enabled policies are cancelled. Audit-only policies continue in the background.
+- **Behavior**: Engine returns `deny` immediately when the enabled policy denies. All other policies (both enabled and audit_only) continue running in the background to provide complete audit information.
 - **Blocking**: Time until the denying policy completed
-- **Audit Log**: Includes the deny result plus any audit_only results that complete (may include `error: "canceled"` for cancelled policies)
+- **Audit Log**: Includes the deny result plus all other policy results. Since all policies complete, the audit log provides a complete picture of what every policy would have decided.
 
 ```json
 {
@@ -454,7 +454,7 @@ When an enabled policy denies early while audit_only policies are still running:
       "reason": "Destructive operation detected",
       "results": [
         {"rule": "block_destructive", "action": "deny", "result": "deny", "evaluation_ms": 500},
-        {"rule": "slow_enabled_check", "action": "deny", "result": "error", "evaluation_ms": 500, "error": "canceled"},
+        {"rule": "slow_enabled_check", "action": "deny", "result": "allow", "evaluation_ms": 1800},
         {"rule": "audit_access", "action": "deny", "mode": "audit_only", "result": "allow", "evaluation_ms": 2000}
       ]
     }
@@ -558,7 +558,7 @@ if asyncResult.Completion != nil {
 - **Parallel**: Rules evaluated concurrently via goroutines
 - **Slow**: Typically 500ms-5000ms per rule
 - **Non-deterministic**: External LLM API calls
-- **Early termination**: First enabled deny cancels remaining goroutines
+- **Early termination**: First enabled deny stops blocking; all goroutines continue to completion for audit
 - **Per-rule timeout**: `max_rule_evaluation_ms` applies to each rule
 - **True async for audit_only**: Returns immediately, evaluation continues in background
 
@@ -823,10 +823,10 @@ The following test cases must be implemented to verify correct policy mode behav
 #### Test: All Policies Enabled - Early Deny
 - **Setup**: Multiple policies with `mode: enabled`, one fast policy returns deny
 - **Assertions**:
-  - Function returns after first deny (doesn't wait for slower policies)
+  - Function returns after first deny (doesn't wait for slower policies to block)
   - `blocked_ms` approximately equals the denying policy's time
   - `AIDetails.DecidingRule` is set to the denying policy name
-  - Slower policies show `error: "canceled"` in results
+  - All policies complete and appear in results (no `error: "canceled"` - policies run to completion for audit)
 
 #### Test: All Policies Audit-Only - True Async
 - **Setup**: All policies with `mode: audit_only`, policies take 1-2 seconds each

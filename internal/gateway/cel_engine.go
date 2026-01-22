@@ -232,15 +232,12 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        issues.Err().Error(),
 			})
-			// Treat compilation error as deny for enabled rules
+			// Fail-open on compilation error for enabled rules
 			if policy.Mode == config.PolicyModeEnabled {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
-				finalAction = "deny"
-				decidingRule = policy.Name
-				decidingReason = fmt.Sprintf("CEL compilation error: %v", issues.Err())
-				results.DenyCount++
+				results.FailedOpen = true
 				earlyTerminated = true
 				break
 			}
@@ -264,15 +261,12 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        err.Error(),
 			})
-			// Treat program creation error as deny for enabled rules
+			// Fail-open on program creation error for enabled rules
 			if policy.Mode == config.PolicyModeEnabled {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
-				finalAction = "deny"
-				decidingRule = policy.Name
-				decidingReason = fmt.Sprintf("CEL program error: %v", err)
-				results.DenyCount++
+				results.FailedOpen = true
 				earlyTerminated = true
 				break
 			}
@@ -297,15 +291,12 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        err.Error(),
 			})
-			// Treat evaluation error as deny for enabled rules
+			// Fail-open on evaluation error for enabled rules
 			if policy.Mode == config.PolicyModeEnabled {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
-				finalAction = "deny"
-				decidingRule = policy.Name
-				decidingReason = fmt.Sprintf("CEL evaluation error: %v", err)
-				results.DenyCount++
+				results.FailedOpen = true
 				earlyTerminated = true
 				break
 			}
@@ -323,15 +314,12 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        "policy did not return a boolean",
 			})
-			// Treat type error as deny for enabled rules
+			// Fail-open on type error for enabled rules
 			if policy.Mode == config.PolicyModeEnabled {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
-				finalAction = "deny"
-				decidingRule = policy.Name
-				decidingReason = "CEL policy did not return a boolean"
-				results.DenyCount++
+				results.FailedOpen = true
 				earlyTerminated = true
 				break
 			}
@@ -406,6 +394,9 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 	if finalAction == "deny" {
 		results.Allowed = false
 		results.Message = decidingReason
+	} else if results.FailedOpen {
+		results.Allowed = true
+		results.Message = "CEL evaluation failed, allowing request (fail-open)"
 	} else if results.AllowCount > 0 {
 		results.Allowed = true
 		// Find the first allow message
@@ -438,6 +429,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 		zap.String("message", results.Message),
 		zap.String("final_action", finalAction),
 		zap.Bool("early_terminated", earlyTerminated),
+		zap.Bool("failed_open", results.FailedOpen),
 		zap.Int64("blocked_ms", blockedMs),
 		zap.Int64("evaluation_ms", evaluationMs),
 	)

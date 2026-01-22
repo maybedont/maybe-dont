@@ -244,6 +244,15 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 			}
 		}
 
+		// Track audit_mode and fail_open using the top-level action_reason field
+		// This counts requests (not individual rules) that were affected
+		switch ActionReason(entry.Audit.ActionReason) {
+		case ActionReasonAuditMode:
+			stats.AuditOnlyDenials++
+		case ActionReasonFailOpen:
+			stats.TimeoutFailures++
+		}
+
 		// Track denied policies from request validation
 		if entry.Audit.RequestValidation != nil {
 			if entry.Audit.RequestValidation.CEL != nil && entry.Audit.RequestValidation.CEL.Action == "deny" {
@@ -260,11 +269,6 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 				}
 				stats.DeniedByPolicy[ruleName]++
 			}
-
-			// Check for audit-only denials and timeout failures in request validation
-			auditOnlyDenials, timeoutFailures := countAuditOnlyAndTimeouts(entry.Audit.RequestValidation)
-			stats.AuditOnlyDenials += auditOnlyDenials
-			stats.TimeoutFailures += timeoutFailures
 		}
 		// Track denied policies from response validation
 		if entry.Audit.ResponseValidation != nil {
@@ -282,11 +286,6 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 				}
 				stats.DeniedByPolicy[ruleName]++
 			}
-
-			// Check for audit-only denials and timeout failures in response validation
-			auditOnlyDenials, timeoutFailures := countAuditOnlyAndTimeouts(entry.Audit.ResponseValidation)
-			stats.AuditOnlyDenials += auditOnlyDenials
-			stats.TimeoutFailures += timeoutFailures
 		}
 	}
 
@@ -296,44 +295,6 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 	return entries, stats, nil
 }
 
-// countAuditOnlyAndTimeouts analyzes validation results for audit-only denials and timeout failures.
-// An audit-only denial is when a rule with mode="audit_only" returned result="deny".
-// A timeout failure is when a rule returned result="error" (typically due to context deadline exceeded).
-func countAuditOnlyAndTimeouts(validation *AuditValidationInfo) (auditOnlyDenials, timeoutFailures int) {
-	if validation == nil {
-		return 0, 0
-	}
-
-	// Check CEL results
-	if validation.CEL != nil {
-		for _, result := range validation.CEL.Results {
-			// Audit-only denial: mode is "audit_only" and result is "deny"
-			if result.Mode == "audit_only" && result.Result == "deny" {
-				auditOnlyDenials++
-			}
-			// Timeout/error failure
-			if result.Result == "error" {
-				timeoutFailures++
-			}
-		}
-	}
-
-	// Check AI results
-	if validation.AI != nil {
-		for _, result := range validation.AI.Results {
-			// Audit-only denial: mode is "audit_only" and result is "deny"
-			if result.Mode == "audit_only" && result.Result == "deny" {
-				auditOnlyDenials++
-			}
-			// Timeout/error failure
-			if result.Result == "error" {
-				timeoutFailures++
-			}
-		}
-	}
-
-	return auditOnlyDenials, timeoutFailures
-}
 
 // generateAIReport calls the AI to analyze the audit entries
 func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []AuditLogEntry, stats AuditReportStatistics, params AuditReportRequest) (*AuditReportResponse, error) {
@@ -476,25 +437,37 @@ func (h *NativeToolsHandler) collectAuditOnlySamples(entries []AuditLogEntry) st
 			continue
 		}
 
-		// Check request validation for audit-only denials
+		// Use top-level action_reason to identify audit_mode entries
+		if ActionReason(entry.Audit.ActionReason) != ActionReasonAuditMode {
+			continue
+		}
+
+		toolName := entry.Audit.Tool.PrefixedName
+		args, _ := json.Marshal(entry.Audit.Tool.Params)
+
+		// Find the deciding rule from validation results for context
+		rule := ""
 		if entry.Audit.RequestValidation != nil {
-			if rule := findAuditOnlyDenial(entry.Audit.RequestValidation); rule != "" {
-				toolName := entry.Audit.Tool.PrefixedName
-				args, _ := json.Marshal(entry.Audit.Tool.Params)
-				summary += fmt.Sprintf("  - Tool: %s, Rule: %s, Args: %s\n", toolName, rule, string(args))
-				count++
-				continue
+			if entry.Audit.RequestValidation.CEL != nil && entry.Audit.RequestValidation.CEL.DecidingRule != "" {
+				rule = entry.Audit.RequestValidation.CEL.DecidingRule
+			} else if entry.Audit.RequestValidation.AI != nil && entry.Audit.RequestValidation.AI.DecidingRule != "" {
+				rule = entry.Audit.RequestValidation.AI.DecidingRule
+			}
+		}
+		if rule == "" && entry.Audit.ResponseValidation != nil {
+			if entry.Audit.ResponseValidation.CEL != nil && entry.Audit.ResponseValidation.CEL.DecidingRule != "" {
+				rule = entry.Audit.ResponseValidation.CEL.DecidingRule + " (response)"
+			} else if entry.Audit.ResponseValidation.AI != nil && entry.Audit.ResponseValidation.AI.DecidingRule != "" {
+				rule = entry.Audit.ResponseValidation.AI.DecidingRule + " (response)"
 			}
 		}
 
-		// Check response validation for audit-only denials
-		if entry.Audit.ResponseValidation != nil {
-			if rule := findAuditOnlyDenial(entry.Audit.ResponseValidation); rule != "" {
-				toolName := entry.Audit.Tool.PrefixedName
-				summary += fmt.Sprintf("  - Tool: %s, Rule: %s (response validation)\n", toolName, rule)
-				count++
-			}
+		if rule != "" {
+			summary += fmt.Sprintf("  - Tool: %s, Rule: %s, Args: %s\n", toolName, rule, string(args))
+		} else {
+			summary += fmt.Sprintf("  - Tool: %s, Args: %s\n", toolName, string(args))
 		}
+		count++
 	}
 
 	if count == 0 {
@@ -517,24 +490,32 @@ func (h *NativeToolsHandler) collectTimeoutSamples(entries []AuditLogEntry) stri
 			continue
 		}
 
-		// Check request validation for timeout failures
+		// Use top-level action_reason to identify fail_open entries
+		if ActionReason(entry.Audit.ActionReason) != ActionReasonFailOpen {
+			continue
+		}
+
+		toolName := entry.Audit.Tool.PrefixedName
+
+		// Find error details from validation results for context
+		rule, errMsg := "", ""
 		if entry.Audit.RequestValidation != nil {
-			if rule, errMsg := findTimeoutFailure(entry.Audit.RequestValidation); rule != "" {
-				toolName := entry.Audit.Tool.PrefixedName
-				summary += fmt.Sprintf("  - Tool: %s, Rule: %s, Error: %s\n", toolName, rule, errMsg)
-				count++
-				continue
+			rule, errMsg = findErrorInResults(entry.Audit.RequestValidation)
+		}
+		if rule == "" && entry.Audit.ResponseValidation != nil {
+			r, e := findErrorInResults(entry.Audit.ResponseValidation)
+			if r != "" {
+				rule = r + " (response)"
+				errMsg = e
 			}
 		}
 
-		// Check response validation for timeout failures
-		if entry.Audit.ResponseValidation != nil {
-			if rule, errMsg := findTimeoutFailure(entry.Audit.ResponseValidation); rule != "" {
-				toolName := entry.Audit.Tool.PrefixedName
-				summary += fmt.Sprintf("  - Tool: %s, Rule: %s (response), Error: %s\n", toolName, rule, errMsg)
-				count++
-			}
+		if rule != "" {
+			summary += fmt.Sprintf("  - Tool: %s, Rule: %s, Error: %s\n", toolName, rule, errMsg)
+		} else {
+			summary += fmt.Sprintf("  - Tool: %s\n", toolName)
 		}
+		count++
 	}
 
 	if count == 0 {
@@ -543,33 +524,8 @@ func (h *NativeToolsHandler) collectTimeoutSamples(entries []AuditLogEntry) stri
 	return summary
 }
 
-// findAuditOnlyDenial finds the first audit-only rule that returned a deny result
-func findAuditOnlyDenial(validation *AuditValidationInfo) string {
-	if validation == nil {
-		return ""
-	}
-
-	if validation.CEL != nil {
-		for _, result := range validation.CEL.Results {
-			if result.Mode == "audit_only" && result.Result == "deny" {
-				return result.Rule
-			}
-		}
-	}
-
-	if validation.AI != nil {
-		for _, result := range validation.AI.Results {
-			if result.Mode == "audit_only" && result.Result == "deny" {
-				return result.Rule
-			}
-		}
-	}
-
-	return ""
-}
-
-// findTimeoutFailure finds the first rule that failed with an error (typically timeout)
-func findTimeoutFailure(validation *AuditValidationInfo) (rule, errMsg string) {
+// findErrorInResults finds the first rule that failed with an error (typically timeout)
+func findErrorInResults(validation *AuditValidationInfo) (rule, errMsg string) {
 	if validation == nil {
 		return "", ""
 	}

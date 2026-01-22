@@ -22,8 +22,9 @@ type AuditEntry struct {
 	ResponseValidation *AuditValidationInfo `json:"response_validation,omitempty"`
 
 	// Actions
-	RecommendedAction string `json:"recommended_action"`
+	RecommendedAction string `json:"recommended_action,omitempty"` // Omitted when fail-open prevents complete evaluation
 	Action            string `json:"action"`
+	ActionReason      string `json:"action_reason,omitempty"` // request_policy, response_policy, audit_mode, fail_open
 
 	// Timing
 	DurationMs     int64 `json:"duration_ms"`       // Total wall-clock time from validation_started to created_at
@@ -194,10 +195,13 @@ func (ac *AuditContext) SetResponseValidationAI(aiResult *AuditAIResult) {
 	ac.entry.ResponseValidation.AI = aiResult
 }
 
-// SetActions sets the recommended and actual actions
-func (ac *AuditContext) SetActions(recommended, actual string) {
+// SetActions sets the recommended and actual actions with an optional reason.
+// The reason explains why the action was taken (request_policy, response_policy, audit_mode, fail_open).
+// Pass empty ActionReason when action == recommended_action with no special circumstances.
+func (ac *AuditContext) SetActions(recommended, actual string, reason ActionReason) {
 	ac.entry.RecommendedAction = recommended
 	ac.entry.Action = actual
+	ac.entry.ActionReason = string(reason)
 }
 
 // SetTotalBlockedMs sets the cumulative time blocked (validation + tool call)

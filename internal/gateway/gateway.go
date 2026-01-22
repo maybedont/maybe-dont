@@ -444,7 +444,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	// If validation failed, set audit actions and write
 	if !validationResults.Allowed {
-		audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny))
+		audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny), ActionReasonRequestPolicy)
 		writeAuditLog()
 
 		errorMessage, errorData := g.buildPolicyDeniedError(&validationResults, req.Params.Name)
@@ -509,7 +509,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 		// If response validation denied the response
 		if !responseValidationResults.Allowed {
-			audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny))
+			audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny), ActionReasonResponsePolicy)
 			writeAuditLog()
 			errorMessage := g.buildResponseDeniedError(&responseValidationResults, req.Params.Name)
 			return nil, &PolicyDeniedError{
@@ -575,7 +575,19 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	result.Meta.AdditionalFields["validation_summary"] = validationSummary
 
 	// Success - set actions and write audit log
-	audit.SetActions(string(config.PolicyActionAllow), string(config.PolicyActionAllow))
+	// Determine action reason based on validation results
+	var actionReason ActionReason
+	var recommendedAction string
+	if validationResults.FailedOpen {
+		actionReason = ActionReasonFailOpen
+		recommendedAction = "" // Unknown - omit from audit log
+	} else if validationResults.AuditModeBypass {
+		actionReason = ActionReasonAuditMode
+		recommendedAction = string(validationResults.RecommendedAction)
+	} else {
+		recommendedAction = string(config.PolicyActionAllow)
+	}
+	audit.SetActions(recommendedAction, string(config.PolicyActionAllow), actionReason)
 	writeAuditLog()
 
 	return result, nil

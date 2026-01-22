@@ -109,7 +109,8 @@ type aiResponseRuleResult struct {
 	message      string
 	redacted     string
 	evaluationMs int64
-	err          error
+	err          error  // Actual error if result is "error"
+	errCategory  string // Error classification: "api_error", "timeout", "canceled", "parse_error", "no_response"
 }
 
 // EvaluateResponse evaluates a response against all policies.
@@ -173,9 +174,6 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	}
 	allAuditOnly := enabledPolicies == 0 && auditOnlyPolicies > 0
 
-	// Create a cancellable context for early termination
-	evalCtx, cancelEval := context.WithCancel(ctx)
-
 	// Create a channel to collect results from goroutines
 	resultChan := make(chan aiResponseRuleResult, len(e.policies))
 
@@ -211,7 +209,10 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		go func(p AIResponsePolicy) {
 			startTime := time.Now()
 
-			policyCtx, cancel := context.WithTimeout(evalCtx, ruleTimeout)
+			// Use a detached context (not derived from request context) so all policies
+			// complete even after the request returns or an early decision is made.
+			// This ensures the audit log captures complete results from all policies.
+			policyCtx, cancel := context.WithTimeout(context.Background(), ruleTimeout)
 			defer cancel()
 
 			schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
@@ -236,12 +237,14 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 			durationMs := time.Since(startTime).Milliseconds()
 
 			if err != nil {
+				errCategory := classifyContextError(policyCtx, "api_error")
 				resultChan <- aiResponseRuleResult{
 					policy:       p,
 					result:       "error",
 					message:      fmt.Sprintf("Failed to evaluate response policy: %v", err),
 					evaluationMs: durationMs,
 					err:          err,
+					errCategory:  errCategory,
 				}
 				return
 			}
@@ -252,7 +255,8 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					result:       "error",
 					message:      "No response from AI model",
 					evaluationMs: durationMs,
-					err:          fmt.Errorf("no response from AI model"),
+					err:          fmt.Errorf("API returned empty choices"),
+					errCategory:  "no_response",
 				}
 				return
 			}
@@ -266,6 +270,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					message:      fmt.Sprintf("Failed to parse AI response: %v", err),
 					evaluationMs: durationMs,
 					err:          err,
+					errCategory:  "parse_error",
 				}
 				return
 			}
@@ -299,7 +304,6 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		completionChan := make(chan AsyncCompletion, 1)
 
 		go func() {
-			defer cancelEval()
 			defer close(completionChan)
 
 			auditResults := make([]AuditAIRuleResult, 0, len(e.policies))
@@ -313,16 +317,25 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					EvaluationMs: result.evaluationMs,
 				}
 				if result.err != nil {
-					auditResult.Error = result.err.Error()
+					auditResult.Error = formatAuditError(result.errCategory, result.err)
 				}
 				auditResults = append(auditResults, auditResult)
 
-				e.logger.Debug(context.Background(), "AI response policy evaluation result (async)",
-					zap.String("rule", result.policy.Name),
-					zap.String("action", string(result.policy.Action)),
-					zap.String("result", result.result),
-					zap.Int64("evaluation_ms", result.evaluationMs),
-				)
+				// Log result
+				if result.err != nil {
+					e.logger.Debug(context.Background(), "AI response policy evaluation error (async)",
+						zap.String("rule", result.policy.Name),
+						zap.String("error", formatAuditError(result.errCategory, result.err)),
+						zap.Int64("evaluation_ms", result.evaluationMs),
+					)
+				} else {
+					e.logger.Debug(context.Background(), "AI response policy evaluation result (async)",
+						zap.String("rule", result.policy.Name),
+						zap.String("action", string(result.policy.Action)),
+						zap.String("result", result.result),
+						zap.Int64("evaluation_ms", result.evaluationMs),
+					)
+				}
 			}
 
 			evaluationMs := time.Since(phaseStart).Milliseconds()
@@ -358,13 +371,13 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	}
 
 	// Regular synchronous flow for enabled policies
-	defer cancelEval()
-
 	ruleResults := make([]AuditAIRuleResult, 0, len(e.policies))
 	var decidingRule, decidingReason string
 	finalAction := "allow"
 	decided := false
 	var redactedContent *string
+	var auditOnlyDeny bool // Track if any audit_only policy returned deny
+	var failedOpen bool    // Track if we failed open due to errors
 
 	remainingEnabled := enabledPolicies
 	remainingTotal := len(e.policies)
@@ -411,15 +424,23 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 							auditResult.Mode = "audit_only"
 						}
 						if result.err != nil {
-							auditResult.Error = result.err.Error()
+							auditResult.Error = formatAuditError(result.errCategory, result.err)
 						}
 						asyncResults = append(asyncResults, auditResult)
 
-						e.logger.Debug(context.Background(), "AI response policy evaluation result (async continuation)",
-							zap.String("rule", result.policy.Name),
-							zap.String("result", result.result),
-							zap.Int64("evaluation_ms", result.evaluationMs),
-						)
+						if result.err != nil {
+							e.logger.Debug(context.Background(), "AI response policy evaluation error (async continuation)",
+								zap.String("rule", result.policy.Name),
+								zap.String("error", formatAuditError(result.errCategory, result.err)),
+								zap.Int64("evaluation_ms", result.evaluationMs),
+							)
+						} else {
+							e.logger.Debug(context.Background(), "AI response policy evaluation result (async continuation)",
+								zap.String("rule", result.policy.Name),
+								zap.String("result", result.result),
+								zap.Int64("evaluation_ms", result.evaluationMs),
+							)
+						}
 					}
 
 					evaluationMs := time.Since(phaseStart).Milliseconds()
@@ -461,9 +482,14 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				EvaluationMs: ruleResult.evaluationMs,
 			}
 			if ruleResult.err != nil {
-				auditResult.Error = ruleResult.err.Error()
+				auditResult.Error = formatAuditError(ruleResult.errCategory, ruleResult.err)
 			}
 			ruleResults = append(ruleResults, auditResult)
+
+			// Track audit_only denies for AuditModeBypass
+			if ruleResult.policy.Mode == config.PolicyModeAuditOnly && ruleResult.result == "deny" {
+				auditOnlyDeny = true
+			}
 
 			results.Results = append(results.Results, ResponseValidationResult{
 				PolicyName:      ruleResult.policy.Name,
@@ -473,27 +499,41 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				Message:         ruleResult.message,
 				RedactedContent: ruleResult.redacted,
 				DurationMs:      ruleResult.evaluationMs,
-				Error:           func() string { if ruleResult.err != nil { return ruleResult.err.Error() }; return "" }(),
+				Error:           func() string { if ruleResult.err != nil { return formatAuditError(ruleResult.errCategory, ruleResult.err) }; return "" }(),
 			})
 
-			e.logger.Debug(ctx, "AI response policy evaluation result",
-				zap.String("rule", ruleResult.policy.Name),
-				zap.String("action", string(ruleResult.policy.Action)),
-				zap.String("result", ruleResult.result),
-				zap.Int64("evaluation_ms", ruleResult.evaluationMs),
-			)
-
+			// Log results
 			if ruleResult.err != nil {
-				e.logger.Error(ctx, "AI response policy evaluation error",
+				// DEBUG: Concise summary for all error results
+				e.logger.Debug(ctx, "AI response policy evaluation error",
 					zap.String("rule", ruleResult.policy.Name),
+					zap.String("error", formatAuditError(ruleResult.errCategory, ruleResult.err)),
+					zap.Int64("evaluation_ms", ruleResult.evaluationMs),
+				)
+
+				// ERROR: Full error details for all errors
+				// With detached contexts, cancellations should only occur due to external factors
+				// like gateway shutdown, not from early termination logic
+				e.logger.Error(ctx, "AI response policy evaluation failed",
+					zap.String("rule", ruleResult.policy.Name),
+					zap.String("category", ruleResult.errCategory),
 					zap.Int64("evaluation_ms", ruleResult.evaluationMs),
 					zap.Error(ruleResult.err),
+				)
+			} else {
+				e.logger.Debug(ctx, "AI response policy evaluation result",
+					zap.String("rule", ruleResult.policy.Name),
+					zap.String("action", string(ruleResult.policy.Action)),
+					zap.String("result", ruleResult.result),
+					zap.Int64("evaluation_ms", ruleResult.evaluationMs),
 				)
 			}
 
 			if !decided && ruleResult.policy.Mode == config.PolicyModeEnabled {
 				switch ruleResult.result {
 				case "deny":
+					// Note: We don't cancel remaining goroutines - they continue to completion
+					// so the audit log captures complete results from all policies
 					if phaseTracker != nil {
 						phaseTracker.MarkDecided()
 					}
@@ -502,8 +542,8 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					decidingReason = ruleResult.message
 					results.Allowed = false
 					decided = true
-					cancelEval()
 				case "error":
+					failedOpen = true
 					e.logger.Warn(ctx, "AI response policy evaluation failed, failing open",
 						zap.String("rule", ruleResult.policy.Name),
 						zap.Error(ruleResult.err),
@@ -534,6 +574,9 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		results.RedactedContent = redactedContent
 	}
 
+	// Set FailedOpen flag
+	results.FailedOpen = failedOpen
+
 	switch finalAction {
 	case "deny":
 		results.Allowed = false
@@ -541,10 +584,22 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		if results.Message == "" {
 			results.Message = "Response denied by AI policy"
 		}
+		results.RecommendedAction = config.PolicyActionDeny
 	case "redact":
 		results.Message = "Response content redacted by AI policy"
+		results.RecommendedAction = config.PolicyActionRedact
 	default:
-		results.Message = "All AI response policies passed"
+		if failedOpen {
+			results.Message = "AI response validation failed, allowing response (fail-open)"
+			// RecommendedAction stays empty for fail-open (unknown recommendation)
+		} else if auditOnlyDeny {
+			results.AuditModeBypass = true
+			results.RecommendedAction = config.PolicyActionDeny
+			results.Message = "AI response policy would deny but mode is audit_only"
+		} else {
+			results.Message = "All AI response policies passed"
+			results.RecommendedAction = config.PolicyActionAllow
+		}
 	}
 
 	if results.AsyncCompletion == nil {
@@ -565,6 +620,8 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.String("final_action", finalAction),
+		zap.Bool("failed_open", failedOpen),
+		zap.Bool("audit_mode_bypass", auditOnlyDeny),
 		zap.Int64("blocked_ms", blockedMs),
 		zap.Int64("evaluation_ms", evaluationMs),
 		zap.Bool("has_async", results.AsyncCompletion != nil),
