@@ -834,10 +834,10 @@ func TestParseAuditLine_LegacyZapFormat(t *testing.T) {
 	assert.Equal(t, "sess-old", entry.Audit.UpstreamRequest.SessionID)
 	assert.Equal(t, "10.0.0.1", entry.Audit.UpstreamRequest.ClientIP)
 
-	// Verify legacy CEL was converted to Rules
+	// Verify legacy CEL validation was parsed correctly
 	require.NotNil(t, entry.Audit.RequestValidation)
-	require.NotNil(t, entry.Audit.RequestValidation.Rules)
-	assert.Equal(t, "allow", entry.Audit.RequestValidation.Rules.Action)
+	require.NotNil(t, entry.Audit.RequestValidation.CEL)
+	assert.Equal(t, "allow", entry.Audit.RequestValidation.CEL.Action)
 
 	// Verify zap metadata was preserved
 	assert.Equal(t, "info", entry.Level)
@@ -868,8 +868,9 @@ func TestParseAuditLine_EmptyToolPrefixedName(t *testing.T) {
 }
 
 func TestParseAuditLine_ZapFormatWithNewSchema(t *testing.T) {
-	// Tests parsing a zap-formatted entry that uses the new schema (has rules, not cel)
-	zapNewJSON := `{"level":"info","ts":1705320000.5,"caller":"gateway/gateway.go:200","msg":"Tool call audit","logger":"audit","audit":{"validation_started":"2024-01-15T12:00:00Z","created_at":"2024-01-15T12:00:01Z","tool":{"name":"new_tool","client":"new_client","prefixed_name":"new_client__new_tool","params":{"key":"value"}},"upstream_request":{"id":"req-new","session_id":"sess-new","client_ip":"172.16.0.1","user_agent":"NewAgent/2.0"},"request_validation":{"rules":{"action":"allow","evaluation_ms":5}},"action":"allow","recommended_action":"allow","duration_ms":80,"total_blocked_ms":30}}`
+	// Tests parsing a zap-formatted entry with the current schema structure
+	// (upstream_request instead of incoming_request, tool.params instead of request.params)
+	zapNewJSON := `{"level":"info","ts":1705320000.5,"caller":"gateway/gateway.go:200","msg":"Tool call audit","logger":"audit","audit":{"validation_started":"2024-01-15T12:00:00Z","created_at":"2024-01-15T12:00:01Z","tool":{"name":"new_tool","client":"new_client","prefixed_name":"new_client__new_tool","params":{"key":"value"}},"upstream_request":{"id":"req-new","session_id":"sess-new","client_ip":"172.16.0.1","user_agent":"NewAgent/2.0"},"request_validation":{"cel":{"action":"allow","evaluation_ms":5}},"action":"allow","recommended_action":"allow","duration_ms":80,"total_blocked_ms":30}}`
 
 	entry, entryTime, err := parseAuditLine([]byte(zapNewJSON))
 	require.NoError(t, err)

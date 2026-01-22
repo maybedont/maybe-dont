@@ -57,10 +57,10 @@ type AuditResponseInfo struct {
 	IsError      bool `json:"is_error"`
 }
 
-// AuditValidationInfo contains validation results for rules and AI policies
+// AuditValidationInfo contains validation results for CEL and AI policies
 type AuditValidationInfo struct {
-	Rules *AuditRulesResult `json:"rules,omitempty"` // Deterministic rule evaluation (was "cel")
-	AI    *AuditAIResult    `json:"ai,omitempty"`    // AI-powered validation
+	CEL *AuditRulesResult `json:"cel,omitempty"` // Deterministic CEL rule evaluation
+	AI  *AuditAIResult    `json:"ai,omitempty"`  // AI-powered validation
 }
 
 // AuditRulesResult contains the result of deterministic rule evaluation
@@ -154,12 +154,12 @@ func (ac *AuditContext) SetToolDuration(durationMs int64) {
 	ac.entry.Tool.DurationMs = &durationMs
 }
 
-// SetRequestValidationRules sets deterministic rules request validation result
+// SetRequestValidationRules sets deterministic CEL rules request validation result
 func (ac *AuditContext) SetRequestValidationRules(rulesResult *AuditRulesResult) {
 	if ac.entry.RequestValidation == nil {
 		ac.entry.RequestValidation = &AuditValidationInfo{}
 	}
-	ac.entry.RequestValidation.Rules = rulesResult
+	ac.entry.RequestValidation.CEL = rulesResult
 }
 
 // SetRequestValidationAI sets AI request validation result with detailed timing and per-rule results
@@ -178,12 +178,12 @@ func (ac *AuditContext) SetResponse(contentItems int, isError bool) {
 	}
 }
 
-// SetResponseValidationRules sets deterministic rules response validation result
+// SetResponseValidationRules sets deterministic CEL rules response validation result
 func (ac *AuditContext) SetResponseValidationRules(rulesResult *AuditRulesResult) {
 	if ac.entry.ResponseValidation == nil {
 		ac.entry.ResponseValidation = &AuditValidationInfo{}
 	}
-	ac.entry.ResponseValidation.Rules = rulesResult
+	ac.entry.ResponseValidation.CEL = rulesResult
 }
 
 // SetResponseValidationAI sets AI response validation result with detailed timing and per-rule results
