@@ -114,8 +114,8 @@ type AuditValidationInfo struct {
 | `duration_ms` | Total wall-clock time from receiving request to returning response | - |
 | `total_blocked_ms` | Time the caller was blocked waiting (includes validation blocking + tool call) | `total_blocked_ms - tool.duration_ms` = gateway overhead |
 | `tool.duration_ms` | Time spent waiting for downstream MCP server (omitted if denied) | - |
-| `request_validation.rules.blocked_ms` | Time blocked waiting for deterministic rules (may be < `evaluation_ms` if short-circuited) | - |
-| `request_validation.rules.evaluation_ms` | Total time for all deterministic rules to complete | - |
+| `request_validation.cel.blocked_ms` | Time blocked waiting for deterministic rules (may be < `evaluation_ms` if short-circuited) | - |
+| `request_validation.cel.evaluation_ms` | Total time for all deterministic rules to complete | - |
 | `request_validation.ai.blocked_ms` | Time blocked waiting for AI rules (may be < `evaluation_ms` if short-circuited or budget exhausted) | - |
 | `request_validation.ai.evaluation_ms` | Total time for all AI rules to complete | - |
 | `response_validation.*` | Same structure as request_validation | - |
@@ -129,12 +129,12 @@ type AuditValidationInfo struct {
 
 ### Validation Result Naming
 
-The validation blocks now use `rules` instead of `cel` to be consistent with configuration naming:
+The validation blocks use `cel` for deterministic CEL rule evaluation results:
 
 ```go
 type AuditValidationInfo struct {
-    Rules *AuditRulesResult `json:"rules,omitempty"` // Was "cel"
-    AI    *AuditAIResult    `json:"ai,omitempty"`
+    CEL *AuditRulesResult `json:"cel,omitempty"` // Deterministic CEL rule evaluation
+    AI  *AuditAIResult    `json:"ai,omitempty"`  // AI-powered validation
 }
 
 // AuditRulesResult contains the result of deterministic rule evaluation
@@ -180,7 +180,7 @@ type AuditRulesRuleResult struct {
     "user_agent": "claude-code/1.0.0"
   },
   "request_validation": {
-    "rules": {
+    "cel": {
       "action": "allow",
       "blocked_ms": 5,
       "evaluation_ms": 5,
@@ -211,7 +211,7 @@ type AuditRulesRuleResult struct {
 
 In this example:
 - `duration_ms` (1100ms) = total wall-clock time
-- `total_blocked_ms` (850ms) = rules.blocked (5) + ai.blocked (695) + tool.duration (150)
+- `total_blocked_ms` (850ms) = cel.blocked (5) + ai.blocked (695) + tool.duration (150)
 - Gateway overhead = 850 - 150 = 700ms
 
 **Denied before tool call:**
@@ -232,7 +232,7 @@ In this example:
     "user_agent": "claude-code/1.0.0"
   },
   "request_validation": {
-    "rules": {
+    "cel": {
       "action": "deny",
       "blocked_ms": 2,
       "evaluation_ms": 2,
@@ -519,7 +519,6 @@ audit.SetToolDuration(time.Since(callStart).Milliseconds())
    - `evaluation_started` renamed to `validation_started`
    - `incoming_request` renamed to `upstream_request`
    - `request` object merged into `tool` (params, called_at, duration_ms now under `tool`)
-   - Validation blocks use `rules` instead of `cel`
    - `total_blocked_ms` now includes tool call duration
    - New `user_agent` field in `upstream_request`
 3. **Config changes**:
@@ -623,7 +622,7 @@ This is a mature, widely-used library for log rotation in Go applications.
 - [ ] Update environment variable handling for new config structure
 
 ### Audit Schema Changes
-- [ ] Rename `AuditCELResult` to `AuditRulesResult` and update JSON tag from `cel` to `rules`
+- [x] Rename `AuditCELResult` to `AuditRulesResult` (JSON tag remains `cel`)
 - [ ] Rename `IncomingRequestInfo` to `UpstreamRequestInfo` and update JSON tag
 - [ ] Add `UserAgent` field to `UpstreamRequestInfo`
 - [ ] Merge `AuditRequestInfo` into `AuditToolInfo` (add `Params`, `CalledAt`, `DurationMs`)

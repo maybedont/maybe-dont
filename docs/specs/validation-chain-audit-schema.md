@@ -84,7 +84,7 @@ Audit log written after all validations complete (blocking or not)
     "user_agent": "claude-code/1.0.0"
   },
   "request_validation": {
-    "rules": {
+    "cel": {
       "action": "allow",
       "blocked_ms": 5,
       "evaluation_ms": 5,
@@ -123,7 +123,7 @@ Audit log written after all validations complete (blocking or not)
     "is_error": false
   },
   "response_validation": {
-    "rules": {
+    "cel": {
       "action": "allow",
       "blocked_ms": 3,
       "evaluation_ms": 3,
@@ -152,7 +152,7 @@ Audit log written after all validations complete (blocking or not)
 ```
 
 In this example:
-- `total_blocked_ms` (858ms) = rules.blocked (5) + ai.blocked (700) + tool.duration (150) + response rules.blocked (3)
+- `total_blocked_ms` (858ms) = cel.blocked (5) + ai.blocked (700) + tool.duration (150) + response cel.blocked (3)
 - Gateway overhead = 858 - 150 = 708ms
 
 ### Top-Level Fields
@@ -186,7 +186,7 @@ In this example:
 
 ### Validation Block Fields (Rules and AI)
 
-Both `request_validation.rules`, `request_validation.ai`, `response_validation.rules`, and `response_validation.ai` share this structure:
+Both `request_validation.cel`, `request_validation.ai`, `response_validation.cel`, and `response_validation.ai` share this structure:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -231,7 +231,7 @@ When `blocked_ms` across all phases reaches `max_blocking_ms`:
 ```json
 {
   "request_validation": {
-    "rules": {
+    "cel": {
       "action": "allow",
       "blocked_ms": 5,
       "evaluation_ms": 5,
@@ -328,7 +328,7 @@ When the validation mode is set to `disabled` (e.g., `request_validation.ai.mode
 ```json
 {
   "request_validation": {
-    "rules": {
+    "cel": {
       "action": "allow",
       "blocked_ms": 5,
       "evaluation_ms": 5,
@@ -617,7 +617,7 @@ if asyncResult.Completion != nil {
 ```json
 {
   "request_validation": {
-    "rules": {
+    "cel": {
       "action": "allow",
       "blocked_ms": 3,
       "evaluation_ms": 3,
@@ -645,7 +645,7 @@ if asyncResult.Completion != nil {
 ```json
 {
   "request_validation": {
-    "rules": {
+    "cel": {
       "action": "deny",
       "blocked_ms": 2,
       "evaluation_ms": 2,
@@ -723,7 +723,7 @@ Note: AI request validation was skipped because rules validation denied.
 ```json
 {
   "request_validation": {
-    "rules": {
+    "cel": {
       "action": "allow",
       "blocked_ms": 5,
       "evaluation_ms": 5,
@@ -733,7 +733,7 @@ Note: AI request validation was skipped because rules validation denied.
     }
   },
   "response_validation": {
-    "rules": {
+    "cel": {
       "action": "redact",
       "blocked_ms": 10,
       "evaluation_ms": 10,
@@ -790,7 +790,6 @@ This schema change is **not backwards compatible**. Key changes:
 - New `validation_started` field at top level
 - `incoming_request` renamed to `upstream_request`
 - `request` object merged into `tool` (params, called_at, duration_ms now under `tool`)
-- Validation blocks use `rules` instead of `cel`
 - `AuditRulesResult` (formerly `AuditCELResult`) expanded from simple to detailed format
 - `total_blocked_ms` now includes tool call duration
 - New `blocked_ms` field in each validation result
