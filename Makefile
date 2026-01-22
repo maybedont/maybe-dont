@@ -36,7 +36,7 @@ snapshot:
 	METRICS_DATASET= METRICS_API_TOKEN= goreleaser release --snapshot --skip=docker --clean
 
 run: build
-	./$(BINARY_NAME) start --config-dir $HOME/.maybe-dont/config
+	./$(BINARY_NAME) start --config-dir $(HOME)/.maybe-dont/
 
 docker-build:
 	./developer/scripts/buildLocalDockerImage.sh
