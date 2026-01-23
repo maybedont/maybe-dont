@@ -405,3 +405,210 @@ func TestAsyncValidation_ResponseEngine_AllAuditOnly(t *testing.T) {
 	assert.NotNil(t, completion.AIDetails)
 	assert.Equal(t, "allow", completion.AIDetails.Action)
 }
+
+// TestAsyncValidation_FullChainWithCELAndAI tests the complete validation flow
+// with both CEL and AI handlers in the chain, ensuring AsyncCompletion propagates
+// through to the audit context correctly.
+func TestAsyncValidation_FullChainWithCELAndAI(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	// Create CEL engine with a simple allow-all policy
+	celEngine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:       "allow_all",
+			Expression: "true",
+			Action:     config.PolicyActionAllow,
+		},
+	}, "")
+	require.NoError(t, err)
+
+	// Create AI engine with audit_only policy
+	mockClient := NewMockAIClient()
+	mockClient.DefaultDelay = 100 * time.Millisecond
+	mockClient.DefaultResponse = AIResponse{Allowed: true, Message: "Approved"}
+
+	aiEngine := &AIPolicyEngine{
+		apiKey:              "test-key",
+		model:               "gpt-4o-mini",
+		maxRuleEvaluationMs: 30000,
+		client:              mockClient,
+	}
+	err = InitAIPolicyEngine(sessionLogger, aiEngine)
+	require.NoError(t, err)
+	err = aiEngine.LoadPolicies([]config.AIPolicy{
+		{
+			Name:   "audit_policy",
+			Prompt: "Check: %s",
+			Action: config.PolicyActionDeny,
+			Mode:   config.PolicyModeAuditOnly,
+		},
+	}, config.PolicyModeAuditOnly)
+	require.NoError(t, err)
+
+	// Create handlers and chain (same order as real gateway: CEL first, then AI)
+	celHandler := NewToolCELValidationHandler(sessionLogger, celEngine)
+	aiHandler := NewToolAIValidationHandler(sessionLogger, aiEngine)
+	chain := NewToolValidationChain(celHandler, aiHandler)
+
+	// Create blocking budget (required for AI validation)
+	budget := NewBlockingBudget(90000)
+	ctx := WithBlockingBudget(context.Background(), budget)
+
+	// Handle through the chain
+	results, err := chain.Handle(ctx, createTestToolRequest("test_tool"))
+	require.NoError(t, err)
+
+	// Verify both CEL and AI results are propagated
+	assert.True(t, results.Allowed, "Should be allowed")
+	assert.NotNil(t, results.RulesDetails, "Should have CEL rules details")
+	assert.NotNil(t, results.AsyncCompletion, "Should have async completion from AI handler")
+
+	// Now simulate what populateRequestValidationAudit does
+	audit := NewAuditContext("client__test_tool", "client", "test_tool", "session-123", "1.2.3.4", "req-123")
+
+	// This is the exact logic from populateRequestValidationAudit
+	if results.RulesDetails != nil {
+		audit.SetRequestValidationRules(results.RulesDetails)
+	}
+	if results.AIDetails != nil {
+		audit.SetRequestValidationAI(results.AIDetails)
+	}
+	if results.AsyncCompletion != nil {
+		audit.SetRequestAIResultsAsync(results.AsyncCompletion)
+	}
+
+	// Critical assertion: HasAsyncWork should return true
+	assert.True(t, audit.HasAsyncWork(), "Audit context should have async work pending")
+
+	// Call FinalizeAsync and verify it waits for AI results
+	startTime := time.Now()
+	entry := audit.FinalizeAsync()
+	waitDuration := time.Since(startTime)
+
+	// Should have waited for async results
+	assert.GreaterOrEqual(t, waitDuration, 80*time.Millisecond, "Should wait for async AI completion")
+
+	// Verify the audit entry has both CEL and AI results
+	require.NotNil(t, entry.RequestValidation, "Should have request validation")
+	assert.NotNil(t, entry.RequestValidation.CEL, "Should have CEL results")
+	assert.NotNil(t, entry.RequestValidation.AI, "Should have AI results")
+	assert.Len(t, entry.RequestValidation.AI.Results, 1, "Should have 1 AI rule result")
+}
+
+// TestAsyncValidation_PopulateAuditWithAsyncCompletion specifically tests that
+// when ValidationResults has AsyncCompletion set, it gets propagated to the
+// audit context and HasAsyncWork returns true.
+func TestAsyncValidation_PopulateAuditWithAsyncCompletion(t *testing.T) {
+	// Create a mock AsyncCompletion channel
+	completionChan := make(chan AsyncCompletion, 1)
+
+	// Create ValidationResults with AsyncCompletion set (simulating all audit_only AI)
+	results := ValidationResults{
+		Allowed:    true,
+		AllowCount: 1,
+		RulesDetails: &AuditRulesResult{
+			Action:  "allow",
+			Results: []AuditRulesRuleResult{},
+		},
+		AIDetails:       nil, // nil because it's async
+		AsyncCompletion: completionChan,
+	}
+
+	// Create audit context
+	audit := NewAuditContext("client__test_tool", "client", "test_tool", "session-123", "1.2.3.4", "req-123")
+
+	// Simulate populateRequestValidationAudit logic
+	if results.RulesDetails != nil {
+		audit.SetRequestValidationRules(results.RulesDetails)
+	}
+	if results.AIDetails != nil {
+		audit.SetRequestValidationAI(results.AIDetails)
+	}
+	if results.AsyncCompletion != nil {
+		audit.SetRequestAIResultsAsync(results.AsyncCompletion)
+	}
+
+	// The key assertion: HasAsyncWork MUST return true
+	assert.True(t, audit.HasAsyncWork(), "HasAsyncWork must return true when AsyncCompletion is set")
+
+	// Send completion in background
+	go func() {
+		completionChan <- AsyncCompletion{
+			AIDetails: &AuditAIResult{
+				Action:       "allow",
+				EvaluationMs: 100,
+				Results: []AuditAIRuleResult{
+					{Rule: "test_rule", Action: "deny", Mode: "audit_only", Result: "allow"},
+				},
+			},
+		}
+	}()
+
+	// FinalizeAsync should wait and populate AI results
+	entry := audit.FinalizeAsync()
+
+	// Verify AI results are present
+	require.NotNil(t, entry.RequestValidation)
+	require.NotNil(t, entry.RequestValidation.AI, "AI results should be populated after FinalizeAsync")
+	assert.Equal(t, "allow", entry.RequestValidation.AI.Action)
+}
+
+// TestAsyncValidation_WriteAuditLogBehavior tests that the audit log writing
+// behavior correctly handles async completion - ensuring it waits for async
+// results before writing the entry.
+func TestAsyncValidation_WriteAuditLogBehavior(t *testing.T) {
+	// This test simulates the writeAuditLog closure behavior in HandleToolCall
+
+	// Create audit context with async completion
+	audit := NewAuditContext("client__test_tool", "client", "test_tool", "session-123", "1.2.3.4", "req-123")
+
+	// Set up CEL results (synchronous)
+	audit.SetRequestValidationRules(&AuditRulesResult{
+		Action:  "allow",
+		Results: []AuditRulesRuleResult{},
+	})
+
+	// Set up async AI completion
+	completionChan := make(chan AsyncCompletion, 1)
+	audit.SetRequestAIResultsAsync(completionChan)
+
+	// Simulate AI completion arriving after a delay
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		completionChan <- AsyncCompletion{
+			AIDetails: &AuditAIResult{
+				Action:       "allow",
+				EvaluationMs: 150,
+				Results: []AuditAIRuleResult{
+					{Rule: "audit_rule", Action: "deny", Mode: "audit_only", Result: "allow"},
+				},
+			},
+		}
+	}()
+
+	// Simulate writeAuditLog behavior
+	var entry *AuditEntry
+	var writeDuration time.Duration
+
+	if audit.HasAsyncWork() {
+		// Async path - should wait for completion
+		startTime := time.Now()
+		entry = audit.FinalizeAsync()
+		writeDuration = time.Since(startTime)
+	} else {
+		// Sync path - would NOT have AI results
+		t.Fatal("HasAsyncWork returned false - this is the bug we're testing for")
+	}
+
+	// Verify we took the async path and waited
+	assert.GreaterOrEqual(t, writeDuration, 100*time.Millisecond, "Should have waited for async completion")
+
+	// Verify the entry has complete results
+	require.NotNil(t, entry.RequestValidation)
+	assert.NotNil(t, entry.RequestValidation.CEL, "Should have CEL results")
+	assert.NotNil(t, entry.RequestValidation.AI, "Should have AI results from async completion")
+	assert.Len(t, entry.RequestValidation.AI.Results, 1)
+}
