@@ -3,8 +3,18 @@ name: deploy to cloud run
 on:
   workflow_dispatch:
     inputs:
+      build_first:
+        description: 'Build a new Docker image before deploying (ignores tag input when enabled)'
+        required: false
+        default: true
+        type: boolean
+      branch:
+        description: 'Branch to build from (only used when build_first is enabled)'
+        required: false
+        default: 'main'
+        type: string
       tag:
-        description: 'Container image tag (default: latest dev tag from ghcr.io)'
+        description: 'Container image tag (ignored when build_first is enabled; default: latest dev tag from ghcr.io)'
         required: false
         default: ''
         type: string
@@ -32,8 +42,19 @@ env:
   AR_IMAGE: us-central1-docker.pkg.dev/utility-dynamo-481523-i9/ghcr/maybedont/maybe-dont
 
 jobs:
+  build-image:
+    if: ${{ inputs.build_first }}
+    uses: ./.github/workflows/dev-docker.yaml
+    with:
+      branch: ${{ inputs.branch }}
+    permissions:
+      contents: read
+      packages: write
+
   resolve-tag:
     runs-on: ubuntu-latest
+    needs: [build-image]
+    if: ${{ always() && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped') }}
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       ghcr_image: ${{ steps.resolve.outputs.ghcr_image }}
@@ -43,8 +64,13 @@ jobs:
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_TAG: ${{ needs.build-image.outputs.tag }}
         run: |
-          if [ -n "${{ inputs.tag }}" ]; then
+          # If build_first was enabled and succeeded, use the built tag
+          if [ -n "$BUILD_TAG" ]; then
+            TAG="$BUILD_TAG"
+            echo "Using tag from build job: $TAG"
+          elif [ -n "${{ inputs.tag }}" ]; then
             TAG="${{ inputs.tag }}"
             echo "Using provided tag: $TAG"
           else
