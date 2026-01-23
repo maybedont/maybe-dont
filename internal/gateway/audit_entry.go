@@ -18,12 +18,12 @@ type AuditEntry struct {
 
 	// Validation results
 	RequestValidation  *AuditValidationInfo `json:"request_validation,omitempty"`
-	Response           *AuditResponseInfo   `json:"response,omitempty"`
 	ResponseValidation *AuditValidationInfo `json:"response_validation,omitempty"`
 
 	// Actions
-	RecommendedAction string `json:"recommended_action"`
+	RecommendedAction string `json:"recommended_action,omitempty"` // Omitted when fail-open prevents complete evaluation
 	Action            string `json:"action"`
+	ActionReason      string `json:"action_reason,omitempty"` // request_policy, response_policy, audit_mode, fail_open
 
 	// Timing
 	DurationMs     int64 `json:"duration_ms"`       // Total wall-clock time from validation_started to created_at
@@ -51,12 +51,6 @@ type UpstreamRequestInfo struct {
 	UserAgent string `json:"user_agent,omitempty"` // User-Agent header from incoming request
 }
 
-// AuditResponseInfo contains response details (minimal to avoid logging sensitive data)
-type AuditResponseInfo struct {
-	ContentItems int  `json:"content_items"`
-	IsError      bool `json:"is_error"`
-}
-
 // AuditValidationInfo contains validation results for CEL and AI policies
 type AuditValidationInfo struct {
 	CEL *AuditRulesResult `json:"cel,omitempty"` // Deterministic CEL rule evaluation
@@ -78,7 +72,7 @@ type AuditRulesRuleResult struct {
 	Rule         string `json:"rule"`           // Rule name from definition
 	Action       string `json:"action"`         // Rule's configured action: "allow", "deny", or "redact"
 	Mode         string `json:"mode,omitempty"` // Only present if "audit_only"
-	Result       string `json:"result"`         // What rule contributed: "allow", "deny", "redact", or "no_match"
+	Result       string `json:"result"`         // Effective decision: "allow", "deny", or "redact"
 	EvaluationMs int64  `json:"evaluation_ms"`  // Time for this rule to complete
 	Error        string `json:"error,omitempty"` // Only present when result is "error"
 }
@@ -170,14 +164,6 @@ func (ac *AuditContext) SetRequestValidationAI(aiResult *AuditAIResult) {
 	ac.entry.RequestValidation.AI = aiResult
 }
 
-// SetResponse sets the response information
-func (ac *AuditContext) SetResponse(contentItems int, isError bool) {
-	ac.entry.Response = &AuditResponseInfo{
-		ContentItems: contentItems,
-		IsError:      isError,
-	}
-}
-
 // SetResponseValidationRules sets deterministic CEL rules response validation result
 func (ac *AuditContext) SetResponseValidationRules(rulesResult *AuditRulesResult) {
 	if ac.entry.ResponseValidation == nil {
@@ -194,10 +180,13 @@ func (ac *AuditContext) SetResponseValidationAI(aiResult *AuditAIResult) {
 	ac.entry.ResponseValidation.AI = aiResult
 }
 
-// SetActions sets the recommended and actual actions
-func (ac *AuditContext) SetActions(recommended, actual string) {
+// SetActions sets the recommended and actual actions with an optional reason.
+// The reason explains why the action was taken (request_policy, response_policy, audit_mode, fail_open).
+// Pass empty ActionReason when action == recommended_action with no special circumstances.
+func (ac *AuditContext) SetActions(recommended, actual string, reason ActionReason) {
 	ac.entry.RecommendedAction = recommended
 	ac.entry.Action = actual
+	ac.entry.ActionReason = string(reason)
 }
 
 // SetTotalBlockedMs sets the cumulative time blocked (validation + tool call)

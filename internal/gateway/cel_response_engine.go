@@ -52,34 +52,39 @@ func NewCELResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 }
 
 // LoadPolicies loads response policies from configuration
-// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
-func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy, defaultMode config.PolicyMode) error {
+// topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
+func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy, topLevelMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info(context.Background(), "Loading response policies",
-		zap.Int("count", len(policies)),
-		zap.String("default_mode", string(defaultMode)),
-	)
+	// Track seen policy names to detect duplicates
+	seenNames := make(map[string]bool)
 
 	// Validate and compile each policy
 	for _, policy := range policies {
-		// Resolve effective mode for this policy
-		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+		// Check for duplicate names
+		if seenNames[policy.Name] {
+			return fmt.Errorf("duplicate policy name '%s' in CEL response rules", policy.Name)
+		}
+		seenNames[policy.Name] = true
 
-		e.logger.Info(context.Background(), "Loading response policy",
-			zap.String("name", policy.Name),
-			zap.String("action", string(policy.Action)),
-			zap.String("mode", string(effectiveMode)),
-		)
-
-		// Skip disabled policies
-		if effectiveMode == config.PolicyModeDisabled {
-			e.logger.Info(context.Background(), "Skipping disabled response policy",
+		// Skip disabled policies (enabled: false)
+		if !policy.IsEnabled() {
+			e.logger.Debug(context.Background(), "Skipping disabled response policy",
 				zap.String("name", policy.Name),
 			)
 			continue
 		}
+
+		// Resolve effective mode for this policy
+		// Top-level audit_only applies to all rules; per-rule audit_only is additive
+		effectiveMode := config.ResolvePolicyMode(topLevelMode, policy.Mode)
+
+		e.logger.Debug(context.Background(), "Loading response policy",
+			zap.String("name", policy.Name),
+			zap.String("action", string(policy.Action)),
+			zap.String("mode", string(effectiveMode)),
+		)
 
 		// Compile the expression
 		_, issues := e.env.Compile(policy.Expression)
@@ -105,7 +110,7 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy,
 		})
 	}
 
-	e.logger.Info(context.Background(), "Loaded CEL response policies", zap.Int("count", len(e.policies)))
+	e.logger.Debug(context.Background(), "Loaded CEL response policies", zap.Int("count", len(e.policies)))
 	return nil
 }
 
@@ -122,7 +127,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		phaseTracker = budget.StartPhase()
 	}
 
-	e.logger.Info(ctx, "Evaluating response with CEL policies",
+	e.logger.Debug(ctx, "Evaluating response with CEL policies",
 		zap.String("tool", req.Params.Name),
 		zap.Int("policy_count", len(e.policies)),
 	)
@@ -180,17 +185,14 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Mode:         modeToAuditString(policy.Mode),
 				Result:       "error",
 				EvaluationMs: ruleDurationMs,
-				Error:        issues.Err().Error(),
+				Error:        formatAuditError("compile_error", issues.Err()),
 			})
-			// Treat compilation error as deny for enabled rules
-			if policy.Mode == config.PolicyModeEnabled {
+			// Fail-open on compilation error for enabled rules
+			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
-				finalAction = "deny"
-				decidingRule = policy.Name
-				decidingReason = fmt.Sprintf("CEL compilation error: %v", issues.Err())
-				results.Allowed = false
+				results.FailedOpen = true
 				earlyTerminated = true
 				break
 			}
@@ -212,17 +214,14 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Mode:         modeToAuditString(policy.Mode),
 				Result:       "error",
 				EvaluationMs: ruleDurationMs,
-				Error:        err.Error(),
+				Error:        formatAuditError("program_error", err),
 			})
-			// Treat program creation error as deny for enabled rules
-			if policy.Mode == config.PolicyModeEnabled {
+			// Fail-open on program creation error for enabled rules
+			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
-				finalAction = "deny"
-				decidingRule = policy.Name
-				decidingReason = fmt.Sprintf("CEL program error: %v", err)
-				results.Allowed = false
+				results.FailedOpen = true
 				earlyTerminated = true
 				break
 			}
@@ -245,17 +244,14 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Mode:         modeToAuditString(policy.Mode),
 				Result:       "error",
 				EvaluationMs: ruleDurationMs,
-				Error:        err.Error(),
+				Error:        formatAuditError("eval_error", err),
 			})
-			// Treat evaluation error as deny for enabled rules
-			if policy.Mode == config.PolicyModeEnabled {
+			// Fail-open on evaluation error for enabled rules
+			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
-				finalAction = "deny"
-				decidingRule = policy.Name
-				decidingReason = fmt.Sprintf("CEL evaluation error: %v", err)
-				results.Allowed = false
+				results.FailedOpen = true
 				earlyTerminated = true
 				break
 			}
@@ -273,15 +269,12 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				EvaluationMs: ruleDurationMs,
 				Error:        "policy did not return a boolean",
 			})
-			// Treat type error as deny for enabled rules
-			if policy.Mode == config.PolicyModeEnabled {
+			// Fail-open on type error for enabled rules
+			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
-				finalAction = "deny"
-				decidingRule = policy.Name
-				decidingReason = "CEL policy did not return a boolean"
-				results.Allowed = false
+				results.FailedOpen = true
 				earlyTerminated = true
 				break
 			}
@@ -295,12 +288,18 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			zap.Int64("evaluation_ms", ruleDurationMs),
 		)
 
-		// Determine the rule result based on expression match
+		// Determine the effective result based on expression match and action
+		// If matched, the result is the action; if not matched, the result is the opposite
 		var ruleResult string
-		if !matched {
-			ruleResult = "no_match"
-		} else {
+		if matched {
 			ruleResult = string(policy.Action) // "allow", "deny", or "redact"
+		} else {
+			// No match: deny/redact rules effectively allow, allow rules effectively deny
+			if policy.Action == config.PolicyActionAllow {
+				ruleResult = string(config.PolicyActionDeny)
+			} else {
+				ruleResult = string(config.PolicyActionAllow)
+			}
 		}
 
 		ruleResults = append(ruleResults, AuditRulesRuleResult{
@@ -325,7 +324,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			switch policy.Action {
 			case config.PolicyActionDeny:
 				// Only affect final decision if mode is enabled (not audit_only)
-				if policy.Mode == config.PolicyModeEnabled {
+				if !policy.Mode.IsAuditOnly() {
 					if phaseTracker != nil {
 						phaseTracker.MarkDecided()
 					}
@@ -349,7 +348,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 					results.Results[len(results.Results)-1].RedactedContent = redacted
 
 					// Only actually apply redaction if mode is enabled (not audit_only)
-					if policy.Mode == config.PolicyModeEnabled {
+					if !policy.Mode.IsAuditOnly() {
 						if finalAction == "allow" {
 							finalAction = "redact"
 						}
@@ -382,16 +381,20 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 
 	// Set final result message if not already set
 	if results.Message == "" {
-		switch finalAction {
-		case "deny":
-			results.Message = decidingReason
-			if results.Message == "" {
-				results.Message = "Response denied by CEL policy"
+		if results.FailedOpen {
+			results.Message = "CEL response evaluation failed, allowing response (fail-open)"
+		} else {
+			switch finalAction {
+			case "deny":
+				results.Message = decidingReason
+				if results.Message == "" {
+					results.Message = "Response denied by CEL policy"
+				}
+			case "redact":
+				results.Message = "Response content redacted by CEL policy"
+			default:
+				results.Message = "No CEL response policies matched"
 			}
-		case "redact":
-			results.Message = "Response content redacted by CEL policy"
-		default:
-			results.Message = "No CEL response policies matched"
 		}
 	}
 
@@ -408,11 +411,12 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	}
 	results.RulesDetails = celDetails
 
-	e.logger.Info(ctx, "CEL response policy evaluation complete",
+	e.logger.Debug(ctx, "CEL response policy evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.String("final_action", finalAction),
 		zap.Bool("early_terminated", earlyTerminated),
+		zap.Bool("failed_open", results.FailedOpen),
 		zap.Int64("blocked_ms", blockedMs),
 		zap.Int64("evaluation_ms", evaluationMs),
 	)

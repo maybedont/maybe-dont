@@ -60,7 +60,7 @@ validation:
     # OpenAI-compatible API endpoint
     endpoint: "https://api.openai.com/v1/chat/completions"
     # Model to use for AI validation
-    model: "gpt-5-nano"
+    model: "gpt-5.2"
     # API key (required when any AI feature is enabled)
     api_key: "${OPENAI_API_KEY}"
 
@@ -69,15 +69,19 @@ validation:
 request_validation:
   # CEL-based deterministic request validation using CEL expressions
   cel:
-    # Mode: enabled, audit_only, disabled (default: enabled)
-    mode: enabled
-    # Path to CEL rules file (required when mode is not disabled)
+    # Whether this validation phase is enabled (default: true)
+    enabled: true
+    # Mode: "audit_only" makes all rules log-only (never block), omit for blocking rules
+    # mode: audit_only
+    # Path to CEL rules file (required when enabled is true)
     rules_file: "cel_request_rules.yaml"
   # AI-powered request validation using an LLM
   ai:
-    # Mode: enabled, audit_only, disabled (default: audit_only)
+    # Whether this validation phase is enabled (default: true)
+    enabled: true
+    # Mode: "audit_only" makes all rules log-only (default for AI: audit_only)
     mode: audit_only
-    # Path to AI rules file (required when mode is not disabled)
+    # Path to AI rules file (required when enabled is true)
     rules_file: "ai_request_rules.yaml"
 
 # Response validation configuration
@@ -85,15 +89,15 @@ request_validation:
 response_validation:
   # CEL-based deterministic response validation using CEL expressions
   cel:
-    # Mode: enabled, audit_only, disabled (default: disabled)
-    mode: disabled
-    # Path to CEL response rules file (required when mode is not disabled)
+    # Whether this validation phase is enabled (default: false)
+    enabled: false
+    # Path to CEL response rules file (required when enabled is true)
     rules_file: "cel_response_rules.yaml"
   # AI-powered response validation to detect sensitive information
   ai:
-    # Mode: enabled, audit_only, disabled (default: disabled)
-    mode: disabled
-    # Path to AI response rules file (required when mode is not disabled)
+    # Whether this validation phase is enabled (default: false)
+    enabled: false
+    # Path to AI response rules file (required when enabled is true)
     rules_file: "ai_response_rules.yaml"
     # Note: Uses the shared AI configuration from validation.ai above
 

@@ -165,8 +165,12 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 		zap.String("session_id", sessionID),
 		zap.Int("client_count", len(configs)))
 
-	// Create a session first
-	cm.sessionManager.CreateSession(sessionID)
+	// Get or create the session.
+	// The session may already exist if it was created by onSessionRegister
+	// to store client metadata (IP, User-Agent) before async discovery started.
+	if _, exists := cm.sessionManager.GetSession(sessionID); !exists {
+		cm.sessionManager.CreateSession(sessionID)
+	}
 
 	result := &SessionDiscoveryResult{
 		DownstreamClients: make(map[string]*SessionClientInfo),
@@ -229,7 +233,7 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 // If the session doesn't exist (e.g., after server restart), it creates a new session.
 // This is used for on-demand discovery of pass-through clients that weren't connected at session creation.
 func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionID, clientName string, cfg config.ClientConfig) (*SessionClientInfo, error) {
-	cm.logger.Info(ctx, "Creating single downstream client for session",
+	cm.logger.Debug(ctx, "Creating single downstream client for session",
 		zap.String("session_id", sessionID),
 		zap.String("client", clientName))
 
@@ -238,7 +242,7 @@ func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionI
 	// This allows discover_tools to work even with a stale session ID.
 	session, exists := cm.sessionManager.GetSession(sessionID)
 	if !exists {
-		cm.logger.Info(ctx, "Session not found, creating new session for discovery",
+		cm.logger.Debug(ctx, "Session not found, creating new session for discovery",
 			zap.String("session_id", sessionID))
 		session = cm.sessionManager.CreateSession(sessionID)
 	}
@@ -288,6 +292,9 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		Config: cfg,
 	}
 
+	// Extract session ID from context for logging (may not be present in all call paths)
+	sessionID, _ := GetSessionIDFromContext(ctx)
+
 	// Initialize client based on type
 	var cl *client.Client
 	var err error
@@ -316,7 +323,8 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		if cfg.Auth.PassThrough.Enabled {
 			headerFunc := cm.createAuthHeaderFunc(name, cfg)
 			sseOpts = append(sseOpts, client.WithHeaderFunc(headerFunc))
-			cm.logger.Info(ctx, "Enabled pass-through auth for SSE client",
+			cm.logger.Debug(ctx, "Enabled pass-through auth for SSE client",
+				zap.String("session_id", sessionID),
 				zap.String("client", name),
 				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
 		}
@@ -339,7 +347,8 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		if cfg.Auth.PassThrough.Enabled {
 			headerFunc := cm.createAuthHeaderFunc(name, cfg)
 			httpOpts = append(httpOpts, transport.WithHTTPHeaderFunc(headerFunc))
-			cm.logger.Info(ctx, "Enabled pass-through auth for HTTP client",
+			cm.logger.Debug(ctx, "Enabled pass-through auth for HTTP client",
+				zap.String("session_id", sessionID),
 				zap.String("client", name),
 				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
 		}
@@ -365,7 +374,9 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		return nil, fmt.Errorf("failed to check capabilities: %w", err)
 	}
 
-	cm.logger.Info(ctx, "Initialized MCP client", zap.String("name", name))
+	cm.logger.Debug(ctx, "Initialized MCP client",
+		zap.String("session_id", sessionID),
+		zap.String("name", name))
 	return clientInfo, nil
 }
 
@@ -521,18 +532,25 @@ func (cm *ClientManager) GetActiveSessions() []SessionInfo {
 			continue
 		}
 
-		// Get downstream client names for this session
+		// Get downstream client info for this session, including tool counts
 		clients := session.GetAllClients()
-		clientNames := make([]string, 0, len(clients))
-		for clientName := range clients {
-			clientNames = append(clientNames, clientName)
+		downstreamClients := make([]DownstreamClientInfo, 0, len(clients))
+		for clientName, clientInfo := range clients {
+			toolCount := 0
+			if clientInfo != nil {
+				toolCount = len(clientInfo.Tools)
+			}
+			downstreamClients = append(downstreamClients, DownstreamClientInfo{
+				Name:      clientName,
+				ToolCount: toolCount,
+			})
 		}
 
 		sessions = append(sessions, SessionInfo{
-			SessionID:       sessionID,
-			ClientIP:        session.GetClientIP(),
-			UserAgent:       session.GetUserAgent(),
-			DownstreamNames: clientNames,
+			SessionID:         sessionID,
+			ClientIP:          session.GetClientIP(),
+			UserAgent:         session.GetUserAgent(),
+			DownstreamClients: downstreamClients,
 		})
 	}
 
@@ -653,14 +671,6 @@ func sessionRetryWithDelay[T any](
 				}
 			} else {
 				// Success
-				if operation == "tool discovery" {
-					// Use title case for operation name
-					titleCaser := cases.Title(language.English)
-					logger.Debug(ctx, titleCaser.String(operation)+" successful",
-						zap.String("client", clientInfo.Name),
-						zap.Int("attempt", attempt+1),
-					)
-				}
 				return result, nil
 			}
 		}
@@ -701,17 +711,8 @@ func (cm *ClientManager) discoverSessionToolsWithRetry(ctx context.Context, clie
 			return toolsResp.Tools, nil
 		},
 		func(tools []mcp.Tool, attempt int) bool {
-			// Validate: continue if we have tools OR if this is the last attempt
-			if len(tools) > 0 || attempt == clientInfo.Config.CapabilityDiscoveryRetries {
-				// Log success with tool count
-				cm.logger.Debug(ctx, "Tool discovery successful",
-					zap.String("client", clientInfo.Name),
-					zap.Int("attempt", attempt+1),
-					zap.Int("tools_count", len(tools)),
-				)
-				return true
-			}
-			return false
+			// Accept result if we have tools OR if this is the last attempt
+			return len(tools) > 0 || attempt == clientInfo.Config.CapabilityDiscoveryRetries
 		},
 	)
 }
@@ -915,37 +916,40 @@ func PrefixName(clientName, originalName string) string {
 	return fmt.Sprintf("%s__%s", clientName, originalName)
 }
 
-// createAuthHeaderFunc creates a header function for pass-through authentication
-// This function will be called on each HTTP/SSE request to inject user credentials from context
+// createAuthHeaderFunc creates a header function for pass-through authentication.
+// This function performs lazy credential extraction - it only extracts and transforms
+// credentials when actually making a downstream request, avoiding unnecessary work
+// for native tool calls that don't need pass-through authentication.
 func (cm *ClientManager) createAuthHeaderFunc(clientName string, cfg config.ClientConfig) transport.HTTPHeaderFunc {
 	return func(ctx context.Context) map[string]string {
 		headers := make(map[string]string)
 
-		// Get client credentials from context
-		clientCreds, ok := GetServiceCredentials(ctx, clientName)
+		// Get raw request headers from context for lazy extraction
+		rawHeaders, ok := GetRawRequestHeaders(ctx)
 		if !ok {
-			cm.logger.Debug(ctx, "No credentials found for client in context",
+			cm.logger.Debug(ctx, "No raw request headers in context for credential extraction",
 				zap.String("client", clientName))
 			return headers
 		}
 
-		// Apply each header mapping
+		// Extract and transform credentials based on this client's header mappings
 		for _, mapping := range cfg.Auth.PassThrough.Headers {
-			// Get credential value from context (keyed by target_header)
-			value, ok := clientCreds.GetHeader(mapping.TargetHeader)
-			if !ok {
-				cm.logger.Debug(ctx, "Missing credential for header mapping",
+			// Extract value from raw request headers using source_header
+			value := rawHeaders.Get(mapping.SourceHeader)
+			if value == "" {
+				cm.logger.Debug(ctx, "Source header not found in request",
 					zap.String("client", clientName),
-					zap.String("target_header", mapping.TargetHeader))
+					zap.String("source_header", mapping.SourceHeader))
 				continue
 			}
 
-			// Format value using template
+			// Format value using template and set as target header
 			headerValue := formatCredentialValue(mapping.Format, value)
 			headers[mapping.TargetHeader] = headerValue
 
-			cm.logger.Debug(ctx, "Injected auth header for downstream",
+			cm.logger.Debug(ctx, "Extracted and injected auth header for downstream",
 				zap.String("client", clientName),
+				zap.String("source_header", mapping.SourceHeader),
 				zap.String("target_header", mapping.TargetHeader))
 		}
 

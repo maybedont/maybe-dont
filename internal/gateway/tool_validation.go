@@ -8,12 +8,27 @@ import (
 	"github.com/maybedont/maybe-dont/internal/config"
 )
 
+// ActionReason is a typed string explaining why the action was taken
+type ActionReason string
+
+// ActionReason constants explain why the action was taken
+const (
+	// ActionReasonRequestPolicy indicates a request validation policy caused the deny
+	ActionReasonRequestPolicy ActionReason = "request_policy"
+	// ActionReasonResponsePolicy indicates a response validation policy caused the deny or redact
+	ActionReasonResponsePolicy ActionReason = "response_policy"
+	// ActionReasonAuditMode indicates the action differs from recommendation due to audit_only mode
+	ActionReasonAuditMode ActionReason = "audit_mode"
+	// ActionReasonFailOpen indicates evaluation couldn't complete (budget exhausted, timeout, errors)
+	ActionReasonFailOpen ActionReason = "fail_open"
+)
+
 // ValidationResult represents the result of a single validation check
 type ValidationResult struct {
 	PolicyName string              `json:"policy_name"`
 	PolicyType string              `json:"policy_type"` // "cel" or "ai"
 	Action     config.PolicyAction `json:"action"`      // "allow" or "deny"
-	Mode       config.PolicyMode   `json:"mode"`        // "enabled", "audit_only", or "disabled"
+	Mode       config.PolicyMode   `json:"mode"`        // "audit_only" or empty (can block)
 	Message    string              `json:"message,omitempty"`
 	Error      string              `json:"error,omitempty"`
 	DurationMs int64               `json:"duration_ms"` // Time taken to evaluate this policy in milliseconds
@@ -50,6 +65,18 @@ type ValidationResults struct {
 	Error      string             `json:"error,omitempty"`
 	AllowCount int                `json:"allow_count"`
 	DenyCount  int                `json:"deny_count"`
+	// RecommendedAction is what validation would recommend if fully evaluated.
+	// Empty when fail-open prevents complete evaluation.
+	RecommendedAction config.PolicyAction `json:"recommended_action,omitempty"`
+	// ActionReason explains why the action was taken.
+	// Empty when action == recommended_action with no special circumstances.
+	ActionReason ActionReason `json:"action_reason,omitempty"`
+	// FailedOpen indicates validation couldn't complete and defaulted to allow.
+	// When true, RecommendedAction should be empty and ActionReason should be ActionReasonFailOpen.
+	FailedOpen bool `json:"-"`
+	// AuditModeBypass indicates the request was allowed despite a deny recommendation
+	// because the deciding rule was in audit_only mode.
+	AuditModeBypass bool `json:"-"`
 	// RulesDetails contains detailed deterministic rules validation results for audit logging
 	// This is only populated by the rules validation handler
 	RulesDetails *AuditRulesResult `json:"rules_details,omitempty"`
@@ -60,6 +87,17 @@ type ValidationResults struct {
 	// The caller should read from this channel in a goroutine to receive complete AI results.
 	// This field is not serialized.
 	AsyncCompletion <-chan AsyncCompletion `json:"-"`
+}
+
+// DenyingRuleNames returns the names of all rules that issued a deny action
+func (v *ValidationResults) DenyingRuleNames() []string {
+	var names []string
+	for _, result := range v.Results {
+		if result.Action == config.PolicyActionDeny {
+			names = append(names, result.PolicyName)
+		}
+	}
+	return names
 }
 
 // ToolValidationHandler defines the interface for tool validation handlers
@@ -117,6 +155,18 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 			finalResults.AsyncCompletion = results.AsyncCompletion
 		}
 
+		// Propagate fail-open and audit-mode flags (any handler can set these)
+		if results.FailedOpen {
+			finalResults.FailedOpen = true
+		}
+		if results.AuditModeBypass {
+			finalResults.AuditModeBypass = true
+			// Capture the recommended action from the handler that would have denied
+			if results.RecommendedAction != "" {
+				finalResults.RecommendedAction = results.RecommendedAction
+			}
+		}
+
 		if !foundDeny && results.DenyCount > 0 && results.Message != "" {
 			denyMessage = results.Message
 			foundDeny = true
@@ -131,11 +181,20 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 	if foundDeny {
 		finalResults.Allowed = false
 		finalResults.Message = denyMessage
+		finalResults.RecommendedAction = config.PolicyActionDeny
 	} else if foundAllow {
 		finalResults.Allowed = true
 		finalResults.Message = allowMessage
+		// RecommendedAction is set by AuditModeBypass handler if applicable
+		if !finalResults.AuditModeBypass && !finalResults.FailedOpen {
+			finalResults.RecommendedAction = config.PolicyActionAllow
+		}
 	} else {
 		finalResults.Allowed = true
+		// Only set RecommendedAction to allow if not overridden by audit mode or fail-open
+		if !finalResults.AuditModeBypass && !finalResults.FailedOpen {
+			finalResults.RecommendedAction = config.PolicyActionAllow
+		}
 	}
 
 	return finalResults, finalError

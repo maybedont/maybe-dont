@@ -687,3 +687,156 @@ func TestClientManager_HasSession(t *testing.T) {
 	require.NoError(t, cm.sessionManager.DeleteSession(ctx, "session-1"))
 	assert.False(t, cm.HasSession("session-1"))
 }
+
+// TestClientManager_GetActiveSessions_ReturnsClientMetadata verifies that
+// GetActiveSessions returns session metadata including ClientIP, UserAgent,
+// and DownstreamClients (with tool counts) when sessions have downstream clients.
+func TestClientManager_GetActiveSessions_ReturnsClientMetadata(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// Create a session and set metadata (in the correct order - session first, then metadata)
+	cm.sessionManager.CreateSession("session-123")
+	cm.SetSessionClientIP("session-123", "192.168.1.100")
+	cm.SetSessionUserAgent("session-123", "Claude-Code/1.0.0")
+
+	// Add downstream clients to the session
+	cm.sessionManager.SetSessionClient("session-123", "github", &SessionClientInfo{
+		Name:   "github",
+		Config: config.ClientConfig{Type: "http"},
+	})
+	cm.sessionManager.SetSessionClient("session-123", "aws-docs", &SessionClientInfo{
+		Name:   "aws-docs",
+		Config: config.ClientConfig{Type: "http"},
+	})
+
+	// Create a second session with different metadata
+	cm.sessionManager.CreateSession("session-456")
+	cm.SetSessionClientIP("session-456", "10.0.0.50")
+	cm.SetSessionUserAgent("session-456", "MCP-Client/2.0")
+
+	cm.sessionManager.SetSessionClient("session-456", "github", &SessionClientInfo{
+		Name:   "github",
+		Config: config.ClientConfig{Type: "http"},
+	})
+
+	// Get active sessions
+	sessions := cm.GetActiveSessions()
+
+	// Verify we have 2 sessions
+	require.Len(t, sessions, 2)
+
+	// Find sessions by ID (order may vary)
+	var session123, session456 *SessionInfo
+	for i := range sessions {
+		switch sessions[i].SessionID {
+		case "session-123":
+			session123 = &sessions[i]
+		case "session-456":
+			session456 = &sessions[i]
+		}
+	}
+
+	// Verify session-123 metadata
+	require.NotNil(t, session123, "session-123 should exist")
+	assert.Equal(t, "192.168.1.100", session123.ClientIP, "session-123 should have correct ClientIP")
+	assert.Equal(t, "Claude-Code/1.0.0", session123.UserAgent, "session-123 should have correct UserAgent")
+	assert.Len(t, session123.DownstreamClients, 2, "session-123 should have 2 downstream clients")
+	clientNames123 := make([]string, len(session123.DownstreamClients))
+	for i, c := range session123.DownstreamClients {
+		clientNames123[i] = c.Name
+	}
+	assert.Contains(t, clientNames123, "github")
+	assert.Contains(t, clientNames123, "aws-docs")
+
+	// Verify session-456 metadata
+	require.NotNil(t, session456, "session-456 should exist")
+	assert.Equal(t, "10.0.0.50", session456.ClientIP, "session-456 should have correct ClientIP")
+	assert.Equal(t, "MCP-Client/2.0", session456.UserAgent, "session-456 should have correct UserAgent")
+	assert.Len(t, session456.DownstreamClients, 1, "session-456 should have 1 downstream client")
+	assert.Equal(t, "github", session456.DownstreamClients[0].Name)
+}
+
+// TestClientManager_SetSessionClientIP_RequiresExistingSession verifies that
+// SetSessionClientIP and SetSessionUserAgent silently fail when called before
+// the session exists. This tests the low-level API behavior.
+//
+// Note: The Gateway.onSessionRegister now creates the session synchronously
+// before calling these methods, so in practice this race condition is avoided.
+func TestClientManager_SetSessionClientIP_RequiresExistingSession(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// Set metadata BEFORE session exists - these calls silently fail
+	cm.SetSessionClientIP("session-123", "192.168.1.100")
+	cm.SetSessionUserAgent("session-123", "Claude-Code/1.0.0")
+
+	// Now create the session
+	cm.sessionManager.CreateSession("session-123")
+
+	// Add a downstream client
+	cm.sessionManager.SetSessionClient("session-123", "github", &SessionClientInfo{
+		Name:   "github",
+		Config: config.ClientConfig{Type: "http"},
+	})
+
+	// Get active sessions
+	sessions := cm.GetActiveSessions()
+	require.Len(t, sessions, 1)
+
+	// ClientIP and UserAgent are empty because they were set before session existed
+	assert.Empty(t, sessions[0].ClientIP, "ClientIP should be empty because it was set before session existed")
+	assert.Empty(t, sessions[0].UserAgent, "UserAgent should be empty because it was set before session existed")
+
+	// The downstream client should still be present
+	assert.Len(t, sessions[0].DownstreamClients, 1)
+	assert.Equal(t, "github", sessions[0].DownstreamClients[0].Name)
+}
+
+// TestClientManager_CreateSessionClients_PreservesExistingSession verifies that
+// CreateSessionClients uses "get or create" semantics, preserving metadata that
+// was set on an existing session (e.g., by onSessionRegister before async discovery).
+func TestClientManager_CreateSessionClients_PreservesExistingSession(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// Initialize with no clients (we're testing session creation, not client creation)
+	err := cm.InitializeClients(ctx, map[string]config.ClientConfig{})
+	require.NoError(t, err)
+
+	// Step 1: Create session first and set metadata (mimics onSessionRegister flow)
+	cm.sessionManager.CreateSession("session-123")
+	cm.SetSessionClientIP("session-123", "192.168.1.100")
+	cm.SetSessionUserAgent("session-123", "Claude-Code/1.0.0")
+
+	// Verify metadata is set
+	session, exists := cm.sessionManager.GetSession("session-123")
+	require.True(t, exists)
+	assert.Equal(t, "192.168.1.100", session.GetClientIP())
+	assert.Equal(t, "Claude-Code/1.0.0", session.GetUserAgent())
+
+	// Step 2: Call CreateSessionClients (mimics async discovery)
+	// This should NOT overwrite the existing session
+	result, err := cm.CreateSessionClients(ctx, "session-123")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify metadata is preserved after CreateSessionClients
+	session, exists = cm.sessionManager.GetSession("session-123")
+	require.True(t, exists)
+	assert.Equal(t, "192.168.1.100", session.GetClientIP(), "ClientIP should be preserved after CreateSessionClients")
+	assert.Equal(t, "Claude-Code/1.0.0", session.GetUserAgent(), "UserAgent should be preserved after CreateSessionClients")
+
+	// Verify GetActiveSessions returns the metadata
+	sessions := cm.GetActiveSessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "session-123", sessions[0].SessionID)
+	assert.Equal(t, "192.168.1.100", sessions[0].ClientIP)
+	assert.Equal(t, "Claude-Code/1.0.0", sessions[0].UserAgent)
+}

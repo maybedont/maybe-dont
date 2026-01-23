@@ -27,6 +27,14 @@ type ResponseValidationResults struct {
 	Message         string                     `json:"message,omitempty"`
 	Error           string                     `json:"error,omitempty"`
 	RedactedContent *string                    `json:"redacted_content,omitempty"` // Final redacted content if any redaction occurred
+	// RecommendedAction is what validation would recommend if fully evaluated.
+	// Empty when fail-open prevents complete evaluation.
+	RecommendedAction config.PolicyAction `json:"recommended_action,omitempty"`
+	// FailedOpen indicates validation couldn't complete and defaulted to allow.
+	FailedOpen bool `json:"-"`
+	// AuditModeBypass indicates the response was allowed despite a deny/redact recommendation
+	// because the deciding rule was in audit_only mode.
+	AuditModeBypass bool `json:"-"`
 	// RulesDetails contains detailed deterministic rules validation results for audit logging
 	// This is only populated by the rules response validation handler
 	RulesDetails *AuditRulesResult `json:"rules_details,omitempty"`
@@ -70,6 +78,17 @@ func (r *ResponseValidationResults) RedactCount() int {
 		}
 	}
 	return count
+}
+
+// DenyingRuleNames returns the names of all rules that issued a deny action
+func (r *ResponseValidationResults) DenyingRuleNames() []string {
+	var names []string
+	for _, result := range r.Results {
+		if result.Action == config.PolicyActionDeny {
+			names = append(names, result.PolicyName)
+		}
+	}
+	return names
 }
 
 // ResponseValidationHandler defines the interface for response validation handlers
@@ -146,6 +165,17 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 		// Propagate async completion channel from AI handler
 		if results.AsyncCompletion != nil {
 			finalResults.AsyncCompletion = results.AsyncCompletion
+		}
+
+		// Propagate fail-open and audit-mode flags (any handler can set these)
+		if results.FailedOpen {
+			finalResults.FailedOpen = true
+		}
+		if results.AuditModeBypass {
+			finalResults.AuditModeBypass = true
+			if results.RecommendedAction != "" {
+				finalResults.RecommendedAction = results.RecommendedAction
+			}
 		}
 	}
 

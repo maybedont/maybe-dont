@@ -57,7 +57,6 @@ type AuditEntry struct {
 
     // Validation results
     RequestValidation  *AuditValidationInfo `json:"request_validation,omitempty"`
-    Response           *AuditResponseInfo   `json:"response,omitempty"`
     ResponseValidation *AuditValidationInfo `json:"response_validation,omitempty"`
 
     // Actions

@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/singleflight"
 )
 
 // TestEnsurePassThroughToolsDiscovered_SkipsWhenClientsExist verifies that
@@ -435,5 +438,410 @@ func TestCredentialCheck_IdentifiesPassThroughClients(t *testing.T) {
 			hasCredentials := tc.creds != nil && len(tc.creds.clients) > 0
 			assert.Equal(t, tc.hasCredentials, hasCredentials)
 		})
+	}
+}
+
+// TestConcurrentLazyDiscovery_Deduplication verifies that concurrent lazy discovery
+// requests for the same session are deduplicated using singleflight.
+// Only one goroutine should perform the actual discovery while others wait and
+// receive the shared result.
+func TestConcurrentLazyDiscovery_Deduplication(t *testing.T) {
+	// This test verifies the singleflight deduplication pattern used by
+	// ensurePassThroughToolsDiscovered. When multiple concurrent tools/list
+	// requests arrive for the same session, only one should trigger discovery.
+	//
+	// The issue this addresses (from production logs):
+	// {"level":"info","ts":...,"msg":"Performing lazy tool discovery for session",...,"request_id":"f59b5b4bdd38fc36..."}
+	// {"level":"info","ts":...,"msg":"Performing lazy tool discovery for session",...,"request_id":"677c1dd026ea46ac..."}
+	// {"level":"info","ts":...,"msg":"Performing lazy tool discovery for session",...,"request_id":"6e4d82810d0aae2c..."}
+	// All with the same session_id but different request_ids - indicating a race condition.
+
+	// We use singleflight.Group directly to verify the pattern
+	var discoveryGroup singleflight.Group
+	var discoveryCount int32
+	sessionID := "test-session-concurrent"
+
+	// Number of concurrent callers
+	numCallers := 10
+	var wg sync.WaitGroup
+	results := make([]interface{}, numCallers)
+	errors := make([]error, numCallers)
+
+	// Barrier to ensure all goroutines start simultaneously
+	startBarrier := make(chan struct{})
+
+	// Simulate concurrent discovery requests
+	for i := 0; i < numCallers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+
+			// Wait for all goroutines to be ready
+			<-startBarrier
+
+			// This simulates what ensurePassThroughToolsDiscovered does with singleflight
+			result, err, _ := discoveryGroup.Do(sessionID, func() (interface{}, error) {
+				// Increment counter - this should only happen once
+				atomic.AddInt32(&discoveryCount, 1)
+
+				// Simulate discovery work (network I/O)
+				time.Sleep(50 * time.Millisecond)
+
+				// Return mock discovered tools
+				return []mcp.Tool{
+					{Name: "github__create_issue"},
+					{Name: "github__search_code"},
+				}, nil
+			})
+
+			results[index] = result
+			errors[index] = err
+		}(i)
+	}
+
+	// Release all goroutines at once
+	close(startBarrier)
+
+	// Wait for all to complete
+	wg.Wait()
+
+	// Verify that discovery only happened once despite 10 concurrent callers
+	assert.Equal(t, int32(1), atomic.LoadInt32(&discoveryCount),
+		"Discovery should only be performed once, but was performed %d times", discoveryCount)
+
+	// Verify all callers got the same result
+	for i := 0; i < numCallers; i++ {
+		require.NoError(t, errors[i], "Caller %d should not have an error", i)
+		require.NotNil(t, results[i], "Caller %d should have a result", i)
+
+		tools := results[i].([]mcp.Tool)
+		assert.Len(t, tools, 2, "Caller %d should receive 2 tools", i)
+		assert.Equal(t, "github__create_issue", tools[0].Name)
+		assert.Equal(t, "github__search_code", tools[1].Name)
+	}
+}
+
+// TestConcurrentLazyDiscovery_DifferentSessions verifies that concurrent requests
+// for different sessions are NOT deduplicated - each session gets its own discovery.
+func TestConcurrentLazyDiscovery_DifferentSessions(t *testing.T) {
+	var discoveryGroup singleflight.Group
+	var discoveryCount int32
+
+	// Two different sessions
+	sessions := []string{"session-1", "session-2"}
+	var wg sync.WaitGroup
+
+	startBarrier := make(chan struct{})
+
+	for _, sessionID := range sessions {
+		wg.Add(1)
+		go func(sid string) {
+			defer wg.Done()
+			<-startBarrier
+
+			_, _, _ = discoveryGroup.Do(sid, func() (interface{}, error) {
+				atomic.AddInt32(&discoveryCount, 1)
+				time.Sleep(20 * time.Millisecond)
+				return []mcp.Tool{{Name: sid + "__tool"}}, nil
+			})
+		}(sessionID)
+	}
+
+	close(startBarrier)
+	wg.Wait()
+
+	// Each session should have triggered its own discovery
+	assert.Equal(t, int32(2), atomic.LoadInt32(&discoveryCount),
+		"Each session should trigger its own discovery")
+}
+
+// TestConcurrentLazyDiscovery_ErrorPropagation verifies that when discovery fails,
+// all waiting callers receive the same error.
+func TestConcurrentLazyDiscovery_ErrorPropagation(t *testing.T) {
+	var discoveryGroup singleflight.Group
+	var discoveryCount int32
+	sessionID := "test-session-error"
+	expectedErr := fmt.Errorf("discovery failed: connection refused")
+
+	numCallers := 5
+	var wg sync.WaitGroup
+	errors := make([]error, numCallers)
+
+	startBarrier := make(chan struct{})
+
+	for i := 0; i < numCallers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-startBarrier
+
+			_, err, _ := discoveryGroup.Do(sessionID, func() (interface{}, error) {
+				atomic.AddInt32(&discoveryCount, 1)
+				time.Sleep(30 * time.Millisecond)
+				return nil, expectedErr
+			})
+
+			errors[index] = err
+		}(i)
+	}
+
+	close(startBarrier)
+	wg.Wait()
+
+	// Discovery should only be attempted once
+	assert.Equal(t, int32(1), atomic.LoadInt32(&discoveryCount))
+
+	// All callers should receive the same error
+	for i := 0; i < numCallers; i++ {
+		require.Error(t, errors[i], "Caller %d should have an error", i)
+		assert.Equal(t, expectedErr, errors[i], "Caller %d should receive the same error", i)
+	}
+}
+
+// TestConcurrentLazyDiscovery_RetryAfterError verifies that after a failed discovery,
+// a subsequent call can retry (unlike sync.Once which is one-shot).
+func TestConcurrentLazyDiscovery_RetryAfterError(t *testing.T) {
+	var discoveryGroup singleflight.Group
+	var attemptCount int32
+
+	sessionID := "test-session-retry"
+
+	// First call fails
+	_, err, _ := discoveryGroup.Do(sessionID, func() (interface{}, error) {
+		atomic.AddInt32(&attemptCount, 1)
+		return nil, fmt.Errorf("first attempt failed")
+	})
+	require.Error(t, err)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&attemptCount))
+
+	// Second call succeeds (singleflight allows retry, unlike sync.Once)
+	result, err, _ := discoveryGroup.Do(sessionID, func() (interface{}, error) {
+		atomic.AddInt32(&attemptCount, 1)
+		return []mcp.Tool{{Name: "github__tool"}}, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&attemptCount),
+		"singleflight should allow retry after failure")
+
+	tools := result.([]mcp.Tool)
+	assert.Len(t, tools, 1)
+}
+
+// =============================================================================
+// Tests for maybedont__discover_tools singleflight deduplication
+// =============================================================================
+
+// TestConcurrentDiscoverTools_Deduplication verifies that concurrent
+// maybedont__discover_tools calls for the same session/client are deduplicated.
+// Only one goroutine should perform the actual discovery while others wait and
+// receive the shared result.
+func TestConcurrentDiscoverTools_Deduplication(t *testing.T) {
+	// This test verifies the singleflight deduplication pattern used by
+	// DiscoverPassThroughTools. When multiple concurrent discover_tools
+	// requests arrive for the same session (e.g., after stale session detection
+	// triggers parallel retries), only one should create a connection.
+	//
+	// The issue this addresses (from production logs):
+	// {"ts":1769147335.121,"msg":"Processing discover_tools request","request_id":"a5d6aedc..."}
+	// {"ts":1769147335.295,"msg":"Processing discover_tools request","request_id":"fdfc6639..."}
+	// {"ts":1769147335.306,"msg":"Processing discover_tools request","request_id":"f8806cc2..."}
+	// All with the same session_id, resulting in 3 separate MCP client connections.
+
+	var discoverToolsGroup singleflight.Group
+	var discoveryCount int32
+	sessionID := "mcp-session-5af41cc5"
+	clientName := "github"
+
+	// Build singleflight key as DiscoverPassThroughTools does
+	singleflightKey := sessionID + "/" + clientName
+
+	numCallers := 10
+	var wg sync.WaitGroup
+	results := make([]interface{}, numCallers)
+	errors := make([]error, numCallers)
+
+	startBarrier := make(chan struct{})
+
+	for i := 0; i < numCallers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-startBarrier
+
+			result, err, _ := discoverToolsGroup.Do(singleflightKey, func() (interface{}, error) {
+				atomic.AddInt32(&discoveryCount, 1)
+				time.Sleep(50 * time.Millisecond) // Simulate MCP connection time
+
+				return &DiscoveryResult{
+					DiscoveredClients: []DiscoveredClientInfo{
+						{ClientName: clientName, ToolCount: 40, Tools: []string{"create_issue", "search_code"}},
+					},
+					AlreadyConnected: []string{},
+					Errors:           []DiscoveryError{},
+				}, nil
+			})
+
+			results[index] = result
+			errors[index] = err
+		}(i)
+	}
+
+	close(startBarrier)
+	wg.Wait()
+
+	// Discovery should only happen once
+	assert.Equal(t, int32(1), atomic.LoadInt32(&discoveryCount),
+		"Discovery should only be performed once, but was performed %d times", discoveryCount)
+
+	// All callers should get the same result
+	for i := 0; i < numCallers; i++ {
+		require.NoError(t, errors[i], "Caller %d should not have an error", i)
+		require.NotNil(t, results[i], "Caller %d should have a result", i)
+
+		result := results[i].(*DiscoveryResult)
+		require.Len(t, result.DiscoveredClients, 1)
+		assert.Equal(t, clientName, result.DiscoveredClients[0].ClientName)
+		assert.Equal(t, 40, result.DiscoveredClients[0].ToolCount)
+	}
+}
+
+// TestConcurrentDiscoverTools_DifferentClients verifies that concurrent
+// discover_tools requests for different clients within the same session are
+// NOT deduplicated - each client gets its own discovery.
+func TestConcurrentDiscoverTools_DifferentClients(t *testing.T) {
+	var discoverToolsGroup singleflight.Group
+	var discoveryCount int32
+	sessionID := "mcp-session-abc123"
+
+	// Two different clients
+	clients := []string{"github", "gitlab"}
+	var wg sync.WaitGroup
+	results := make(map[string]*DiscoveryResult)
+	var mu sync.Mutex
+
+	startBarrier := make(chan struct{})
+
+	for _, client := range clients {
+		wg.Add(1)
+		go func(clientName string) {
+			defer wg.Done()
+			<-startBarrier
+
+			// Key includes clientName, so different clients are NOT deduplicated
+			singleflightKey := sessionID + "/" + clientName
+
+			result, _, _ := discoverToolsGroup.Do(singleflightKey, func() (interface{}, error) {
+				atomic.AddInt32(&discoveryCount, 1)
+				time.Sleep(20 * time.Millisecond)
+
+				return &DiscoveryResult{
+					DiscoveredClients: []DiscoveredClientInfo{
+						{ClientName: clientName, ToolCount: 10},
+					},
+				}, nil
+			})
+
+			mu.Lock()
+			results[clientName] = result.(*DiscoveryResult)
+			mu.Unlock()
+		}(client)
+	}
+
+	close(startBarrier)
+	wg.Wait()
+
+	// Each client should trigger its own discovery
+	assert.Equal(t, int32(2), atomic.LoadInt32(&discoveryCount),
+		"Each client should trigger its own discovery")
+
+	// Each client should have its own result
+	require.Len(t, results, 2)
+	assert.Equal(t, "github", results["github"].DiscoveredClients[0].ClientName)
+	assert.Equal(t, "gitlab", results["gitlab"].DiscoveredClients[0].ClientName)
+}
+
+// TestConcurrentDiscoverTools_AllClientsKey verifies that when clientName is empty
+// (discover all clients), the singleflight key correctly deduplicates.
+func TestConcurrentDiscoverTools_AllClientsKey(t *testing.T) {
+	var discoverToolsGroup singleflight.Group
+	var discoveryCount int32
+	sessionID := "mcp-session-def456"
+	clientName := "" // Empty = discover all clients
+
+	singleflightKey := sessionID + "/" + clientName // Results in "sessionID/"
+
+	numCallers := 5
+	var wg sync.WaitGroup
+
+	startBarrier := make(chan struct{})
+
+	for i := 0; i < numCallers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startBarrier
+
+			_, _, _ = discoverToolsGroup.Do(singleflightKey, func() (interface{}, error) {
+				atomic.AddInt32(&discoveryCount, 1)
+				time.Sleep(30 * time.Millisecond)
+
+				return &DiscoveryResult{
+					DiscoveredClients: []DiscoveredClientInfo{
+						{ClientName: "github", ToolCount: 40},
+						{ClientName: "gitlab", ToolCount: 30},
+					},
+				}, nil
+			})
+		}()
+	}
+
+	close(startBarrier)
+	wg.Wait()
+
+	// Discovery should only happen once for "all clients"
+	assert.Equal(t, int32(1), atomic.LoadInt32(&discoveryCount),
+		"Discovery for all clients should only happen once")
+}
+
+// TestConcurrentDiscoverTools_ErrorPropagation verifies that when discovery fails,
+// all waiting callers receive the same error.
+func TestConcurrentDiscoverTools_ErrorPropagation(t *testing.T) {
+	var discoverToolsGroup singleflight.Group
+	var discoveryCount int32
+	singleflightKey := "session-xyz/github"
+	expectedErr := fmt.Errorf("failed to connect to github: unauthorized")
+
+	numCallers := 5
+	var wg sync.WaitGroup
+	errors := make([]error, numCallers)
+
+	startBarrier := make(chan struct{})
+
+	for i := 0; i < numCallers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-startBarrier
+
+			_, err, _ := discoverToolsGroup.Do(singleflightKey, func() (interface{}, error) {
+				atomic.AddInt32(&discoveryCount, 1)
+				time.Sleep(30 * time.Millisecond)
+				return nil, expectedErr
+			})
+
+			errors[index] = err
+		}(i)
+	}
+
+	close(startBarrier)
+	wg.Wait()
+
+	// Discovery should only be attempted once
+	assert.Equal(t, int32(1), atomic.LoadInt32(&discoveryCount))
+
+	// All callers should receive the same error
+	for i := 0; i < numCallers; i++ {
+		require.Error(t, errors[i], "Caller %d should have an error", i)
+		assert.Equal(t, expectedErr, errors[i], "Caller %d should receive the same error", i)
 	}
 }

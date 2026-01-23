@@ -155,7 +155,7 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 		},
 	}
 
-	err = celEngine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = celEngine.LoadPolicies(policies, "")
 	require.NoError(t, err)
 
 	// Create validation chain with real handlers
@@ -277,7 +277,7 @@ func TestCELValidationHandler_Isolation(t *testing.T) {
 			Message:    "Allowed to call tools",
 		},
 	}
-	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = engine.LoadPolicies(policies, "")
 	require.NoError(t, err)
 
 	handler := NewToolCELValidationHandler(sessionLogger, engine)
@@ -314,4 +314,167 @@ func TestValidationChain_EmptyChain(t *testing.T) {
 	assert.Len(t, results.Results, 0)
 	assert.Equal(t, 0, results.AllowCount)
 	assert.Equal(t, 0, results.DenyCount)
+}
+
+// TestValidationChain_FailedOpenPropagation verifies that FailedOpen flag
+// propagates through the validation chain correctly.
+func TestValidationChain_FailedOpenPropagation(t *testing.T) {
+	// Create a handler that sets FailedOpen
+	failedOpenHandler := &MockValidationHandlerWithFlags{
+		name:        "failed-open-handler",
+		shouldAllow: true,
+		failedOpen:  true,
+	}
+
+	workingHandler := &MockValidationHandler{
+		name:        "working-handler",
+		shouldAllow: true,
+		expectedResult: ValidationResult{
+			PolicyName: "Working Policy",
+			PolicyType: "mock",
+			Action:     config.PolicyActionAllow,
+			Message:    "Working handler succeeded",
+		},
+	}
+
+	chain := NewToolValidationChain(failedOpenHandler, workingHandler)
+
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "test_tool"},
+	}
+
+	results, err := chain.Handle(context.Background(), req)
+	require.NoError(t, err)
+
+	assert.True(t, results.Allowed, "Should be allowed")
+	assert.True(t, results.FailedOpen, "FailedOpen flag should propagate")
+}
+
+// TestValidationChain_AuditModeBypassPropagation verifies that AuditModeBypass flag
+// and RecommendedAction propagate through the validation chain correctly.
+func TestValidationChain_AuditModeBypassPropagation(t *testing.T) {
+	// Create a handler that sets AuditModeBypass with an allow count
+	// This simulates a scenario where an audit_only deny policy matched
+	// but allowed the request because of audit mode
+	auditModeHandler := &MockValidationHandlerWithFlags{
+		name:              "audit-mode-handler",
+		shouldAllow:       true,
+		allowCount:        1, // Need an allow count for the chain to recognize results
+		auditModeBypass:   true,
+		recommendedAction: config.PolicyActionDeny,
+	}
+
+	chain := NewToolValidationChain(auditModeHandler)
+
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "test_tool"},
+	}
+
+	results, err := chain.Handle(context.Background(), req)
+	require.NoError(t, err)
+
+	assert.True(t, results.Allowed, "Should be allowed despite audit_only deny")
+	assert.True(t, results.AuditModeBypass, "AuditModeBypass flag should propagate")
+	assert.Equal(t, config.PolicyActionDeny, results.RecommendedAction, "RecommendedAction should be deny")
+}
+
+// MockValidationHandlerWithFlags extends MockValidationHandler to support
+// testing FailedOpen and AuditModeBypass flag propagation.
+type MockValidationHandlerWithFlags struct {
+	name              string
+	shouldAllow       bool
+	failedOpen        bool
+	auditModeBypass   bool
+	recommendedAction config.PolicyAction
+	allowCount        int
+	denyCount         int
+}
+
+func (m *MockValidationHandlerWithFlags) HandleToolCall(context.Context, mcp.CallToolRequest) (ValidationResults, error) {
+	return ValidationResults{
+		Allowed:           m.shouldAllow,
+		AllowCount:        m.allowCount,
+		DenyCount:         m.denyCount,
+		FailedOpen:        m.failedOpen,
+		AuditModeBypass:   m.auditModeBypass,
+		RecommendedAction: m.recommendedAction,
+	}, nil
+}
+
+// TestCELValidationHandler_FailOpenOnRuntimeError verifies that CEL runtime errors
+// result in fail-open behavior and set the FailedOpen flag.
+func TestCELValidationHandler_FailOpenOnRuntimeError(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+	engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
+	require.NoError(t, err)
+
+	// Load a policy that will cause a runtime error
+	policies := []config.Policy{
+		{
+			Name:       "runtime-error-policy",
+			Expression: `request.params.nonexistent.nested`, // Will fail at runtime
+			Action:     config.PolicyActionDeny,
+			Message:    "Should not reach this",
+		},
+	}
+	err = engine.LoadPolicies(policies, "")
+	require.NoError(t, err)
+
+	handler := NewToolCELValidationHandler(sessionLogger, engine)
+
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "test_tool"},
+	}
+
+	results, err := handler.HandleToolCall(context.Background(), req)
+	require.NoError(t, err, "Handler should not return error on CEL runtime error")
+
+	assert.True(t, results.Allowed, "Should fail-open and allow")
+	assert.True(t, results.FailedOpen, "FailedOpen flag should be set")
+	assert.Contains(t, results.Message, "fail-open", "Message should indicate fail-open")
+}
+
+// TestActionReasonTypeString verifies ActionReason type string conversion works correctly.
+func TestActionReasonTypeString(t *testing.T) {
+	tests := []struct {
+		name     string
+		reason   ActionReason
+		expected string
+	}{
+		{
+			name:     "request_policy converts correctly",
+			reason:   ActionReasonRequestPolicy,
+			expected: "request_policy",
+		},
+		{
+			name:     "response_policy converts correctly",
+			reason:   ActionReasonResponsePolicy,
+			expected: "response_policy",
+		},
+		{
+			name:     "audit_mode converts correctly",
+			reason:   ActionReasonAuditMode,
+			expected: "audit_mode",
+		},
+		{
+			name:     "fail_open converts correctly",
+			reason:   ActionReasonFailOpen,
+			expected: "fail_open",
+		},
+		{
+			name:     "empty reason stays empty",
+			reason:   ActionReason(""),
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, string(tt.reason))
+		})
+	}
 }

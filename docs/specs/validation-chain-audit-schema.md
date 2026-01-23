@@ -118,10 +118,6 @@ Audit log written after all validations complete (blocking or not)
       ]
     }
   },
-  "response": {
-    "content_items": 1,
-    "is_error": false
-  },
   "response_validation": {
     "cel": {
       "action": "allow",
@@ -204,7 +200,7 @@ Both `request_validation.cel`, `request_validation.ai`, `response_validation.cel
 | `rule` | string | Yes | Rule name from the rule definition |
 | `action` | `"allow"` \| `"deny"` \| `"redact"` | Yes | Rule's configured action |
 | `mode` | `"audit_only"` | No | Only present when rule mode is `audit_only` |
-| `result` | `"allow"` \| `"deny"` \| `"redact"` \| `"error"` | Yes | What this rule contributed |
+| `result` | `"allow"` \| `"deny"` \| `"redact"` \| `"error"` | Yes | Effective decision from this rule (see [Policy Action and Result Mapping](#policy-action-and-result-mapping)) |
 | `evaluation_ms` | int | Yes | Time for this rule to complete |
 | `error` | string | No | Present when `result: "error"` (e.g., "timeout", "api_error") |
 
@@ -290,7 +286,7 @@ In this example:
 
 | Scenario | Can Terminate Early? | Behavior |
 |----------|---------------------|----------|
-| First `enabled` rule returns `deny` | Yes | Stop blocking, cancel remaining, continue async for audit |
+| First `enabled` rule returns `deny` | Yes | Stop blocking, all remaining rules continue async for complete audit |
 | All `enabled` rules return `allow` | Yes | Stop blocking, remaining `audit_only` rules continue async |
 | All rules are `audit_only` | Yes | Phase is non-blocking from start |
 | Error on `enabled` rule | Yes | Treat as deny (fail-closed), stop blocking |
@@ -308,17 +304,19 @@ This section defines the precise behavior for each policy mode combination. The 
 
 ### Policy Modes
 
+> **Note**: Policy mode configuration has been simplified. See [Rule Mode Simplification](rule-mode-simplification.md) for details. The configuration uses `enabled: true/false` at the validation level and `mode: audit_only` (optional) at the rule level. The runtime behaviors described below are unchanged.
+
 | Mode | Executed? | Blocks Caller? | Affects Decision? | Appears in Audit Log? |
 |------|-----------|----------------|-------------------|----------------------|
-| `enabled` | Yes | Yes | Yes | Yes |
+| enabled (can block) | Yes | Yes | Yes | Yes |
 | `audit_only` | Yes | **No** | No | Yes |
-| `disabled` | **No** | No | No | **No** |
+| disabled | **No** | No | No | **No** |
 
 ### Mode Combinations and Expected Behavior
 
 #### 1. All Policies Disabled
 
-When the validation mode is set to `disabled` (e.g., `request_validation.ai.mode: disabled`):
+When validation is disabled (e.g., `request_validation.ai.enabled: false`):
 
 - **Behavior**: The engine returns immediately without executing any policies
 - **Blocking**: 0ms
@@ -342,9 +340,9 @@ When the validation mode is set to `disabled` (e.g., `request_validation.ai.mode
 
 Note: `request_validation.ai` is absent because AI validation is disabled.
 
-#### 2. All Policies Enabled
+#### 2. All Policies Enabled (Can Block)
 
-When all loaded policies have `mode: enabled`:
+When all loaded policies are in enabled mode (no `mode: audit_only`):
 
 - **Behavior**: Engine blocks until either:
   - An enabled policy returns `deny` (early termination), OR
@@ -437,11 +435,11 @@ In this example:
 
 #### 5. Mixed Modes with Early Deny
 
-When an enabled policy denies early while audit_only policies are still running:
+When an enabled policy denies early while other policies are still running:
 
-- **Behavior**: Engine returns `deny` immediately when the enabled policy denies. Remaining enabled policies are cancelled. Audit-only policies continue in the background.
+- **Behavior**: Engine returns `deny` immediately when the enabled policy denies. All other policies (both enabled and audit_only) continue running in the background to provide complete audit information.
 - **Blocking**: Time until the denying policy completed
-- **Audit Log**: Includes the deny result plus any audit_only results that complete (may include `error: "canceled"` for cancelled policies)
+- **Audit Log**: Includes the deny result plus all other policy results. Since all policies complete, the audit log provides a complete picture of what every policy would have decided.
 
 ```json
 {
@@ -454,7 +452,7 @@ When an enabled policy denies early while audit_only policies are still running:
       "reason": "Destructive operation detected",
       "results": [
         {"rule": "block_destructive", "action": "deny", "result": "deny", "evaluation_ms": 500},
-        {"rule": "slow_enabled_check", "action": "deny", "result": "error", "evaluation_ms": 500, "error": "canceled"},
+        {"rule": "slow_enabled_check", "action": "deny", "result": "allow", "evaluation_ms": 1800},
         {"rule": "audit_access", "action": "deny", "mode": "audit_only", "result": "allow", "evaluation_ms": 2000}
       ]
     }
@@ -466,7 +464,7 @@ When an enabled policy denies early while audit_only policies are still running:
 
 ### Disabled Policies Are Not Loaded
 
-Policies with `mode: disabled` (either explicitly or inherited from the top-level default) are filtered out during `LoadPolicies()`:
+Policies with `enabled: false` are filtered out during `LoadPolicies()`:
 
 - They are **not** added to the engine's policy list
 - They are **never** executed
@@ -558,7 +556,7 @@ if asyncResult.Completion != nil {
 - **Parallel**: Rules evaluated concurrently via goroutines
 - **Slow**: Typically 500ms-5000ms per rule
 - **Non-deterministic**: External LLM API calls
-- **Early termination**: First enabled deny cancels remaining goroutines
+- **Early termination**: First enabled deny stops blocking; all goroutines continue to completion for audit
 - **Per-rule timeout**: `max_rule_evaluation_ms` applies to each rule
 - **True async for audit_only**: Returns immediately, evaluation continues in background
 
@@ -585,7 +583,31 @@ if asyncResult.Completion != nil {
 
 ## Policy Action and Result Mapping
 
-### Deny Policies
+### CEL Rules (Deterministic)
+
+For CEL rules, the `result` field represents the **effective decision** based on whether the expression matched and what action was configured. This makes CEL results consistent with AI results—both report what action the rule contributed.
+
+| Action | Expression Matched? | Result | Effect (if `enabled`) |
+|--------|---------------------|--------|----------------------|
+| `deny` | yes | `"deny"` | DENY request/response |
+| `deny` | no | `"allow"` | No action (pattern not found) |
+| `allow` | yes | `"allow"` | Gate passed |
+| `allow` | no | `"deny"` | DENY (gate failed) |
+| `redact` | yes | `"redact"` | Apply redaction |
+| `redact` | no | `"allow"` | No action (pattern not found) |
+| any | error | `"error"` | DENY (fail-closed) |
+
+**Key insight**: You can determine if the expression matched by comparing `action` and `result`:
+- `action == result` → expression matched
+- `action != result` → expression did not match
+
+**Debugging**: The DEBUG log includes the raw `matched` boolean for developers who need to troubleshoot rule expressions.
+
+### AI Policies
+
+The following tables apply to AI-powered policies, where the result combines the AI's response with the rule's configured action.
+
+#### Deny Policies
 
 | AI Response (`allowed:`) | Result | Effect (if `enabled`) |
 |--------------------------|--------|----------------------|
@@ -593,7 +615,7 @@ if asyncResult.Completion != nil {
 | `true` | `"allow"` | No action (AI didn't find issue) |
 | error/timeout | `"error"` | DENY (fail-closed) |
 
-### Allow Policies (Required Gates)
+#### Allow Policies (Required Gates)
 
 | AI Response (`allowed:`) | Result | Effect (if `enabled`) |
 |--------------------------|--------|----------------------|
@@ -601,7 +623,7 @@ if asyncResult.Completion != nil {
 | `false` | `"deny"` | DENY (gate failed) |
 | error/timeout | `"error"` | DENY (fail-closed) |
 
-### Redact Policies (Response Only)
+#### Redact Policies (Response Only)
 
 | AI Response | Result | Effect (if `enabled`) |
 |-------------|--------|----------------------|
@@ -696,10 +718,6 @@ Note: AI request validation was skipped because rules validation denied.
         {"rule": "check_request", "action": "deny", "result": "allow", "evaluation_ms": 800}
       ]
     }
-  },
-  "response": {
-    "content_items": 1,
-    "is_error": false
   },
   "response_validation": {
     "ai": {
@@ -823,10 +841,10 @@ The following test cases must be implemented to verify correct policy mode behav
 #### Test: All Policies Enabled - Early Deny
 - **Setup**: Multiple policies with `mode: enabled`, one fast policy returns deny
 - **Assertions**:
-  - Function returns after first deny (doesn't wait for slower policies)
+  - Function returns after first deny (doesn't wait for slower policies to block)
   - `blocked_ms` approximately equals the denying policy's time
   - `AIDetails.DecidingRule` is set to the denying policy name
-  - Slower policies show `error: "canceled"` in results
+  - All policies complete and appear in results (no `error: "canceled"` - policies run to completion for audit)
 
 #### Test: All Policies Audit-Only - True Async
 - **Setup**: All policies with `mode: audit_only`, policies take 1-2 seconds each

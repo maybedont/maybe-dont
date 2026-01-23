@@ -2,6 +2,7 @@
 rules:
 - name: deny-github-delete-file
   description: Deny github delete file
+  enabled: true
   expression: |-
     get(request, "method", "") == "tools/call" &&
     get(request.params, "name", "") == "github__delete_file"
@@ -9,6 +10,7 @@ rules:
   message: Denied access to github__delete_file
 - name: deny-github-delete-workflow-run-logs
   description: Deny github__delete_workflow_run_logs
+  enabled: true
   expression: |-
     get(request, "method", "") == "tools/call" &&
     get(request.params, "name", "") == "github__delete_workflow_run_logs"

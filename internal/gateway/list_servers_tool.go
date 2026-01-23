@@ -40,6 +40,7 @@ func (h *NativeToolsHandler) getListDownstreamServersToolDefinition() mcp.Tool {
 			"If a server shows total_tools=0, tools may not yet be discovered for this session. " +
 			"Use " + ToolDiscoverTools + " to trigger discovery, then re-call this tool to see updated counts. " +
 			"Check the retrieved_at field to determine the age of previously cached results.",
+		DeferLoading: true,
 		Annotations: mcp.ToolAnnotation{
 			ReadOnlyHint: boolPtr(true),
 		},

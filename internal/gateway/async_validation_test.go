@@ -105,15 +105,18 @@ func TestAsyncValidation_EnabledPoliciesBlock(t *testing.T) {
 			Name:   "enabled_policy",
 			Prompt: "Check: %s",
 			Action: config.PolicyActionDeny,
-			Mode:   config.PolicyModeEnabled,
+			// Mode not set - can block
 		},
 	}
-	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = engine.LoadPolicies(policies, "")
 	require.NoError(t, err)
+
+	// Create blocking budget (required for enabled policies)
+	budget := NewBlockingBudget(90000) // 90 second budget
 
 	// Measure how long EvaluateToolCall takes
 	startTime := time.Now()
-	results, err := engine.EvaluateToolCall(context.Background(), createTestToolRequest("test_tool"), nil)
+	results, err := engine.EvaluateToolCall(context.Background(), createTestToolRequest("test_tool"), budget)
 	returnDuration := time.Since(startTime)
 
 	require.NoError(t, err)
@@ -158,7 +161,7 @@ func TestAsyncValidation_MixedModePolicies(t *testing.T) {
 			Name:   "enabled_policy",
 			Prompt: "Check: %s",
 			Action: config.PolicyActionDeny,
-			Mode:   config.PolicyModeEnabled,
+			// Mode not set - can block
 		},
 		{
 			Name:   "audit_only_policy",
@@ -167,10 +170,13 @@ func TestAsyncValidation_MixedModePolicies(t *testing.T) {
 			Mode:   config.PolicyModeAuditOnly,
 		},
 	}
-	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = engine.LoadPolicies(policies, "")
 	require.NoError(t, err)
 
-	results, err := engine.EvaluateToolCall(context.Background(), createTestToolRequest("test_tool"), nil)
+	// Create blocking budget (required for enabled policies)
+	budget := NewBlockingBudget(90000) // 90 second budget
+
+	results, err := engine.EvaluateToolCall(context.Background(), createTestToolRequest("test_tool"), budget)
 	require.NoError(t, err)
 
 	// Should be allowed

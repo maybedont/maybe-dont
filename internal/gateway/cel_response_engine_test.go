@@ -125,7 +125,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 			engine, err := NewCELResponsePolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies, config.PolicyModeEnabled)
+			err = engine.LoadPolicies(tt.policies, "")
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateResponse(context.Background(), tt.request, tt.response, nil)
@@ -185,4 +185,31 @@ func TestCELResponsePolicyEngine_Redaction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCELResponsePolicyEngine_DuplicatePolicyNames(t *testing.T) {
+	// Tests that LoadPolicies rejects policies with duplicate names
+	logger := zap.NewNop()
+	sessionLogger := config.NewSessionLogger(logger)
+	engine, err := NewCELResponsePolicyEngine(context.Background(), sessionLogger)
+	require.NoError(t, err)
+
+	policies := []config.ResponsePolicy{
+		{
+			Name:       "duplicate-name",
+			Expression: `true`,
+			Action:     config.PolicyActionDeny,
+			Message:    "First policy",
+		},
+		{
+			Name:       "duplicate-name",
+			Expression: `false`,
+			Action:     config.PolicyActionAllow,
+			Message:    "Second policy with same name",
+		},
+	}
+
+	err = engine.LoadPolicies(policies, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate policy name 'duplicate-name'")
 }

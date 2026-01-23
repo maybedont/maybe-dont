@@ -42,16 +42,21 @@ func TestListSessions_BasicResponse(t *testing.T) {
 	handler.SetSessionProvider(&mockSessionProvider{
 		sessions: []SessionInfo{
 			{
-				SessionID:       "session-123",
-				ClientIP:        "192.168.1.100",
-				UserAgent:       "Claude-Code/1.0.0",
-				DownstreamNames: []string{"github", "aws-docs"},
+				SessionID: "session-123",
+				ClientIP:  "192.168.1.100",
+				UserAgent: "Claude-Code/1.0.0",
+				DownstreamClients: []DownstreamClientInfo{
+					{Name: "github", ToolCount: 5},
+					{Name: "aws-docs", ToolCount: 12},
+				},
 			},
 			{
-				SessionID:       "session-456",
-				ClientIP:        "10.0.0.50",
-				UserAgent:       "MCP-Client/2.0",
-				DownstreamNames: []string{"github"},
+				SessionID: "session-456",
+				ClientIP:  "10.0.0.50",
+				UserAgent: "MCP-Client/2.0",
+				DownstreamClients: []DownstreamClientInfo{
+					{Name: "github", ToolCount: 3},
+				},
 			},
 		},
 	})
@@ -83,11 +88,18 @@ func TestListSessions_BasicResponse(t *testing.T) {
 	assert.Equal(t, "session-123", response.Sessions[0].SessionID)
 	assert.Equal(t, "192.168.1.100", response.Sessions[0].ClientIP)
 	assert.Equal(t, "Claude-Code/1.0.0", response.Sessions[0].UserAgent)
-	assert.Equal(t, []string{"github", "aws-docs"}, response.Sessions[0].DownstreamNames)
+	require.Len(t, response.Sessions[0].DownstreamClients, 2)
+	assert.Equal(t, "github", response.Sessions[0].DownstreamClients[0].Name)
+	assert.Equal(t, 5, response.Sessions[0].DownstreamClients[0].ToolCount)
+	assert.Equal(t, "aws-docs", response.Sessions[0].DownstreamClients[1].Name)
+	assert.Equal(t, 12, response.Sessions[0].DownstreamClients[1].ToolCount)
+
 	assert.Equal(t, "session-456", response.Sessions[1].SessionID)
 	assert.Equal(t, "10.0.0.50", response.Sessions[1].ClientIP)
 	assert.Equal(t, "MCP-Client/2.0", response.Sessions[1].UserAgent)
-	assert.Equal(t, []string{"github"}, response.Sessions[1].DownstreamNames)
+	require.Len(t, response.Sessions[1].DownstreamClients, 1)
+	assert.Equal(t, "github", response.Sessions[1].DownstreamClients[0].Name)
+	assert.Equal(t, 3, response.Sessions[1].DownstreamClients[0].ToolCount)
 }
 
 func TestListSessions_EmptyResponse(t *testing.T) {
@@ -156,16 +168,23 @@ func TestListSessions_SortedBySessionID(t *testing.T) {
 	handler.SetSessionProvider(&mockSessionProvider{
 		sessions: []SessionInfo{
 			{
-				SessionID:       "zzz-session",
-				DownstreamNames: []string{"github"},
+				SessionID: "zzz-session",
+				DownstreamClients: []DownstreamClientInfo{
+					{Name: "github", ToolCount: 5},
+				},
 			},
 			{
-				SessionID:       "aaa-session",
-				DownstreamNames: []string{"aws-docs"},
+				SessionID: "aaa-session",
+				DownstreamClients: []DownstreamClientInfo{
+					{Name: "aws-docs", ToolCount: 10},
+				},
 			},
 			{
-				SessionID:       "mmm-session",
-				DownstreamNames: []string{"github", "aws-docs"},
+				SessionID: "mmm-session",
+				DownstreamClients: []DownstreamClientInfo{
+					{Name: "github", ToolCount: 5},
+					{Name: "aws-docs", ToolCount: 10},
+				},
 			},
 		},
 	})
@@ -205,10 +224,12 @@ func TestListSessions_UserAgentOmittedWhenEmpty(t *testing.T) {
 	handler.SetSessionProvider(&mockSessionProvider{
 		sessions: []SessionInfo{
 			{
-				SessionID:       "session-no-ua",
-				ClientIP:        "192.168.1.100",
-				UserAgent:       "", // Empty User-Agent
-				DownstreamNames: []string{"github"},
+				SessionID: "session-no-ua",
+				ClientIP:  "192.168.1.100",
+				UserAgent: "", // Empty User-Agent
+				DownstreamClients: []DownstreamClientInfo{
+					{Name: "github", ToolCount: 5},
+				},
 			},
 		},
 	})
