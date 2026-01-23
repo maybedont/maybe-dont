@@ -57,17 +57,20 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy,
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info(context.Background(), "Loading response policies",
-		zap.Int("count", len(policies)),
-		zap.String("default_mode", string(defaultMode)),
-	)
+	// Track seen policy names to detect duplicates
+	seenNames := make(map[string]bool)
 
 	// Validate and compile each policy
 	for _, policy := range policies {
+		// Check for duplicate names
+		if seenNames[policy.Name] {
+			return fmt.Errorf("duplicate policy name '%s' in CEL response rules", policy.Name)
+		}
+		seenNames[policy.Name] = true
 		// Resolve effective mode for this policy
 		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
 
-		e.logger.Info(context.Background(), "Loading response policy",
+		e.logger.Debug(context.Background(), "Loading response policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
 			zap.String("mode", string(effectiveMode)),
@@ -75,7 +78,7 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy,
 
 		// Skip disabled policies
 		if effectiveMode == config.PolicyModeDisabled {
-			e.logger.Info(context.Background(), "Skipping disabled response policy",
+			e.logger.Debug(context.Background(), "Skipping disabled response policy",
 				zap.String("name", policy.Name),
 			)
 			continue
@@ -105,7 +108,7 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy,
 		})
 	}
 
-	e.logger.Info(context.Background(), "Loaded CEL response policies", zap.Int("count", len(e.policies)))
+	e.logger.Debug(context.Background(), "Loaded CEL response policies", zap.Int("count", len(e.policies)))
 	return nil
 }
 
@@ -122,7 +125,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		phaseTracker = budget.StartPhase()
 	}
 
-	e.logger.Info(ctx, "Evaluating response with CEL policies",
+	e.logger.Debug(ctx, "Evaluating response with CEL policies",
 		zap.String("tool", req.Params.Name),
 		zap.Int("policy_count", len(e.policies)),
 	)
@@ -180,7 +183,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Mode:         modeToAuditString(policy.Mode),
 				Result:       "error",
 				EvaluationMs: ruleDurationMs,
-				Error:        issues.Err().Error(),
+				Error:        formatAuditError("compile_error", issues.Err()),
 			})
 			// Fail-open on compilation error for enabled rules
 			if policy.Mode == config.PolicyModeEnabled {
@@ -209,7 +212,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Mode:         modeToAuditString(policy.Mode),
 				Result:       "error",
 				EvaluationMs: ruleDurationMs,
-				Error:        err.Error(),
+				Error:        formatAuditError("program_error", err),
 			})
 			// Fail-open on program creation error for enabled rules
 			if policy.Mode == config.PolicyModeEnabled {
@@ -239,7 +242,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Mode:         modeToAuditString(policy.Mode),
 				Result:       "error",
 				EvaluationMs: ruleDurationMs,
-				Error:        err.Error(),
+				Error:        formatAuditError("eval_error", err),
 			})
 			// Fail-open on evaluation error for enabled rules
 			if policy.Mode == config.PolicyModeEnabled {
@@ -283,12 +286,18 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			zap.Int64("evaluation_ms", ruleDurationMs),
 		)
 
-		// Determine the rule result based on expression match
+		// Determine the effective result based on expression match and action
+		// If matched, the result is the action; if not matched, the result is the opposite
 		var ruleResult string
-		if !matched {
-			ruleResult = "no_match"
-		} else {
+		if matched {
 			ruleResult = string(policy.Action) // "allow", "deny", or "redact"
+		} else {
+			// No match: deny/redact rules effectively allow, allow rules effectively deny
+			if policy.Action == config.PolicyActionAllow {
+				ruleResult = string(config.PolicyActionDeny)
+			} else {
+				ruleResult = string(config.PolicyActionAllow)
+			}
 		}
 
 		ruleResults = append(ruleResults, AuditRulesRuleResult{
@@ -400,7 +409,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	}
 	results.RulesDetails = celDetails
 
-	e.logger.Info(ctx, "CEL response policy evaluation complete",
+	e.logger.Debug(ctx, "CEL response policy evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.String("final_action", finalAction),

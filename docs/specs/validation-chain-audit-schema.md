@@ -118,10 +118,6 @@ Audit log written after all validations complete (blocking or not)
       ]
     }
   },
-  "response": {
-    "content_items": 1,
-    "is_error": false
-  },
   "response_validation": {
     "cel": {
       "action": "allow",
@@ -204,7 +200,7 @@ Both `request_validation.cel`, `request_validation.ai`, `response_validation.cel
 | `rule` | string | Yes | Rule name from the rule definition |
 | `action` | `"allow"` \| `"deny"` \| `"redact"` | Yes | Rule's configured action |
 | `mode` | `"audit_only"` | No | Only present when rule mode is `audit_only` |
-| `result` | `"allow"` \| `"deny"` \| `"redact"` \| `"error"` | Yes | What this rule contributed |
+| `result` | `"allow"` \| `"deny"` \| `"redact"` \| `"error"` | Yes | Effective decision from this rule (see [Policy Action and Result Mapping](#policy-action-and-result-mapping)) |
 | `evaluation_ms` | int | Yes | Time for this rule to complete |
 | `error` | string | No | Present when `result: "error"` (e.g., "timeout", "api_error") |
 
@@ -585,7 +581,31 @@ if asyncResult.Completion != nil {
 
 ## Policy Action and Result Mapping
 
-### Deny Policies
+### CEL Rules (Deterministic)
+
+For CEL rules, the `result` field represents the **effective decision** based on whether the expression matched and what action was configured. This makes CEL results consistent with AI results—both report what action the rule contributed.
+
+| Action | Expression Matched? | Result | Effect (if `enabled`) |
+|--------|---------------------|--------|----------------------|
+| `deny` | yes | `"deny"` | DENY request/response |
+| `deny` | no | `"allow"` | No action (pattern not found) |
+| `allow` | yes | `"allow"` | Gate passed |
+| `allow` | no | `"deny"` | DENY (gate failed) |
+| `redact` | yes | `"redact"` | Apply redaction |
+| `redact` | no | `"allow"` | No action (pattern not found) |
+| any | error | `"error"` | DENY (fail-closed) |
+
+**Key insight**: You can determine if the expression matched by comparing `action` and `result`:
+- `action == result` → expression matched
+- `action != result` → expression did not match
+
+**Debugging**: The DEBUG log includes the raw `matched` boolean for developers who need to troubleshoot rule expressions.
+
+### AI Policies
+
+The following tables apply to AI-powered policies, where the result combines the AI's response with the rule's configured action.
+
+#### Deny Policies
 
 | AI Response (`allowed:`) | Result | Effect (if `enabled`) |
 |--------------------------|--------|----------------------|
@@ -593,7 +613,7 @@ if asyncResult.Completion != nil {
 | `true` | `"allow"` | No action (AI didn't find issue) |
 | error/timeout | `"error"` | DENY (fail-closed) |
 
-### Allow Policies (Required Gates)
+#### Allow Policies (Required Gates)
 
 | AI Response (`allowed:`) | Result | Effect (if `enabled`) |
 |--------------------------|--------|----------------------|
@@ -601,7 +621,7 @@ if asyncResult.Completion != nil {
 | `false` | `"deny"` | DENY (gate failed) |
 | error/timeout | `"error"` | DENY (fail-closed) |
 
-### Redact Policies (Response Only)
+#### Redact Policies (Response Only)
 
 | AI Response | Result | Effect (if `enabled`) |
 |-------------|--------|----------------------|
@@ -696,10 +716,6 @@ Note: AI request validation was skipped because rules validation denied.
         {"rule": "check_request", "action": "deny", "result": "allow", "evaluation_ms": 800}
       ]
     }
-  },
-  "response": {
-    "content_items": 1,
-    "is_error": false
   },
   "response_validation": {
     "ai": {

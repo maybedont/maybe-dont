@@ -7,7 +7,7 @@ toolchain go1.24.3
 require (
 	github.com/google/cel-go v0.26.1
 	github.com/invopop/jsonschema v0.13.0
-	github.com/mark3labs/mcp-go v0.43.2
+	github.com/mark3labs/mcp-go v0.44.0-beta.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1

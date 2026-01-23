@@ -38,10 +38,16 @@ type RegisteredToolsProvider interface {
 
 // SessionInfo contains information about an active session
 type SessionInfo struct {
-	SessionID       string   `json:"session_id"`
-	ClientIP        string   `json:"client_ip,omitempty"`
-	UserAgent       string   `json:"user_agent,omitempty"`
-	DownstreamNames []string `json:"downstream_clients"`
+	SessionID         string                 `json:"session_id"`
+	ClientIP          string                 `json:"client_ip,omitempty"`
+	UserAgent         string                 `json:"user_agent,omitempty"`
+	DownstreamClients []DownstreamClientInfo `json:"downstream_clients"`
+}
+
+// DownstreamClientInfo contains information about a downstream MCP client
+type DownstreamClientInfo struct {
+	Name      string `json:"name"`
+	ToolCount int    `json:"tool_count"`
 }
 
 // SessionClientTools contains tool names for a session's downstream clients
@@ -182,8 +188,9 @@ func (h *NativeToolsHandler) HandleToolCall(ctx context.Context, req mcp.CallToo
 // getAuditLogToolDefinition returns the MCP tool definition for get_audit_log
 func (h *NativeToolsHandler) getAuditLogToolDefinition() mcp.Tool {
 	return mcp.Tool{
-		Name:        ToolGetAuditLog,
-		Description: "[EXPERIMENTAL] Retrieve the gateway's audit log entries. Returns JSON-formatted log entries from the configured audit log file.",
+		Name:         ToolGetAuditLog,
+		Description:  "[EXPERIMENTAL] Retrieve the gateway's audit log entries. Returns JSON-formatted log entries from the configured audit log file.",
+		DeferLoading: true,
 		Annotations: mcp.ToolAnnotation{
 			ReadOnlyHint: boolPtr(true),
 		},
@@ -227,8 +234,9 @@ func (h *NativeToolsHandler) getAuditLogToolDefinition() mcp.Tool {
 // getAuditReportToolDefinition returns the MCP tool definition for generate_audit_report
 func (h *NativeToolsHandler) getAuditReportToolDefinition() mcp.Tool {
 	return mcp.Tool{
-		Name:        ToolGenerateAuditReport,
-		Description: "[EXPERIMENTAL] Generate an AI-powered analysis report of the gateway's audit log. Analyzes patterns, security concerns, and provides recommendations prioritized by business impact.",
+		Name:         ToolGenerateAuditReport,
+		Description:  "[EXPERIMENTAL] Generate an AI-powered analysis report of the gateway's audit log. Analyzes patterns, security concerns, and provides recommendations prioritized by business impact.",
+		DeferLoading: true,
 		Annotations: mcp.ToolAnnotation{
 			ReadOnlyHint: boolPtr(true),
 		},

@@ -2,18 +2,16 @@ package gateway
 
 import (
 	"context"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestDiscoverAndRegisterSessionTools_PreservesCredentials verifies that
-// credentials from the original context are preserved in the async discovery.
-func TestDiscoverAndRegisterSessionTools_PreservesCredentials(t *testing.T) {
+// TestContextPreservation_Credentials verifies that credentials from the original
+// context are preserved when passed to downstream operations like lazy discovery.
+func TestContextPreservation_Credentials(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)
 
@@ -49,9 +47,10 @@ func TestDiscoverAndRegisterSessionTools_PreservesCredentials(t *testing.T) {
 	assert.Equal(t, "192.168.1.100", clientIP)
 }
 
-// TestAsyncDiscovery_DoesNotBlockOnCancelledContext verifies that async discovery
-// continues even when the original context is cancelled (simulating client disconnect).
-func TestAsyncDiscovery_DoesNotBlockOnCancelledContext(t *testing.T) {
+// TestLazyDiscovery_WorksWithBackgroundContext verifies that lazy discovery
+// continues working even when the original context is cancelled (simulating client disconnect).
+// This ensures context values are properly extracted before any async work begins.
+func TestLazyDiscovery_WorksWithBackgroundContext(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cm := NewClientManager(context.Background(), logger)
@@ -60,12 +59,14 @@ func TestAsyncDiscovery_DoesNotBlockOnCancelledContext(t *testing.T) {
 	err := cm.InitializeClients(context.Background(), map[string]config.ClientConfig{})
 	require.NoError(t, err)
 
-	// Create a context that we'll cancel
+	// Create a context that we'll cancel, with a request_id set
 	ctx, cancel := context.WithCancel(context.Background())
+	ctx = WithRequestID(ctx, "original-request-id")
 
 	// Extract values like onSessionRegister does
 	serviceCreds, _ := ctx.Value(ServiceCredentialsKey).(*ServiceCredentials)
 	clientIP, _ := GetClientIP(ctx)
+	requestID, _ := GetRequestID(ctx)
 
 	// Cancel the context (simulating client disconnect)
 	cancel()
@@ -78,7 +79,8 @@ func TestAsyncDiscovery_DoesNotBlockOnCancelledContext(t *testing.T) {
 		t.Fatal("Context should be cancelled")
 	}
 
-	// Create a new background context like discoverAndRegisterSessionTools does
+	// Create a new background context with preserved values
+	// (this pattern is used when we need work to continue after request ends)
 	asyncCtx := context.Background()
 	if serviceCreds != nil {
 		asyncCtx = WithServiceCredentials(asyncCtx, serviceCreds)
@@ -86,14 +88,22 @@ func TestAsyncDiscovery_DoesNotBlockOnCancelledContext(t *testing.T) {
 	if clientIP != "" {
 		asyncCtx = WithClientIP(asyncCtx, clientIP)
 	}
+	if requestID != "" {
+		asyncCtx = WithRequestID(asyncCtx, requestID)
+	}
 
-	// Verify the async context is NOT cancelled
+	// Verify the new context is NOT cancelled
 	select {
 	case <-asyncCtx.Done():
-		t.Fatal("Async context should not be cancelled")
+		t.Fatal("New context should not be cancelled")
 	default:
-		// Expected - async context is still valid
+		// Expected - new context is still valid
 	}
+
+	// Verify request_id was preserved
+	asyncRequestID, hasRequestID := GetRequestID(asyncCtx)
+	require.True(t, hasRequestID, "Request ID should be preserved in new context")
+	assert.Equal(t, "original-request-id", asyncRequestID)
 
 	// CreateSessionClients should work with the background context
 	result, err := cm.CreateSessionClients(asyncCtx, "test-session")
@@ -102,71 +112,39 @@ func TestAsyncDiscovery_DoesNotBlockOnCancelledContext(t *testing.T) {
 	require.NotNil(t, result)
 }
 
-// TestOnSessionRegister_ReturnsQuickly verifies that onSessionRegister doesn't
-// block waiting for tool discovery to complete.
-func TestOnSessionRegister_ReturnsQuickly(t *testing.T) {
-	// This test verifies the architectural requirement that onSessionRegister
-	// returns quickly by spawning a goroutine for async work.
-	//
-	// We can't easily test the full Gateway.onSessionRegister without setting up
-	// a complete MCP server, but we can verify the pattern used.
+// TestContextPreservation_RequestID verifies that request_id is correctly
+// transferred to a new background context, enabling log correlation between
+// the triggering request and subsequent operations.
+func TestContextPreservation_RequestID(t *testing.T) {
+	// Create original context with request_id (simulating HTTP request context)
+	originalCtx, cancel := context.WithCancel(context.Background())
+	originalCtx = WithRequestID(originalCtx, "test-request-id-12345")
 
-	var wg sync.WaitGroup
-	hookReturned := make(chan struct{})
-	asyncWorkDone := make(chan struct{})
+	// Extract request_id like onSessionRegister does
+	extractedRequestID, hasRequestID := GetRequestID(originalCtx)
+	require.True(t, hasRequestID, "Request ID should be present in original context")
+	assert.Equal(t, "test-request-id-12345", extractedRequestID)
 
-	// Simulate the pattern used in onSessionRegister
-	simulatedHook := func() {
-		// This represents the quick synchronous work
-		// (like storing client IP)
+	// Cancel original context (simulating request end)
+	cancel()
 
-		// Spawn async work (like tool discovery)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// Simulate slow network I/O
-			time.Sleep(100 * time.Millisecond)
-			close(asyncWorkDone)
-		}()
-
-		// Hook returns immediately
-		close(hookReturned)
+	// Create new background context with preserved request_id
+	newCtx := context.Background()
+	if extractedRequestID != "" {
+		newCtx = WithRequestID(newCtx, extractedRequestID)
 	}
 
-	// Run the simulated hook
-	start := time.Now()
-	simulatedHook()
-	hookDuration := time.Since(start)
+	// Verify request_id is available in new context
+	retrievedRequestID, ok := GetRequestID(newCtx)
+	require.True(t, ok, "Request ID should be available in new context")
+	assert.Equal(t, "test-request-id-12345", retrievedRequestID)
 
-	// Verify hook returned quickly (much less than the async work duration)
-	assert.Less(t, hookDuration, 50*time.Millisecond,
-		"Hook should return quickly without waiting for async work")
-
-	// Verify hook has returned
+	// Verify new context is not cancelled
 	select {
-	case <-hookReturned:
+	case <-newCtx.Done():
+		t.Fatal("New context should not be cancelled")
+	default:
 		// Expected
-	default:
-		t.Fatal("Hook should have returned")
-	}
-
-	// Verify async work hasn't completed yet
-	select {
-	case <-asyncWorkDone:
-		t.Fatal("Async work should not be done yet")
-	default:
-		// Expected - async work is still running
-	}
-
-	// Wait for async work to complete
-	wg.Wait()
-
-	// Now async work should be done
-	select {
-	case <-asyncWorkDone:
-		// Expected
-	default:
-		t.Fatal("Async work should be done now")
 	}
 }
 
@@ -201,25 +179,25 @@ func TestContextPreservation_ServiceCredentials(t *testing.T) {
 	cancel()
 
 	// Create new background context with preserved credentials
-	asyncCtx := context.Background()
+	newCtx := context.Background()
 	if extractedCreds != nil {
-		asyncCtx = WithServiceCredentials(asyncCtx, extractedCreds)
+		newCtx = WithServiceCredentials(newCtx, extractedCreds)
 	}
 
-	// Verify credentials are available in async context
-	githubCreds, ok := GetServiceCredentials(asyncCtx, "github")
+	// Verify credentials are available in new context
+	githubCreds, ok := GetServiceCredentials(newCtx, "github")
 	require.True(t, ok, "GitHub credentials should be available")
 	assert.Equal(t, "Bearer github-token", githubCreds.Headers["Authorization"])
 	assert.Equal(t, "custom-value", githubCreds.Headers["X-Custom"])
 
-	awsCreds, ok := GetServiceCredentials(asyncCtx, "aws")
+	awsCreds, ok := GetServiceCredentials(newCtx, "aws")
 	require.True(t, ok, "AWS credentials should be available")
 	assert.Equal(t, "aws-key", awsCreds.Headers["X-Api-Key"])
 
-	// Verify async context is not cancelled
+	// Verify new context is not cancelled
 	select {
-	case <-asyncCtx.Done():
-		t.Fatal("Async context should not be cancelled")
+	case <-newCtx.Done():
+		t.Fatal("New context should not be cancelled")
 	default:
 		// Expected
 	}

@@ -54,17 +54,20 @@ func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy, defaultMode co
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info(context.Background(), "Loading AI policies",
-		zap.Int("count", len(policies)),
-		zap.String("default_mode", string(defaultMode)),
-	)
+	// Track seen policy names to detect duplicates
+	seenNames := make(map[string]bool)
 
 	// Validate each policy
 	for _, policy := range policies {
+		// Check for duplicate names
+		if seenNames[policy.Name] {
+			return fmt.Errorf("duplicate policy name '%s' in AI request rules", policy.Name)
+		}
+		seenNames[policy.Name] = true
 		// Resolve effective mode for this policy
 		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
 
-		e.logger.Info(context.Background(), "Loading AI policy",
+		e.logger.Debug(context.Background(), "Loading AI policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
 			zap.String("mode", string(effectiveMode)),
@@ -72,7 +75,7 @@ func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy, defaultMode co
 
 		// Skip disabled policies
 		if effectiveMode == config.PolicyModeDisabled {
-			e.logger.Info(context.Background(), "Skipping disabled AI policy",
+			e.logger.Debug(context.Background(), "Skipping disabled AI policy",
 				zap.String("name", policy.Name),
 			)
 			continue
@@ -94,7 +97,7 @@ func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy, defaultMode co
 		})
 	}
 
-	e.logger.Info(context.Background(), "Loaded AI policies", zap.Int("count", len(e.policies)))
+	e.logger.Debug(context.Background(), "Loaded AI request policies", zap.Int("count", len(e.policies)))
 	return nil
 }
 
@@ -305,14 +308,8 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				}
 				auditResults = append(auditResults, auditResult)
 
-				// Log result
-				if result.err != nil {
-					e.logger.Debug(context.Background(), "AI policy evaluation error (async)",
-						zap.String("rule", result.rule),
-						zap.String("error", formatAuditError(result.errCategory, result.err)),
-						zap.Int64("evaluation_ms", result.evaluationMs),
-					)
-				} else {
+				// Log successful results (errors are logged at ERROR level elsewhere)
+				if result.err == nil {
 					e.logger.Debug(context.Background(), "AI policy evaluation result (async)",
 						zap.String("rule", result.rule),
 						zap.String("action", string(result.action)),
@@ -341,7 +338,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				EvaluationMs: evaluationMs,
 			}
 
-			e.logger.Info(context.Background(), "Tool call evaluation complete (async)",
+			e.logger.Debug(context.Background(), "Tool call evaluation complete (async)",
 				zap.Bool("allowed", true),
 				zap.Int64("blocked_ms", int64(0)),
 				zap.Int64("evaluation_ms", evaluationMs),
@@ -452,13 +449,8 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 						}
 						asyncResults = append(asyncResults, auditResult)
 
-						if result.err != nil {
-							e.logger.Debug(context.Background(), "AI policy evaluation error (async continuation)",
-								zap.String("rule", result.rule),
-								zap.String("error", formatAuditError(result.errCategory, result.err)),
-								zap.Int64("evaluation_ms", result.evaluationMs),
-							)
-						} else {
+						// Log successful results (errors are logged at ERROR level elsewhere)
+						if result.err == nil {
 							e.logger.Debug(context.Background(), "AI policy evaluation result (async continuation)",
 								zap.String("rule", result.rule),
 								zap.String("result", result.result),
@@ -546,13 +538,6 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 
 			// Log results
 			if result.err != nil {
-				// DEBUG: Concise summary for all error results
-				e.logger.Debug(ctx, "AI policy evaluation error",
-					zap.String("rule", result.rule),
-					zap.String("error", formatAuditError(result.errCategory, result.err)),
-					zap.Int64("evaluation_ms", result.evaluationMs),
-				)
-
 				// ERROR: Full error details for all errors
 				// With detached contexts, cancellations should only occur due to external factors
 				// like gateway shutdown, not from early termination logic
@@ -629,7 +614,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		results.RecommendedAction = config.PolicyActionAllow
 	}
 
-	e.logger.Info(ctx, "Tool call evaluation complete",
+	e.logger.Debug(ctx, "Tool call evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("deciding_rule", decidingRule),
 		zap.Bool("failed_open", failedOpen),

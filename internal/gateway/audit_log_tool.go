@@ -58,10 +58,6 @@ type legacyAuditEntry struct {
 		CEL *AuditRulesResult `json:"cel,omitempty"`
 		AI  *AuditAIResult    `json:"ai,omitempty"`
 	} `json:"request_validation,omitempty"`
-	Response *struct {
-		ContentItems int  `json:"content_items"`
-		IsError      bool `json:"is_error"`
-	} `json:"response,omitempty"`
 	ResponseValidation *struct {
 		CEL *AuditRulesResult `json:"cel,omitempty"`
 		AI  *AuditAIResult    `json:"ai,omitempty"`
@@ -227,14 +223,6 @@ func convertLegacyEntry(legacy *legacyAuditEntry) *AuditEntry {
 		entry.RequestValidation = &AuditValidationInfo{
 			CEL: legacy.RequestValidation.CEL,
 			AI:  legacy.RequestValidation.AI,
-		}
-	}
-
-	// Copy Response
-	if legacy.Response != nil {
-		entry.Response = &AuditResponseInfo{
-			ContentItems: legacy.Response.ContentItems,
-			IsError:      legacy.Response.IsError,
 		}
 	}
 

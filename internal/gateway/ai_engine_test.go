@@ -215,6 +215,34 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, config.PolicyModeAuditOnly, engine.policies[0].Mode)
 	})
+
+	t.Run("rejects_duplicate_policy_names", func(t *testing.T) {
+		engine := &AIPolicyEngine{
+			apiKey: "test-key",
+			model:  "gpt-4o-mini",
+		}
+		err := InitAIPolicyEngine(sessionLogger, engine)
+		require.NoError(t, err)
+
+		policies := []config.AIPolicy{
+			{
+				Name:   "duplicate_name",
+				Prompt: "First prompt",
+				Action: config.PolicyActionDeny,
+				Mode:   config.PolicyModeEnabled,
+			},
+			{
+				Name:   "duplicate_name",
+				Prompt: "Second prompt",
+				Action: config.PolicyActionAllow,
+				Mode:   config.PolicyModeEnabled,
+			},
+		}
+
+		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate policy name 'duplicate_name'")
+	})
 }
 
 func TestAIPolicyEngine_NoPolicies(t *testing.T) {

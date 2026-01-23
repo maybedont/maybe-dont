@@ -208,6 +208,33 @@ func TestCELPolicyEngine_AuditOnlyMode(t *testing.T) {
 	}
 }
 
+func TestCELPolicyEngine_DuplicatePolicyNames(t *testing.T) {
+	// Tests that LoadPolicies rejects policies with duplicate names
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+	engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
+	require.NoError(t, err)
+
+	policies := []config.Policy{
+		{
+			Name:       "duplicate-name",
+			Expression: `true`,
+			Action:     config.PolicyActionDeny,
+			Message:    "First policy",
+		},
+		{
+			Name:       "duplicate-name",
+			Expression: `false`,
+			Action:     config.PolicyActionAllow,
+			Message:    "Second policy with same name",
+		},
+	}
+
+	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate policy name 'duplicate-name'")
+}
+
 func TestCELPolicyEngine_Evaluate(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)

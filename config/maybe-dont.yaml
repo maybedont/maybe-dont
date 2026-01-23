@@ -60,7 +60,7 @@ validation:
     # OpenAI-compatible API endpoint
     endpoint: "https://api.openai.com/v1/chat/completions"
     # Model to use for AI validation
-    model: "gpt-5-nano"
+    model: "gpt-5.2"
     # API key (required when any AI feature is enabled)
     api_key: "${OPENAI_API_KEY}"
 

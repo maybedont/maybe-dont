@@ -39,145 +39,43 @@ func (g *Gateway) initServer(ctx context.Context) error {
 	}
 }
 
-// onSessionRegister handles new upstream client sessions by creating downstream clients.
-// Tool discovery and registration is performed asynchronously to avoid blocking the
-// session registration hook, which can cause race conditions if the client disconnects
-// before discovery completes.
+// onSessionRegister handles new upstream client sessions.
+// Session metadata (client IP, user agent) is stored immediately.
+// Tool discovery is deferred until the client calls tools/list (lazy discovery).
 func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSession) {
 	sessionID := session.SessionID()
 
-	// Extract values from context that we need to preserve for async work.
-	// The request context (ctx) may be cancelled when the HTTP request ends,
-	// so we need to capture these values and create a new context for async work.
+	// Extract values from context for metadata storage
 	clientIP, hasClientIP := GetClientIP(ctx)
 	userAgent, hasUserAgent := GetUserAgent(ctx)
-	serviceCreds, _ := ctx.Value(ServiceCredentialsKey).(*ServiceCredentials)
 
 	// Determine if this session has credentials (helps identify initialization vs SSE sessions)
-	hasCredentials := serviceCreds != nil && len(serviceCreds.clients) > 0
+	hasCredentials := g.hasPassThroughCredentials(ctx)
+
 	g.logger.Info(ctx, "New upstream session registered",
 		zap.String("session_id", sessionID),
 		zap.Bool("has_credentials", hasCredentials))
 
-	// Store client IP in session immediately (this is fast, no network I/O)
+	// Create the session synchronously so we can store client metadata immediately.
+	g.clientManager.sessionManager.CreateSession(sessionID)
+
+	// Store client metadata in session immediately (this is fast, no network I/O)
 	if hasClientIP && clientIP != "" {
 		g.clientManager.SetSessionClientIP(sessionID, clientIP)
-		g.logger.Debug(ctx, "Stored client IP for session",
-			zap.String("session_id", sessionID),
-			zap.String("client_ip", clientIP))
 	}
-
-	// Store User-Agent in session immediately (this is fast, no network I/O)
 	if hasUserAgent && userAgent != "" {
 		g.clientManager.SetSessionUserAgent(sessionID, userAgent)
-		g.logger.Debug(ctx, "Stored User-Agent for session",
+	}
+	if (hasClientIP && clientIP != "") || (hasUserAgent && userAgent != "") {
+		g.logger.Debug(ctx, "Stored client metadata for session",
 			zap.String("session_id", sessionID),
+			zap.String("client_ip", clientIP),
 			zap.String("user_agent", userAgent))
 	}
 
-	// Only trigger tool discovery if credentials are present.
-	// This ensures we only discover tools for the session that actually has auth credentials,
-	// avoiding duplicate discovery for SSE connections that may not have credentials.
-	if hasCredentials {
-		// Run tool discovery asynchronously to avoid blocking the session registration hook.
-		// This prevents race conditions where the session gets unregistered (via defer in
-		// the HTTP handler) before tool discovery completes.
-		go g.discoverAndRegisterSessionTools(sessionID, clientIP, serviceCreds)
-	} else {
-		g.logger.Debug(ctx, "Skipping tool discovery - no credentials in context",
-			zap.String("session_id", sessionID))
-	}
-}
-
-// discoverAndRegisterSessionTools performs async discovery of downstream client tools
-// and registers them with the session. This runs in a goroutine to avoid blocking
-// the session registration hook.
-func (g *Gateway) discoverAndRegisterSessionTools(sessionID string, clientIP string, serviceCreds *ServiceCredentials) {
-	// Create a background context with the preserved values.
-	// We use Background() because the original request context may be cancelled.
-	ctx := context.Background()
-	if serviceCreds != nil {
-		ctx = WithServiceCredentials(ctx, serviceCreds)
-	}
-	if clientIP != "" {
-		ctx = WithClientIP(ctx, clientIP)
-	}
-
-	g.logger.Debug(ctx, "Starting async tool discovery for session",
-		zap.String("session_id", sessionID))
-
-	// Create downstream clients for this session
-	result, err := g.clientManager.CreateSessionClients(ctx, sessionID)
-	if err != nil {
-		g.logger.Error(ctx, "Failed to create downstream clients for session",
-			zap.String("session_id", sessionID),
-			zap.Error(err))
-		// Continue to register any tools that were successfully discovered
-	}
-
-	// Register session-specific tools for pass-through clients
-	if result != nil && len(result.DownstreamClients) > 0 {
-		g.registerSessionTools(ctx, sessionID, result.DownstreamClients)
-	}
-
-	clientCount := 0
-	if result != nil {
-		clientCount = len(result.DownstreamClients)
-	}
-	g.logger.Info(ctx, "Async tool discovery completed for session",
-		zap.String("session_id", sessionID),
-		zap.Int("client_count", clientCount))
-}
-
-// registerSessionTools registers tools from pass-through clients as session-specific tools.
-// Only pass-through clients need session tools; non-pass-through clients have their
-// tools registered globally at startup.
-func (g *Gateway) registerSessionTools(ctx context.Context, sessionID string, clients map[string]*SessionClientInfo) {
-	for clientName, clientInfo := range clients {
-		// Only register session tools for pass-through clients
-		// Non-pass-through clients have their tools registered globally at startup
-		if !clientInfo.Config.Auth.PassThrough.Enabled {
-			g.logger.Debug(ctx, "Skipping session tool registration for non-pass-through client",
-				zap.String("session_id", sessionID),
-				zap.String("client", clientName))
-			continue
-		}
-
-		registeredCount := 0
-		g.logger.Info(ctx, "Starting session tool registration",
-			zap.String("session_id", sessionID),
-			zap.String("client", clientName),
-			zap.Int("tools_to_register", len(clientInfo.Tools)))
-
-		for _, tool := range clientInfo.Tools {
-			prefixedTool := tool
-			prefixedTool.Name = PrefixName(clientName, tool.Name)
-
-			err := g.server.AddSessionTool(sessionID, prefixedTool, g.handleToolCallWithErrorHandling)
-			if err != nil {
-				g.logger.Error(ctx, "Failed to register session tool",
-					zap.String("session_id", sessionID),
-					zap.String("client", clientName),
-					zap.String("tool", prefixedTool.Name),
-					zap.Error(err))
-				continue
-			}
-			registeredCount++
-		}
-
-		if registeredCount != len(clientInfo.Tools) {
-			g.logger.Warn(ctx, "Completed session tool registration with errors",
-				zap.String("session_id", sessionID),
-				zap.String("client", clientName),
-				zap.Int("registered", registeredCount),
-				zap.Int("total", len(clientInfo.Tools)))
-		} else {
-			g.logger.Info(ctx, "Completed session tool registration",
-				zap.String("session_id", sessionID),
-				zap.String("client", clientName),
-				zap.Int("registered", registeredCount))
-		}
-	}
+	// Tool discovery is now fully lazy - it will happen when the client calls tools/list.
+	// This avoids redundant discovery work for sessions that may never need tools,
+	// and eliminates race conditions between async discovery and lazy discovery.
 }
 
 // onSessionUnregister handles upstream client session cleanup
@@ -234,6 +132,10 @@ func (g *Gateway) onRequestInitialization(ctx context.Context, id any, message a
 		// Can't parse method, let the normal handler deal with it
 		return nil
 	}
+
+	// Log all JSON-RPC methods for request flow visibility
+	g.logger.Debug(ctx, "Processing JSON-RPC request",
+		zap.String("method", req.Method))
 
 	// Only check for tools/call requests
 	if req.Method != string(mcp.MethodToolsCall) {
@@ -315,10 +217,9 @@ func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionI
 		return g.getToolsFromExistingClients(ctx, sessionID)
 	}
 
-	// Get credentials from context for pass-through auth
-	serviceCreds, _ := ctx.Value(ServiceCredentialsKey).(*ServiceCredentials)
-	if serviceCreds == nil || len(serviceCreds.clients) == 0 {
-		g.logger.Debug(ctx, "No credentials in context for lazy discovery",
+	// Check if pass-through credentials are available in raw headers
+	if !g.hasPassThroughCredentials(ctx) {
+		g.logger.Debug(ctx, "No pass-through credentials in context for lazy discovery",
 			zap.String("session_id", sessionID))
 		return nil
 	}
@@ -352,6 +253,7 @@ func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionI
 		for _, tool := range clientInfo.Tools {
 			prefixedTool := tool
 			prefixedTool.Name = PrefixName(clientName, tool.Name)
+			prefixedTool.DeferLoading = true
 
 			// Register the tool with the session
 			if err := g.server.AddSessionTool(sessionID, prefixedTool, g.handleToolCallWithErrorHandling); err != nil {
@@ -373,8 +275,8 @@ func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionI
 }
 
 // getToolsFromExistingClients retrieves tools from downstream clients that are already
-// connected for this session. This handles the case where async discovery connected
-// the clients but session tool registration failed due to timing issues.
+// connected for this session. This handles subsequent tools/list calls after the
+// initial lazy discovery has already connected the downstream clients.
 func (g *Gateway) getToolsFromExistingClients(ctx context.Context, sessionID string) []mcp.Tool {
 	clients, err := g.clientManager.GetAllSessionClients(sessionID)
 	if err != nil {
@@ -394,6 +296,7 @@ func (g *Gateway) getToolsFromExistingClients(ctx context.Context, sessionID str
 		for _, tool := range clientInfo.Tools {
 			prefixedTool := tool
 			prefixedTool.Name = PrefixName(clientName, tool.Name)
+			prefixedTool.DeferLoading = true
 			allTools = append(allTools, prefixedTool)
 		}
 	}
@@ -535,9 +438,13 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 	g.server = srv
 
 	// Register native gateway tools
+	nativeToolNames := make([]string, 0, len(nativeTools))
 	for _, tool := range nativeTools {
 		g.server.AddTool(tool, g.handleToolCallWithErrorHandling)
-		g.logger.Info(ctx, "Registered native tool", zap.String("name", tool.Name))
+		nativeToolNames = append(nativeToolNames, tool.Name)
+	}
+	if len(nativeToolNames) > 0 {
+		g.logger.Info(ctx, "Registered native tools", zap.Strings("names", nativeToolNames))
 	}
 
 	// Register discovered tools/prompts/resources from downstream clients
@@ -552,45 +459,56 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 func (g *Gateway) registerDiscoveredCapabilities(ctx context.Context, discovered *DiscoveredCapabilities) {
 	// Register tools
 	for clientName, tools := range discovered.Tools {
+		toolNames := make([]string, 0, len(tools))
 		for _, tool := range tools {
 			prefixedTool := tool
 			prefixedTool.Name = PrefixName(clientName, tool.Name)
+			prefixedTool.DeferLoading = true
 			g.server.AddTool(prefixedTool, g.handleToolCallWithErrorHandling)
-			g.logger.Debug(ctx, "Registered tool",
+			toolNames = append(toolNames, prefixedTool.Name)
+		}
+		if len(toolNames) > 0 {
+			g.logger.Debug(ctx, "Registered tools",
 				zap.String("client", clientName),
-				zap.String("original_name", tool.Name),
-				zap.String("prefixed_name", prefixedTool.Name))
+				zap.Strings("tools", toolNames))
 		}
 	}
 
 	// Register prompts
 	for clientName, prompts := range discovered.Prompts {
+		promptNames := make([]string, 0, len(prompts))
 		for _, prompt := range prompts {
 			prefixedPrompt := prompt
 			prefixedPrompt.Name = PrefixName(clientName, prompt.Name)
 			g.server.AddPrompt(prefixedPrompt, g.HandlePromptCall)
-			g.logger.Debug(ctx, "Registered prompt",
+			promptNames = append(promptNames, prefixedPrompt.Name)
+		}
+		if len(promptNames) > 0 {
+			g.logger.Debug(ctx, "Registered prompts",
 				zap.String("client", clientName),
-				zap.String("original_name", prompt.Name),
-				zap.String("prefixed_name", prefixedPrompt.Name))
+				zap.Strings("prompts", promptNames))
 		}
 	}
 
 	// Register resources
 	for clientName, resources := range discovered.Resources {
+		resourceURIs := make([]string, 0, len(resources))
 		for _, resource := range resources {
 			prefixedResource := resource
 			prefixedResource.URI = PrefixName(clientName, resource.URI)
 			g.server.AddResource(prefixedResource, g.HandleResourceCall)
-			g.logger.Debug(ctx, "Registered resource",
+			resourceURIs = append(resourceURIs, prefixedResource.URI)
+		}
+		if len(resourceURIs) > 0 {
+			g.logger.Debug(ctx, "Registered resources",
 				zap.String("client", clientName),
-				zap.String("original_uri", resource.URI),
-				zap.String("prefixed_uri", prefixedResource.URI))
+				zap.Strings("resources", resourceURIs))
 		}
 	}
 
 	// Register resource templates
 	for clientName, templates := range discovered.Templates {
+		templateURIs := make([]string, 0, len(templates))
 		for _, template := range templates {
 			prefixedTemplate := template
 			if template.URITemplate != nil {
@@ -610,8 +528,14 @@ func (g *Gateway) registerDiscoveredCapabilities(ctx context.Context, discovered
 				prefixedTemplate.URITemplate = &mcp.URITemplate{Template: newTemplate}
 			}
 			g.server.AddResourceTemplate(prefixedTemplate, g.HandleResourceTemplateCall)
-			g.logger.Debug(ctx, "Registered resource template",
-				zap.String("client", clientName))
+			if prefixedTemplate.URITemplate != nil {
+				templateURIs = append(templateURIs, prefixedTemplate.URITemplate.Raw())
+			}
+		}
+		if len(templateURIs) > 0 {
+			g.logger.Debug(ctx, "Registered resource templates",
+				zap.String("client", clientName),
+				zap.Strings("templates", templateURIs))
 		}
 	}
 }
@@ -791,9 +715,9 @@ func (g *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.C
 	return result, nil
 }
 
-// extractAuthFromRequest extracts authentication credentials from HTTP request headers
-// and stores them in context for pass-through authentication. It also generates a request ID
-// for tracking capabilities per session and extracts the client IP address.
+// extractAuthFromRequest prepares the context with request metadata needed for downstream calls.
+// It generates a request ID for tracking, extracts the client IP address, parses the JSON-RPC
+// method, and stores raw request headers for lazy credential extraction when needed.
 func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) context.Context {
 	// Generate or extract request ID
 	requestID := r.Header.Get("X-Request-ID")
@@ -833,45 +757,31 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 		g.logger.Debug(ctx, "Using existing request ID")
 	}
 
-	// Create credentials storage
-	serviceCreds := NewServiceCredentials()
+	// Store raw request headers in context for lazy credential extraction.
+	// Credentials will be extracted on-demand when making downstream requests,
+	// avoiding unnecessary extraction for native tool calls.
+	return WithRawRequestHeaders(ctx, r.Header)
+}
 
-	// Extract credentials from client pass-through configurations
-	for clientName, clientConfig := range g.config.DownstreamMCPServers {
-		// Skip if pass-through is not enabled
+// hasPassThroughCredentials checks if any pass-through source headers are present
+// in the raw request headers. This is used to determine if lazy discovery should
+// be attempted without eagerly extracting all credentials.
+func (g *Gateway) hasPassThroughCredentials(ctx context.Context) bool {
+	rawHeaders, ok := GetRawRequestHeaders(ctx)
+	if !ok {
+		return false
+	}
+
+	// Check if any configured pass-through client has source headers in the request
+	for _, clientConfig := range g.config.DownstreamMCPServers {
 		if !clientConfig.Auth.PassThrough.Enabled {
 			continue
 		}
-
-		var clientCreds *ClientCredentials
-
-		// Extract credentials from configured header mappings
 		for _, mapping := range clientConfig.Auth.PassThrough.Headers {
-			headerValue := r.Header.Get(mapping.SourceHeader)
-			if headerValue == "" {
-				continue
+			if rawHeaders.Get(mapping.SourceHeader) != "" {
+				return true
 			}
-
-			// Initialize client credentials if needed
-			if clientCreds == nil {
-				clientCreds = NewClientCredentials()
-			}
-
-			// Store credential using target_header as key
-			clientCreds.SetHeader(mapping.TargetHeader, headerValue)
-
-			g.logger.Debug(ctx, "Extracted credential from header",
-				zap.String("source_header", mapping.SourceHeader),
-				zap.String("client", clientName),
-				zap.String("target_header", mapping.TargetHeader))
-		}
-
-		// Only store client credentials if we extracted any
-		if clientCreds != nil {
-			serviceCreds.SetClient(clientName, clientCreds)
 		}
 	}
-
-	// Store credentials in context
-	return WithServiceCredentials(ctx, serviceCreds)
+	return false
 }

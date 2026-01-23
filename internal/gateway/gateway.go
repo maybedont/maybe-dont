@@ -418,14 +418,16 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	}
 
 	// Validate request through the chain (timing is captured per-policy)
+	g.logger.Debug(ctx, "Starting tool call validation",
+		zap.String("tool", req.Params.Name),
+		zap.String("client", clientName),
+	)
 	validationResults, err := g.ValidateToolCall(validationCtx, req)
 
 	if err != nil {
 		// Validation error - don't write audit log (infrastructure error)
 		return nil, fmt.Errorf("request validation failed: %v", err)
 	}
-	g.logger.Debug(ctx, "Validation results", zap.Any("validationResults", validationResults))
-
 	// Extract validation results by policy type and populate audit context
 	g.populateRequestValidationAudit(audit, validationResults)
 
@@ -446,6 +448,13 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	if !validationResults.Allowed {
 		audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny), ActionReasonRequestPolicy)
 		writeAuditLog()
+
+		g.logger.Info(ctx, "Tool call denied by request validation",
+			zap.String("tool", req.Params.Name),
+			zap.String("client", clientName),
+			zap.Int("deny_count", validationResults.DenyCount),
+			zap.String("message", validationResults.Message),
+		)
 
 		errorMessage, errorData := g.buildPolicyDeniedError(&validationResults, req.Params.Name)
 		return nil, &PolicyDeniedError{
@@ -491,12 +500,13 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	// Record tool call duration
 	audit.SetRequestDuration(toolCallDuration)
 
-	// Record response info
-	audit.SetResponse(len(result.Content), result.IsError)
-
 	// Validate response through the response validation chain (timing is captured per-policy)
 	// Use validationCtx to share the blocking budget with response validation
 	if g.responseValidationChain != nil {
+		g.logger.Debug(ctx, "Starting response validation",
+			zap.String("tool", req.Params.Name),
+			zap.String("client", clientName),
+		)
 		responseValidationResults, respErr := g.responseValidationChain.Handle(validationCtx, req, result)
 
 		if respErr != nil {
@@ -511,6 +521,14 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		if !responseValidationResults.Allowed {
 			audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny), ActionReasonResponsePolicy)
 			writeAuditLog()
+
+			g.logger.Info(ctx, "Tool call denied by response validation",
+				zap.String("tool", req.Params.Name),
+				zap.String("client", clientName),
+				zap.Int("deny_count", responseValidationResults.DenyCount()),
+				zap.String("message", responseValidationResults.Message),
+			)
+
 			errorMessage := g.buildResponseDeniedError(&responseValidationResults, req.Params.Name)
 			return nil, &PolicyDeniedError{
 				Message: errorMessage,
@@ -924,19 +942,18 @@ func (g *Gateway) DiscoverPassThroughTools(ctx context.Context, sessionID string
 		// guiding the user to reconnect, rather than the SDK returning an unhelpful "tool not found" error.
 		if len(clientInfo.Tools) > 0 {
 			toolNames := make([]string, 0, len(clientInfo.Tools))
+			newlyRegistered := make([]string, 0)
 			for _, tool := range clientInfo.Tools {
 				prefixedTool := tool
 				prefixedTool.Name = PrefixName(name, tool.Name)
+				prefixedTool.DeferLoading = true
 
 				// Check if this tool is already registered globally (from a previous session)
 				existingTool := g.server.GetTool(prefixedTool.Name)
 				if existingTool == nil {
 					// Register globally so it persists across session lifecycles
 					g.server.AddTool(prefixedTool, g.handleToolCallWithErrorHandling)
-					g.logger.Debug(ctx, "Registered pass-through tool globally",
-						zap.String("session_id", sessionID),
-						zap.String("client", name),
-						zap.String("tool", prefixedTool.Name))
+					newlyRegistered = append(newlyRegistered, prefixedTool.Name)
 				}
 				toolNames = append(toolNames, tool.Name)
 			}
@@ -946,6 +963,13 @@ func (g *Gateway) DiscoverPassThroughTools(ctx context.Context, sessionID string
 				ToolCount:  len(toolNames),
 				Tools:      toolNames,
 			})
+
+			if len(newlyRegistered) > 0 {
+				g.logger.Debug(ctx, "Registered pass-through tools globally",
+					zap.String("session_id", sessionID),
+					zap.String("client", name),
+					zap.Strings("tools", newlyRegistered))
+			}
 
 			g.logger.Info(ctx, "Discovered and registered tools from pass-through client",
 				zap.String("session_id", sessionID),

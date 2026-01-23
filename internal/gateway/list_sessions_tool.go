@@ -18,8 +18,9 @@ type ListSessionsResponse struct {
 // getListSessionsToolDefinition returns the MCP tool definition for list_sessions
 func (h *NativeToolsHandler) getListSessionsToolDefinition() mcp.Tool {
 	return mcp.Tool{
-		Name:        ToolListSessions,
-		Description: "[EXPERIMENTAL] List all active upstream client sessions connected to this gateway, including their session IDs and connected downstream clients.",
+		Name:         ToolListSessions,
+		Description:  "[EXPERIMENTAL] List all active upstream client sessions connected to this gateway, including their session IDs and connected downstream clients.",
+		DeferLoading: true,
 		Annotations: mcp.ToolAnnotation{
 			ReadOnlyHint: boolPtr(true),
 		},

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 )
@@ -21,6 +22,11 @@ const (
 	// UserAgentKey stores the User-Agent header from the upstream client
 	// Value type: string
 	UserAgentKey contextKey = "user_agent"
+
+	// RawRequestHeadersKey stores the raw HTTP headers from the incoming request
+	// for lazy credential extraction when making downstream requests.
+	// Value type: http.Header
+	RawRequestHeadersKey contextKey = "raw_request_headers"
 )
 
 // RequestIDKey stores the request ID for tracking capabilities per session
@@ -48,6 +54,18 @@ func WithUserAgent(ctx context.Context, userAgent string) context.Context {
 func GetUserAgent(ctx context.Context) (string, bool) {
 	ua, ok := ctx.Value(UserAgentKey).(string)
 	return ua, ok
+}
+
+// WithRawRequestHeaders adds the raw HTTP request headers to the context.
+// This allows lazy credential extraction when making downstream requests.
+func WithRawRequestHeaders(ctx context.Context, headers http.Header) context.Context {
+	return context.WithValue(ctx, RawRequestHeadersKey, headers)
+}
+
+// GetRawRequestHeaders retrieves the raw HTTP request headers from the context.
+func GetRawRequestHeaders(ctx context.Context) (http.Header, bool) {
+	headers, ok := ctx.Value(RawRequestHeadersKey).(http.Header)
+	return headers, ok
 }
 
 // ServiceCredentials stores authentication credentials for all downstream MCP clients.

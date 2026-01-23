@@ -18,7 +18,6 @@ type AuditEntry struct {
 
 	// Validation results
 	RequestValidation  *AuditValidationInfo `json:"request_validation,omitempty"`
-	Response           *AuditResponseInfo   `json:"response,omitempty"`
 	ResponseValidation *AuditValidationInfo `json:"response_validation,omitempty"`
 
 	// Actions
@@ -52,12 +51,6 @@ type UpstreamRequestInfo struct {
 	UserAgent string `json:"user_agent,omitempty"` // User-Agent header from incoming request
 }
 
-// AuditResponseInfo contains response details (minimal to avoid logging sensitive data)
-type AuditResponseInfo struct {
-	ContentItems int  `json:"content_items"`
-	IsError      bool `json:"is_error"`
-}
-
 // AuditValidationInfo contains validation results for CEL and AI policies
 type AuditValidationInfo struct {
 	CEL *AuditRulesResult `json:"cel,omitempty"` // Deterministic CEL rule evaluation
@@ -79,7 +72,7 @@ type AuditRulesRuleResult struct {
 	Rule         string `json:"rule"`           // Rule name from definition
 	Action       string `json:"action"`         // Rule's configured action: "allow", "deny", or "redact"
 	Mode         string `json:"mode,omitempty"` // Only present if "audit_only"
-	Result       string `json:"result"`         // What rule contributed: "allow", "deny", "redact", or "no_match"
+	Result       string `json:"result"`         // Effective decision: "allow", "deny", or "redact"
 	EvaluationMs int64  `json:"evaluation_ms"`  // Time for this rule to complete
 	Error        string `json:"error,omitempty"` // Only present when result is "error"
 }
@@ -169,14 +162,6 @@ func (ac *AuditContext) SetRequestValidationAI(aiResult *AuditAIResult) {
 		ac.entry.RequestValidation = &AuditValidationInfo{}
 	}
 	ac.entry.RequestValidation.AI = aiResult
-}
-
-// SetResponse sets the response information
-func (ac *AuditContext) SetResponse(contentItems int, isError bool) {
-	ac.entry.Response = &AuditResponseInfo{
-		ContentItems: contentItems,
-		IsError:      isError,
-	}
 }
 
 // SetResponseValidationRules sets deterministic CEL rules response validation result

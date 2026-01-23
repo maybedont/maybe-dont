@@ -15,6 +15,7 @@ func (h *NativeToolsHandler) getDiscoverToolsDefinition() mcp.Tool {
 		Description: "Discover tools from downstream MCP servers that require authentication. " +
 			"Call this to connect to servers like GitHub that need your credentials. " +
 			"Returns the list of newly discovered tools that are now available for use.",
+		DeferLoading: true,
 		Annotations: mcp.ToolAnnotation{
 			ReadOnlyHint: boolPtr(true),
 		},

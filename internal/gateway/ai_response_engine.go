@@ -51,17 +51,20 @@ func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.logger.Info(context.Background(), "Loading AI response policies",
-		zap.Int("count", len(policies)),
-		zap.String("default_mode", string(defaultMode)),
-	)
+	// Track seen policy names to detect duplicates
+	seenNames := make(map[string]bool)
 
 	// Validate each policy
 	for _, policy := range policies {
+		// Check for duplicate names
+		if seenNames[policy.Name] {
+			return fmt.Errorf("duplicate policy name '%s' in AI response rules", policy.Name)
+		}
+		seenNames[policy.Name] = true
 		// Resolve effective mode for this policy
 		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
 
-		e.logger.Info(context.Background(), "Loading AI response policy",
+		e.logger.Debug(context.Background(), "Loading AI response policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
 			zap.String("mode", string(effectiveMode)),
@@ -69,7 +72,7 @@ func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy
 
 		// Skip disabled policies
 		if effectiveMode == config.PolicyModeDisabled {
-			e.logger.Info(context.Background(), "Skipping disabled AI response policy",
+			e.logger.Debug(context.Background(), "Skipping disabled AI response policy",
 				zap.String("name", policy.Name),
 			)
 			continue
@@ -91,7 +94,7 @@ func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy
 		})
 	}
 
-	e.logger.Info(context.Background(), "Loaded AI response policies", zap.Int("count", len(e.policies)))
+	e.logger.Debug(context.Background(), "Loaded AI response policies", zap.Int("count", len(e.policies)))
 	return nil
 }
 
@@ -133,7 +136,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		phaseTracker = budget.StartPhase()
 	}
 
-	e.logger.Info(ctx, "Evaluating response with AI policies",
+	e.logger.Debug(ctx, "Evaluating response with AI policies",
 		zap.String("tool", req.Params.Name),
 		zap.Int("policy_count", len(e.policies)),
 	)
@@ -321,14 +324,8 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				}
 				auditResults = append(auditResults, auditResult)
 
-				// Log result
-				if result.err != nil {
-					e.logger.Debug(context.Background(), "AI response policy evaluation error (async)",
-						zap.String("rule", result.policy.Name),
-						zap.String("error", formatAuditError(result.errCategory, result.err)),
-						zap.Int64("evaluation_ms", result.evaluationMs),
-					)
-				} else {
+				// Log successful results (errors are logged at ERROR level elsewhere)
+				if result.err == nil {
 					e.logger.Debug(context.Background(), "AI response policy evaluation result (async)",
 						zap.String("rule", result.policy.Name),
 						zap.String("action", string(result.policy.Action)),
@@ -355,7 +352,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				EvaluationMs: evaluationMs,
 			}
 
-			e.logger.Info(context.Background(), "Response evaluation complete (async)",
+			e.logger.Debug(context.Background(), "Response evaluation complete (async)",
 				zap.Bool("allowed", true),
 				zap.Int64("blocked_ms", int64(0)),
 				zap.Int64("evaluation_ms", evaluationMs),
@@ -428,13 +425,8 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 						}
 						asyncResults = append(asyncResults, auditResult)
 
-						if result.err != nil {
-							e.logger.Debug(context.Background(), "AI response policy evaluation error (async continuation)",
-								zap.String("rule", result.policy.Name),
-								zap.String("error", formatAuditError(result.errCategory, result.err)),
-								zap.Int64("evaluation_ms", result.evaluationMs),
-							)
-						} else {
+						// Log successful results (errors are logged at ERROR level elsewhere)
+						if result.err == nil {
 							e.logger.Debug(context.Background(), "AI response policy evaluation result (async continuation)",
 								zap.String("rule", result.policy.Name),
 								zap.String("result", result.result),
@@ -504,13 +496,6 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 
 			// Log results
 			if ruleResult.err != nil {
-				// DEBUG: Concise summary for all error results
-				e.logger.Debug(ctx, "AI response policy evaluation error",
-					zap.String("rule", ruleResult.policy.Name),
-					zap.String("error", formatAuditError(ruleResult.errCategory, ruleResult.err)),
-					zap.Int64("evaluation_ms", ruleResult.evaluationMs),
-				)
-
 				// ERROR: Full error details for all errors
 				// With detached contexts, cancellations should only occur due to external factors
 				// like gateway shutdown, not from early termination logic
@@ -616,7 +601,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		results.AIDetails = aiDetails
 	}
 
-	e.logger.Info(ctx, "Response evaluation complete",
+	e.logger.Debug(ctx, "Response evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.String("final_action", finalAction),
