@@ -399,6 +399,12 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		}
 		audit.SetTotalBlockedMs(blockingBudget.TotalBlockedMs() + toolDuration)
 
+		// TODO: Remove this temporary debug logging after async audit issue is resolved
+		// Debug: trace async work status before writing audit log
+		g.logger.Debug(ctx, "Writing audit log",
+			zap.Bool("has_async_work", audit.HasAsyncWork()),
+		)
+
 		// Check if there's async work pending (audit_only policies still running)
 		if audit.HasAsyncWork() {
 			// Track this async write for graceful shutdown
@@ -432,6 +438,15 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		// Validation error - don't write audit log (infrastructure error)
 		return nil, fmt.Errorf("request validation failed: %v", err)
 	}
+
+	// TODO: Remove this temporary debug logging after async audit issue is resolved
+	// Debug: trace async completion propagation
+	g.logger.Debug(ctx, "Request validation complete",
+		zap.Bool("has_async_completion", validationResults.AsyncCompletion != nil),
+		zap.Bool("has_rules_details", validationResults.RulesDetails != nil),
+		zap.Bool("has_ai_details", validationResults.AIDetails != nil),
+	)
+
 	// Extract validation results by policy type and populate audit context
 	g.populateRequestValidationAudit(audit, validationResults)
 
