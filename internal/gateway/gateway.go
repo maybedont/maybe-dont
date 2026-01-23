@@ -432,6 +432,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		// Validation error - don't write audit log (infrastructure error)
 		return nil, fmt.Errorf("request validation failed: %v", err)
 	}
+
 	// Extract validation results by policy type and populate audit context
 	g.populateRequestValidationAudit(audit, validationResults)
 

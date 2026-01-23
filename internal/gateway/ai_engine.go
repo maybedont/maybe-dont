@@ -641,9 +641,19 @@ func classifyContextError(ctx context.Context, defaultCategory string) string {
 
 // formatAuditError formats an error for the audit log as "category: message".
 // The message is truncated to 100 characters to keep audit logs concise.
+// For timeout and canceled errors, provides human-friendly messages.
 func formatAuditError(category string, err error) string {
 	if err == nil {
 		return category
+	}
+
+	// Provide human-friendly messages for context errors
+	// The evaluation_ms field in the audit log shows the actual duration
+	switch category {
+	case "timeout":
+		return "timeout: rule evaluation exceeded max_rule_evaluation_ms limit"
+	case "canceled":
+		return "canceled: rule evaluation was canceled"
 	}
 
 	msg := err.Error()

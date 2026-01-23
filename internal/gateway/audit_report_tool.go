@@ -592,9 +592,49 @@ Please provide:
      - affected tools
      - recommendation for remediation
 
-3. Recommendations for improving security policies
-   - Include recommendations for enabling audit_only policies that are catching issues
-   - Include recommendations for adjusting timeout configuration if timeout failures are occurring
+3. Recommendations
+
+   CRITICAL: All recommendations must be:
+   - Grounded in patterns observed in this audit log data (reference specific tools, patterns, or statistics)
+   - Achievable with the current MCP gateway capabilities or organizational actions
+   - Specific and actionable, not generic security advice
+
+   Recommendations must fall into one of these categories:
+
+   a) **CEL Policy Changes** - Deterministic rules using Common Expression Language:
+      - Add rules to match specific tool/argument patterns observed in the data
+      - Remove or disable rules causing excessive false positives
+      - Refine existing rules to be more precise (reduce scope or add conditions)
+      - Enable rules currently in audit_only mode that are catching real issues
+      Example: "Add a CEL rule to deny [tool_name] when the [argument] matches pattern [X] - this would have caught [N] of the audit-only denials"
+
+   b) **AI Policy Changes** - Context-aware validation rules:
+      - Add AI rules for nuanced scenarios CEL cannot express
+      - Adjust AI rule instructions to reduce false positives/negatives
+      - Enable AI rules in audit_only mode that show good signal
+
+   c) **Gateway Configuration Tuning**:
+      - Adjust max_blocking_ms or max_rule_evaluation_ms if timeout failures are occurring
+      - Enable/disable validation phases (request CEL, request AI, response CEL, response AI)
+      - Switch specific rules or phases from audit_only to blocking mode
+
+   d) **Organizational Actions** (external to the gateway):
+      - User training on specific tool usage patterns observed
+      - Process changes for sensitive operations
+      - Review which downstream MCP servers should remain enabled
+      - Access control modifications
+      - Incident response procedures for specific threat patterns
+
+   DO NOT recommend features that don't exist:
+   - Rate limiting, quotas, or throttling
+   - ML-based anomaly detection
+   - Integration with SIEM or external systems
+   - User authentication or identity management
+   - New validation engines or rule types
+
+   Distinguish between:
+   - Per-concern recommendations: Tactical fixes for that specific issue
+   - Overall recommendations: Strategic themes across multiple concerns
 
 Sort concerns by severity (HIGH first, then MEDIUM, then LOW).
 For each severity level, sort by number of occurrences (highest first).

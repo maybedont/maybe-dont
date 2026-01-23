@@ -312,7 +312,7 @@ type ResponseValidationConfig struct {
 // CELRequestValidationConfig for deterministic CEL-based request validation
 type CELRequestValidationConfig struct {
 	Enabled   bool       `mapstructure:"enabled"`    // Whether this validation phase runs (default: true)
-	Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or empty (default: empty = can block)
+	Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
 	RulesFile string     `mapstructure:"rules_file"`
 	Rules     []Policy   `mapstructure:"rules"`
 }
@@ -320,7 +320,7 @@ type CELRequestValidationConfig struct {
 // AIRequestValidationConfig for AI-powered request validation
 type AIRequestValidationConfig struct {
 	Enabled   bool       `mapstructure:"enabled"`    // Whether this validation phase runs (default: true)
-	Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only for AI)
+	Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
 	RulesFile string     `mapstructure:"rules_file"`
 	Rules     []AIPolicy `mapstructure:"rules"`
 }
@@ -328,7 +328,7 @@ type AIRequestValidationConfig struct {
 // CELResponseValidationConfig for deterministic CEL-based response validation
 type CELResponseValidationConfig struct {
 	Enabled   bool             `mapstructure:"enabled"`    // Whether this validation phase runs (default: false)
-	Mode      PolicyMode       `mapstructure:"mode"`       // "audit_only" or empty (default: empty = can block)
+	Mode      PolicyMode       `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
 	RulesFile string           `mapstructure:"rules_file"`
 	Rules     []ResponsePolicy `mapstructure:"rules"`
 }
@@ -336,7 +336,7 @@ type CELResponseValidationConfig struct {
 // AIResponseValidationConfig for AI-powered response validation
 type AIResponseValidationConfig struct {
 	Enabled   bool               `mapstructure:"enabled"`    // Whether this validation phase runs (default: false)
-	Mode      PolicyMode         `mapstructure:"mode"`       // "audit_only" or empty (default: empty = can block)
+	Mode      PolicyMode         `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
 	RulesFile string             `mapstructure:"rules_file"`
 	Rules     []AIResponsePolicy `mapstructure:"rules"`
 }
@@ -993,10 +993,13 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("server.session_timeout_minutes", 30)
 	// Validation phase defaults
 	v.SetDefault("request_validation.cel.enabled", true)
+	v.SetDefault("request_validation.cel.mode", "audit_only")
 	v.SetDefault("request_validation.ai.enabled", true)
-	v.SetDefault("request_validation.ai.mode", "audit_only") // AI request defaults to audit_only
+	v.SetDefault("request_validation.ai.mode", "audit_only")
 	v.SetDefault("response_validation.cel.enabled", false)
+	v.SetDefault("response_validation.cel.mode", "audit_only")
 	v.SetDefault("response_validation.ai.enabled", false)
+	v.SetDefault("response_validation.ai.mode", "audit_only")
 
 	// Try to find config file with fallback logic
 	configFileFound := false

@@ -70,7 +70,7 @@ Configuration is loaded in this order (later overrides earlier):
 ### Validation Policy Configuration
 Each validation phase (CEL request, AI request, CEL response, AI response) has two settings:
 - **enabled** (bool) - Whether the validation phase runs at all
-- **mode** (optional, only `audit_only` supported) - When set to `audit_only`, rules log but don't block
+- **mode** (default: `audit_only`) - When set to `audit_only`, rules log but don't block. Set to empty string to enable blocking.
 
 Per-rule settings allow fine-grained control:
 - **enabled** (bool) - Whether this specific rule runs (default: true)
@@ -79,10 +79,10 @@ Per-rule settings allow fine-grained control:
 **Mode Resolution**: Top-level `mode: audit_only` applies to ALL rules in that phase. Per-rule `mode: audit_only` only affects that rule.
 
 Defaults:
-- `request_validation.cel.enabled`: true
+- `request_validation.cel.enabled`: true, `mode`: audit_only
 - `request_validation.ai.enabled`: true, `mode`: audit_only
-- `response_validation.cel.enabled`: false
-- `response_validation.ai.enabled`: false
+- `response_validation.cel.enabled`: false, `mode`: audit_only
+- `response_validation.ai.enabled`: false, `mode`: audit_only
 
 ### AI Configuration (Centralized)
 All AI-powered features share a common configuration under `validation.ai`:

@@ -71,15 +71,15 @@ request_validation:
   cel:
     # Whether this validation phase is enabled (default: true)
     enabled: true
-    # Mode: "audit_only" makes all rules log-only (never block), omit for blocking rules
-    # mode: audit_only
+    # Mode: "audit_only" makes rules log-only (default: audit_only), set to empty string to enable blocking
+    mode: audit_only
     # Path to CEL rules file (required when enabled is true)
     rules_file: "cel_request_rules.yaml"
   # AI-powered request validation using an LLM
   ai:
     # Whether this validation phase is enabled (default: true)
     enabled: true
-    # Mode: "audit_only" makes all rules log-only (default for AI: audit_only)
+    # Mode: "audit_only" makes rules log-only (default: audit_only), set to empty string to enable blocking
     mode: audit_only
     # Path to AI rules file (required when enabled is true)
     rules_file: "ai_request_rules.yaml"
@@ -91,12 +91,16 @@ response_validation:
   cel:
     # Whether this validation phase is enabled (default: false)
     enabled: false
+    # Mode: "audit_only" makes rules log-only (default: audit_only), set to empty string to enable blocking
+    mode: audit_only
     # Path to CEL response rules file (required when enabled is true)
     rules_file: "cel_response_rules.yaml"
   # AI-powered response validation to detect sensitive information
   ai:
     # Whether this validation phase is enabled (default: false)
     enabled: false
+    # Mode: "audit_only" makes rules log-only (default: audit_only), set to empty string to enable blocking
+    mode: audit_only
     # Path to AI response rules file (required when enabled is true)
     rules_file: "ai_response_rules.yaml"
     # Note: Uses the shared AI configuration from validation.ai above
