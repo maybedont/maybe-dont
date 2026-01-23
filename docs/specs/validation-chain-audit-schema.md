@@ -304,17 +304,19 @@ This section defines the precise behavior for each policy mode combination. The 
 
 ### Policy Modes
 
+> **Note**: Policy mode configuration has been simplified. See [Rule Mode Simplification](rule-mode-simplification.md) for details. The configuration uses `enabled: true/false` at the validation level and `mode: audit_only` (optional) at the rule level. The runtime behaviors described below are unchanged.
+
 | Mode | Executed? | Blocks Caller? | Affects Decision? | Appears in Audit Log? |
 |------|-----------|----------------|-------------------|----------------------|
-| `enabled` | Yes | Yes | Yes | Yes |
+| enabled (can block) | Yes | Yes | Yes | Yes |
 | `audit_only` | Yes | **No** | No | Yes |
-| `disabled` | **No** | No | No | **No** |
+| disabled | **No** | No | No | **No** |
 
 ### Mode Combinations and Expected Behavior
 
 #### 1. All Policies Disabled
 
-When the validation mode is set to `disabled` (e.g., `request_validation.ai.mode: disabled`):
+When validation is disabled (e.g., `request_validation.ai.enabled: false`):
 
 - **Behavior**: The engine returns immediately without executing any policies
 - **Blocking**: 0ms
@@ -338,9 +340,9 @@ When the validation mode is set to `disabled` (e.g., `request_validation.ai.mode
 
 Note: `request_validation.ai` is absent because AI validation is disabled.
 
-#### 2. All Policies Enabled
+#### 2. All Policies Enabled (Can Block)
 
-When all loaded policies have `mode: enabled`:
+When all loaded policies are in enabled mode (no `mode: audit_only`):
 
 - **Behavior**: Engine blocks until either:
   - An enabled policy returns `deny` (early termination), OR
@@ -462,7 +464,7 @@ When an enabled policy denies early while other policies are still running:
 
 ### Disabled Policies Are Not Loaded
 
-Policies with `mode: disabled` (either explicitly or inherited from the top-level default) are filtered out during `LoadPolicies()`:
+Policies with `enabled: false` are filtered out during `LoadPolicies()`:
 
 - They are **not** added to the engine's policy list
 - They are **never** executed

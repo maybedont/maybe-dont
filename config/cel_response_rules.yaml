@@ -5,6 +5,7 @@ rules:
   # Example: Redact sensitive file content
   - name: redact-passwd-content
     description: Redact content from /etc/passwd file responses
+    enabled: true
     expression: |-
       size(response.content) > 0 &&
       response.content[0].type == "text" &&
@@ -17,6 +18,10 @@ rules:
   # Example: Block responses containing credential patterns
   - name: block-credential-exposure
     description: Block responses that appear to contain credentials
+    # This rule can cause false positives, it is relatively brute force.
+    # - Leaving this as audit_only for now. This would be better handled by an AI rule.
+    enabled: true
+    mode: audit_only
     expression: |-
       size(response.content) > 0 &&
       response.content[0].type == "text" &&
@@ -29,6 +34,7 @@ rules:
   # Example: Redact email addresses from responses
   - name: redact-email-addresses
     description: Redact email addresses from response content
+    enabled: false
     expression: |-
       size(response.content) > 0 &&
       response.content[0].type == "text" &&
@@ -41,6 +47,7 @@ rules:
   # Example: Block error responses containing stack traces
   - name: block-stack-traces
     description: Block responses containing detailed stack traces
+    enabled: false
     expression: |-
       response.isError == true &&
       size(response.content) > 0 &&
@@ -54,6 +61,7 @@ rules:
   # Example: Redact IP addresses from responses
   - name: redact-ip-addresses
     description: Redact IPv4 addresses from response content
+    enabled: false
     expression: |-
       size(response.content) > 0 &&
       response.content[0].type == "text" &&

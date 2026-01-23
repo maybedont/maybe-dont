@@ -5,6 +5,7 @@ rules:
   # Example: Detect and redact PII in responses
   - name: detect-pii-in-response
     description: Detect and redact personally identifiable information in responses
+    enabled: true
     action: redact
     prompt: |-
       ANALYZE: Does this response contain PII (personally identifiable information)?
@@ -35,6 +36,7 @@ rules:
   # Example: Detect credential leakage in responses
   - name: detect-credential-leakage
     description: Detect if response contains credentials or secrets
+    enabled: true
     action: deny
     prompt: |-
       ANALYZE: Does this response contain credentials, API keys, passwords, or secrets?
@@ -47,6 +49,13 @@ rules:
       - Database connection strings with credentials
       - AWS/GCP/Azure access keys
 
+      IMPORTANT: Environment variable REFERENCES (like $HOME, ${API_KEY}, $(VAR))
+      are NOT secrets - they are just variable names. Only flag environment
+      variables when actual VALUES are exposed, such as:
+        - KEY=sk-abc123... (variable assignment with real value)
+        - export SECRET="actual-password-here"
+        - Environment dumps showing resolved values
+      
       Response content: %s
 
       If credentials are found:
@@ -63,6 +72,7 @@ rules:
   # Example: Detect and redact internal system paths
   - name: redact-internal-paths
     description: Redact internal file system paths from responses
+    enabled: true
     action: redact
     prompt: |-
       ANALYZE: Does this response contain internal file system paths that should be redacted?
@@ -97,6 +107,8 @@ rules:
   # Example: Detect sensitive business data
   - name: detect-sensitive-business-data
     description: Detect and block responses containing sensitive business information
+    enabled: true
+    mode: audit_only
     action: deny
     prompt: |-
       ANALYZE: Does this response contain sensitive business information that should not be shared?

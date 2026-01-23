@@ -5,6 +5,7 @@ rules:
 
     - name: "Check mass deletion operations"
       description: "Prevent deletion of multiple files or use of dangerous deletion flags"
+      enabled: true
       action: deny
       prompt: |-
         ANALYZE: Does this operation delete multiple files or use dangerous deletion patterns?
@@ -24,6 +25,7 @@ rules:
 
     - name: "Check system directory access"
       description: "Prevent access to critical system directories"
+      enabled: true
       action: deny
       prompt: |-
         ANALYZE: Does this operation access dangerous system directories?
@@ -41,6 +43,7 @@ rules:
 
     - name: "Check command execution tools"
       description: "Prevent execution of system commands and shell access"
+      enabled: true
       action: deny
       prompt: |-
         ANALYZE: Is this tool name on the dangerous command execution list?
@@ -58,6 +61,7 @@ rules:
 
     - name: "Check credential file access"
       description: "Prevent access to files that typically contain credentials"
+      enabled: true
       action: deny
       prompt: |-
         ANALYZE: Does this operation access credential files?
@@ -75,7 +79,7 @@ rules:
 
     - name: "Check external network access"
       description: "Prevent HTTP requests to external domains"
-      mode: disabled
+      enabled: false
       action: deny
       prompt: |-
         ANALYZE: Does this operation make HTTP/HTTPS requests to external domains?
@@ -93,6 +97,7 @@ rules:
 
     - name: "Check executable file creation"
       description: "Prevent creation of executable files"
+      enabled: true
       action: deny
       prompt: |-
         ANALYZE: Does this operation create executable files?
@@ -111,6 +116,7 @@ rules:
 
     - name: "Check large file operations"
       description: "Prevent operations on excessively large files"
+      enabled: true
       action: deny
       prompt: |-
         ANALYZE: Does this operation involve excessively large files or data?

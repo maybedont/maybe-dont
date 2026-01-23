@@ -49,8 +49,8 @@ func InitAIPolicyEngine(logger *config.SessionLogger, engine *AIPolicyEngine) er
 }
 
 // LoadPolicies loads AI policies from configuration
-// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
-func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy, defaultMode config.PolicyMode) error {
+// topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
+func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy, topLevelMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -64,22 +64,24 @@ func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy, defaultMode co
 			return fmt.Errorf("duplicate policy name '%s' in AI request rules", policy.Name)
 		}
 		seenNames[policy.Name] = true
+
+		// Skip disabled policies (enabled: false)
+		if !policy.IsEnabled() {
+			e.logger.Debug(context.Background(), "Skipping disabled AI policy",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
+
 		// Resolve effective mode for this policy
-		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+		// Top-level audit_only applies to all rules; per-rule audit_only is additive
+		effectiveMode := config.ResolvePolicyMode(topLevelMode, policy.Mode)
 
 		e.logger.Debug(context.Background(), "Loading AI policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
 			zap.String("mode", string(effectiveMode)),
 		)
-
-		// Skip disabled policies
-		if effectiveMode == config.PolicyModeDisabled {
-			e.logger.Debug(context.Background(), "Skipping disabled AI policy",
-				zap.String("name", policy.Name),
-			)
-			continue
-		}
 
 		// Validate action, request validation can only be 'allow' or 'deny'
 		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny {
@@ -151,11 +153,10 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	// Count enabled and audit_only policies
 	var enabledPolicies, auditOnlyPolicies int
 	for _, p := range e.policies {
-		switch p.Mode {
-		case config.PolicyModeEnabled:
-			enabledPolicies++
-		case config.PolicyModeAuditOnly:
+		if p.Mode.IsAuditOnly() {
 			auditOnlyPolicies++
+		} else {
+			enabledPolicies++
 		}
 	}
 	allAuditOnly := enabledPolicies == 0 && auditOnlyPolicies > 0
@@ -365,22 +366,21 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	var auditOnlyDeny bool // Track if any audit_only policy returned deny
 	var failedOpen bool    // Track if we failed open due to errors
 
-	// Determine blocking deadline from shared budget or use default
+	// BlockingBudget is required - fail fast if not provided
+	if budget == nil {
+		return ValidationResults{}, fmt.Errorf("BlockingBudget is required for AI validation - this indicates a code path that bypasses budget initialization")
+	}
+
+	// Determine blocking deadline from shared budget
 	var blockingDeadline time.Time
-	if budget != nil {
-		// Check if budget is already exhausted
-		if budget.IsExhausted() {
-			blockedMs = 0
-			decided = true
-			finalAction = "allow"
-			failedOpen = true
-			e.logger.Warn(ctx, "AI validation skipping blocking - budget already exhausted")
-		} else {
-			blockingDeadline = budget.BlockingDeadline()
-		}
+	if budget.IsExhausted() {
+		blockedMs = 0
+		decided = true
+		finalAction = "allow"
+		failedOpen = true
+		e.logger.Warn(ctx, "AI validation skipping blocking - budget already exhausted")
 	} else {
-		// No budget provided, use a default timeout
-		blockingDeadline = evalStartTime.Add(5 * time.Second)
+		blockingDeadline = budget.BlockingDeadline()
 	}
 
 	// Track how many enabled policies we're waiting for
@@ -487,7 +487,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		select {
 		case result := <-resultChan:
 			remainingTotal--
-			if result.mode == config.PolicyModeEnabled {
+			if !result.mode.IsAuditOnly() {
 				remainingEnabled--
 			}
 
@@ -512,7 +512,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			}
 
 			// Check if this result should trigger early termination
-			if !decided && result.mode == config.PolicyModeEnabled {
+			if !decided && !result.mode.IsAuditOnly() {
 				switch result.result {
 				case "deny":
 					// Early termination: first enabled deny

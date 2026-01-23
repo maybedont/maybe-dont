@@ -46,8 +46,8 @@ func InitAIResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 }
 
 // LoadPolicies loads AI response policies from configuration
-// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
-func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy, defaultMode config.PolicyMode) error {
+// topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
+func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy, topLevelMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -61,22 +61,24 @@ func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy
 			return fmt.Errorf("duplicate policy name '%s' in AI response rules", policy.Name)
 		}
 		seenNames[policy.Name] = true
+
+		// Skip disabled policies (enabled: false)
+		if !policy.IsEnabled() {
+			e.logger.Debug(context.Background(), "Skipping disabled AI response policy",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
+
 		// Resolve effective mode for this policy
-		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+		// Top-level audit_only applies to all rules; per-rule audit_only is additive
+		effectiveMode := config.ResolvePolicyMode(topLevelMode, policy.Mode)
 
 		e.logger.Debug(context.Background(), "Loading AI response policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
 			zap.String("mode", string(effectiveMode)),
 		)
-
-		// Skip disabled policies
-		if effectiveMode == config.PolicyModeDisabled {
-			e.logger.Debug(context.Background(), "Skipping disabled AI response policy",
-				zap.String("name", policy.Name),
-			)
-			continue
-		}
 
 		// Validate action, a response policy can be 'allow', 'deny' or 'redact'
 		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny && policy.Action != config.PolicyActionRedact {
@@ -168,11 +170,10 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 	// Count enabled and audit_only policies
 	var enabledPolicies, auditOnlyPolicies int
 	for _, p := range e.policies {
-		switch p.Mode {
-		case config.PolicyModeEnabled:
-			enabledPolicies++
-		case config.PolicyModeAuditOnly:
+		if p.Mode.IsAuditOnly() {
 			auditOnlyPolicies++
+		} else {
+			enabledPolicies++
 		}
 	}
 	allAuditOnly := enabledPolicies == 0 && auditOnlyPolicies > 0
@@ -462,7 +463,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		select {
 		case ruleResult := <-resultChan:
 			remainingTotal--
-			if ruleResult.policy.Mode == config.PolicyModeEnabled {
+			if !ruleResult.policy.Mode.IsAuditOnly() {
 				remainingEnabled--
 			}
 
@@ -514,7 +515,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				)
 			}
 
-			if !decided && ruleResult.policy.Mode == config.PolicyModeEnabled {
+			if !decided && !ruleResult.policy.Mode.IsAuditOnly() {
 				switch ruleResult.result {
 				case "deny":
 					// Note: We don't cancel remaining goroutines - they continue to completion

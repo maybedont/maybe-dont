@@ -28,7 +28,7 @@ type ValidationResult struct {
 	PolicyName string              `json:"policy_name"`
 	PolicyType string              `json:"policy_type"` // "cel" or "ai"
 	Action     config.PolicyAction `json:"action"`      // "allow" or "deny"
-	Mode       config.PolicyMode   `json:"mode"`        // "enabled", "audit_only", or "disabled"
+	Mode       config.PolicyMode   `json:"mode"`        // "audit_only" or empty (can block)
 	Message    string              `json:"message,omitempty"`
 	Error      string              `json:"error,omitempty"`
 	DurationMs int64               `json:"duration_ms"` // Time taken to evaluate this policy in milliseconds
@@ -87,6 +87,17 @@ type ValidationResults struct {
 	// The caller should read from this channel in a goroutine to receive complete AI results.
 	// This field is not serialized.
 	AsyncCompletion <-chan AsyncCompletion `json:"-"`
+}
+
+// DenyingRuleNames returns the names of all rules that issued a deny action
+func (v *ValidationResults) DenyingRuleNames() []string {
+	var names []string
+	for _, result := range v.Results {
+		if result.Action == config.PolicyActionDeny {
+			names = append(names, result.PolicyName)
+		}
+	}
+	return names
 }
 
 // ToolValidationHandler defines the interface for tool validation handlers

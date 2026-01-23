@@ -155,7 +155,7 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 		},
 	}
 
-	err = celEngine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = celEngine.LoadPolicies(policies, "")
 	require.NoError(t, err)
 
 	// Create validation chain with real handlers
@@ -277,7 +277,7 @@ func TestCELValidationHandler_Isolation(t *testing.T) {
 			Message:    "Allowed to call tools",
 		},
 	}
-	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = engine.LoadPolicies(policies, "")
 	require.NoError(t, err)
 
 	handler := NewToolCELValidationHandler(sessionLogger, engine)
@@ -420,7 +420,7 @@ func TestCELValidationHandler_FailOpenOnRuntimeError(t *testing.T) {
 			Message:    "Should not reach this",
 		},
 	}
-	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = engine.LoadPolicies(policies, "")
 	require.NoError(t, err)
 
 	handler := NewToolCELValidationHandler(sessionLogger, engine)

@@ -31,7 +31,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 				Prompt:      "Check if this is destructive: %s",
 				Action:      config.PolicyActionDeny,
 				Message:     "Blocked",
-				Mode:        config.PolicyModeEnabled,
+				// Mode not set - defaults to "" (can block)
 			},
 			{
 				Name:        "require_valid_repo",
@@ -39,11 +39,11 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 				Prompt:      "Check repo: %s",
 				Action:      config.PolicyActionAllow,
 				Message:     "Repo required",
-				Mode:        config.PolicyModeEnabled,
+				// Mode not set - defaults to "" (can block)
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 2)
 	})
@@ -56,22 +56,23 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
+		disabledBool := false
 		policies := []config.AIPolicy{
 			{
 				Name:   "enabled_policy",
 				Prompt: "Check: %s",
 				Action: config.PolicyActionDeny,
-				Mode:   config.PolicyModeEnabled,
+				// Mode not set - defaults to "" (can block)
 			},
 			{
-				Name:   "disabled_policy",
-				Prompt: "Check: %s",
-				Action: config.PolicyActionDeny,
-				Mode:   config.PolicyModeDisabled,
+				Name:    "disabled_policy",
+				Prompt:  "Check: %s",
+				Action:  config.PolicyActionDeny,
+				Enabled: &disabledBool, // Explicitly disabled
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, "enabled_policy", engine.policies[0].Name)
@@ -101,7 +102,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		assert.Equal(t, config.PolicyModeAuditOnly, engine.policies[0].Mode)
 	})
 
-	t.Run("policy_mode_overrides_default", func(t *testing.T) {
+	t.Run("policy_audit_only_overrides_default", func(t *testing.T) {
 		engine := &AIPolicyEngine{
 			apiKey: "test-key",
 			model:  "gpt-4o-mini",
@@ -111,18 +112,18 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 
 		policies := []config.AIPolicy{
 			{
-				Name:   "enabled_override",
+				Name:   "audit_only_override",
 				Prompt: "Check: %s",
 				Action: config.PolicyActionDeny,
-				Mode:   config.PolicyModeEnabled,
+				Mode:   config.PolicyModeAuditOnly, // Policy explicitly sets audit_only
 			},
 		}
 
-		// Load with audit_only as default, but policy explicitly sets enabled
-		err = engine.LoadPolicies(policies, config.PolicyModeAuditOnly)
+		// Load with "" (can block) as default, but policy explicitly sets audit_only
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
-		assert.Equal(t, config.PolicyModeEnabled, engine.policies[0].Mode)
+		assert.Equal(t, config.PolicyModeAuditOnly, engine.policies[0].Mode)
 	})
 
 	t.Run("rejects_invalid_action", func(t *testing.T) {
@@ -138,11 +139,11 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 				Name:   "invalid_policy",
 				Prompt: "Check: %s",
 				Action: config.PolicyAction("invalid"),
-				Mode:   config.PolicyModeEnabled,
+				// Mode not set
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid action")
 	})
@@ -160,11 +161,11 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 				Name:   "deny_policy",
 				Prompt: "Check: %s",
 				Action: config.PolicyActionDeny,
-				Mode:   config.PolicyModeEnabled,
+				// Mode not set
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, config.PolicyActionDeny, engine.policies[0].Action)
@@ -183,11 +184,11 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 				Name:   "allow_policy",
 				Prompt: "Check: %s",
 				Action: config.PolicyActionAllow,
-				Mode:   config.PolicyModeEnabled,
+				// Mode not set
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, config.PolicyActionAllow, engine.policies[0].Action)
@@ -210,7 +211,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, config.PolicyModeAuditOnly, engine.policies[0].Mode)
@@ -229,17 +230,17 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 				Name:   "duplicate_name",
 				Prompt: "First prompt",
 				Action: config.PolicyActionDeny,
-				Mode:   config.PolicyModeEnabled,
+				// Mode not set
 			},
 			{
 				Name:   "duplicate_name",
 				Prompt: "Second prompt",
 				Action: config.PolicyActionAllow,
-				Mode:   config.PolicyModeEnabled,
+				// Mode not set
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate policy name 'duplicate_name'")
 	})
@@ -314,7 +315,7 @@ func TestAIPolicyEngine_CountEnabledPolicies(t *testing.T) {
 				Name:   "enabled_policy",
 				Prompt: "Check: %s",
 				Action: config.PolicyActionDeny,
-				Mode:   config.PolicyModeEnabled,
+				// Mode not set - can block
 			},
 			{
 				Name:   "audit_policy",
@@ -324,13 +325,13 @@ func TestAIPolicyEngine_CountEnabledPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 
-		// Count enabled policies
+		// Count non-audit_only (enabled) policies
 		enabledCount := 0
 		for _, p := range engine.policies {
-			if p.Mode == config.PolicyModeEnabled {
+			if !p.Mode.IsAuditOnly() {
 				enabledCount++
 			}
 		}
@@ -622,10 +623,10 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 				Name:   "test_policy",
 				Prompt: "Check: %s",
 				Action: config.PolicyActionDeny,
-				Mode:   config.PolicyModeEnabled,
+				// Mode not set - can block
 			},
 		}
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 
 		// Create a budget that is already exhausted
@@ -978,7 +979,7 @@ func TestAiRuleResult_ErrorFields(t *testing.T) {
 		result := aiRuleResult{
 			rule:         "test_rule",
 			action:       config.PolicyActionDeny,
-			mode:         config.PolicyModeEnabled,
+			mode:         "", // enabled (can block)
 			result:       "error",
 			evaluationMs: 500,
 			err:          err,
@@ -994,7 +995,7 @@ func TestAiRuleResult_ErrorFields(t *testing.T) {
 		result := aiRuleResult{
 			rule:         "slow_rule",
 			action:       config.PolicyActionDeny,
-			mode:         config.PolicyModeEnabled,
+			mode:         "", // enabled (can block)
 			result:       "error",
 			evaluationMs: 10000,
 			err:          context.DeadlineExceeded,
@@ -1009,7 +1010,7 @@ func TestAiRuleResult_ErrorFields(t *testing.T) {
 		result := aiRuleResult{
 			rule:         "canceled_rule",
 			action:       config.PolicyActionDeny,
-			mode:         config.PolicyModeEnabled,
+			mode:         "", // enabled (can block)
 			result:       "error",
 			evaluationMs: 300,
 			err:          context.Canceled,
@@ -1025,7 +1026,7 @@ func TestAiRuleResult_ErrorFields(t *testing.T) {
 		result := aiRuleResult{
 			rule:         "malformed_rule",
 			action:       config.PolicyActionDeny,
-			mode:         config.PolicyModeEnabled,
+			mode:         "", // enabled (can block)
 			result:       "error",
 			evaluationMs: 1200,
 			err:          parseErr,
@@ -1040,7 +1041,7 @@ func TestAiRuleResult_ErrorFields(t *testing.T) {
 		result := aiRuleResult{
 			rule:         "empty_response_rule",
 			action:       config.PolicyActionDeny,
-			mode:         config.PolicyModeEnabled,
+			mode:         "", // enabled (can block)
 			result:       "error",
 			evaluationMs: 800,
 			err:          fmt.Errorf("API returned empty choices"),
@@ -1089,7 +1090,7 @@ func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 
 		// The engine should return immediately with no async work for all audit_only policies
@@ -1118,17 +1119,17 @@ func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
 				Name:   "enabled_policy",
 				Prompt: "Check: %s",
 				Action: config.PolicyActionDeny,
-				Mode:   config.PolicyModeEnabled,
+				// Mode not set - can block
 			},
 		}
 
-		err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+		err = engine.LoadPolicies(policies, "")
 		require.NoError(t, err)
 
-		// Count enabled policies manually
+		// Count non-audit_only (enabled) policies
 		enabledCount := 0
 		for _, p := range engine.policies {
-			if p.Mode == config.PolicyModeEnabled {
+			if !p.Mode.IsAuditOnly() {
 				enabledCount++
 			}
 		}

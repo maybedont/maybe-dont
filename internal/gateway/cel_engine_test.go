@@ -72,7 +72,7 @@ func TestCELPolicyEngine_FailOpenOnError(t *testing.T) {
 			require.NoError(t, err)
 
 			// LoadPolicies may fail for syntax errors, but runtime errors will pass loading
-			loadErr := engine.LoadPolicies(tt.policies, config.PolicyModeEnabled)
+			loadErr := engine.LoadPolicies(tt.policies, "")
 
 			var results ValidationResults
 			if loadErr != nil {
@@ -121,7 +121,7 @@ func TestCELPolicyEngine_AuditOnlyMode(t *testing.T) {
 					Mode:       config.PolicyModeAuditOnly,
 				},
 			},
-			defaultMode: config.PolicyModeEnabled,
+			defaultMode: "",
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{Method: "tools/call"},
 				Params:  mcp.CallToolParams{Name: "dangerous_tool"},
@@ -164,10 +164,10 @@ func TestCELPolicyEngine_AuditOnlyMode(t *testing.T) {
 					Expression: `true`,
 					Action:     config.PolicyActionDeny,
 					Message:    "Enabled deny blocks",
-					Mode:       config.PolicyModeEnabled,
+					// Mode not set, defaults to "" (can block)
 				},
 			},
-			defaultMode: config.PolicyModeEnabled,
+			defaultMode: "",
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{Method: "tools/call"},
 				Params:  mcp.CallToolParams{Name: "any_tool"},
@@ -230,7 +230,7 @@ func TestCELPolicyEngine_DuplicatePolicyNames(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = engine.LoadPolicies(policies, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate policy name 'duplicate-name'")
 }
@@ -256,7 +256,7 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = engine.LoadPolicies(policies, "")
 	require.NoError(t, err)
 
 	tests := []struct {

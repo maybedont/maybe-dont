@@ -1,5 +1,7 @@
 # Validation Config Restructure
 
+> **Note**: The mode configuration described in this spec has been superseded by the [Rule Mode Simplification](rule-mode-simplification.md) spec. The new design uses `enabled: true/false` and `mode: audit_only` (only) instead of `mode: enabled/audit_only/disabled`.
+
 ## Overview
 
 Restructure the validation configuration to group CEL and AI validation under unified `request_validation` and `response_validation` sections, and rename rules files for consistency.

@@ -80,6 +80,17 @@ func (r *ResponseValidationResults) RedactCount() int {
 	return count
 }
 
+// DenyingRuleNames returns the names of all rules that issued a deny action
+func (r *ResponseValidationResults) DenyingRuleNames() []string {
+	var names []string
+	for _, result := range r.Results {
+		if result.Action == config.PolicyActionDeny {
+			names = append(names, result.PolicyName)
+		}
+	}
+	return names
+}
+
 // ResponseValidationHandler defines the interface for response validation handlers
 type ResponseValidationHandler interface {
 	HandleResponse(ctx context.Context, req mcp.CallToolRequest, result *mcp.CallToolResult) (ResponseValidationResults, error)

@@ -33,8 +33,6 @@ func (h *NativeToolsHandler) getDiscoverToolsDefinition() mcp.Tool {
 
 // handleDiscoverTools handles the maybedont__discover_tools tool call
 func (h *NativeToolsHandler) handleDiscoverTools(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	h.logger.Info(ctx, "Processing discover_tools request")
-
 	// Parse parameters
 	var clientName string
 	if args, ok := req.Params.Arguments.(map[string]interface{}); ok && args != nil {
@@ -65,16 +63,24 @@ func (h *NativeToolsHandler) handleDiscoverTools(ctx context.Context, req mcp.Ca
 		return mcp.NewToolResultError("Failed to discover tools: " + err.Error()), nil
 	}
 
-	// Log discovery results
+	// Log discovery results - use DEBUG for shared results (singleflight deduplication),
+	// INFO only for the request that actually performed the discovery
 	totalDiscovered := 0
 	for _, client := range result.DiscoveredClients {
 		totalDiscovered += client.ToolCount
 	}
-	h.logger.Info(ctx, "Pass-through tool discovery completed",
+	logFields := []zap.Field{
+		zap.String("session_id", sessionID),
 		zap.Int("clients_discovered", len(result.DiscoveredClients)),
 		zap.Int("total_tools", totalDiscovered),
 		zap.Int("already_connected", len(result.AlreadyConnected)),
-		zap.Int("errors", len(result.Errors)))
+		zap.Int("errors", len(result.Errors)),
+	}
+	if result.Shared {
+		h.logger.Debug(ctx, "Pass-through tool discovery completed (shared result)", logFields...)
+	} else {
+		h.logger.Info(ctx, "Pass-through tool discovery completed", logFields...)
+	}
 
 	// Marshal response to JSON
 	jsonBytes, err := json.MarshalIndent(result, "", "  ")

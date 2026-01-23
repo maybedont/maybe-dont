@@ -48,10 +48,9 @@ The server will listen for MCP client connections and forward them to the config
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+		var shutdownSignal os.Signal
 		go func() {
-			sig := <-sigChan
-			// Create a new context for shutdown logging since the main ctx will be cancelled
-			Logger.Info(context.Background(), "Received shutdown signal", zap.String("signal", sig.String()))
+			shutdownSignal = <-sigChan
 			cancel()
 		}()
 
@@ -64,7 +63,7 @@ The server will listen for MCP client connections and forward them to the config
 		<-ctx.Done()
 		// Create a new context for shutdown logging
 		shutdownCtx := context.Background()
-		Logger.Info(shutdownCtx, "Shutting down gateway")
+		Logger.Info(shutdownCtx, "Shutting down gateway", zap.String("signal", shutdownSignal.String()))
 
 		// Close metrics collector before shutdown (stops background flush and performs final flush)
 		if MetricsCollector != nil {

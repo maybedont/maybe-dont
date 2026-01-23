@@ -32,7 +32,7 @@ func TestAIResponsePolicyEngine_DuplicatePolicyNames(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies, config.PolicyModeEnabled)
+	err = engine.LoadPolicies(policies, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate policy name 'duplicate-name'")
 }

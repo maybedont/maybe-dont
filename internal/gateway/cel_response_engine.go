@@ -52,8 +52,8 @@ func NewCELResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 }
 
 // LoadPolicies loads response policies from configuration
-// defaultMode is the top-level mode that applies to all policies unless overridden per-rule
-func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy, defaultMode config.PolicyMode) error {
+// topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
+func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy, topLevelMode config.PolicyMode) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -67,22 +67,24 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy,
 			return fmt.Errorf("duplicate policy name '%s' in CEL response rules", policy.Name)
 		}
 		seenNames[policy.Name] = true
+
+		// Skip disabled policies (enabled: false)
+		if !policy.IsEnabled() {
+			e.logger.Debug(context.Background(), "Skipping disabled response policy",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
+
 		// Resolve effective mode for this policy
-		effectiveMode := config.ResolvePolicyMode(policy.Mode, defaultMode)
+		// Top-level audit_only applies to all rules; per-rule audit_only is additive
+		effectiveMode := config.ResolvePolicyMode(topLevelMode, policy.Mode)
 
 		e.logger.Debug(context.Background(), "Loading response policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
 			zap.String("mode", string(effectiveMode)),
 		)
-
-		// Skip disabled policies
-		if effectiveMode == config.PolicyModeDisabled {
-			e.logger.Debug(context.Background(), "Skipping disabled response policy",
-				zap.String("name", policy.Name),
-			)
-			continue
-		}
 
 		// Compile the expression
 		_, issues := e.env.Compile(policy.Expression)
@@ -186,7 +188,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Error:        formatAuditError("compile_error", issues.Err()),
 			})
 			// Fail-open on compilation error for enabled rules
-			if policy.Mode == config.PolicyModeEnabled {
+			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
@@ -215,7 +217,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Error:        formatAuditError("program_error", err),
 			})
 			// Fail-open on program creation error for enabled rules
-			if policy.Mode == config.PolicyModeEnabled {
+			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
@@ -245,7 +247,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Error:        formatAuditError("eval_error", err),
 			})
 			// Fail-open on evaluation error for enabled rules
-			if policy.Mode == config.PolicyModeEnabled {
+			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
@@ -268,7 +270,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				Error:        "policy did not return a boolean",
 			})
 			// Fail-open on type error for enabled rules
-			if policy.Mode == config.PolicyModeEnabled {
+			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
 				}
@@ -322,7 +324,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			switch policy.Action {
 			case config.PolicyActionDeny:
 				// Only affect final decision if mode is enabled (not audit_only)
-				if policy.Mode == config.PolicyModeEnabled {
+				if !policy.Mode.IsAuditOnly() {
 					if phaseTracker != nil {
 						phaseTracker.MarkDecided()
 					}
@@ -346,7 +348,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 					results.Results[len(results.Results)-1].RedactedContent = redacted
 
 					// Only actually apply redaction if mode is enabled (not audit_only)
-					if policy.Mode == config.PolicyModeEnabled {
+					if !policy.Mode.IsAuditOnly() {
 						if finalAction == "allow" {
 							finalAction = "redact"
 						}

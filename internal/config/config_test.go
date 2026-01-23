@@ -281,8 +281,8 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 		},
 		RequestValidation: RequestValidationConfig{
 			AI: AIRequestValidationConfig{
-				Mode: PolicyModeEnabled, // Use Mode instead of deprecated Enabled
-				// AI credentials are now in validation.ai - Error 11, 12, 13
+				Enabled: true, // AI enabled without credentials - Error 11, 12, 13
+				// AI credentials are now in validation.ai
 			},
 		},
 	}
@@ -386,7 +386,7 @@ downstream_mcp_servers:
 # Request validation with CEL disabled, AI enabled
 request_validation:
   cel:
-    mode: disabled
+    enabled: false
   ai:
     enabled: true
     rules_file: ai_request_rules.yaml
@@ -1248,10 +1248,10 @@ downstream_mcp_servers:
 
 request_validation:
   cel:
-    mode: enabled
+    enabled: true
     rules_file: "../../../etc/passwd"
   ai:
-    mode: disabled
+    enabled: false
 `
 	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -1281,9 +1281,9 @@ validation:
 
 request_validation:
   cel:
-    mode: disabled
+    enabled: false
   ai:
-    mode: enabled
+    enabled: true
     rules_file: "../../secrets/rules.yaml"
 `
 	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
@@ -1308,13 +1308,13 @@ downstream_mcp_servers:
 
 request_validation:
   cel:
-    mode: disabled
+    enabled: false
   ai:
-    mode: disabled
+    enabled: false
 
 response_validation:
   cel:
-    mode: enabled
+    enabled: true
     rules_file: "../secret/response_rules.yaml"
 `
 	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
@@ -1345,13 +1345,13 @@ validation:
 
 request_validation:
   cel:
-    mode: disabled
+    enabled: false
   ai:
-    mode: disabled
+    enabled: false
 
 response_validation:
   ai:
-    mode: enabled
+    enabled: true
     rules_file: "/etc/passwd"
 `
 	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
@@ -1391,10 +1391,10 @@ downstream_mcp_servers:
 
 request_validation:
   cel:
-    mode: enabled
+    enabled: true
     rules_file: "rules/custom/my-rules.yaml"
   ai:
-    mode: disabled
+    enabled: false
 
 native_tools:
   audit_report:
@@ -1422,10 +1422,10 @@ downstream_mcp_servers:
 
 request_validation:
   cel:
-    mode: enabled
+    enabled: true
     rules_file: ".hidden_rules.yaml"
   ai:
-    mode: disabled
+    enabled: false
 `
 	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -1449,10 +1449,10 @@ downstream_mcp_servers:
 
 request_validation:
   cel:
-    mode: enabled
+    enabled: true
     rules_file: "%2e%2e/rules.yaml"
   ai:
-    mode: disabled
+    enabled: false
 `
 	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -1602,9 +1602,9 @@ downstream_mcp_servers:
 
 request_validation:
   cel:
-    mode: disabled
+    enabled: false
   ai:
-    mode: disabled
+    enabled: false
 
 native_tools:
   audit_report:

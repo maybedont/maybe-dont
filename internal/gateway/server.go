@@ -189,7 +189,7 @@ func (g *Gateway) onRequestInitialization(ctx context.Context, id any, message a
 	// Session doesn't exist in our SessionManager, but the tool belongs to a
 	// configured downstream client. This means the AI agent is using a stale
 	// session (e.g., from before a server restart).
-	g.logger.Info(ctx, "Stale session detected for downstream tool call",
+	g.logger.Debug(ctx, "Stale session detected for downstream tool call",
 		zap.String("session_id", sessionID),
 		zap.String("tool_name", toolName),
 		zap.String("client_prefix", clientName))
@@ -203,9 +203,10 @@ func (g *Gateway) onRequestInitialization(ctx context.Context, id any, message a
 // ensurePassThroughToolsDiscovered ensures that pass-through tools are available
 // for this session. It checks for existing downstream clients and returns their tools,
 // or performs synchronous discovery if no clients exist yet.
+// Uses singleflight to deduplicate concurrent discovery requests for the same session.
 // Returns the list of tools (which may be empty if no pass-through clients).
 func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionID string) []mcp.Tool {
-	// Check if this session already has downstream clients connected
+	// Fast path: check if clients already exist
 	existingClients := g.clientManager.GetSessionClientNames(sessionID)
 	if len(existingClients) > 0 {
 		// Downstream clients exist - return their tools directly.
@@ -224,11 +225,70 @@ func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionI
 		return nil
 	}
 
-	g.logger.Info(ctx, "Performing lazy tool discovery for session",
-		zap.String("session_id", sessionID))
+	// Use singleflight to deduplicate concurrent discovery requests for the same session.
+	// This prevents multiple concurrent tools/list requests from all triggering discovery.
+	result, err, shared := g.lazyDiscoveryGroup.Do(sessionID, func() (interface{}, error) {
+		// Double-check: another request might have completed discovery while we waited
+		existingClients := g.clientManager.GetSessionClientNames(sessionID)
+		if len(existingClients) > 0 {
+			g.logger.Debug(ctx, "Discovery already completed by another request",
+				zap.String("session_id", sessionID),
+				zap.Strings("clients", existingClients))
+			return g.getToolsFromExistingClients(ctx, sessionID), nil
+		}
 
-	// Perform synchronous discovery for this session
-	result, err := g.clientManager.CreateSessionClients(ctx, sessionID)
+		g.logger.Info(ctx, "Performing lazy tool discovery for session",
+			zap.String("session_id", sessionID))
+
+		// Perform synchronous discovery for this session
+		discoveryResult, err := g.clientManager.CreateSessionClients(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+
+		if discoveryResult == nil || len(discoveryResult.DownstreamClients) == 0 {
+			g.logger.Debug(ctx, "No downstream clients discovered",
+				zap.String("session_id", sessionID))
+			return []mcp.Tool{}, nil
+		}
+
+		// Collect all discovered tools and register them as session tools
+		var allTools []mcp.Tool
+		for clientName, clientInfo := range discoveryResult.DownstreamClients {
+			// Only process pass-through clients
+			if !clientInfo.Config.Auth.PassThrough.Enabled {
+				continue
+			}
+
+			for _, tool := range clientInfo.Tools {
+				prefixedTool := tool
+				prefixedTool.Name = PrefixName(clientName, tool.Name)
+				prefixedTool.DeferLoading = true
+
+				// Register the tool with the session
+				if err := g.server.AddSessionTool(sessionID, prefixedTool, g.handleToolCallWithErrorHandling); err != nil {
+					g.logger.Warn(ctx, "Failed to register session tool during lazy discovery",
+						zap.String("session_id", sessionID),
+						zap.String("tool", prefixedTool.Name),
+						zap.Error(err))
+					// Still add to return list so it appears in tools/list
+				}
+				allTools = append(allTools, prefixedTool)
+			}
+		}
+
+		g.logger.Info(ctx, "Lazy tool discovery completed",
+			zap.String("session_id", sessionID),
+			zap.Int("tools_discovered", len(allTools)))
+
+		return allTools, nil
+	})
+
+	if shared {
+		g.logger.Debug(ctx, "Lazy discovery result shared from concurrent request",
+			zap.String("session_id", sessionID))
+	}
+
 	if err != nil {
 		g.logger.Error(ctx, "Failed lazy tool discovery",
 			zap.String("session_id", sessionID),
@@ -236,42 +296,10 @@ func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionI
 		return nil
 	}
 
-	if result == nil || len(result.DownstreamClients) == 0 {
-		g.logger.Debug(ctx, "No downstream clients discovered",
-			zap.String("session_id", sessionID))
+	if result == nil {
 		return nil
 	}
-
-	// Collect all discovered tools and register them as session tools
-	var allTools []mcp.Tool
-	for clientName, clientInfo := range result.DownstreamClients {
-		// Only process pass-through clients
-		if !clientInfo.Config.Auth.PassThrough.Enabled {
-			continue
-		}
-
-		for _, tool := range clientInfo.Tools {
-			prefixedTool := tool
-			prefixedTool.Name = PrefixName(clientName, tool.Name)
-			prefixedTool.DeferLoading = true
-
-			// Register the tool with the session
-			if err := g.server.AddSessionTool(sessionID, prefixedTool, g.handleToolCallWithErrorHandling); err != nil {
-				g.logger.Warn(ctx, "Failed to register session tool during lazy discovery",
-					zap.String("session_id", sessionID),
-					zap.String("tool", prefixedTool.Name),
-					zap.Error(err))
-				// Still add to return list so it appears in tools/list
-			}
-			allTools = append(allTools, prefixedTool)
-		}
-	}
-
-	g.logger.Info(ctx, "Lazy tool discovery completed",
-		zap.String("session_id", sessionID),
-		zap.Int("tools_discovered", len(allTools)))
-
-	return allTools
+	return result.([]mcp.Tool)
 }
 
 // getToolsFromExistingClients retrieves tools from downstream clients that are already
@@ -368,7 +396,7 @@ func (g *Gateway) initMCPServer() (*server.MCPServer, error) {
 			}
 		}
 
-		g.logger.Info(ctx, "tools/list response",
+		g.logger.Debug(ctx, "tools/list response",
 			zap.String("session_id", sessionID),
 			zap.Int("total_tools", len(tools)),
 			zap.Any("by_prefix", prefixCounts))
@@ -656,7 +684,11 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 	go func() {
 		defer close(errChan)
 		if err := httpSrv.Start(g.config.Server.ListenAddr); err != nil {
-			g.logger.Error(context.Background(), "Failed to start HTTP server", zap.Error(err))
+			if errors.Is(err, http.ErrServerClosed) {
+				// Expected during graceful shutdown
+				return
+			}
+			g.logger.Error(context.Background(), "HTTP server failed", zap.Error(err))
 			errChan <- err
 		}
 	}()

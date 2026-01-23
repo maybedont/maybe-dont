@@ -67,17 +67,22 @@ Configuration is loaded in this order (later overrides earlier):
 2. Environment variables (prefix: `MAYBE_DONT_`)
 3. Command-line flags
 
-### Validation Policy Modes
-Each validation type supports three modes:
-- **enabled** - Policy is enforced (blocks/allows requests based on rules)
-- **audit_only** - Policy executes and is logged, but doesn't affect the final result
-- **disabled** - Policy is not executed
+### Validation Policy Configuration
+Each validation phase (CEL request, AI request, CEL response, AI response) has two settings:
+- **enabled** (bool) - Whether the validation phase runs at all
+- **mode** (optional, only `audit_only` supported) - When set to `audit_only`, rules log but don't block
 
-Default modes:
-- `request_validation.cel`: enabled
-- `request_validation.ai`: audit_only
-- `response_validation.cel`: disabled
-- `response_validation.ai`: disabled
+Per-rule settings allow fine-grained control:
+- **enabled** (bool) - Whether this specific rule runs (default: true)
+- **mode** (optional, only `audit_only` supported) - When set, overrides top-level for this rule
+
+**Mode Resolution**: Top-level `mode: audit_only` applies to ALL rules in that phase. Per-rule `mode: audit_only` only affects that rule.
+
+Defaults:
+- `request_validation.cel.enabled`: true
+- `request_validation.ai.enabled`: true, `mode`: audit_only
+- `response_validation.cel.enabled`: false
+- `response_validation.ai.enabled`: false
 
 ### AI Configuration (Centralized)
 All AI-powered features share a common configuration under `validation.ai`:
@@ -101,12 +106,12 @@ The gateway implements a blocking budget to limit cumulative validation latency:
 When the blocking budget is exhausted, remaining validations continue asynchronously but the request proceeds (fail-open behavior).
 
 ### Security Rules
-- **CEL Request Rules**: Loaded from external `cel_request_rules.yaml` file when `request_validation.cel` mode is not disabled (deterministic CEL-based rules)
-- **AI Request Rules**: Loaded from external `ai_request_rules.yaml` file when `request_validation.ai` mode is not disabled
-- **CEL Response Rules**: Loaded from external `cel_response_rules.yaml` file when `response_validation.cel` mode is not disabled (deterministic CEL-based rules)
-- **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `response_validation.ai` mode is not disabled
+- **CEL Request Rules**: Loaded from external `cel_request_rules.yaml` file when `request_validation.cel.enabled` is true (deterministic CEL-based rules)
+- **AI Request Rules**: Loaded from external `ai_request_rules.yaml` file when `request_validation.ai.enabled` is true
+- **CEL Response Rules**: Loaded from external `cel_response_rules.yaml` file when `response_validation.cel.enabled` is true (deterministic CEL-based rules)
+- **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `response_validation.ai.enabled` is true
 - **Multi-Client Validation**: Policies can target specific clients using name prefixes
-- **Required When Not Disabled**: Rules files must be specified in config when their corresponding validation mode is not disabled
+- **Required When Enabled**: Rules files must be specified in config when their corresponding validation phase is enabled
 
 ### Native Tools
 The gateway provides built-in introspection tools (prefixed with `maybedont__`):
@@ -175,6 +180,7 @@ From `.cursor/rules/golang.mdc`:
 - **Always keep code formatted**: Run formatters before committing
 - **Consider edge cases**: When writing new code, think through edge cases and ensure test coverage addresses them
 - **Error equality**: Favor `errors.Is` instead of the legacy equality checks. When you find the legacy usage, please update it.
+- **Fail-fast over defensive programming**: Prefer failing explicitly with clear error messages over masking problems with fallbacks or default values. Silent fallbacks hide bugs and make debugging harder. If a required parameter is missing or a precondition isn't met, return an error rather than proceeding with a "safe" default. This surfaces issues during development rather than hiding them until they cause subtle problems in production.
 
 ### Adding Configuration Fields
 When adding new configuration fields:

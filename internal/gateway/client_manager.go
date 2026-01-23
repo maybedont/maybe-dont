@@ -233,7 +233,7 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 // If the session doesn't exist (e.g., after server restart), it creates a new session.
 // This is used for on-demand discovery of pass-through clients that weren't connected at session creation.
 func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionID, clientName string, cfg config.ClientConfig) (*SessionClientInfo, error) {
-	cm.logger.Info(ctx, "Creating single downstream client for session",
+	cm.logger.Debug(ctx, "Creating single downstream client for session",
 		zap.String("session_id", sessionID),
 		zap.String("client", clientName))
 
@@ -242,7 +242,7 @@ func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionI
 	// This allows discover_tools to work even with a stale session ID.
 	session, exists := cm.sessionManager.GetSession(sessionID)
 	if !exists {
-		cm.logger.Info(ctx, "Session not found, creating new session for discovery",
+		cm.logger.Debug(ctx, "Session not found, creating new session for discovery",
 			zap.String("session_id", sessionID))
 		session = cm.sessionManager.CreateSession(sessionID)
 	}
@@ -292,6 +292,9 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		Config: cfg,
 	}
 
+	// Extract session ID from context for logging (may not be present in all call paths)
+	sessionID, _ := GetSessionIDFromContext(ctx)
+
 	// Initialize client based on type
 	var cl *client.Client
 	var err error
@@ -320,7 +323,8 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		if cfg.Auth.PassThrough.Enabled {
 			headerFunc := cm.createAuthHeaderFunc(name, cfg)
 			sseOpts = append(sseOpts, client.WithHeaderFunc(headerFunc))
-			cm.logger.Info(ctx, "Enabled pass-through auth for SSE client",
+			cm.logger.Debug(ctx, "Enabled pass-through auth for SSE client",
+				zap.String("session_id", sessionID),
 				zap.String("client", name),
 				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
 		}
@@ -343,7 +347,8 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		if cfg.Auth.PassThrough.Enabled {
 			headerFunc := cm.createAuthHeaderFunc(name, cfg)
 			httpOpts = append(httpOpts, transport.WithHTTPHeaderFunc(headerFunc))
-			cm.logger.Info(ctx, "Enabled pass-through auth for HTTP client",
+			cm.logger.Debug(ctx, "Enabled pass-through auth for HTTP client",
+				zap.String("session_id", sessionID),
 				zap.String("client", name),
 				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
 		}
@@ -369,7 +374,9 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		return nil, fmt.Errorf("failed to check capabilities: %w", err)
 	}
 
-	cm.logger.Info(ctx, "Initialized MCP client", zap.String("name", name))
+	cm.logger.Debug(ctx, "Initialized MCP client",
+		zap.String("session_id", sessionID),
+		zap.String("name", name))
 	return clientInfo, nil
 }
 

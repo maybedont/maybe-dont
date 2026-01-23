@@ -68,6 +68,9 @@ type DiscoveryResult struct {
 	DiscoveredClients []DiscoveredClientInfo `json:"discovered_clients"`
 	AlreadyConnected  []string               `json:"already_connected,omitempty"`
 	Errors            []DiscoveryError       `json:"errors,omitempty"`
+	// Shared indicates this result was obtained from a concurrent request via singleflight.
+	// This is an internal field, not included in JSON responses.
+	Shared bool `json:"-"`
 }
 
 // DiscoveredClientInfo contains information about a discovered client

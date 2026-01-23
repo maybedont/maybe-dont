@@ -12,6 +12,7 @@ import (
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/maybedont/maybe-dont/internal/metrics"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 // PolicyDeniedError represents a policy denial error with structured data
@@ -72,6 +73,10 @@ type Gateway struct {
 	trustedProxyChecker *TrustedProxyChecker
 	// WaitGroup for tracking pending async audit writes
 	pendingAuditWrites sync.WaitGroup
+	// Singleflight group for deduplicating concurrent lazy discovery requests per session
+	lazyDiscoveryGroup singleflight.Group
+	// Singleflight group for deduplicating concurrent maybedont__discover_tools calls
+	discoverToolsGroup singleflight.Group
 }
 
 // New creates a new gateway instance.
@@ -91,29 +96,27 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	var policyEngine *CELPolicyEngine
 	var aiPolicyEngine *AIPolicyEngine
 
-	// Mode is already resolved during config loading, use it directly
-	celRequestPolicyMode := cfg.RequestValidation.CEL.Mode
-	aiRequestPolicyMode := cfg.RequestValidation.AI.Mode
-
-	// Initialize CEL request policy engine only if not disabled
-	if celRequestPolicyMode != config.PolicyModeDisabled {
-		logger.Info(ctx, "Initializing CEL request policy engine", zap.String("mode", string(celRequestPolicyMode)))
+	// Initialize CEL request policy engine only if enabled
+	if cfg.RequestValidation.CEL.Enabled {
+		celMode := cfg.RequestValidation.CEL.Mode
+		logger.Info(ctx, "Initializing CEL request policy engine", zap.String("mode", string(celMode)))
 		policyEngine, err = NewCELPolicyEngine(ctx, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create CEL request policy engine: %w", err)
 		}
 
 		// Load policies from configuration with the resolved mode
-		if err := policyEngine.LoadPolicies(cfg.RequestValidation.CEL.Rules, celRequestPolicyMode); err != nil {
+		if err := policyEngine.LoadPolicies(cfg.RequestValidation.CEL.Rules, celMode); err != nil {
 			return nil, fmt.Errorf("failed to load CEL request policies: %w", err)
 		}
 	} else {
 		logger.Info(ctx, "CEL request policy validation is disabled")
 	}
 
-	// Initialize AI request policy engine only if not disabled
-	if aiRequestPolicyMode != config.PolicyModeDisabled {
-		logger.Info(ctx, "Initializing AI request policy engine", zap.String("mode", string(aiRequestPolicyMode)))
+	// Initialize AI request policy engine only if enabled
+	if cfg.RequestValidation.AI.Enabled {
+		aiMode := cfg.RequestValidation.AI.Mode
+		logger.Info(ctx, "Initializing AI request policy engine", zap.String("mode", string(aiMode)))
 		aiPolicyEngine = &AIPolicyEngine{
 			endpoint:            cfg.Validation.AI.Endpoint,
 			model:               cfg.Validation.AI.Model,
@@ -128,7 +131,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		}
 
 		// Load policies from configuration with the resolved mode
-		if err := aiPolicyEngine.LoadPolicies(cfg.RequestValidation.AI.Rules, aiRequestPolicyMode); err != nil {
+		if err := aiPolicyEngine.LoadPolicies(cfg.RequestValidation.AI.Rules, aiMode); err != nil {
 			return nil, fmt.Errorf("failed to load AI request policies: %w", err)
 		}
 	} else {
@@ -139,12 +142,9 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	var responsePolicyEngine *CELResponsePolicyEngine
 	var aiResponsePolicyEngine *AIResponsePolicyEngine
 
-	// Mode is already resolved during config loading, use it directly
-	celResponseMode := cfg.ResponseValidation.CEL.Mode
-	aiResponseMode := cfg.ResponseValidation.AI.Mode
-
-	// Initialize CEL response policy engine only if not disabled
-	if celResponseMode != config.PolicyModeDisabled {
+	// Initialize CEL response policy engine only if enabled
+	if cfg.ResponseValidation.CEL.Enabled {
+		celResponseMode := cfg.ResponseValidation.CEL.Mode
 		logger.Info(ctx, "Initializing CEL response policy engine", zap.String("mode", string(celResponseMode)))
 		responsePolicyEngine, err = NewCELResponsePolicyEngine(ctx, logger)
 		if err != nil {
@@ -159,8 +159,9 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		logger.Info(ctx, "CEL response validation is disabled")
 	}
 
-	// Initialize AI response policy engine only if not disabled
-	if aiResponseMode != config.PolicyModeDisabled {
+	// Initialize AI response policy engine only if enabled
+	if cfg.ResponseValidation.AI.Enabled {
+		aiResponseMode := cfg.ResponseValidation.AI.Mode
 		logger.Info(ctx, "Initializing AI response policy engine", zap.String("mode", string(aiResponseMode)))
 		aiResponsePolicyEngine = &AIResponsePolicyEngine{
 			endpoint:            cfg.Validation.AI.Endpoint,
@@ -320,8 +321,6 @@ func (g *Gateway) Stop(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.logger.Info(ctx, "Stopping gateway")
-
 	// Close the stop channel to signal shutdown
 	close(g.stopChan)
 
@@ -423,6 +422,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	// Validate request through the chain (timing is captured per-policy)
 	g.logger.Debug(ctx, "Starting tool call validation",
+		zap.String("session_id", sessionID),
 		zap.String("tool", req.Params.Name),
 		zap.String("client", clientName),
 	)
@@ -454,9 +454,11 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		writeAuditLog()
 
 		g.logger.Info(ctx, "Tool call denied by request validation",
+			zap.String("session_id", sessionID),
 			zap.String("tool", req.Params.Name),
 			zap.String("client", clientName),
 			zap.Int("deny_count", validationResults.DenyCount),
+			zap.Strings("denying_rules", validationResults.DenyingRuleNames()),
 			zap.String("message", validationResults.Message),
 		)
 
@@ -508,13 +510,18 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	// Use validationCtx to share the blocking budget with response validation
 	if g.responseValidationChain != nil {
 		g.logger.Debug(ctx, "Starting response validation",
+			zap.String("session_id", sessionID),
 			zap.String("tool", req.Params.Name),
 			zap.String("client", clientName),
 		)
 		responseValidationResults, respErr := g.responseValidationChain.Handle(validationCtx, req, result)
 
 		if respErr != nil {
-			g.logger.Error(ctx, "Response validation error", zap.Error(respErr))
+			g.logger.Error(ctx, "Response validation error",
+				zap.String("session_id", sessionID),
+				zap.String("tool", req.Params.Name),
+				zap.String("client", clientName),
+				zap.Error(respErr))
 			// Continue even if response validation has errors
 		}
 
@@ -527,9 +534,11 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 			writeAuditLog()
 
 			g.logger.Info(ctx, "Tool call denied by response validation",
+				zap.String("session_id", sessionID),
 				zap.String("tool", req.Params.Name),
 				zap.String("client", clientName),
 				zap.Int("deny_count", responseValidationResults.DenyCount()),
+				zap.Strings("denying_rules", responseValidationResults.DenyingRuleNames()),
 				zap.String("message", responseValidationResults.Message),
 			)
 
@@ -878,7 +887,35 @@ func (g *Gateway) HandleResourceTemplateCall(ctx context.Context, req mcp.ReadRe
 // DiscoverPassThroughTools implements PassThroughDiscoveryProvider interface.
 // It triggers discovery for pass-through clients that weren't discovered at startup,
 // using credentials from the current request context.
+// Uses singleflight to deduplicate concurrent requests for the same session/client.
 func (g *Gateway) DiscoverPassThroughTools(ctx context.Context, sessionID string, clientName string) (*DiscoveryResult, error) {
+	// Build singleflight key: sessionID/clientName (clientName may be empty for "all clients")
+	singleflightKey := sessionID + "/" + clientName
+
+	result, err, shared := g.discoverToolsGroup.Do(singleflightKey, func() (interface{}, error) {
+		return g.doDiscoverPassThroughTools(ctx, sessionID, clientName)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	discoveryResult := result.(*DiscoveryResult)
+
+	// Mark the result as shared if this request waited for another's discovery
+	if shared {
+		// Copy the result to avoid mutating the shared instance
+		sharedResult := *discoveryResult
+		sharedResult.Shared = true
+		return &sharedResult, nil
+	}
+
+	return discoveryResult, nil
+}
+
+// doDiscoverPassThroughTools performs the actual discovery logic.
+// This is called within singleflight to deduplicate concurrent requests.
+func (g *Gateway) doDiscoverPassThroughTools(ctx context.Context, sessionID string, clientName string) (*DiscoveryResult, error) {
 	g.logger.Info(ctx, "Triggering pass-through tool discovery",
 		zap.String("session_id", sessionID),
 		zap.String("client_filter", clientName))
