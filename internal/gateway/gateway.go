@@ -393,8 +393,12 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	// Helper to write audit log - handles both sync and async cases
 	writeAuditLog := func() {
-		// Set total blocked time from budget
-		audit.SetTotalBlockedMs(blockingBudget.TotalBlockedMs())
+		// Calculate total blocked time = validation blocking + tool call duration
+		toolDuration := int64(0)
+		if audit.Entry().Tool.DurationMs != nil {
+			toolDuration = *audit.Entry().Tool.DurationMs
+		}
+		audit.SetTotalBlockedMs(blockingBudget.TotalBlockedMs() + toolDuration)
 
 		// Check if there's async work pending (audit_only policies still running)
 		if audit.HasAsyncWork() {
