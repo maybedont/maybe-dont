@@ -40,35 +40,42 @@ func GetDefaultFiles() []DefaultFile {
 }
 
 // WriteDefaultsIfMissing writes embedded default configuration files to the config directory
-// if they don't already exist. This is called on first run to bootstrap the configuration.
+// if the main config file (maybe-dont.yaml) doesn't exist. This is called on first run to
+// bootstrap the configuration.
+//
+// Bootstrap is all-or-nothing: if maybe-dont.yaml exists, no files are written (the user
+// has their own configuration). If it doesn't exist, we attempt to write all default files
+// (config + rules files that the default config references).
+//
+// This prevents polluting the config directory with unused default rules files when users
+// have their own configuration with custom rules file names.
+//
+// Write failures are non-fatal: if files cannot be written (e.g., read-only filesystem),
+// bootstrap is skipped. This allows the gateway to start when configuration is provided
+// entirely via environment variables with a read-only config directory.
+//
 // Returns the list of files that were created.
-//
-// Files that already exist are NEVER overwritten - user customizations are preserved.
-// Each file written is printed to stdout so users know what was created.
-//
-// Write failures are non-fatal: if a file cannot be written (e.g., read-only filesystem),
-// bootstrap is skipped for that file. This allows the gateway to start when configuration
-// is provided entirely via environment variables with a read-only config directory.
 func WriteDefaultsIfMissing(configDir string) ([]string, error) {
-	var createdFiles []string
+	mainConfigPath := filepath.Join(configDir, "maybe-dont.yaml")
 
+	// Check if main config file exists - if so, skip bootstrap entirely
+	if _, err := os.Stat(mainConfigPath); err == nil {
+		// Config exists, user has their own setup - don't write anything
+		return nil, nil
+	} else if !os.IsNotExist(err) {
+		// Some other error (permission denied, etc.) - report and skip bootstrap
+		_, _ = fmt.Fprintf(os.Stderr, "Note: Cannot check if config exists at %s: %v. Skipping bootstrap.\n", mainConfigPath, err)
+		return nil, nil
+	}
+
+	// Main config doesn't exist - this is a fresh install, write all defaults
+	var createdFiles []string
 	defaults := GetDefaultFiles()
 
 	for _, d := range defaults {
 		path := filepath.Join(configDir, d.Filename)
 
-		// Check if file already exists
-		if _, err := os.Stat(path); err == nil {
-			// File exists, skip it
-			continue
-		} else if !os.IsNotExist(err) {
-			// Some other error checking file status - skip this file
-			// This handles cases like permission denied on stat
-			_, _ = fmt.Fprintf(os.Stderr, "Note: Skipping default %s (cannot check if file exists: %v). Continuing without it.\n", d.Filename, err)
-			continue
-		}
-
-		// File doesn't exist, try to write it
+		// Try to write the file
 		// Use 0600 for config files (may contain sensitive data like API keys)
 		if err := os.WriteFile(path, d.Content, 0600); err != nil {
 			// Write failed (read-only filesystem, permissions, etc.)

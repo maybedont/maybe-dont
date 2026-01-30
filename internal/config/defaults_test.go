@@ -63,8 +63,9 @@ func TestWriteDefaultsIfMissing_CreatesFilesOnFirstRun(t *testing.T) {
 	}
 }
 
-func TestWriteDefaultsIfMissing_NeverOverwritesExisting(t *testing.T) {
-	// Test that existing files are preserved
+func TestWriteDefaultsIfMissing_SkipsWhenConfigExists(t *testing.T) {
+	// Test that NO files are written when maybe-dont.yaml already exists
+	// This prevents polluting the config directory with unused default rules files
 	tmpDir := t.TempDir()
 
 	// Create an existing config file with custom content
@@ -77,18 +78,20 @@ func TestWriteDefaultsIfMissing_NeverOverwritesExisting(t *testing.T) {
 	created, err := WriteDefaultsIfMissing(tmpDir)
 	require.NoError(t, err)
 
-	// Should NOT have created maybe-dont.yaml (it already existed)
-	for _, f := range created {
-		require.NotEqual(t, "maybe-dont.yaml", f, "Should not overwrite existing maybe-dont.yaml")
-	}
+	// Should NOT have created any files (config exists = user has their own setup)
+	require.Empty(t, created, "Should not create any files when maybe-dont.yaml exists")
 
 	// Verify original content is preserved
 	content, err := os.ReadFile(existingPath)
 	require.NoError(t, err)
 	require.Equal(t, existingContent, string(content), "Existing file content should be preserved")
 
-	// But other files should have been created
-	require.Len(t, created, 4, "Should create 4 files (all except maybe-dont.yaml)")
+	// Verify no rules files were created
+	rulesFiles := []string{"cel_request_rules.yaml", "ai_request_rules.yaml", "cel_response_rules.yaml", "ai_response_rules.yaml"}
+	for _, rf := range rulesFiles {
+		_, err := os.Stat(filepath.Join(tmpDir, rf))
+		require.True(t, os.IsNotExist(err), "Rules file %s should not have been created", rf)
+	}
 }
 
 func TestWriteDefaultsIfMissing_FilePermissions(t *testing.T) {
@@ -110,29 +113,29 @@ func TestWriteDefaultsIfMissing_FilePermissions(t *testing.T) {
 	}
 }
 
-func TestWriteDefaultsIfMissing_PartialRun(t *testing.T) {
-	// Test that only missing files are created on subsequent runs
+func TestWriteDefaultsIfMissing_SubsequentRunsSkipped(t *testing.T) {
+	// Test that subsequent runs don't create files once maybe-dont.yaml exists
 	tmpDir := t.TempDir()
 
-	// First run - creates all files
+	// First run - creates all files (fresh install)
 	created1, err := WriteDefaultsIfMissing(tmpDir)
 	require.NoError(t, err)
 	require.Len(t, created1, 5, "First run should create all 5 files")
 
-	// Second run - should create no files
+	// Second run - should create no files (maybe-dont.yaml exists)
 	created2, err := WriteDefaultsIfMissing(tmpDir)
 	require.NoError(t, err)
-	require.Len(t, created2, 0, "Second run should create no files")
+	require.Empty(t, created2, "Second run should create no files")
 
-	// Delete one file
+	// Delete a rules file
 	err = os.Remove(filepath.Join(tmpDir, "cel_request_rules.yaml"))
 	require.NoError(t, err)
 
-	// Third run - should only create the deleted file
+	// Third run - still should create no files (maybe-dont.yaml exists)
+	// User is responsible for their own rules files once they have a config
 	created3, err := WriteDefaultsIfMissing(tmpDir)
 	require.NoError(t, err)
-	require.Len(t, created3, 1, "Third run should create only 1 file")
-	require.Equal(t, "cel_request_rules.yaml", created3[0])
+	require.Empty(t, created3, "Third run should create no files - config exists")
 }
 
 func TestWriteDefaultsIfMissing_NonWritableDirectory(t *testing.T) {
