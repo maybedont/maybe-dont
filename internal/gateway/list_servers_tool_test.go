@@ -37,7 +37,7 @@ func TestListDownstreamServers_BasicResponse(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListServers.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	// Set up mock providers
 	handler.SetClientConfigProvider(&mockClientConfigProvider{
@@ -120,7 +120,7 @@ func TestListDownstreamServers_IncludeTools(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListServers.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	handler.SetClientConfigProvider(&mockClientConfigProvider{
 		configs: map[string]config.ClientConfig{
@@ -172,7 +172,7 @@ func TestListDownstreamServers_NoToolsDiscovered(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListServers.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	// Server configured but no tools discovered (e.g., pass-through auth)
 	handler.SetClientConfigProvider(&mockClientConfigProvider{
@@ -216,7 +216,7 @@ func TestListDownstreamServers_NoProviderError(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListServers.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	// Don't set providers
 
 	req := mcp.CallToolRequest{}
@@ -236,7 +236,7 @@ func TestListDownstreamServers_SessionSpecificTools(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListServers.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	// Configure two servers: one with global tools, one with pass-through (no global tools)
 	handler.SetClientConfigProvider(&mockClientConfigProvider{
@@ -333,7 +333,7 @@ func TestListDownstreamServers_SessionToolsMergedWithGlobal(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListServers.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	handler.SetClientConfigProvider(&mockClientConfigProvider{
 		configs: map[string]config.ClientConfig{
@@ -399,7 +399,7 @@ func TestListDownstreamServers_NoServersConfigured(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListServers.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	// Set up mock providers with empty configs
 	handler.SetClientConfigProvider(&mockClientConfigProvider{

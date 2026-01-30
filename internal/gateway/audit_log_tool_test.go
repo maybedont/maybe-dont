@@ -28,7 +28,7 @@ func TestGetAuditLog_FileDoesNotExist(t *testing.T) {
 	// Ensure file doesn't exist
 	_ = os.Remove(auditPath)
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -68,7 +68,7 @@ func TestGetAuditLog_EmptyFile(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -108,7 +108,7 @@ func TestGetAuditLog_FileWithOnlyWhitespace(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -157,7 +157,7 @@ func TestGetAuditLog_WithValidEntries(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -204,7 +204,7 @@ not valid json at all
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -250,7 +250,7 @@ func TestGetAuditLog_WithOldFormatEntries(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -287,7 +287,7 @@ func TestGetAuditLog_StderrPath(t *testing.T) {
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	auditPath := "stderr"
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -313,7 +313,7 @@ func TestGetAuditLog_StdoutPath(t *testing.T) {
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 	auditPath := "stdout"
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -356,7 +356,7 @@ func TestGetAuditLog_AllEntriesOlderThanTimeWindow(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	// Test with default 7-day window - should return empty results
 	t.Run("DefaultTimeWindow", func(t *testing.T) {
@@ -444,7 +444,7 @@ func TestGetAuditLog_WithFiltering(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	// Test filtering by status
 	t.Run("FilterByStatus", func(t *testing.T) {
@@ -557,7 +557,7 @@ func TestGetAuditLog_LineSpanningMultipleChunks(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -611,7 +611,7 @@ func TestGetAuditLog_SingleLineLargerThan64KB(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -656,7 +656,7 @@ func TestGetAuditLog_NoNewlineAtEOF(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog
@@ -765,7 +765,7 @@ func TestGetAuditLog_TimeRangeWithFractionalTimestamps(t *testing.T) {
 	cfg.NativeTools.AuditLog.Enabled = true
 	cfg.NativeTools.AuditLog.MaxEntries = 1000
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGetAuditLog

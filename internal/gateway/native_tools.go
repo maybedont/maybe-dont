@@ -98,7 +98,6 @@ type PassThroughDiscoveryProvider interface {
 type NativeToolsHandler struct {
 	config               *config.Config
 	logger               *config.SessionLogger
-	auditLogger          *config.SessionLogger
 	auditLogPath         string // Full path to the audit log file
 	clientConfigProvider ClientConfigProvider
 	toolsProvider        RegisteredToolsProvider
@@ -108,11 +107,10 @@ type NativeToolsHandler struct {
 
 // NewNativeToolsHandler creates a new native tools handler.
 // auditLogPath is the full resolved path to the audit log file.
-func NewNativeToolsHandler(cfg *config.Config, logger, auditLogger *config.SessionLogger, auditLogPath string) *NativeToolsHandler {
+func NewNativeToolsHandler(cfg *config.Config, logger *config.SessionLogger, auditLogPath string) *NativeToolsHandler {
 	return &NativeToolsHandler{
 		config:       cfg,
 		logger:       logger,
-		auditLogger:  auditLogger,
 		auditLogPath: auditLogPath,
 	}
 }

@@ -57,12 +57,15 @@ and providing comprehensive audit logging.`,
 		}
 
 		// Resolve log directory from CLI flag or environment variable
-		// If not specified, derives from config directory (e.g., ./config → ./config/logs)
+		// If not specified, uses XDG_STATE_HOME or $HOME/.local/state/maybe-dont
 		ResolvedLogDir = logDir
 		if ResolvedLogDir == "" {
 			ResolvedLogDir = os.Getenv("MAYBE_DONT_LOG_DIR")
 		}
-		ResolvedLogDir = config.ResolveLogDir(ResolvedLogDir, resolvedCfgDir)
+		ResolvedLogDir, err = config.ResolveLogDir(ResolvedLogDir)
+		if err != nil {
+			return fmt.Errorf("failed to resolve log directory: %w", err)
+		}
 
 		// Resolve config file name from CLI flag or environment variable
 		resolvedCfgFileName := cfgFileName

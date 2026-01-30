@@ -912,6 +912,23 @@ func ensureDir(path string) bool {
 	return true
 }
 
+// ensureFileWritable verifies that a file can be created/written to.
+// Creates the parent directory if needed and attempts to open the file for appending.
+// This is used to fail fast at startup rather than on first write.
+func ensureFileWritable(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("cannot create directory %s: %w", dir, err)
+	}
+
+	// Try to open the file for appending (creates if doesn't exist)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 // ResolveConfigDir resolves the configuration directory with XDG support.
 // Priority: CLI/env > XDG_CONFIG_HOME > $HOME/.config/maybe-dont
 // Returns the resolved path and an error if no valid config directory could be determined.
@@ -946,31 +963,29 @@ func ResolveConfigDir(configDir string) (string, error) {
 
 // ResolveLogDir resolves the log directory with XDG support.
 // Priority: CLI/env > XDG_STATE_HOME > $HOME/.local/state/maybe-dont
-// The configDir parameter is kept for API compatibility but is no longer used for fallback.
-func ResolveLogDir(logDir, configDir string) string {
+// Returns the resolved path and an error if no valid log directory could be determined.
+func ResolveLogDir(logDir string) (string, error) {
 	// Priority 1-2: CLI flag or env var takes precedence
 	if logDir != "" {
-		return logDir
+		return logDir, nil
 	}
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		// Can't determine home dir - this is an edge case
-		// Return a path that will likely fail, letting the logger handle it
-		return filepath.Join(configDir, "logs")
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
 	// Priority 3: XDG_STATE_HOME/maybe-dont
 	if xdgState := os.Getenv("XDG_STATE_HOME"); xdgState != "" {
 		xdgPath := filepath.Join(xdgState, "maybe-dont")
 		_ = os.MkdirAll(xdgPath, 0700) // Best effort, 0700 for security
-		return xdgPath
+		return xdgPath, nil
 	}
 
 	// Priority 4: XDG default ($HOME/.local/state/maybe-dont)
 	xdgDefault := filepath.Join(homeDir, ".local", "state", "maybe-dont")
 	_ = os.MkdirAll(xdgDefault, 0700) // Best effort, 0700 for security
-	return xdgDefault
+	return xdgDefault, nil
 }
 
 // LoadConfig loads the configuration from all sources.
@@ -1461,8 +1476,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 			errMsg += "  - MAYBE_DONT_SERVER_TYPE=stdio\n"
 			errMsg += "  - MAYBE_DONT_AI_VALIDATION_API_KEY=your-api-key\n"
 			errMsg += "\nAlternatively, create a config file (maybe-dont.yaml) in one of these locations:\n"
-			errMsg += "  - ./config/\n"
-			errMsg += "  - ~/.maybe-dont/config/\n"
+			errMsg += "  - $XDG_CONFIG_HOME/maybe-dont/ (or ~/.config/maybe-dont/)\n"
 			errMsg += "  - Current directory\n"
 		}
 		return fmt.Errorf("%s", errMsg)
@@ -1499,6 +1513,13 @@ func GetLogger(cfg *Config, logDir string) (*SessionLogger, error) {
 	default:
 		// Path is a filename - resolve it within logDir and use lumberjack for rotation
 		fullPath := filepath.Join(logDir, logPath)
+
+		// Fail fast: verify log directory exists and file is writable before proceeding
+		// Lumberjack is lazy and wouldn't fail until first write, so we validate upfront
+		if err := ensureFileWritable(fullPath); err != nil {
+			return nil, fmt.Errorf("cannot write to log file %s: %w", fullPath, err)
+		}
+
 		lumberjackLogger := newLumberjackLogger(fullPath, cfg.Logger.Rotation)
 		core = zapcore.NewCore(encoder, zapcore.AddSync(lumberjackLogger), level)
 	}
@@ -1508,47 +1529,6 @@ func GetLogger(cfg *Config, logDir string) (*SessionLogger, error) {
 
 	// Add logger type designation and wrap in SessionLogger
 	zapLogger := logger.With(zap.String("logger", "application"))
-	return NewSessionLogger(zapLogger), nil
-}
-
-// GetAuditLogger creates a new session-aware audit logger based on the configuration.
-// logDir: the resolved log directory where the audit log file should be written.
-// If audit.path is "stdout" or "stderr", logs go directly there.
-// Otherwise, audit.path is treated as a filename and resolved within logDir.
-func GetAuditLogger(cfg *Config, logDir string) (*SessionLogger, error) {
-	config := zap.NewProductionConfig()
-
-	// Set log level to info for audit logs
-	config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
-
-	// Set output path based on configuration
-	auditPath := cfg.Audit.Path
-	switch auditPath {
-	case "stdout":
-		config.OutputPaths = []string{"stdout"}
-		config.ErrorOutputPaths = []string{"stderr"}
-	case "stderr":
-		config.OutputPaths = []string{"stderr"}
-		config.ErrorOutputPaths = []string{"stderr"}
-	default:
-		// Path is a filename - resolve it within logDir
-		// Default to "maybedont-audit.log" if empty
-		if auditPath == "" {
-			auditPath = "maybedont-audit.log"
-		}
-		fullPath := filepath.Join(logDir, auditPath)
-		config.OutputPaths = []string{fullPath}
-		config.ErrorOutputPaths = []string{fullPath}
-	}
-
-	// Build the logger
-	logger, err := config.Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build audit logger: %w", err)
-	}
-
-	// Add logger type designation and wrap in SessionLogger
-	zapLogger := logger.With(zap.String("logger", "audit"))
 	return NewSessionLogger(zapLogger), nil
 }
 

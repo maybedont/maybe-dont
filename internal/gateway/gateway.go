@@ -193,9 +193,8 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	clientManager := NewClientManagerWithTimeout(ctx, logger, sessionTimeout)
 
 	// Create native tools handler with the resolved audit log path
-	// Note: NativeToolsHandler still uses logger for its internal logging
 	auditLogPath := config.ResolveAuditLogPath(cfg, logDir)
-	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, logger, auditLogPath)
+	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, auditLogPath)
 
 	// Wire up the client config provider for native tools
 	nativeToolsHandler.SetClientConfigProvider(clientManager)

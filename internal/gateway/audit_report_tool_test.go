@@ -31,7 +31,7 @@ func TestGenerateAuditReport_EmptyFile(t *testing.T) {
 	cfg.NativeTools.AuditReport.MaxEntries = 1000
 	cfg.Validation.AI.APIKey = "test-key" // Required to get past the API key check
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGenerateAuditReport
@@ -65,7 +65,7 @@ func TestGenerateAuditReport_FileDoesNotExist(t *testing.T) {
 	// Ensure file doesn't exist
 	_ = os.Remove(auditPath)
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = ToolGenerateAuditReport
@@ -110,7 +110,7 @@ func TestGenerateAuditReport_AllEntriesOlderThanTimeWindow(t *testing.T) {
 	cfg.NativeTools.AuditReport.MaxEntries = 1000
 	cfg.Validation.AI.APIKey = "test-key"
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	// Test with default 24h time range - should return no entries message
 	t.Run("Default24hTimeRange", func(t *testing.T) {
@@ -177,7 +177,7 @@ func TestGetEntriesForReport_LimitReturnsMostRecentEntries(t *testing.T) {
 	cfg.NativeTools.AuditReport.MaxEntries = 2 // Limit to 2 entries
 	cfg.Validation.AI.APIKey = "test-key"
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	// Get entries for report with the limit of 2
 	resultEntries, stats, err := handler.getEntriesForReport(ctx, "7d")
@@ -233,7 +233,7 @@ func TestGetEntriesForReport_AllTimeRange(t *testing.T) {
 	cfg.NativeTools.AuditReport.MaxEntries = 1000
 	cfg.Validation.AI.APIKey = "test-key"
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, auditPath)
+	handler := NewNativeToolsHandler(cfg, logger, auditPath)
 
 	// Get entries with "all" time range - should include all entries regardless of age
 	resultEntries, stats, err := handler.getEntriesForReport(ctx, "all")
