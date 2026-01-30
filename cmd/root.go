@@ -46,7 +46,15 @@ and providing comprehensive audit logging.`,
 			resolvedCfgDir = os.Getenv("MAYBE_DONT_CONFIG_DIR")
 		}
 		// Apply fallback logic for config directory
-		resolvedCfgDir = config.ResolveConfigDir(resolvedCfgDir)
+		resolvedCfgDir, err = config.ResolveConfigDir(resolvedCfgDir)
+		if err != nil {
+			return fmt.Errorf("failed to resolve config directory: %w", err)
+		}
+
+		// Write default config files if they don't exist (first-run bootstrap)
+		if _, err := config.WriteDefaultsIfMissing(resolvedCfgDir); err != nil {
+			return fmt.Errorf("failed to write default config files: %w", err)
+		}
 
 		// Resolve log directory from CLI flag or environment variable
 		// If not specified, derives from config directory (e.g., ./config → ./config/logs)
@@ -123,7 +131,9 @@ func Execute(VERSION string, COMMIT string, DATE string, metricsCfg metrics.Conf
 
 func init() {
 	// Global flags
-	rootCmd.PersistentFlags().StringVar(&cfgDir, "config-dir", "", "Config directory (env: MAYBE_DONT_CONFIG_DIR, default: ./config or $HOME/.maybe-dont/config)")
-	rootCmd.PersistentFlags().StringVar(&logDir, "log-dir", "", "Log directory (env: MAYBE_DONT_LOG_DIR, default: <config-dir>/logs)")
+	rootCmd.PersistentFlags().StringVar(&cfgDir, "config-dir", "",
+		"Config directory (env: MAYBE_DONT_CONFIG_DIR, default: $XDG_CONFIG_HOME/maybe-dont or ~/.config/maybe-dont)")
+	rootCmd.PersistentFlags().StringVar(&logDir, "log-dir", "",
+		"Log directory (env: MAYBE_DONT_LOG_DIR, default: $XDG_STATE_HOME/maybe-dont or ~/.local/state/maybe-dont)")
 	rootCmd.PersistentFlags().StringVar(&cfgFileName, "config-file-name", "", "Config file name (env: MAYBE_DONT_CONFIG_FILE_NAME, default: maybe-dont.yaml)")
 }

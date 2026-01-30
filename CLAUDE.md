@@ -277,6 +277,88 @@ Key environment variables for configuration:
 - Environment variables follow the pattern: `MAYBE_DONT_{CONFIG_PATH}` where CONFIG_PATH uses underscores
 - Use `${VAR_NAME}` syntax in config files for environment variable substitution (e.g., `api_key: "${OPENAI_API_KEY}"`)
 
+### Directory Resolution
+
+The gateway follows [XDG Base Directory conventions](https://specifications.freedesktop.org/basedir/latest/) for locating configuration and log files.
+
+**Config Directory** (in priority order):
+1. `--config-dir` CLI flag
+2. `MAYBE_DONT_CONFIG_DIR` environment variable
+3. `$XDG_CONFIG_HOME/maybe-dont`
+4. `$HOME/.config/maybe-dont` (XDG default)
+
+**Log Directory** (in priority order):
+1. `--log-dir` CLI flag
+2. `MAYBE_DONT_LOG_DIR` environment variable
+3. `$XDG_STATE_HOME/maybe-dont`
+4. `$HOME/.local/state/maybe-dont` (XDG default)
+
+### Docker Volume Mount Patterns
+
+The Docker image uses XDG Base Directory conventions. The binary embeds default configuration files and writes them on first run if they don't exist.
+
+**Default XDG Paths in Container:**
+- Config: `/home/maybedont/.config/maybe-dont/`
+- State/Logs: `/home/maybedont/.local/state/maybe-dont/`
+
+**Basic Usage (XDG defaults):**
+```yaml
+# docker-compose.yml
+services:
+  gateway:
+    image: ghcr.io/maybedont/maybe-dont:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount config read-only after initial setup
+      - ./config:/home/maybedont/.config/maybe-dont:ro
+      # Mount state read-write for logs, metrics, installation ID
+      - ./state:/home/maybedont/.local/state/maybe-dont
+```
+
+**With Read-Only Root Filesystem:**
+```yaml
+services:
+  gateway:
+    image: ghcr.io/maybedont/maybe-dont:latest
+    read_only: true
+    volumes:
+      - ./config:/home/maybedont/.config/maybe-dont:ro
+      - ./state:/home/maybedont/.local/state/maybe-dont
+```
+
+**Using XDG Environment Variables:**
+```yaml
+services:
+  gateway:
+    image: ghcr.io/maybedont/maybe-dont:latest
+    environment:
+      - XDG_CONFIG_HOME=/xdg/config
+      - XDG_STATE_HOME=/xdg/state
+    volumes:
+      - ./config:/xdg/config/maybe-dont:ro
+      - ./state:/xdg/state/maybe-dont
+```
+
+**Using App-Specific Environment Variables:**
+```yaml
+services:
+  gateway:
+    image: ghcr.io/maybedont/maybe-dont:latest
+    environment:
+      - MAYBE_DONT_CONFIG_DIR=/config
+      - MAYBE_DONT_LOG_DIR=/logs
+    volumes:
+      - ./config:/config:ro
+      - ./logs:/logs
+```
+
+**First-Run Workflow:**
+1. Start container without config volume to generate defaults
+2. Copy defaults from container or use `defaults export` command
+3. Customize configuration files
+4. Restart with config volume mounted read-only
+
 ### Downstream MCP Server Configuration via Environment Variables
 
 Configure downstream servers entirely via environment variables (no YAML file required):

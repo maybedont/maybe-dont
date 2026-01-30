@@ -1,7 +1,7 @@
 # XDG Base Directory Specification Support
 
 ## Status
-**Draft** - Pending Review
+**Implemented** - All checklist items complete
 
 ## Overview
 
@@ -139,16 +139,16 @@ func writeDefaultsIfMissing(configDir string) error {
 }
 ```
 
-### Dump Defaults Command
+### Defaults Export Command
 
-Add a CLI flag to extract embedded defaults to a specified directory. This is useful for:
+Add a CLI subcommand to extract embedded defaults to a specified directory. This is useful for:
 - Getting fresh defaults after an upgrade to compare with your customized files
 - Recovering defaults if you want to start over
 - Inspecting what the current version ships with
 
 ```bash
-# Dump all defaults to a directory
-maybe-dont dump-defaults --output-dir ./my-defaults
+# Export all defaults to a directory
+maybe-dont defaults export --output-dir ./my-defaults
 
 # Output:
 # Writing maybe-dont.yaml to ./my-defaults/maybe-dont.yaml
@@ -163,11 +163,13 @@ This command always writes files (overwrites if they exist in the output directo
 **Upgrade workflow**:
 ```bash
 # Get the new defaults from upgraded binary
-maybe-dont dump-defaults --output-dir ./new-defaults
+maybe-dont defaults export --output-dir ./new-defaults
 
 # Compare with your current config
 diff ./new-defaults/cel_request_rules.yaml ~/.config/maybe-dont/cel_request_rules.yaml
 ```
+
+The nested command structure (`defaults export`) allows for future subcommands like `defaults show` or `defaults diff`.
 
 ### Benefits
 
@@ -175,17 +177,17 @@ diff ./new-defaults/cel_request_rules.yaml ~/.config/maybe-dont/cel_request_rule
 |--------|-------------------|------------------|
 | Docker | Works out of the box | Requires copying files |
 | Binary download | Works out of the box | Requires extracting archive |
-| Upgrades | Never overwrites; use `dump-defaults` to compare | May require merge |
+| Upgrades | Never overwrites; use `defaults export` to compare | May require merge |
 | XDG compliance | Config lands in XDG paths | Creates `./config` directory |
 | Packaging | Single binary | Binary + config files |
-| Getting fresh defaults | `dump-defaults` command | Re-download archive |
+| Getting fresh defaults | `defaults export` command | Re-download archive |
 
 ### Packaging Changes
 
 - Remove `./config` directory from release archives entirely
 - Binary becomes fully self-contained
 - Archive contains only: binary, README, LICENSE
-- All config/rules are embedded and extracted on first run or via `dump-defaults`
+- All config/rules are embedded and extracted on first run or via `defaults export`
 
 ## Alpine Linux / Docker Considerations
 
@@ -500,50 +502,50 @@ This change removes support for the legacy path `$HOME/.maybe-dont/config`. User
 ## Implementation Checklist
 
 ### Config and Log Directory Resolution
-- [ ] Update `ResolveConfigDir` in `internal/config/config.go` (return error instead of `./` fallback)
-- [ ] Update `ResolveLogDir` in `internal/config/config.go`
-- [ ] Add `ensureDir` helper function
-- [ ] Update callers to handle `ResolveConfigDir` error return
-- [ ] Update CLI flag help text in `cmd/root.go`
-- [ ] Add unit tests for XDG config resolution
-- [ ] Add unit tests for XDG log resolution
-- [ ] Add unit tests for directory creation behavior
-- [ ] Add unit tests for error case when no config dir found
-- [ ] Update CLAUDE.md with directory resolution docs
+- [x] Update `ResolveConfigDir` in `internal/config/config.go` (return error instead of `./` fallback)
+- [x] Update `ResolveLogDir` in `internal/config/config.go`
+- [x] Add `ensureDir` helper function
+- [x] Update callers to handle `ResolveConfigDir` error return
+- [x] Update CLI flag help text in `cmd/root.go`
+- [x] Add unit tests for XDG config resolution
+- [x] Add unit tests for XDG log resolution
+- [x] Add unit tests for directory creation behavior
+- [x] Add unit tests for error case when no config dir found
+- [x] Update CLAUDE.md with directory resolution docs
 
 ### Embedded Default Configuration
-- [ ] Create `defaults/` directory with all default config and rule files
-- [ ] Add `//go:embed` directives for all defaults (config + all *_rules.yaml)
-- [ ] Implement `writeDefaultsIfMissing()` function
-- [ ] Print to stdout when writing each default file
-- [ ] Call on startup after resolving config directory
-- [ ] Add unit tests for first-run config generation
-- [ ] Add unit tests to verify existing files are never overwritten
-- [ ] Update goreleaser to remove `./config` from archives (binary-only archives)
-- [ ] Update documentation for self-contained binary behavior
+- [x] Create `defaults/` directory with all default config and rule files
+- [x] Add `//go:embed` directives for all defaults (config + all *_rules.yaml)
+- [x] Implement `writeDefaultsIfMissing()` function
+- [x] Print to stdout when writing each default file
+- [x] Call on startup after resolving config directory
+- [x] Add unit tests for first-run config generation
+- [x] Add unit tests to verify existing files are never overwritten
+- [x] Update goreleaser to remove `./config` from archives (binary-only archives)
+- [x] Update documentation for self-contained binary behavior
 
-### Dump Defaults Command
-- [ ] Add `dump-defaults` subcommand to CLI
-- [ ] Add `--output-dir` flag (required)
-- [ ] Implement writing all embedded files to output directory
-- [ ] Print each file as it's written
-- [ ] Overwrite existing files in output directory (unlike startup behavior)
-- [ ] Add unit tests for dump-defaults command
-- [ ] Document upgrade workflow (dump-defaults + diff)
+### Defaults Export Command
+- [x] Add `defaults export` subcommand to CLI
+- [x] Add `--output-dir` flag (required)
+- [x] Implement writing all embedded files to output directory
+- [x] Print each file as it's written
+- [x] Overwrite existing files in output directory (unlike startup behavior)
+- [x] Add unit tests for defaults export command
+- [x] Document upgrade workflow (defaults export + diff)
 
 ### Docker Updates
-- [ ] Ensure Dockerfile creates user with proper `$HOME`
-- [ ] Remove any `--config-dir` / `--log-dir` from CMD
-- [ ] Test with read-only root filesystem
-- [ ] Test XDG defaults resolve correctly in container
-- [ ] Document volume mount patterns in README or docs
+- [x] Ensure Dockerfile creates user with proper `$HOME`
+- [x] Remove any `--config-dir` / `--log-dir` from CMD
+- [x] Test with read-only root filesystem
+- [x] Test XDG defaults resolve correctly in container
+- [x] Document volume mount patterns in README or docs
 
 ### Metrics Package Cleanup
-- [ ] Add `getStateDir()` function in `internal/metrics/metrics.go`
-- [ ] Move `installation-id` from config dir to state dir
-- [ ] Move `metrics-state` from cache dir to state dir
-- [ ] Add migration logic for existing files in old locations
-- [ ] Remove unused `getConfigDir()` function (if no longer needed)
-- [ ] Remove unused `getCacheDir()` function (if no longer needed)
-- [ ] Add unit tests for state directory resolution
-- [ ] Add unit tests for migration from old locations
+- [x] Add `getStateDir()` function in `internal/metrics/metrics.go`
+- [x] Move `installation-id` from config dir to state dir
+- [x] Move `metrics-state` from cache dir to state dir
+- [x] Add migration logic for existing files in old locations
+- [x] Remove unused `getConfigDir()` function (if no longer needed)
+- [x] Remove unused `getCacheDir()` function (if no longer needed)
+- [x] Add unit tests for state directory resolution
+- [x] Add unit tests for migration from old locations

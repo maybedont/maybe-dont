@@ -55,16 +55,11 @@ archives:
       - goos: windows
         formats: [zip]
     wrap_in_directory: true
+    # Binary is self-contained with embedded defaults - config files are
+    # generated on first run via XDG Base Directory conventions.
+    # Use 'maybe-dont defaults export' to extract defaults for customization.
     files:
       - README.md
-      - src: config/maybe-dont.yaml
-        dst: config/maybe-dont.yaml
-        info:
-          mode: 0644
-      - src: config/*_rules.yaml
-        dst: config/
-        info:
-          mode: 0644
       - LICENSE
 dockers:
   # AMD64 image

@@ -7,16 +7,18 @@ ARG GID=1000
 RUN apk upgrade --no-cache \
   && apk add --no-cache ca-certificates
 
-# Create a non-root group and user
+# Create a non-root group and user with conventional home directory
+# This enables XDG Base Directory defaults:
+#   Config: /home/maybedont/.config/maybe-dont
+#   State:  /home/maybedont/.local/state/maybe-dont
 RUN addgroup -S -g "$GID" maybedont \
-  && adduser -S -u "$UID" -G maybedont -h /usr/local/maybedont maybedont \
-  && chown maybedont:maybedont /usr/local/maybedont \
-  && chmod 700 /usr/local/maybedont
+  && adduser -S -u "$UID" -G maybedont -h /home/maybedont maybedont
 
-COPY --chown=maybedont:maybedont maybe-dont /usr/local/maybedont/
+COPY --chown=maybedont:maybedont maybe-dont /home/maybedont/
 
 EXPOSE 8080
 USER maybedont
+WORKDIR /home/maybedont
 
-ENTRYPOINT ["/usr/local/maybedont/maybe-dont"]
+ENTRYPOINT ["/home/maybedont/maybe-dont"]
 CMD ["start"]

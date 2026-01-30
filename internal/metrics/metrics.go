@@ -100,19 +100,19 @@ func NewCollector(version string, cfg Config, logger *zap.Logger) (*Collector, e
 	// Check if user has opted out
 	optedOut := os.Getenv("MAYBEDONT_METRICS_OPTOUT") != ""
 
-	// Determine config directory and file path
-	configDir, err := getConfigDir()
+	// Determine state directory - both files now go in the same place per XDG spec
+	stateDir, err := getStateDir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get config directory: %w", err)
+		return nil, fmt.Errorf("failed to get state directory: %w", err)
 	}
-	configFilePath := filepath.Join(configDir, InstallationIDFile)
 
-	// Determine cache directory and file path
-	cacheDir, err := getCacheDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get cache directory: %w", err)
+	// Migrate files from old locations if they exist
+	if err := migrateFromOldLocations(stateDir, logger); err != nil {
+		logger.Warn("Failed to migrate metrics files from old locations", zap.Error(err))
 	}
-	stateFilePath := filepath.Join(cacheDir, MetricsStateFile)
+
+	configFilePath := filepath.Join(stateDir, InstallationIDFile)
+	stateFilePath := filepath.Join(stateDir, MetricsStateFile)
 
 	c := &Collector{
 		version:           version,
@@ -146,12 +146,14 @@ func NewCollector(version string, cfg Config, logger *zap.Logger) (*Collector, e
 	return c, nil
 }
 
-// getConfigDir returns the directory for storing configuration files
-// Uses XDG_CONFIG_HOME/maybe-dont or falls back to ~/.config/maybe-dont
-func getConfigDir() (string, error) {
-	// Try XDG_CONFIG_HOME first
-	if configHome := os.Getenv("XDG_CONFIG_HOME"); configHome != "" {
-		dir := filepath.Join(configHome, "maybe-dont")
+// getStateDir returns the directory for storing state files (installation ID, metrics state)
+// Uses XDG_STATE_HOME/maybe-dont or falls back to ~/.local/state/maybe-dont
+// Per XDG spec, state data is for "data that should persist between application restarts,
+// but is not important or portable enough to store in XDG_DATA_HOME"
+func getStateDir() (string, error) {
+	// Try XDG_STATE_HOME first
+	if stateHome := os.Getenv("XDG_STATE_HOME"); stateHome != "" {
+		dir := filepath.Join(stateHome, "maybe-dont")
 		if err := os.MkdirAll(dir, 0700); err == nil {
 			return dir, nil
 		}
@@ -161,20 +163,20 @@ func getConfigDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		// Fallback to current directory
-		dir := "maybe-dont-config"
+		dir := "maybe-dont-state"
 		if err := os.MkdirAll(dir, 0700); err != nil {
-			return "", fmt.Errorf("failed to create config directory: %w", err)
+			return "", fmt.Errorf("failed to create state directory: %w", err)
 		}
 		return dir, nil
 	}
 
-	// Use ~/.config/maybe-dont
-	dir := filepath.Join(homeDir, ".config", "maybe-dont")
+	// Use ~/.local/state/maybe-dont (XDG default)
+	dir := filepath.Join(homeDir, ".local", "state", "maybe-dont")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		// Fallback to current directory
-		dir := "maybe-dont-config"
+		dir := "maybe-dont-state"
 		if err := os.MkdirAll(dir, 0700); err != nil {
-			return "", fmt.Errorf("failed to create config directory: %w", err)
+			return "", fmt.Errorf("failed to create state directory: %w", err)
 		}
 		return dir, nil
 	}
@@ -182,40 +184,86 @@ func getConfigDir() (string, error) {
 	return dir, nil
 }
 
-// getCacheDir returns the directory for storing cache files
-// Uses XDG_CACHE_HOME/maybe-dont or falls back to ~/.cache/maybe-dont
-func getCacheDir() (string, error) {
-	// Try XDG_CACHE_HOME first
-	if cacheHome := os.Getenv("XDG_CACHE_HOME"); cacheHome != "" {
-		dir := filepath.Join(cacheHome, "maybe-dont")
-		if err := os.MkdirAll(dir, 0700); err == nil {
-			return dir, nil
-		}
-	}
-
-	// Try user's home directory
+// migrateFromOldLocations migrates files from old config/cache locations to state directory
+func migrateFromOldLocations(stateDir string, logger *zap.Logger) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		// Fallback to current directory
-		dir := "maybe-dont-cache"
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return "", fmt.Errorf("failed to create cache directory: %w", err)
-		}
-		return dir, nil
+		// Can't determine home dir, skip migration
+		return nil
 	}
 
-	// Use ~/.cache/maybe-dont
-	dir := filepath.Join(homeDir, ".cache", "maybe-dont")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		// Fallback to current directory
-		dir := "maybe-dont-cache"
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return "", fmt.Errorf("failed to create cache directory: %w", err)
-		}
-		return dir, nil
+	// Old locations to check
+	oldLocations := []struct {
+		filename string
+		oldDirs  []string
+	}{
+		{
+			filename: InstallationIDFile,
+			oldDirs: []string{
+				filepath.Join(homeDir, ".config", "maybe-dont"), // Old XDG_CONFIG_HOME default
+			},
+		},
+		{
+			filename: MetricsStateFile,
+			oldDirs: []string{
+				filepath.Join(homeDir, ".cache", "maybe-dont"), // Old XDG_CACHE_HOME default
+			},
+		},
 	}
 
-	return dir, nil
+	// Also check XDG env var locations
+	if configHome := os.Getenv("XDG_CONFIG_HOME"); configHome != "" {
+		oldLocations[0].oldDirs = append(oldLocations[0].oldDirs, filepath.Join(configHome, "maybe-dont"))
+	}
+	if cacheHome := os.Getenv("XDG_CACHE_HOME"); cacheHome != "" {
+		oldLocations[1].oldDirs = append(oldLocations[1].oldDirs, filepath.Join(cacheHome, "maybe-dont"))
+	}
+
+	for _, loc := range oldLocations {
+		newPath := filepath.Join(stateDir, loc.filename)
+
+		// Skip if file already exists in new location
+		if _, err := os.Stat(newPath); err == nil {
+			continue
+		}
+
+		// Try to migrate from old locations
+		for _, oldDir := range loc.oldDirs {
+			oldPath := filepath.Join(oldDir, loc.filename)
+			if _, err := os.Stat(oldPath); err == nil {
+				// File exists in old location, migrate it
+				data, err := os.ReadFile(oldPath)
+				if err != nil {
+					logger.Debug("Failed to read file from old location",
+						zap.String("old_path", oldPath),
+						zap.Error(err))
+					continue
+				}
+
+				if err := os.WriteFile(newPath, data, 0600); err != nil {
+					logger.Debug("Failed to write file to new location",
+						zap.String("new_path", newPath),
+						zap.Error(err))
+					continue
+				}
+
+				// Remove old file after successful migration
+				if err := os.Remove(oldPath); err != nil {
+					logger.Debug("Failed to remove old file after migration",
+						zap.String("old_path", oldPath),
+						zap.Error(err))
+				}
+
+				logger.Info("Migrated metrics file to XDG state directory",
+					zap.String("filename", loc.filename),
+					zap.String("from", oldPath),
+					zap.String("to", newPath))
+				break
+			}
+		}
+	}
+
+	return nil
 }
 
 // generateInstallationID generates a new random installation ID

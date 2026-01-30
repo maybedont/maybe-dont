@@ -1,0 +1,42 @@
+# AI Request Validation Rules
+#
+# These rules use AI (LLM) for context-aware request validation.
+# AI rules are more flexible than CEL but have higher latency.
+# Use AI rules for nuanced security checks that require understanding intent.
+#
+# The %s placeholder in prompts is replaced with the tool call details.
+#
+# Response format from AI must be JSON:
+#   { "allowed": true/false, "message": "explanation" }
+
+rules:
+  - name: "check-dangerous-operations"
+    description: "Detect potentially dangerous operations like mass deletion or system access"
+    enabled: true
+    action: deny
+    prompt: |-
+      ANALYZE: Is this operation potentially dangerous?
+
+      Look for:
+      - Mass deletion (wildcards, recursive flags, >5 files)
+      - System directory access (/etc/, /sys/, /proc/, C:\Windows\)
+      - Credential file access (.env, .key, .pem, id_rsa)
+      - Command execution tools (bash, shell, exec, system)
+
+      Tool call: %s
+
+      Return ONLY JSON: { "allowed": true/false, "message": "brief explanation" }
+
+  - name: "check-executable-creation"
+    description: "Prevent creation of executable files outside approved directories"
+    enabled: true
+    action: deny
+    prompt: |-
+      ANALYZE: Does this operation create executable files?
+
+      Look for write/create operations with extensions: .exe, .bat, .cmd, .sh, .bash, .ps1
+      EXCEPT in approved directories: ./scripts/, ./bin/, ./dev/
+
+      Tool call: %s
+
+      Return ONLY JSON: { "allowed": true/false, "message": "brief explanation" }

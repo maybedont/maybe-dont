@@ -1,0 +1,28 @@
+# CEL Response Validation Rules
+#
+# These rules use CEL for deterministic response validation.
+# Response validation is disabled by default - enable in maybe-dont.yaml
+# if you need to filter or redact tool responses.
+#
+# Available variables:
+#   response.content    - Response content array
+#   response.isError    - Whether response is an error
+#
+# Actions:
+#   allow  - Allow the response
+#   deny   - Block the response entirely
+#   redact - Replace matching content with redaction_replacement
+
+rules:
+  # Example: Redact sensitive file content
+  # - name: redact-passwd-content
+  #   description: Redact content from /etc/passwd file responses
+  #   enabled: true
+  #   expression: |-
+  #     size(response.content) > 0 &&
+  #     response.content[0].type == "text" &&
+  #     response.content[0].text.contains("/etc/passwd")
+  #   action: redact
+  #   message: Sensitive system file content redacted
+  #   redaction_pattern: ".*"
+  #   redaction_replacement: "[REDACTED: System file content removed by policy]"

@@ -2065,3 +2065,222 @@ func TestConfigPathToEnvVar(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveConfigDir_XDGSupport tests XDG Base Directory support for config resolution
+func TestResolveConfigDir_XDGSupport(t *testing.T) {
+	// Save original env vars to restore after test
+	origXDGConfig := os.Getenv("XDG_CONFIG_HOME")
+	origHome := os.Getenv("HOME")
+	defer func() {
+		if origXDGConfig != "" {
+			_ = os.Setenv("XDG_CONFIG_HOME", origXDGConfig)
+		} else {
+			_ = os.Unsetenv("XDG_CONFIG_HOME")
+		}
+		if origHome != "" {
+			_ = os.Setenv("HOME", origHome)
+		}
+	}()
+
+	t.Run("CLI flag takes precedence over all", func(t *testing.T) {
+		_ = os.Setenv("XDG_CONFIG_HOME", "/should/be/ignored")
+		defer func() { _ = os.Unsetenv("XDG_CONFIG_HOME") }()
+
+		result, err := ResolveConfigDir("/explicit/path")
+		require.NoError(t, err)
+		require.Equal(t, "/explicit/path", result)
+	})
+
+	t.Run("XDG_CONFIG_HOME takes precedence when set", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+		defer func() { _ = os.Unsetenv("XDG_CONFIG_HOME") }()
+
+		result, err := ResolveConfigDir("")
+		require.NoError(t, err)
+		require.Equal(t, tmpDir+"/maybe-dont", result)
+
+		// Verify directory was created
+		info, err := os.Stat(result)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("falls back to HOME/.config/maybe-dont when XDG_CONFIG_HOME not set", func(t *testing.T) {
+		_ = os.Unsetenv("XDG_CONFIG_HOME")
+		tmpHome := t.TempDir()
+		_ = os.Setenv("HOME", tmpHome)
+
+		result, err := ResolveConfigDir("")
+		require.NoError(t, err)
+		require.Equal(t, tmpHome+"/.config/maybe-dont", result)
+
+		// Verify directory was created
+		info, err := os.Stat(result)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("returns error when no valid config directory found", func(t *testing.T) {
+		_ = os.Unsetenv("XDG_CONFIG_HOME")
+		_ = os.Setenv("HOME", "/nonexistent/readonly/path")
+
+		result, err := ResolveConfigDir("")
+		require.Error(t, err)
+		require.Empty(t, result)
+		require.Contains(t, err.Error(), "no config directory found")
+	})
+
+	t.Run("does not fall back to ./config - requires explicit flag", func(t *testing.T) {
+		_ = os.Unsetenv("XDG_CONFIG_HOME")
+		_ = os.Setenv("HOME", "/nonexistent/readonly/path")
+
+		// Create a temp directory with ./config inside it
+		tmpDir := t.TempDir()
+		oldWd, _ := os.Getwd()
+		_ = os.Chdir(tmpDir)
+		defer func() { _ = os.Chdir(oldWd) }()
+
+		_ = os.MkdirAll("./config", 0755)
+
+		// Should still fail - ./config is NOT a fallback
+		result, err := ResolveConfigDir("")
+		require.Error(t, err)
+		require.Empty(t, result)
+
+		// But if explicitly provided, it works
+		result, err = ResolveConfigDir("./config")
+		require.NoError(t, err)
+		require.Equal(t, "./config", result)
+	})
+
+	t.Run("directory created with 0700 permissions for security", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+		defer func() { _ = os.Unsetenv("XDG_CONFIG_HOME") }()
+
+		result, err := ResolveConfigDir("")
+		require.NoError(t, err)
+
+		info, err := os.Stat(result)
+		require.NoError(t, err)
+		// Check permissions (masking off type bits) - 0700 for security
+		require.Equal(t, os.FileMode(0700), info.Mode().Perm())
+	})
+}
+
+// TestResolveLogDir_XDGSupport tests XDG Base Directory support for log resolution
+func TestResolveLogDir_XDGSupport(t *testing.T) {
+	// Save original env vars to restore after test
+	origXDGState := os.Getenv("XDG_STATE_HOME")
+	origHome := os.Getenv("HOME")
+	defer func() {
+		if origXDGState != "" {
+			_ = os.Setenv("XDG_STATE_HOME", origXDGState)
+		} else {
+			_ = os.Unsetenv("XDG_STATE_HOME")
+		}
+		if origHome != "" {
+			_ = os.Setenv("HOME", origHome)
+		}
+	}()
+
+	t.Run("CLI flag takes precedence over all", func(t *testing.T) {
+		_ = os.Setenv("XDG_STATE_HOME", "/should/be/ignored")
+		defer func() { _ = os.Unsetenv("XDG_STATE_HOME") }()
+
+		result := ResolveLogDir("/explicit/path", "/some/config/dir")
+		require.Equal(t, "/explicit/path", result)
+	})
+
+	t.Run("XDG_STATE_HOME takes precedence when set", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		_ = os.Setenv("XDG_STATE_HOME", tmpDir)
+		defer func() { _ = os.Unsetenv("XDG_STATE_HOME") }()
+
+		result := ResolveLogDir("", "/some/config/dir")
+		require.Equal(t, tmpDir+"/maybe-dont", result)
+
+		// Verify directory was created
+		info, err := os.Stat(result)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("falls back to HOME/.local/state/maybe-dont when XDG_STATE_HOME not set", func(t *testing.T) {
+		_ = os.Unsetenv("XDG_STATE_HOME")
+		tmpHome := t.TempDir()
+		_ = os.Setenv("HOME", tmpHome)
+
+		result := ResolveLogDir("", "/some/config/dir")
+		require.Equal(t, tmpHome+"/.local/state/maybe-dont", result)
+
+		// Verify directory was created
+		info, err := os.Stat(result)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("configDir parameter no longer used for fallback", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		_ = os.Setenv("HOME", tmpHome)
+		_ = os.Unsetenv("XDG_STATE_HOME")
+
+		// configDir is passed but should be ignored
+		result := ResolveLogDir("", "/old/config/dir")
+
+		// Should use XDG default, not configDir/logs
+		require.Equal(t, tmpHome+"/.local/state/maybe-dont", result)
+		require.NotEqual(t, "/old/config/dir/logs", result)
+	})
+
+	t.Run("directory created with 0700 permissions for security", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		_ = os.Setenv("XDG_STATE_HOME", tmpDir)
+		defer func() { _ = os.Unsetenv("XDG_STATE_HOME") }()
+
+		result := ResolveLogDir("", "")
+
+		info, err := os.Stat(result)
+		require.NoError(t, err)
+		// 0700 for security - logs may contain sensitive data
+		require.Equal(t, os.FileMode(0700), info.Mode().Perm())
+	})
+}
+
+// TestEnsureDir tests the helper function for directory creation
+func TestEnsureDir(t *testing.T) {
+	t.Run("returns true when directory already exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		require.True(t, ensureDir(tmpDir))
+	})
+
+	t.Run("creates directory when it does not exist", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		newDir := tmpDir + "/new/nested/dir"
+
+		require.True(t, ensureDir(newDir))
+
+		info, err := os.Stat(newDir)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("returns false when directory cannot be created", func(t *testing.T) {
+		// Try to create a directory in a non-existent path
+		result := ensureDir("/nonexistent/readonly/system/path/test")
+		require.False(t, result)
+	})
+
+	t.Run("returns false for file path instead of directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := tmpDir + "/existingfile"
+
+		// Create a file at the path
+		err := os.WriteFile(filePath, []byte("test"), 0644)
+		require.NoError(t, err)
+
+		// ensureDir should return false since it's a file, not a directory
+		require.False(t, ensureDir(filePath))
+	})
+}

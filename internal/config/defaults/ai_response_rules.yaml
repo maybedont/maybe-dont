@@ -1,0 +1,58 @@
+# AI Response Validation Rules
+#
+# These rules use AI for context-aware response validation.
+# Response validation is disabled by default - enable in maybe-dont.yaml
+# if you need AI-powered filtering of tool responses.
+#
+# The %s placeholder is replaced with the response content.
+#
+# For redact actions, AI should return:
+#   { "allowed": true, "message": "...", "redacted_content": "sanitized version" }
+#
+# For deny actions, AI should return:
+#   { "allowed": false, "message": "explanation" }
+
+rules:
+  - name: "detect-credential-leakage"
+    description: "Detect if response contains credentials or secrets"
+    enabled: true
+    action: deny
+    prompt: |-
+      ANALYZE: Does this response contain credentials, API keys, passwords, or secrets?
+
+      Look for:
+      - API keys (alphanumeric tokens like sk-xxx, ghp_xxx)
+      - Passwords in config files or environment dumps
+      - Private keys or certificates
+      - Database connection strings with credentials
+
+      IMPORTANT: Variable REFERENCES like ${API_KEY} or $HOME are NOT secrets.
+      Only flag when actual VALUES are exposed.
+
+      Response content: %s
+
+      Return ONLY JSON: { "allowed": true/false, "message": "explanation" }
+    message: Credential leakage detected in response
+
+  - name: "detect-pii"
+    description: "Detect personally identifiable information in responses"
+    enabled: true
+    action: redact
+    prompt: |-
+      ANALYZE: Does this response contain PII?
+
+      Look for: email addresses, phone numbers, SSNs, physical addresses,
+      credit card numbers, or other identifying information.
+
+      Response content: %s
+
+      If PII found, return with redacted_content replacing PII with [PII_REDACTED].
+      If no PII, return { "allowed": true, "message": "No PII detected" }
+
+      Return ONLY JSON:
+      {
+        "allowed": true,
+        "message": "explanation",
+        "redacted_content": "sanitized version (only if PII found)"
+      }
+    message: PII detected and redacted from response

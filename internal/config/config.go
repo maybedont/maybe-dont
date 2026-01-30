@@ -899,43 +899,78 @@ func expandEnvironmentVariables(v reflect.Value) {
 	}
 }
 
-// ResolveConfigDir resolves the configuration directory with fallback logic.
-// Priority: 1) provided dir, 2) ./config (if exists), 3) $HOME/.maybe-dont/config (if exists), 4) current directory
-func ResolveConfigDir(configDir string) string {
+// ensureDir attempts to create a directory if it doesn't exist.
+// Returns true if the directory exists or was created successfully.
+// Uses 0700 permissions for security (config/state may contain sensitive data).
+func ensureDir(path string) bool {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return true
+	}
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return false
+	}
+	return true
+}
+
+// ResolveConfigDir resolves the configuration directory with XDG support.
+// Priority: CLI/env > XDG_CONFIG_HOME > $HOME/.config/maybe-dont
+// Returns the resolved path and an error if no valid config directory could be determined.
+func ResolveConfigDir(configDir string) (string, error) {
+	// Priority 1-2: CLI flag or env var takes precedence
 	if configDir != "" {
-		return configDir
+		return configDir, nil
 	}
 
-	// Check ./config first
-	if info, err := os.Stat("./config"); err == nil && info.IsDir() {
-		return "./config"
-	}
-
-	// Fall back to $HOME/.maybe-dont/config only if it exists
 	homeDir, err := os.UserHomeDir()
-	if err == nil {
-		homeCfgDir := filepath.Join(homeDir, ".maybe-dont", "config")
-		if info, err := os.Stat(homeCfgDir); err == nil && info.IsDir() {
-			return homeCfgDir
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	// Priority 3: XDG_CONFIG_HOME/maybe-dont
+	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+		xdgPath := filepath.Join(xdgConfig, "maybe-dont")
+		if ensureDir(xdgPath) {
+			return xdgPath, nil
 		}
 	}
 
-	// Last resort: current directory
-	return "."
+	// Priority 4: XDG default ($HOME/.config/maybe-dont)
+	xdgDefault := filepath.Join(homeDir, ".config", "maybe-dont")
+	if ensureDir(xdgDefault) {
+		return xdgDefault, nil
+	}
+
+	// No fallback - fail with clear error
+	return "", fmt.Errorf("no config directory found; set --config-dir, MAYBE_DONT_CONFIG_DIR, or create %s", xdgDefault)
 }
 
-// ResolveLogDir resolves the log directory.
-// If logDir is provided, it is used directly.
-// Otherwise, the log directory defaults to a "logs" subdirectory within the config directory.
-// For example, if configDir is "./config", log-dir defaults to "./config/logs".
-// If configDir is "$HOME/.maybe-dont", log-dir defaults to "$HOME/.maybe-dont/logs".
+// ResolveLogDir resolves the log directory with XDG support.
+// Priority: CLI/env > XDG_STATE_HOME > $HOME/.local/state/maybe-dont
+// The configDir parameter is kept for API compatibility but is no longer used for fallback.
 func ResolveLogDir(logDir, configDir string) string {
+	// Priority 1-2: CLI flag or env var takes precedence
 	if logDir != "" {
 		return logDir
 	}
 
-	// Default to logs subdirectory within config directory
-	return filepath.Join(configDir, "logs")
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		// Can't determine home dir - this is an edge case
+		// Return a path that will likely fail, letting the logger handle it
+		return filepath.Join(configDir, "logs")
+	}
+
+	// Priority 3: XDG_STATE_HOME/maybe-dont
+	if xdgState := os.Getenv("XDG_STATE_HOME"); xdgState != "" {
+		xdgPath := filepath.Join(xdgState, "maybe-dont")
+		_ = os.MkdirAll(xdgPath, 0700) // Best effort, 0700 for security
+		return xdgPath
+	}
+
+	// Priority 4: XDG default ($HOME/.local/state/maybe-dont)
+	xdgDefault := filepath.Join(homeDir, ".local", "state", "maybe-dont")
+	_ = os.MkdirAll(xdgDefault, 0700) // Best effort, 0700 for security
+	return xdgDefault
 }
 
 // LoadConfig loads the configuration from all sources.
@@ -960,7 +995,10 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	// Resolve config directory
-	resolvedConfigDir := ResolveConfigDir(configDir)
+	resolvedConfigDir, err := ResolveConfigDir(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve config directory: %w", err)
+	}
 
 	// Set config type
 	v.SetConfigType("yaml")

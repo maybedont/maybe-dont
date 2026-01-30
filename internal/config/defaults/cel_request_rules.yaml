@@ -1,0 +1,26 @@
+# CEL Request Validation Rules
+#
+# These rules use CEL (Common Expression Language) for deterministic,
+# high-performance request validation. CEL rules are evaluated before
+# AI rules and are ideal for exact pattern matching.
+#
+# Available variables:
+#   request.method    - MCP method (e.g., "tools/call")
+#   request.params    - Request parameters (map)
+#
+# Useful functions:
+#   get(map, key, default) - Safe map access with default value
+#   has(request.params.name) - Check if key exists
+#   string.contains("substr") - Substring check
+#   string.matches("regex") - Regex match
+
+rules:
+  # Example: Block specific dangerous tools
+  # - name: deny-dangerous-tool
+  #   description: Block access to a dangerous tool
+  #   enabled: true
+  #   expression: |-
+  #     get(request, "method", "") == "tools/call" &&
+  #     get(request.params, "name", "") == "dangerous_tool"
+  #   action: deny
+  #   message: Access to dangerous_tool is blocked by policy
