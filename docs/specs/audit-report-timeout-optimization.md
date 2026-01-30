@@ -142,7 +142,7 @@ func parseTimeout(value interface{}) (time.Duration, error) {
 
 **Recommendation:** Option A (integer with `_seconds` suffix) for consistency with the existing codebase. The codebase already uses `_ms` and `_seconds` suffixes consistently, and introducing a different pattern for one field would be inconsistent.
 
-**Default:** 120 seconds (increased from 60)
+**Default:** 180 seconds (increased from 60)
 
 **Validation:** 30-300 seconds (30s minimum to be useful, 5min maximum to avoid indefinite hangs)
 
@@ -151,6 +151,8 @@ func parseTimeout(value interface{}) (time.Duration, error) {
 timeout := time.Duration(h.config.NativeTools.AuditReport.TimeoutSeconds) * time.Second
 aiCtx, cancel := context.WithTimeout(ctx, timeout)
 ```
+
+**Status:** ✅ Implemented
 
 ### 2. Optimize Data Summary (Required)
 
@@ -381,22 +383,23 @@ Chunking would only make sense if:
 
 ### 5. Default Timeout Increase (Required)
 
-Change default from 60s to 120s:
+Change default from 60s to 180s:
 
 ```go
 // internal/config/config.go (in setDefaults or load function)
-if config.NativeTools.AuditReport.TimeoutSeconds == 0 {
-    config.NativeTools.AuditReport.TimeoutSeconds = 120
-}
+v.SetDefault("native_tools.audit_report.timeout_seconds", 180)
 ```
+
+**Status:** ✅ Implemented
 
 ## Implementation Checklist
 
 ### Phase 1: Timeout Configuration (Required)
-- [ ] Add `TimeoutSeconds` field to `AuditReport` config struct
-- [ ] Add default value (120 seconds) in config loading
-- [ ] Add validation for `TimeoutSeconds` (30-300 range)
-- [ ] Update `audit_report_tool.go` to use configurable timeout instead of hardcoded 60s
+- [x] Add `TimeoutSeconds` field to `AuditReport` config struct
+- [x] Add default value (180 seconds) in config loading
+- [x] Add validation for `TimeoutSeconds` (30-300 range)
+- [x] Update `audit_report_tool.go` to use configurable timeout instead of hardcoded 60s
+- [x] Add improved error logging with timeout vs API error distinction
 - [ ] Add unit tests for new config field loading and validation
 - [ ] Update example config file (`config/maybe-dont.yaml`)
 
@@ -423,7 +426,7 @@ native_tools:
   audit_report:
     enabled: true
     max_entries: 1000
-    timeout_seconds: 120  # NEW: default 120, range 30-300
+    timeout_seconds: 180  # default 180, range 30-300
     # max_samples_per_category: 5  # Optional, if implemented
 ```
 

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -114,6 +115,15 @@ func (h *NativeToolsHandler) handleGenerateAuditReport(ctx context.Context, req 
 			params.Format = format
 		}
 	}
+
+	// Log request parameters for debugging
+	h.logger.Debug(ctx, "Audit report request parameters",
+		zap.String("time_range", params.TimeRange),
+		zap.String("focus", params.Focus),
+		zap.String("format", params.Format),
+		zap.Bool("include_recommendations", params.IncludeRecommendations),
+		zap.Bool("include_impact_analysis", params.IncludeImpactAnalysis),
+	)
 
 	// Get audit log entries for analysis
 	entries, stats, err := h.getEntriesForReport(ctx, params.TimeRange)
@@ -304,6 +314,14 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 	// Build the user prompt
 	userPrompt := h.buildReportPrompt(entrySummary, params)
 
+	// Log request details for debugging
+	h.logger.Debug(ctx, "Preparing audit report AI request",
+		zap.String("time_range", params.TimeRange),
+		zap.Int("entry_count", len(entries)),
+		zap.Int("system_prompt_size", len(h.config.NativeTools.AuditReport.SystemPrompt)),
+		zap.Int("user_prompt_size", len(userPrompt)),
+	)
+
 	// Create OpenAI client
 	client := openai.NewClient(
 		option.WithAPIKey(h.config.Validation.AI.APIKey),
@@ -317,10 +335,12 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 		Strict:      openai.Bool(true),
 	}
 
-	// Call the AI
-	aiCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	// Call the AI with configurable timeout
+	timeout := time.Duration(h.config.NativeTools.AuditReport.TimeoutSeconds) * time.Second
+	aiCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	apiStart := time.Now()
 	chatCompletion, err := client.Chat.Completions.New(aiCtx, openai.ChatCompletionNewParams{
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			openai.SystemMessage(h.config.NativeTools.AuditReport.SystemPrompt),
@@ -333,9 +353,30 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 			},
 		},
 	})
+	apiDuration := time.Since(apiStart)
+
 	if err != nil {
+		// Distinguish between timeout and other errors for better debugging
+		if errors.Is(err, context.DeadlineExceeded) {
+			h.logger.Debug(ctx, "Audit report AI API call timed out",
+				zap.Duration("duration", apiDuration),
+				zap.Duration("timeout", timeout),
+				zap.Error(err),
+			)
+			return nil, fmt.Errorf("AI API call timed out after %v (consider increasing native_tools.audit_report.timeout_seconds or reducing time_range): %w", timeout, err)
+		}
+
+		// For OpenAI API errors, the error message includes status code and response body
+		h.logger.Debug(ctx, "Audit report AI API call failed",
+			zap.Duration("duration", apiDuration),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("AI API call failed: %w", err)
 	}
+
+	h.logger.Debug(ctx, "Audit report AI API call completed",
+		zap.Duration("duration", apiDuration),
+	)
 
 	if len(chatCompletion.Choices) == 0 {
 		return nil, fmt.Errorf("no response from AI model")

@@ -160,9 +160,10 @@ type Config struct {
 		} `mapstructure:"audit_log"`
 
 		AuditReport struct {
-			Enabled      bool   `mapstructure:"enabled"`
-			MaxEntries   int    `mapstructure:"max_entries"`
-			SystemPrompt string `mapstructure:"system_prompt"`
+			Enabled        bool   `mapstructure:"enabled"`
+			MaxEntries     int    `mapstructure:"max_entries"`
+			TimeoutSeconds int    `mapstructure:"timeout_seconds"` // Timeout for AI API call (default: 180, range: 30-300)
+			SystemPrompt   string `mapstructure:"system_prompt"`
 		} `mapstructure:"audit_report"`
 
 		ListServers struct {
@@ -1029,6 +1030,7 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("native_tools.list_sessions.enabled", true)
 	v.SetDefault("native_tools.audit_log.max_entries", 100)
 	v.SetDefault("native_tools.audit_report.max_entries", 1_000)
+	v.SetDefault("native_tools.audit_report.timeout_seconds", 180)
 	v.SetDefault("logger.path", "stderr")
 	v.SetDefault("logger.level", "info")
 	v.SetDefault("logger.rotation.max_size_mb", 100)
@@ -1445,6 +1447,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 	if cfg.NativeTools.AuditReport.Enabled {
 		validateRange(cfg.NativeTools.AuditReport.MaxEntries, 10, 2_000, "native_tools.audit_report.max_entries", &errors)
+		validateRange(cfg.NativeTools.AuditReport.TimeoutSeconds, 30, 300, "native_tools.audit_report.timeout_seconds", &errors)
 	}
 
 	// Validate logger.path - must be stdout, stderr, or a safe relative path

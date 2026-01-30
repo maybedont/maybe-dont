@@ -744,6 +744,7 @@ func TestViperConfigPathsMatchStruct(t *testing.T) {
 		"native_tools.list_sessions.enabled",
 		"native_tools.audit_log.max_entries",
 		"native_tools.audit_report.max_entries",
+		"native_tools.audit_report.timeout_seconds",
 		"logger.path",
 		"logger.level",
 		"logger.rotation.max_size_mb",
@@ -1666,9 +1667,10 @@ func createValidBaseConfig() *Config {
 				MaxEntries int  `mapstructure:"max_entries"`
 			} `mapstructure:"audit_log"`
 			AuditReport struct {
-				Enabled      bool   `mapstructure:"enabled"`
-				MaxEntries   int    `mapstructure:"max_entries"`
-				SystemPrompt string `mapstructure:"system_prompt"`
+				Enabled        bool   `mapstructure:"enabled"`
+				MaxEntries     int    `mapstructure:"max_entries"`
+				TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+				SystemPrompt   string `mapstructure:"system_prompt"`
 			} `mapstructure:"audit_report"`
 			ListServers struct {
 				Enabled bool `mapstructure:"enabled"`
@@ -1685,12 +1687,14 @@ func createValidBaseConfig() *Config {
 				MaxEntries: 100,
 			},
 			AuditReport: struct {
-				Enabled      bool   `mapstructure:"enabled"`
-				MaxEntries   int    `mapstructure:"max_entries"`
-				SystemPrompt string `mapstructure:"system_prompt"`
+				Enabled        bool   `mapstructure:"enabled"`
+				MaxEntries     int    `mapstructure:"max_entries"`
+				TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+				SystemPrompt   string `mapstructure:"system_prompt"`
 			}{
-				Enabled:    false,
-				MaxEntries: 1000,
+				Enabled:        false,
+				MaxEntries:     1000,
+				TimeoutSeconds: 180,
 			},
 		},
 	}
