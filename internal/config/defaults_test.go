@@ -136,7 +136,7 @@ func TestWriteDefaultsIfMissing_PartialRun(t *testing.T) {
 }
 
 func TestWriteDefaultsIfMissing_NonWritableDirectory(t *testing.T) {
-	// Test behavior when directory is not writable
+	// Test that write failures are non-fatal (allows env-var-only config with read-only mounts)
 	// Skip on systems where we can't reliably test this
 	if os.Getuid() == 0 {
 		t.Skip("Skipping permission test when running as root")
@@ -149,8 +149,10 @@ func TestWriteDefaultsIfMissing_NonWritableDirectory(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = os.Chmod(tmpDir, 0755) }() // Restore for cleanup
 
-	_, err = WriteDefaultsIfMissing(tmpDir)
-	require.Error(t, err, "Should fail when directory is not writable")
+	// Should succeed but create no files (non-fatal write failures)
+	created, err := WriteDefaultsIfMissing(tmpDir)
+	require.NoError(t, err, "Should not fail when directory is not writable - bootstrap is best-effort")
+	require.Empty(t, created, "Should not have created any files")
 }
 
 func TestDumpDefaults_OverwritesExisting(t *testing.T) {

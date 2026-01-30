@@ -45,6 +45,10 @@ func GetDefaultFiles() []DefaultFile {
 //
 // Files that already exist are NEVER overwritten - user customizations are preserved.
 // Each file written is printed to stdout so users know what was created.
+//
+// Write failures are non-fatal: if a file cannot be written (e.g., read-only filesystem),
+// bootstrap is skipped for that file. This allows the gateway to start when configuration
+// is provided entirely via environment variables with a read-only config directory.
 func WriteDefaultsIfMissing(configDir string) ([]string, error) {
 	var createdFiles []string
 
@@ -58,14 +62,17 @@ func WriteDefaultsIfMissing(configDir string) ([]string, error) {
 			// File exists, skip it
 			continue
 		} else if !os.IsNotExist(err) {
-			// Some other error (permission denied, etc.)
-			return createdFiles, fmt.Errorf("failed to check %s: %w", d.Filename, err)
+			// Some other error checking file status - skip this file
+			// This handles cases like permission denied on stat
+			continue
 		}
 
-		// File doesn't exist, write it
+		// File doesn't exist, try to write it
 		// Use 0600 for config files (may contain sensitive data like API keys)
 		if err := os.WriteFile(path, d.Content, 0600); err != nil {
-			return createdFiles, fmt.Errorf("failed to write %s: %w", d.Filename, err)
+			// Write failed (read-only filesystem, permissions, etc.)
+			// This is non-fatal - user may be configuring via env vars
+			continue
 		}
 
 		// Print to stdout so user knows what was created
