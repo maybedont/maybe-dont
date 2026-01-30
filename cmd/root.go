@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/maybedont/maybe-dont/internal/metrics"
@@ -50,6 +51,15 @@ logging, and gives you visibility into what AI agents are doing with your tools.
 			return fmt.Errorf("failed to resolve config directory: %w", err)
 		}
 
+		// Resolve config file name from CLI flag or environment variable
+		resolvedCfgFileName := cfgFileName
+		if resolvedCfgFileName == "" {
+			resolvedCfgFileName = os.Getenv("MAYBE_DONT_CONFIG_FILE_NAME")
+		}
+		if resolvedCfgFileName == "" {
+			resolvedCfgFileName = "maybe-dont.yaml"
+		}
+
 		// Write default config files if they don't exist (first-run bootstrap)
 		createdFiles, err := config.WriteDefaultsIfMissing(resolvedCfgDir)
 		if err != nil {
@@ -58,7 +68,7 @@ logging, and gives you visibility into what AI agents are doing with your tools.
 		if len(createdFiles) > 0 {
 			fmt.Printf("Configuration initialized at %s\n", resolvedCfgDir)
 		} else {
-			fmt.Printf("Using configuration from %s\n", resolvedCfgDir)
+			fmt.Printf("Using configuration %s\n", filepath.Join(resolvedCfgDir, resolvedCfgFileName))
 		}
 
 		// Resolve log directory from CLI flag or environment variable
@@ -70,12 +80,6 @@ logging, and gives you visibility into what AI agents are doing with your tools.
 		ResolvedLogDir, err = config.ResolveLogDir(ResolvedLogDir)
 		if err != nil {
 			return fmt.Errorf("failed to resolve log directory: %w", err)
-		}
-
-		// Resolve config file name from CLI flag or environment variable
-		resolvedCfgFileName := cfgFileName
-		if resolvedCfgFileName == "" {
-			resolvedCfgFileName = os.Getenv("MAYBE_DONT_CONFIG_FILE_NAME")
 		}
 
 		cfg, err = config.LoadConfig(resolvedCfgDir, resolvedCfgFileName)
