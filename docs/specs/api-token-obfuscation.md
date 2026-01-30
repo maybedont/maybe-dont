@@ -18,33 +18,33 @@ This results in the token being stored as a plain string literal in the binary, 
 strings maybe-dont | grep -i "token\|key\|api"
 ```
 
-## Recommended Solution: garble with -literals
+## Recommended Solution: Proxy Architecture (Remove Embedded Key)
 
-Use [garble](https://github.com/burrowers/garble) as a drop-in replacement for `go build` in release builds. Garble obfuscates Go binaries including string literals when the `-literals` flag is used.
+> **Note**: Garble obfuscation was previously considered and implemented, but has been removed due to build performance impact and debugging concerns. See "Historical Note" section for details.
 
-### Implementation
+The recommended long-term solution is to **remove the embedded API key entirely** and use a proxy-based authentication pattern. This approach:
 
-Update the Makefile to use garble for release builds:
+1. Eliminates the need for obfuscation
+2. Solves the key rotation problem for on-premise deployments
+3. Provides revocation capability per-build
+4. Enables better audit trails
+
+See "Proxy-Based Authentication" section below for the full design.
+
+### Previous Approach: garble with -literals (Deprioritized)
+
+Garble was previously used as a drop-in replacement for `go build` to obfuscate string literals:
 
 ```makefile
-# Development build (no obfuscation)
-build:
-	$(GO) build -ldflags "..." -o $(BINARY_NAME) ./
-
-# Release build (with obfuscation)
+# This approach was implemented and later removed
 build-release:
-	garble -literals build -ldflags "..." -o $(BINARY_NAME) ./
+	garble -literals -tiny -seed=random build -ldflags "..." -o $(BINARY_NAME) ./
 ```
 
-Update `.goreleaser.yaml` to use garble:
-
-```yaml
-builds:
-  - gobinary: garble
-    ldflags:
-      - -literals
-      # ... existing ldflags
-```
+This was removed in commit `2ed3419` due to:
+- ~2x build time overhead
+- Required `large` CI runner
+- `-tiny` flag made production debugging difficult (silent panics)
 
 ## Trade-off Analysis
 
@@ -54,15 +54,24 @@ builds:
 |----------|----------------------|------------------|----------------|-------|
 | Plain ldflags | Trivial | None | None | Current approach |
 | XOR obfuscation | Moderate | Low | Negligible | Custom encode/decode logic |
-| **garble -literals** | High | Low | <5% | **Recommended** |
-| Runtime fetch | Very High | High | Network dependent | Changes deployment model |
+| garble -literals | High | Moderate | <5% | Was implemented, removed due to build perf |
+| **Proxy architecture** | Very High | High | Network dependent | **Recommended** - eliminates embedded key |
 
-### Why garble?
+### Why Proxy Architecture?
 
-1. **Drop-in replacement** - Minimal changes to build process
-2. **Comprehensive** - Obfuscates identifiers, paths, and literals
-3. **Maintained** - Active development, supports latest Go versions
-4. **Build cache support** - Incremental builds remain fast
+1. **Eliminates the root problem** - No embedded key to protect
+2. **Key rotation independence** - Backend changes don't affect clients
+3. **Revocation capability** - Can blocklist specific builds
+4. **Audit trail** - Know which versions are actively reporting
+
+### Why Not Garble? (Lessons Learned)
+
+Garble was implemented and later removed:
+
+1. **Build performance** - ~2x slower builds, required `large` CI runner
+2. **Debugging impact** - `-tiny` flag caused silent panics without stack traces
+3. **Doesn't solve key rotation** - Embedded key still can't be rotated without new builds
+4. **Security through obscurity** - Determined attackers can still extract
 
 ## garble Impact Analysis
 
@@ -266,12 +275,12 @@ This is security through obscurity combined with practical access control. The g
 
 ### Implementation Phases
 
-**Phase 1: Obfuscation (Short-term)**
-- Implement garble for release builds
-- Provides immediate protection against casual extraction
-- No infrastructure changes required
+**~~Phase 1: Obfuscation (Short-term)~~** - Deprioritized
+- ~~Implement garble for release builds~~
+- Was implemented and removed due to build performance impact
+- See "Historical Note" section below for details
 
-**Phase 2: Proxy Architecture (Medium-term)**
+**Phase 2: Proxy Architecture (Medium-term)** - Recommended Next Step
 - Deploy metrics proxy service
 - Implement hash-based client identification
 - Update client to use proxy with obfuscated protocol
@@ -282,17 +291,59 @@ This is security through obscurity combined with practical access control. The g
 - Implement timestamp-based replay prevention
 - Consider certificate pinning for proxy connection
 
+## Historical Note: Garble Was Implemented and Removed
+
+Garble was previously implemented in this project and subsequently removed. The commit history shows:
+
+| Commit | Date | Description |
+|--------|------|-------------|
+| `cd82aac` | Nov 2, 2025 | Added garble to CI |
+| `3007c0a` | Nov 3, 2025 | Fixed garble to work without const (refactored metrics config passing) |
+| `2ed3419` | Nov 16, 2025 | **Removed garble** - "fix: speed up build by removing garble" |
+
+### Configuration That Was Removed
+
+```yaml
+# .goreleaser.yaml (removed)
+builds:
+  - tool: garble
+    command: "-literals"
+    flags: [ "-tiny", "-seed=random", "build"]
+```
+
+The build was also downgraded from `runs-on: large` to `runs-on: ubuntu-latest`, indicating garble's resource requirements were significant.
+
+### Why It Was Removed
+
+The stated reason was **build performance**. However, the `-tiny` flag also had debugging implications:
+- Panics exit silently without stack traces
+- Source positions removed from binary
+- Makes production debugging significantly harder
+
+### Recommendation Going Forward
+
+Rather than re-adding garble for API key obfuscation, the longer-term solution is to:
+
+1. **Remove the embedded API key entirely**
+2. **Implement Phase 2 (Proxy Architecture)** as described above
+3. This eliminates the need for obfuscation and solves the key rotation problem
+
+If garble is reconsidered in the future for other reasons:
+- Avoid `-tiny` flag to preserve debuggability
+- Consider whether `-literals` overhead is acceptable
+- Ensure CI has adequate resources (previously required `large` runner)
+
 ## Implementation Checklist
 
-### Phase 1: Obfuscation
+### ~~Phase 1: Obfuscation~~ (Deprioritized)
 
-- [ ] Install garble: `go install mvdan.cc/garble@latest`
-- [ ] Add `build-release` target to Makefile using garble
-- [ ] Update `.goreleaser.yaml` to use garble for releases
-- [ ] Document seed storage process for stack trace reversal
-- [ ] Update CI to cache garble build artifacts
-- [ ] Verify timezone loading still works (if applicable)
-- [ ] Benchmark runtime performance with `-literals`
+Garble obfuscation has been deprioritized in favor of moving directly to the proxy architecture, which eliminates the need for embedded API keys entirely.
+
+- [x] ~~Install garble~~ (was implemented, then removed)
+- [x] ~~Add build target using garble~~ (was implemented, then removed)
+- [x] ~~Update `.goreleaser.yaml`~~ (was implemented, then removed)
+- [ ] ~~Document seed storage process~~ (not needed if not using garble)
+- [ ] ~~Benchmark runtime performance~~ (not needed if not using garble)
 
 ### Phase 2: Proxy Architecture
 
