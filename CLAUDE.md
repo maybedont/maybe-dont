@@ -408,8 +408,8 @@ The following anonymized metrics are collected:
 
 ### How It Works
 
-- Metrics are stored locally in `~/.maybe-dont/.maybedont-metrics` (or `./.maybedont-metrics` if home directory is unavailable)
-- Metrics are reported once per day (24-hour interval) to Axiom if configured
+- Metrics state files (`installation-id`, `metrics-state`) are stored in `XDG_STATE_HOME/maybe-dont` (default: `~/.local/state/maybe-dont`)
+- Metrics are reported once per day (24-hour interval) to Axiom
 - Reporting is done via HTTPS POST to `https://api.axiom.co/v1/datasets/{dataset_name}/ingest`
 - The gateway continues to function normally even if metrics reporting fails
 
@@ -429,7 +429,9 @@ When opted out:
 
 ### Configuration
 
-Metrics configuration is built into the binary at compile time and cannot be modified by users. This ensures consistent metrics collection across all installations.
+Metrics configuration (Axiom dataset and API token) is built into the binary at compile time. This means:
+- **Release builds**: Metrics collection is enabled by default (installation ID created on first run)
+- **Development builds**: Metrics collection is disabled (no installation ID created) unless you build with `-ldflags "-X main.metricsDataset=... -X main.metricsAPIToken=..."`
 
 ## Environment Variable Substitution
 
