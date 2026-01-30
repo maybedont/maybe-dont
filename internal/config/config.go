@@ -1317,7 +1317,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 	// Validate client configuration
 	if len(cfg.DownstreamMCPServers) == 0 {
-		errors = append(errors, "at least one downstream MCP server must be configured")
+		errors = append(errors, configError("downstream_mcp_servers", "at least one downstream MCP server must be configured"))
 	}
 
 	// Validate each client in the map

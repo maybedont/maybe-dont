@@ -14,15 +14,15 @@ import (
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Launch the MCP security gateway server",
-	Long: `Start the MCP security gateway server with the configured settings.
-The server will listen for MCP client connections and forward them to the configured downstream server.`,
+	Short: "Start the MCP gateway server",
+	Long: `Start the MCP gateway server with the configured settings.
+The server will listen for MCP client connections and forward them to the configured downstream servers.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Create context for graceful shutdown
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		Logger.Info(ctx, "Starting MCP security gateway")
+		Logger.Info(ctx, "Starting MCP gateway")
 
 		// Increment gateway starts metric and report immediately
 		if MetricsCollector != nil {

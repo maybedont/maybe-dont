@@ -60,5 +60,5 @@ func TestDefaultsExportCommand_OverwritesExisting(t *testing.T) {
 	content, err := os.ReadFile(existingPath)
 	require.NoError(t, err)
 	require.NotEqual(t, customContent, string(content), "File should be overwritten")
-	require.Contains(t, string(content), "MCP Security Gateway", "Should contain default content")
+	require.Contains(t, string(content), "Maybe Don't AI", "Should contain default content")
 }

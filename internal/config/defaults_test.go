@@ -171,7 +171,7 @@ func TestDumpDefaults_OverwritesExisting(t *testing.T) {
 	content, err := os.ReadFile(existingPath)
 	require.NoError(t, err)
 	require.NotEqual(t, existingContent, string(content), "DumpDefaults should overwrite existing files")
-	require.Contains(t, string(content), "MCP Security Gateway Configuration",
+	require.Contains(t, string(content), "Maybe Don't AI Configuration",
 		"Should contain default config content")
 }
 
