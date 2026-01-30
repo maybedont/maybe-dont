@@ -162,7 +162,10 @@ The gateway exposes a native MCP tool that the CLI wrapper calls to validate com
 ```json
 {
   "name": "maybedont__validate_cli",
-  "description": "Validates a CLI command against security policies before execution",
+  "description": "[EXPERIMENTAL] Validates a CLI command against security policies before execution",
+  "annotations": {
+    "readOnlyHint": true
+  },
   "inputSchema": {
     "type": "object",
     "properties": {
