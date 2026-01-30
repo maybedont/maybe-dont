@@ -13,7 +13,6 @@ import (
 
 var (
 	cfgDir           string
-	cfgPath          string // Deprecated: use cfgDir instead
 	logDir           string
 	cfgFileName      string
 	cfg              *config.Config
@@ -42,15 +41,9 @@ and providing comprehensive audit logging.`,
 		var err error
 
 		// Resolve config directory from CLI flag or environment variable
-		// Falls back to deprecated --config-path for backwards compatibility
 		resolvedCfgDir := cfgDir
 		if resolvedCfgDir == "" {
 			resolvedCfgDir = os.Getenv("MAYBE_DONT_CONFIG_DIR")
-		}
-		if resolvedCfgDir == "" && cfgPath != "" {
-			// Backwards compatibility: use deprecated --config-path
-			// Note: Cobra already prints a deprecation warning via MarkDeprecated
-			resolvedCfgDir = cfgPath
 		}
 		// Apply fallback logic for config directory
 		resolvedCfgDir = config.ResolveConfigDir(resolvedCfgDir)
@@ -133,8 +126,4 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgDir, "config-dir", "", "Config directory (env: MAYBE_DONT_CONFIG_DIR, default: ./config or $HOME/.maybe-dont/config)")
 	rootCmd.PersistentFlags().StringVar(&logDir, "log-dir", "", "Log directory (env: MAYBE_DONT_LOG_DIR, default: <config-dir>/logs)")
 	rootCmd.PersistentFlags().StringVar(&cfgFileName, "config-file-name", "", "Config file name (env: MAYBE_DONT_CONFIG_FILE_NAME, default: maybe-dont.yaml)")
-
-	// Deprecated flags for backwards compatibility
-	rootCmd.PersistentFlags().StringVar(&cfgPath, "config-path", "", "Deprecated: use --config-dir instead")
-	_ = rootCmd.PersistentFlags().MarkDeprecated("config-path", "use --config-dir instead")
 }

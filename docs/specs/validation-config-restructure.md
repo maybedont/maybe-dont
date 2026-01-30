@@ -176,7 +176,7 @@ No code changes needed for env var handling - the existing `applyEnvironmentOver
 ### 2. `docs/specs/`
 - Review and update any specs that reference config structure
 
-### 3. `config/maybedont.yaml`
+### 3. `config/maybe-dont.yaml`
 - Update to new structure with comments
 
 ### 4. Example rules files
@@ -260,7 +260,7 @@ No backwards compatibility layer will be provided - this is a clean break.
 - [x] Update `internal/gateway/response_validation.go`
 - [x] Update `internal/config/config_test.go`
 - [x] Update gateway test files
-- [x] Update `config/maybedont.yaml`
+- [x] Update `config/maybe-dont.yaml`
 - [x] Update `CLAUDE.md`
 - [x] Review and update specs in `docs/specs/`
 - [x] Run `make test` and fix any failures

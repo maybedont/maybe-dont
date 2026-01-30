@@ -943,7 +943,7 @@ func ResolveLogDir(logDir, configDir string) string {
 // configFileName: name of config file (defaults to "maybe-dont.yaml", falls back to deprecated names)
 //
 // Configuration can be provided via:
-// 1. A YAML config file (maybe-dont.yaml, or deprecated: maybedont.yaml, gateway-config.yaml)
+// 1. A YAML config file (maybe-dont.yaml)
 // 2. Environment variables with MAYBE_DONT_ prefix (e.g., MAYBE_DONT_SERVER_TYPE)
 // 3. A combination of both (environment variables override config file values)
 //
@@ -1001,7 +1001,7 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("response_validation.ai.enabled", false)
 	v.SetDefault("response_validation.ai.mode", "audit_only")
 
-	// Try to find config file with fallback logic
+	// Try to find config file
 	configFileFound := false
 
 	if configFileName != "" {
@@ -1013,24 +1013,10 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 			configFileFound = true
 		}
 	} else {
-		// Try maybe-dont.yaml first, then fall back to deprecated names
+		// Look for maybe-dont.yaml
 		v.SetConfigName("maybe-dont")
 		if err := v.ReadInConfig(); err == nil {
 			configFileFound = true
-		} else {
-			// Fall back to deprecated config file - maybedont.yaml
-			v.SetConfigName("maybedont")
-			if err := v.ReadInConfig(); err == nil {
-				configFileFound = true
-				fmt.Printf("Filename maybedont.yaml is deprecated, rename config file to maybe-dont.yaml\n")
-			} else {
-				// Fall back to deprecated config file - gateway-config.yaml
-				v.SetConfigName("gateway-config")
-				if err := v.ReadInConfig(); err == nil {
-					configFileFound = true
-					fmt.Printf("Filename gateway-config.yaml is deprecated, rename config file to maybe-dont.yaml\n")
-				}
-			}
 		}
 	}
 

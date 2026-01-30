@@ -63,7 +63,7 @@ The gateway supports multiple MCP transport types per client:
 
 ### Configuration Hierarchy
 Configuration is loaded in this order (later overrides earlier):
-1. YAML config file (`maybe-dont.yaml`, with fallback to deprecated `maybedont.yaml` and `gateway-config.yaml`)
+1. YAML config file (`maybe-dont.yaml`)
 2. Environment variables (prefix: `MAYBE_DONT_`)
 3. Command-line flags
 

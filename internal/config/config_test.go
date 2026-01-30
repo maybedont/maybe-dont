@@ -371,7 +371,7 @@ func TestLoadConfigWithEnvironmentVariableOverride(t *testing.T) {
 
 	// Create a temporary directory and config file
 	tmpDir := t.TempDir()
-	configPath := tmpDir + "/gateway-config.yaml"
+	configPath := tmpDir + "/maybe-dont.yaml"
 
 	// Create a minimal config file without API key
 	configContent := `
