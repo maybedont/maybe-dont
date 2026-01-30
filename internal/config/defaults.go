@@ -64,6 +64,7 @@ func WriteDefaultsIfMissing(configDir string) ([]string, error) {
 		} else if !os.IsNotExist(err) {
 			// Some other error checking file status - skip this file
 			// This handles cases like permission denied on stat
+			_, _ = fmt.Fprintf(os.Stderr, "Note: Skipping default %s (cannot check if file exists: %v). Continuing without it.\n", d.Filename, err)
 			continue
 		}
 
@@ -72,6 +73,7 @@ func WriteDefaultsIfMissing(configDir string) ([]string, error) {
 		if err := os.WriteFile(path, d.Content, 0600); err != nil {
 			// Write failed (read-only filesystem, permissions, etc.)
 			// This is non-fatal - user may be configuring via env vars
+			_, _ = fmt.Fprintf(os.Stderr, "Note: Skipping default %s (cannot write: %v). This is optional if configuring via environment variables.\n", d.Filename, err)
 			continue
 		}
 
