@@ -5,7 +5,7 @@ rules:
   # Example: Detect and redact PII in responses
   - name: detect-pii-in-response
     description: Detect and redact personally identifiable information in responses
-    enabled: true
+    enabled: false
     action: redact
     prompt: |-
       ANALYZE: Does this response contain PII (personally identifiable information)?
