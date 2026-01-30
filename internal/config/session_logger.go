@@ -12,10 +12,12 @@ type ContextKey string
 const (
 	// RequestIDKey is the context key for request IDs
 	RequestIDKey ContextKey = "request_id"
+	// SessionIDKey is the context key for session IDs
+	SessionIDKey ContextKey = "session_id"
 )
 
-// SessionLogger wraps a zap.Logger and automatically includes request_id from context in all log calls.
-// If no request_id exists in the context, it will use "-".
+// SessionLogger wraps a zap.Logger and automatically includes request_id and session_id from context in all log calls.
+// If no request_id or session_id exists in the context, it will use "-".
 type SessionLogger struct {
 	logger *zap.Logger
 }
@@ -36,31 +38,46 @@ func (l *SessionLogger) extractRequestID(ctx context.Context) string {
 	return "-"
 }
 
-// Debug logs a debug message with request_id automatically included.
+// extractSessionID extracts the session ID from the context, returning "-" if not present.
+func (l *SessionLogger) extractSessionID(ctx context.Context) string {
+	if ctx == nil {
+		return "-"
+	}
+	if sessionID, ok := ctx.Value(SessionIDKey).(string); ok {
+		return sessionID
+	}
+	return "-"
+}
+
+// Debug logs a debug message with request_id and session_id automatically included.
 func (l *SessionLogger) Debug(ctx context.Context, msg string, fields ...zap.Field) {
 	requestID := l.extractRequestID(ctx)
-	allFields := append([]zap.Field{zap.String("request_id", requestID)}, fields...)
+	sessionID := l.extractSessionID(ctx)
+	allFields := append([]zap.Field{zap.String("request_id", requestID), zap.String("session_id", sessionID)}, fields...)
 	l.logger.Debug(msg, allFields...)
 }
 
-// Info logs an info message with request_id automatically included.
+// Info logs an info message with request_id and session_id automatically included.
 func (l *SessionLogger) Info(ctx context.Context, msg string, fields ...zap.Field) {
 	requestID := l.extractRequestID(ctx)
-	allFields := append([]zap.Field{zap.String("request_id", requestID)}, fields...)
+	sessionID := l.extractSessionID(ctx)
+	allFields := append([]zap.Field{zap.String("request_id", requestID), zap.String("session_id", sessionID)}, fields...)
 	l.logger.Info(msg, allFields...)
 }
 
-// Warn logs a warning message with request_id automatically included.
+// Warn logs a warning message with request_id and session_id automatically included.
 func (l *SessionLogger) Warn(ctx context.Context, msg string, fields ...zap.Field) {
 	requestID := l.extractRequestID(ctx)
-	allFields := append([]zap.Field{zap.String("request_id", requestID)}, fields...)
+	sessionID := l.extractSessionID(ctx)
+	allFields := append([]zap.Field{zap.String("request_id", requestID), zap.String("session_id", sessionID)}, fields...)
 	l.logger.Warn(msg, allFields...)
 }
 
-// Error logs an error message with request_id automatically included.
+// Error logs an error message with request_id and session_id automatically included.
 func (l *SessionLogger) Error(ctx context.Context, msg string, fields ...zap.Field) {
 	requestID := l.extractRequestID(ctx)
-	allFields := append([]zap.Field{zap.String("request_id", requestID)}, fields...)
+	sessionID := l.extractSessionID(ctx)
+	allFields := append([]zap.Field{zap.String("request_id", requestID), zap.String("session_id", sessionID)}, fields...)
 	l.logger.Error(msg, allFields...)
 }
 

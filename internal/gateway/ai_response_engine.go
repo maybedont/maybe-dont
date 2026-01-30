@@ -307,8 +307,22 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 
 		completionChan := make(chan AsyncCompletion, 1)
 
+		// Extract request_id and session_id for async logging (original ctx may be cancelled)
+		requestID := "-"
+		if rid, ok := ctx.Value(config.RequestIDKey).(string); ok {
+			requestID = rid
+		}
+		sessionID := "-"
+		if sid, ok := ctx.Value(config.SessionIDKey).(string); ok {
+			sessionID = sid
+		}
+
 		go func() {
 			defer close(completionChan)
+
+			// Create a context with request_id and session_id for async logging
+			asyncCtx := context.WithValue(context.Background(), config.RequestIDKey, requestID)
+			asyncCtx = context.WithValue(asyncCtx, config.SessionIDKey, sessionID)
 
 			auditResults := make([]AuditAIRuleResult, 0, len(e.policies))
 			for i := 0; i < len(e.policies); i++ {
@@ -327,7 +341,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 
 				// Log successful results (errors are logged at ERROR level elsewhere)
 				if result.err == nil {
-					e.logger.Debug(context.Background(), "AI response policy evaluation result (async)",
+					e.logger.Debug(asyncCtx, "AI response policy evaluation result (async)",
 						zap.String("rule", result.policy.Name),
 						zap.String("action", string(result.policy.Action)),
 						zap.String("result", result.result),
@@ -353,7 +367,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				EvaluationMs: evaluationMs,
 			}
 
-			e.logger.Debug(context.Background(), "Response evaluation complete (async)",
+			e.logger.Debug(asyncCtx, "Response evaluation complete (async)",
 				zap.Bool("allowed", true),
 				zap.Int64("blocked_ms", int64(0)),
 				zap.Int64("evaluation_ms", evaluationMs),
@@ -406,8 +420,22 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					capturedBlockedMs, _ = phaseTracker.Finalize()
 				}
 
+				// Extract request_id and session_id for async logging (original ctx may be cancelled)
+				requestID := "-"
+				if rid, ok := ctx.Value(config.RequestIDKey).(string); ok {
+					requestID = rid
+				}
+				sessionID := "-"
+				if sid, ok := ctx.Value(config.SessionIDKey).(string); ok {
+					sessionID = sid
+				}
+
 				go func() {
 					defer close(completionChan)
+
+					// Create a context with request_id and session_id for async logging
+					asyncCtx := context.WithValue(context.Background(), config.RequestIDKey, requestID)
+					asyncCtx = context.WithValue(asyncCtx, config.SessionIDKey, sessionID)
 
 					asyncResults := capturedResults
 					for i := 0; i < capturedRemaining; i++ {
@@ -428,7 +456,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 
 						// Log successful results (errors are logged at ERROR level elsewhere)
 						if result.err == nil {
-							e.logger.Debug(context.Background(), "AI response policy evaluation result (async continuation)",
+							e.logger.Debug(asyncCtx, "AI response policy evaluation result (async continuation)",
 								zap.String("rule", result.policy.Name),
 								zap.String("result", result.result),
 								zap.Int64("evaluation_ms", result.evaluationMs),

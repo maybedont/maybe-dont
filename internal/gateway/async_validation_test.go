@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -611,4 +613,162 @@ func TestAsyncValidation_WriteAuditLogBehavior(t *testing.T) {
 	assert.NotNil(t, entry.RequestValidation.CEL, "Should have CEL results")
 	assert.NotNil(t, entry.RequestValidation.AI, "Should have AI results from async completion")
 	assert.Len(t, entry.RequestValidation.AI.Results, 1)
+}
+
+// TestAsyncValidation_AllAuditOnlyWritesAuditLog is an end-to-end integration test
+// that verifies when ALL policies (both CEL and AI) are set to audit_only mode,
+// the audit log entry is still written to the file with complete results.
+// This test was added to verify the fix for a bug where audit logs were not written
+// when all policies were audit_only.
+func TestAsyncValidation_AllAuditOnlyWritesAuditLog(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	// Create a temporary file for audit log
+	tmpDir := t.TempDir()
+	auditPath := tmpDir + "/audit.log"
+
+	// Create audit writer
+	auditWriter, err := NewJSONLAuditWriter(auditPath, "", config.RotationConfig{
+		MaxSizeMB:  10,
+		MaxBackups: 3,
+		MaxAgeDays: 7,
+		Compress:   false,
+	}, "all")
+	require.NoError(t, err)
+	defer func() { _ = auditWriter.Close() }()
+
+	// Create CEL engine with audit_only policy
+	celEngine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:       "cel_audit_policy",
+			Expression: "true", // Always matches
+			Action:     config.PolicyActionDeny,
+			Mode:       config.PolicyModeAuditOnly, // audit_only - should not block
+		},
+	}, config.PolicyModeAuditOnly) // Default mode is also audit_only
+	require.NoError(t, err)
+
+	// Create AI engine with audit_only policy
+	mockClient := NewMockAIClient()
+	mockClient.DefaultDelay = 50 * time.Millisecond // Short delay for test speed
+	mockClient.DefaultResponse = AIResponse{Allowed: false, Message: "Would deny"} // AI says deny
+
+	aiEngine := &AIPolicyEngine{
+		apiKey:              "test-key",
+		model:               "gpt-4o-mini",
+		maxRuleEvaluationMs: 30000,
+		client:              mockClient,
+	}
+	err = InitAIPolicyEngine(sessionLogger, aiEngine)
+	require.NoError(t, err)
+	err = aiEngine.LoadPolicies([]config.AIPolicy{
+		{
+			Name:   "ai_audit_policy",
+			Prompt: "Check security: %s",
+			Action: config.PolicyActionDeny,
+			Mode:   config.PolicyModeAuditOnly, // audit_only - should not block
+		},
+	}, config.PolicyModeAuditOnly) // Default mode is also audit_only
+	require.NoError(t, err)
+
+	// Create handlers and chain
+	celHandler := NewToolCELValidationHandler(sessionLogger, celEngine)
+	aiHandler := NewToolAIValidationHandler(sessionLogger, aiEngine)
+	chain := NewToolValidationChain(celHandler, aiHandler)
+
+	// Create blocking budget
+	budget := NewBlockingBudget(90000)
+	ctx := WithBlockingBudget(context.Background(), budget)
+
+	// Create audit context
+	audit := NewAuditContext("client__test_tool", "client", "test_tool", "session-123", "1.2.3.4", "req-123")
+
+	// Handle through the chain
+	results, err := chain.Handle(ctx, createTestToolRequest("test_tool"))
+	require.NoError(t, err)
+
+	// Should be allowed despite both policies saying deny (because audit_only)
+	assert.True(t, results.Allowed, "Should be allowed - all policies are audit_only")
+
+	// Populate audit context (same logic as gateway.populateRequestValidationAudit)
+	if results.RulesDetails != nil {
+		audit.SetRequestValidationRules(results.RulesDetails)
+	}
+	if results.AIDetails != nil {
+		audit.SetRequestValidationAI(results.AIDetails)
+	}
+	if results.AsyncCompletion != nil {
+		audit.SetRequestAIResultsAsync(results.AsyncCompletion)
+	}
+
+	// Set actions (simulating gateway behavior)
+	audit.SetActions("deny", "allow", ActionReasonAuditMode)
+
+	// CRITICAL: Verify HasAsyncWork returns true
+	assert.True(t, audit.HasAsyncWork(), "HasAsyncWork MUST return true when AsyncCompletion is set")
+
+	// Write audit log using the async path (same as gateway)
+	var entry *AuditEntry
+	if audit.HasAsyncWork() {
+		// This is the async path - wait for completion then write
+		entry = audit.FinalizeAsync()
+	} else {
+		t.Fatal("HasAsyncWork returned false - this is the bug we're testing for!")
+	}
+
+	// Write the entry
+	written, err := auditWriter.Write(entry)
+	require.NoError(t, err)
+	assert.True(t, written, "Audit entry should have been written")
+
+	// Read and verify the audit log file
+	content, err := os.ReadFile(auditPath)
+	require.NoError(t, err)
+
+	contentStr := string(content)
+	t.Logf("Audit log content:\n%s", contentStr)
+
+	// Verify the file is not empty
+	assert.NotEmpty(t, contentStr, "Audit log file should not be empty")
+
+	// Verify CEL results are present
+	assert.Contains(t, contentStr, `"cel"`, "Audit log should contain CEL results")
+	assert.Contains(t, contentStr, `"cel_audit_policy"`, "Audit log should contain CEL policy name")
+
+	// Verify AI results are present
+	assert.Contains(t, contentStr, `"ai"`, "Audit log should contain AI results")
+	assert.Contains(t, contentStr, `"ai_audit_policy"`, "Audit log should contain AI policy name")
+
+	// Verify audit_only mode is recorded
+	assert.Contains(t, contentStr, `"mode":"audit_only"`, "Audit log should record audit_only mode")
+
+	// Verify actions are correct
+	assert.Contains(t, contentStr, `"recommended_action":"deny"`, "Recommended action should be deny")
+	assert.Contains(t, contentStr, `"action":"allow"`, "Actual action should be allow")
+	assert.Contains(t, contentStr, `"action_reason":"audit_mode"`, "Action reason should be audit_mode")
+
+	// Parse and verify the JSON structure
+	var auditEntry AuditEntry
+	err = json.Unmarshal(content, &auditEntry)
+	require.NoError(t, err, "Audit log should be valid JSON")
+
+	// Verify request validation structure
+	require.NotNil(t, auditEntry.RequestValidation, "RequestValidation should not be nil")
+	require.NotNil(t, auditEntry.RequestValidation.CEL, "CEL results should not be nil")
+	require.NotNil(t, auditEntry.RequestValidation.AI, "AI results should not be nil")
+
+	// Verify CEL rule results
+	assert.Equal(t, "allow", auditEntry.RequestValidation.CEL.Action, "CEL action should be allow (audit_only bypassed)")
+	assert.Len(t, auditEntry.RequestValidation.CEL.Results, 1, "Should have 1 CEL rule result")
+	assert.Equal(t, "cel_audit_policy", auditEntry.RequestValidation.CEL.Results[0].Rule)
+	assert.Equal(t, "audit_only", auditEntry.RequestValidation.CEL.Results[0].Mode)
+
+	// Verify AI rule results
+	assert.Equal(t, "allow", auditEntry.RequestValidation.AI.Action, "AI action should be allow (audit_only bypassed)")
+	assert.Len(t, auditEntry.RequestValidation.AI.Results, 1, "Should have 1 AI rule result")
+	assert.Equal(t, "ai_audit_policy", auditEntry.RequestValidation.AI.Results[0].Rule)
+	assert.Equal(t, "audit_only", auditEntry.RequestValidation.AI.Results[0].Mode)
 }
