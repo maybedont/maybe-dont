@@ -351,20 +351,21 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		g.metricsCollector.IncrementToolInvocations()
 	}
 
+	// Enrich context with session_id for logging (request_id is already set by middleware)
+	// This must happen before any tool handling so all log messages have session context
+	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	ctx = WithSessionID(ctx, sessionID)
+
 	// Check if this is a native gateway tool (not audited)
 	if IsNativeTool(req.Params.Name) {
 		g.logger.Debug(ctx, "Routing to native tool handler", zap.String("tool", req.Params.Name))
 		return g.nativeToolsHandler.HandleToolCall(ctx, req)
 	}
 
-	// Get session ID, client IP, user agent, and request ID for audit logging
-	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	// Get client IP, user agent, and request ID for audit logging
 	clientIP, _ := GetClientIP(ctx)
 	userAgent, _ := GetUserAgent(ctx)
 	requestID, _ := GetRequestID(ctx)
-
-	// Enrich context with session_id for logging (request_id is already set by middleware)
-	ctx = WithSessionID(ctx, sessionID)
 
 	// Parse the prefixed tool name early to populate audit context
 	clientName, originalToolName, parseErr := ParsePrefixedName(req.Params.Name)
