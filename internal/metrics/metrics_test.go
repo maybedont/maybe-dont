@@ -487,3 +487,193 @@ func TestClose(t *testing.T) {
 	// Should have loaded the flushed state
 	assert.Equal(t, int64(2), c2.toolInvocations)
 }
+
+func TestGetStateDir(t *testing.T) {
+	t.Run("uses XDG_STATE_HOME when set", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		originalStateHome := os.Getenv("XDG_STATE_HOME")
+		os.Setenv("XDG_STATE_HOME", tmpDir)
+		defer func() {
+			if originalStateHome != "" {
+				os.Setenv("XDG_STATE_HOME", originalStateHome)
+			} else {
+				os.Unsetenv("XDG_STATE_HOME")
+			}
+		}()
+
+		dir, err := getStateDir()
+		require.NoError(t, err)
+		assert.Equal(t, tmpDir+"/maybe-dont", dir)
+	})
+
+	t.Run("falls back to XDG default when XDG_STATE_HOME not set", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		originalStateHome := os.Getenv("XDG_STATE_HOME")
+		originalHome := os.Getenv("HOME")
+		os.Unsetenv("XDG_STATE_HOME")
+		os.Setenv("HOME", tmpDir)
+		defer func() {
+			if originalStateHome != "" {
+				os.Setenv("XDG_STATE_HOME", originalStateHome)
+			}
+			os.Setenv("HOME", originalHome)
+		}()
+
+		dir, err := getStateDir()
+		require.NoError(t, err)
+		assert.Equal(t, tmpDir+"/.local/state/maybe-dont", dir)
+	})
+}
+
+func TestMigrateFromOldLocations(t *testing.T) {
+	logger := zap.NewNop()
+
+	t.Run("migrates installation-id from config dir", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		originalHome := os.Getenv("HOME")
+		os.Setenv("HOME", tmpDir)
+		defer os.Setenv("HOME", originalHome)
+
+		// Create old config directory with installation-id file
+		oldConfigDir := tmpDir + "/.config/maybe-dont"
+		require.NoError(t, os.MkdirAll(oldConfigDir, 0700))
+		oldPath := oldConfigDir + "/" + InstallationIDFile
+		oldContent := []byte(`{"installation_id":"old-test-id-12345"}`)
+		require.NoError(t, os.WriteFile(oldPath, oldContent, 0600))
+
+		// Create new state directory
+		stateDir := tmpDir + "/.local/state/maybe-dont"
+		require.NoError(t, os.MkdirAll(stateDir, 0700))
+
+		// Run migration
+		err := migrateFromOldLocations(stateDir, logger)
+		require.NoError(t, err)
+
+		// Verify file was migrated to new location
+		newPath := stateDir + "/" + InstallationIDFile
+		newContent, err := os.ReadFile(newPath)
+		require.NoError(t, err)
+		assert.Equal(t, oldContent, newContent)
+
+		// Verify old file was removed
+		_, err = os.Stat(oldPath)
+		assert.True(t, os.IsNotExist(err))
+	})
+
+	t.Run("migrates metrics-state from cache dir", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		originalHome := os.Getenv("HOME")
+		os.Setenv("HOME", tmpDir)
+		defer os.Setenv("HOME", originalHome)
+
+		// Create old cache directory with metrics-state file
+		oldCacheDir := tmpDir + "/.cache/maybe-dont"
+		require.NoError(t, os.MkdirAll(oldCacheDir, 0700))
+		oldPath := oldCacheDir + "/" + MetricsStateFile
+		oldContent := []byte(`{"tool_invocations":42,"gateway_starts":5}`)
+		require.NoError(t, os.WriteFile(oldPath, oldContent, 0600))
+
+		// Create new state directory
+		stateDir := tmpDir + "/.local/state/maybe-dont"
+		require.NoError(t, os.MkdirAll(stateDir, 0700))
+
+		// Run migration
+		err := migrateFromOldLocations(stateDir, logger)
+		require.NoError(t, err)
+
+		// Verify file was migrated to new location
+		newPath := stateDir + "/" + MetricsStateFile
+		newContent, err := os.ReadFile(newPath)
+		require.NoError(t, err)
+		assert.Equal(t, oldContent, newContent)
+
+		// Verify old file was removed
+		_, err = os.Stat(oldPath)
+		assert.True(t, os.IsNotExist(err))
+	})
+
+	t.Run("does not overwrite existing files in new location", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		originalHome := os.Getenv("HOME")
+		os.Setenv("HOME", tmpDir)
+		defer os.Setenv("HOME", originalHome)
+
+		// Create old config directory with installation-id file
+		oldConfigDir := tmpDir + "/.config/maybe-dont"
+		require.NoError(t, os.MkdirAll(oldConfigDir, 0700))
+		oldPath := oldConfigDir + "/" + InstallationIDFile
+		oldContent := []byte(`{"installation_id":"old-id"}`)
+		require.NoError(t, os.WriteFile(oldPath, oldContent, 0600))
+
+		// Create new state directory with existing file
+		stateDir := tmpDir + "/.local/state/maybe-dont"
+		require.NoError(t, os.MkdirAll(stateDir, 0700))
+		newPath := stateDir + "/" + InstallationIDFile
+		newContent := []byte(`{"installation_id":"new-id"}`)
+		require.NoError(t, os.WriteFile(newPath, newContent, 0600))
+
+		// Run migration
+		err := migrateFromOldLocations(stateDir, logger)
+		require.NoError(t, err)
+
+		// Verify new file was not overwritten
+		content, err := os.ReadFile(newPath)
+		require.NoError(t, err)
+		assert.Equal(t, newContent, content)
+
+		// Verify old file still exists (not removed because no migration occurred)
+		_, err = os.Stat(oldPath)
+		assert.NoError(t, err)
+	})
+
+	t.Run("handles missing old locations gracefully", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		originalHome := os.Getenv("HOME")
+		os.Setenv("HOME", tmpDir)
+		defer os.Setenv("HOME", originalHome)
+
+		// Create only the new state directory
+		stateDir := tmpDir + "/.local/state/maybe-dont"
+		require.NoError(t, os.MkdirAll(stateDir, 0700))
+
+		// Run migration - should not error
+		err := migrateFromOldLocations(stateDir, logger)
+		require.NoError(t, err)
+	})
+}
+
+func TestCollectorUsesStateDir(t *testing.T) {
+	logger := zap.NewNop()
+	tmpDir := t.TempDir()
+
+	// Clear any XDG env vars and set HOME
+	originalStateHome := os.Getenv("XDG_STATE_HOME")
+	originalHome := os.Getenv("HOME")
+	os.Unsetenv("XDG_STATE_HOME")
+	os.Setenv("HOME", tmpDir)
+	defer func() {
+		if originalStateHome != "" {
+			os.Setenv("XDG_STATE_HOME", originalStateHome)
+		}
+		os.Setenv("HOME", originalHome)
+	}()
+
+	cfg := Config{
+		Dataset:  "test-dataset",
+		APIToken: "test-token",
+	}
+
+	c, err := NewCollector("v1.0.0", cfg, logger)
+	require.NoError(t, err)
+	defer c.Close()
+
+	// Verify files are in state directory
+	expectedStateDir := tmpDir + "/.local/state/maybe-dont"
+	assert.Equal(t, expectedStateDir+"/"+InstallationIDFile, c.configFilePath)
+	assert.Equal(t, expectedStateDir+"/"+MetricsStateFile, c.stateFilePath)
+
+	// Verify directory was created
+	info, err := os.Stat(expectedStateDir)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+}

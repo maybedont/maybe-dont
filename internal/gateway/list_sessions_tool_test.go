@@ -36,7 +36,7 @@ func TestListSessions_BasicResponse(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListSessions.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	// Set up mock session provider with multiple sessions
 	handler.SetSessionProvider(&mockSessionProvider{
@@ -109,7 +109,7 @@ func TestListSessions_EmptyResponse(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListSessions.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	// Set up mock session provider with no sessions
 	handler.SetSessionProvider(&mockSessionProvider{
@@ -143,7 +143,7 @@ func TestListSessions_NoProviderError(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListSessions.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	// Don't set session provider
 
 	req := mcp.CallToolRequest{}
@@ -162,7 +162,7 @@ func TestListSessions_SortedBySessionID(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListSessions.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	// Set up mock session provider with sessions in non-alphabetical order
 	handler.SetSessionProvider(&mockSessionProvider{
@@ -218,7 +218,7 @@ func TestListSessions_UserAgentOmittedWhenEmpty(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.NativeTools.ListSessions.Enabled = true
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	// Set up mock session provider with sessions that have no UserAgent
 	handler.SetSessionProvider(&mockSessionProvider{

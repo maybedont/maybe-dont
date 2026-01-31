@@ -30,7 +30,7 @@ func TestDiscoverTools_ToolDefinition(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	tools := handler.GetTools()
 
@@ -56,7 +56,7 @@ func TestDiscoverTools_RequiresSession(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	handler.SetDiscoveryProvider(&mockDiscoveryProvider{
 		result: &DiscoveryResult{},
 	})
@@ -83,7 +83,7 @@ func TestDiscoverTools_RequiresDiscoveryProvider(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	// Don't set discovery provider
 
 	req := mcp.CallToolRequest{}
@@ -107,7 +107,7 @@ func TestDiscoverTools_SuccessfulDiscovery(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	handler.SetDiscoveryProvider(&mockDiscoveryProvider{
 		result: &DiscoveryResult{
 			DiscoveredClients: []DiscoveredClientInfo{
@@ -159,7 +159,7 @@ func TestDiscoverTools_MultipleClients(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	handler.SetDiscoveryProvider(&mockDiscoveryProvider{
 		result: &DiscoveryResult{
 			DiscoveredClients: []DiscoveredClientInfo{
@@ -202,7 +202,7 @@ func TestDiscoverTools_AlreadyConnectedClients(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	handler.SetDiscoveryProvider(&mockDiscoveryProvider{
 		result: &DiscoveryResult{
 			DiscoveredClients: []DiscoveredClientInfo{},
@@ -237,7 +237,7 @@ func TestDiscoverTools_WithErrors(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	handler.SetDiscoveryProvider(&mockDiscoveryProvider{
 		result: &DiscoveryResult{
 			DiscoveredClients: []DiscoveredClientInfo{
@@ -286,7 +286,7 @@ func TestDiscoverTools_FilterByClientName(t *testing.T) {
 	cfg := &config.Config{}
 	// Create a provider that verifies the client name is passed
 	var capturedClientName string
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	handler.SetDiscoveryProvider(&mockDiscoveryProviderWithCapture{
 		result: &DiscoveryResult{
 			DiscoveredClients: []DiscoveredClientInfo{
@@ -320,7 +320,7 @@ func TestDiscoverTools_ProviderError(t *testing.T) {
 	logger := newTestLogger(t)
 
 	cfg := &config.Config{}
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 	handler.SetDiscoveryProvider(&mockDiscoveryProvider{
 		err: errors.New("provider failed"),
 	})
@@ -414,7 +414,7 @@ func TestLazyDiscovery_DiscoverToolsIsAlwaysVisible(t *testing.T) {
 	cfg.NativeTools.ListServers.Enabled = false
 	cfg.NativeTools.ListSessions.Enabled = false
 
-	handler := NewNativeToolsHandler(cfg, logger, logger, "")
+	handler := NewNativeToolsHandler(cfg, logger, "")
 
 	// Get tools - discover_tools is always enabled
 	tools := handler.GetTools()

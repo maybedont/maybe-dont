@@ -160,9 +160,10 @@ type Config struct {
 		} `mapstructure:"audit_log"`
 
 		AuditReport struct {
-			Enabled      bool   `mapstructure:"enabled"`
-			MaxEntries   int    `mapstructure:"max_entries"`
-			SystemPrompt string `mapstructure:"system_prompt"`
+			Enabled        bool   `mapstructure:"enabled"`
+			MaxEntries     int    `mapstructure:"max_entries"`
+			TimeoutSeconds int    `mapstructure:"timeout_seconds"` // Timeout for AI API call (default: 180, range: 30-300)
+			SystemPrompt   string `mapstructure:"system_prompt"`
 		} `mapstructure:"audit_report"`
 
 		ListServers struct {
@@ -899,43 +900,93 @@ func expandEnvironmentVariables(v reflect.Value) {
 	}
 }
 
-// ResolveConfigDir resolves the configuration directory with fallback logic.
-// Priority: 1) provided dir, 2) ./config (if exists), 3) $HOME/.maybe-dont/config (if exists), 4) current directory
-func ResolveConfigDir(configDir string) string {
+// ensureDir attempts to create a directory if it doesn't exist.
+// Returns true if the directory exists or was created successfully.
+// Uses 0700 permissions for security (config/state may contain sensitive data).
+func ensureDir(path string) bool {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return true
+	}
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return false
+	}
+	return true
+}
+
+// ensureFileWritable verifies that a file can be created/written to.
+// Creates the parent directory if needed and attempts to open the file for appending.
+// This is used to fail fast at startup rather than on first write.
+func ensureFileWritable(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("cannot create directory %s: %w", dir, err)
+	}
+
+	// Try to open the file for appending (creates if doesn't exist)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// ResolveConfigDir resolves the configuration directory with XDG support.
+// Priority: CLI/env > XDG_CONFIG_HOME > $HOME/.config/maybe-dont
+// Returns the resolved path and an error if no valid config directory could be determined.
+func ResolveConfigDir(configDir string) (string, error) {
+	// Priority 1-2: CLI flag or env var takes precedence
 	if configDir != "" {
-		return configDir
+		return configDir, nil
 	}
 
-	// Check ./config first
-	if info, err := os.Stat("./config"); err == nil && info.IsDir() {
-		return "./config"
-	}
-
-	// Fall back to $HOME/.maybe-dont/config only if it exists
 	homeDir, err := os.UserHomeDir()
-	if err == nil {
-		homeCfgDir := filepath.Join(homeDir, ".maybe-dont", "config")
-		if info, err := os.Stat(homeCfgDir); err == nil && info.IsDir() {
-			return homeCfgDir
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	// Priority 3: XDG_CONFIG_HOME/maybe-dont
+	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+		xdgPath := filepath.Join(xdgConfig, "maybe-dont")
+		if ensureDir(xdgPath) {
+			return xdgPath, nil
 		}
 	}
 
-	// Last resort: current directory
-	return "."
-}
-
-// ResolveLogDir resolves the log directory.
-// If logDir is provided, it is used directly.
-// Otherwise, the log directory defaults to a "logs" subdirectory within the config directory.
-// For example, if configDir is "./config", log-dir defaults to "./config/logs".
-// If configDir is "$HOME/.maybe-dont", log-dir defaults to "$HOME/.maybe-dont/logs".
-func ResolveLogDir(logDir, configDir string) string {
-	if logDir != "" {
-		return logDir
+	// Priority 4: XDG default ($HOME/.config/maybe-dont)
+	xdgDefault := filepath.Join(homeDir, ".config", "maybe-dont")
+	if ensureDir(xdgDefault) {
+		return xdgDefault, nil
 	}
 
-	// Default to logs subdirectory within config directory
-	return filepath.Join(configDir, "logs")
+	// No fallback - fail with clear error
+	return "", fmt.Errorf("no config directory found; set --config-dir, MAYBE_DONT_CONFIG_DIR, or create %s", xdgDefault)
+}
+
+// ResolveLogDir resolves the log directory with XDG support.
+// Priority: CLI/env > XDG_STATE_HOME > $HOME/.local/state/maybe-dont
+// Returns the resolved path and an error if no valid log directory could be determined.
+func ResolveLogDir(logDir string) (string, error) {
+	// Priority 1-2: CLI flag or env var takes precedence
+	if logDir != "" {
+		return logDir, nil
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	// Priority 3: XDG_STATE_HOME/maybe-dont
+	if xdgState := os.Getenv("XDG_STATE_HOME"); xdgState != "" {
+		xdgPath := filepath.Join(xdgState, "maybe-dont")
+		_ = os.MkdirAll(xdgPath, 0700) // Best effort, 0700 for security
+		return xdgPath, nil
+	}
+
+	// Priority 4: XDG default ($HOME/.local/state/maybe-dont)
+	xdgDefault := filepath.Join(homeDir, ".local", "state", "maybe-dont")
+	_ = os.MkdirAll(xdgDefault, 0700) // Best effort, 0700 for security
+	return xdgDefault, nil
 }
 
 // LoadConfig loads the configuration from all sources.
@@ -943,7 +994,7 @@ func ResolveLogDir(logDir, configDir string) string {
 // configFileName: name of config file (defaults to "maybe-dont.yaml", falls back to deprecated names)
 //
 // Configuration can be provided via:
-// 1. A YAML config file (maybe-dont.yaml, or deprecated: maybedont.yaml, gateway-config.yaml)
+// 1. A YAML config file (maybe-dont.yaml)
 // 2. Environment variables with MAYBE_DONT_ prefix (e.g., MAYBE_DONT_SERVER_TYPE)
 // 3. A combination of both (environment variables override config file values)
 //
@@ -960,7 +1011,10 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	// Resolve config directory
-	resolvedConfigDir := ResolveConfigDir(configDir)
+	resolvedConfigDir, err := ResolveConfigDir(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve config directory: %w", err)
+	}
 
 	// Set config type
 	v.SetConfigType("yaml")
@@ -976,6 +1030,7 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("native_tools.list_sessions.enabled", true)
 	v.SetDefault("native_tools.audit_log.max_entries", 100)
 	v.SetDefault("native_tools.audit_report.max_entries", 1_000)
+	v.SetDefault("native_tools.audit_report.timeout_seconds", 180)
 	v.SetDefault("logger.path", "stderr")
 	v.SetDefault("logger.level", "info")
 	v.SetDefault("logger.rotation.max_size_mb", 100)
@@ -1001,7 +1056,7 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("response_validation.ai.enabled", false)
 	v.SetDefault("response_validation.ai.mode", "audit_only")
 
-	// Try to find config file with fallback logic
+	// Try to find config file
 	configFileFound := false
 
 	if configFileName != "" {
@@ -1013,24 +1068,10 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 			configFileFound = true
 		}
 	} else {
-		// Try maybe-dont.yaml first, then fall back to deprecated names
+		// Look for maybe-dont.yaml
 		v.SetConfigName("maybe-dont")
 		if err := v.ReadInConfig(); err == nil {
 			configFileFound = true
-		} else {
-			// Fall back to deprecated config file - maybedont.yaml
-			v.SetConfigName("maybedont")
-			if err := v.ReadInConfig(); err == nil {
-				configFileFound = true
-				fmt.Printf("Filename maybedont.yaml is deprecated, rename config file to maybe-dont.yaml\n")
-			} else {
-				// Fall back to deprecated config file - gateway-config.yaml
-				v.SetConfigName("gateway-config")
-				if err := v.ReadInConfig(); err == nil {
-					configFileFound = true
-					fmt.Printf("Filename gateway-config.yaml is deprecated, rename config file to maybe-dont.yaml\n")
-				}
-			}
 		}
 	}
 
@@ -1278,7 +1319,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 	// Validate client configuration
 	if len(cfg.DownstreamMCPServers) == 0 {
-		errors = append(errors, "at least one downstream MCP server must be configured")
+		errors = append(errors, configError("downstream_mcp_servers", "at least one downstream MCP server must be configured"))
 	}
 
 	// Validate each client in the map
@@ -1406,6 +1447,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 	if cfg.NativeTools.AuditReport.Enabled {
 		validateRange(cfg.NativeTools.AuditReport.MaxEntries, 10, 2_000, "native_tools.audit_report.max_entries", &errors)
+		validateRange(cfg.NativeTools.AuditReport.TimeoutSeconds, 30, 300, "native_tools.audit_report.timeout_seconds", &errors)
 	}
 
 	// Validate logger.path - must be stdout, stderr, or a safe relative path
@@ -1437,8 +1479,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 			errMsg += "  - MAYBE_DONT_SERVER_TYPE=stdio\n"
 			errMsg += "  - MAYBE_DONT_AI_VALIDATION_API_KEY=your-api-key\n"
 			errMsg += "\nAlternatively, create a config file (maybe-dont.yaml) in one of these locations:\n"
-			errMsg += "  - ./config/\n"
-			errMsg += "  - ~/.maybe-dont/config/\n"
+			errMsg += "  - $XDG_CONFIG_HOME/maybe-dont/ (or ~/.config/maybe-dont/)\n"
 			errMsg += "  - Current directory\n"
 		}
 		return fmt.Errorf("%s", errMsg)
@@ -1475,6 +1516,13 @@ func GetLogger(cfg *Config, logDir string) (*SessionLogger, error) {
 	default:
 		// Path is a filename - resolve it within logDir and use lumberjack for rotation
 		fullPath := filepath.Join(logDir, logPath)
+
+		// Fail fast: verify log directory exists and file is writable before proceeding
+		// Lumberjack is lazy and wouldn't fail until first write, so we validate upfront
+		if err := ensureFileWritable(fullPath); err != nil {
+			return nil, fmt.Errorf("cannot write to log file %s: %w", fullPath, err)
+		}
+
 		lumberjackLogger := newLumberjackLogger(fullPath, cfg.Logger.Rotation)
 		core = zapcore.NewCore(encoder, zapcore.AddSync(lumberjackLogger), level)
 	}
@@ -1484,47 +1532,6 @@ func GetLogger(cfg *Config, logDir string) (*SessionLogger, error) {
 
 	// Add logger type designation and wrap in SessionLogger
 	zapLogger := logger.With(zap.String("logger", "application"))
-	return NewSessionLogger(zapLogger), nil
-}
-
-// GetAuditLogger creates a new session-aware audit logger based on the configuration.
-// logDir: the resolved log directory where the audit log file should be written.
-// If audit.path is "stdout" or "stderr", logs go directly there.
-// Otherwise, audit.path is treated as a filename and resolved within logDir.
-func GetAuditLogger(cfg *Config, logDir string) (*SessionLogger, error) {
-	config := zap.NewProductionConfig()
-
-	// Set log level to info for audit logs
-	config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
-
-	// Set output path based on configuration
-	auditPath := cfg.Audit.Path
-	switch auditPath {
-	case "stdout":
-		config.OutputPaths = []string{"stdout"}
-		config.ErrorOutputPaths = []string{"stderr"}
-	case "stderr":
-		config.OutputPaths = []string{"stderr"}
-		config.ErrorOutputPaths = []string{"stderr"}
-	default:
-		// Path is a filename - resolve it within logDir
-		// Default to "maybedont-audit.log" if empty
-		if auditPath == "" {
-			auditPath = "maybedont-audit.log"
-		}
-		fullPath := filepath.Join(logDir, auditPath)
-		config.OutputPaths = []string{fullPath}
-		config.ErrorOutputPaths = []string{fullPath}
-	}
-
-	// Build the logger
-	logger, err := config.Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build audit logger: %w", err)
-	}
-
-	// Add logger type designation and wrap in SessionLogger
-	zapLogger := logger.With(zap.String("logger", "audit"))
 	return NewSessionLogger(zapLogger), nil
 }
 

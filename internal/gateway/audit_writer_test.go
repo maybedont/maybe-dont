@@ -262,3 +262,69 @@ func TestIsAbsolutePath(t *testing.T) {
 		})
 	}
 }
+
+// TestEnsureAuditFileWritable tests the helper function for audit file writability validation
+func TestEnsureAuditFileWritable(t *testing.T) {
+	t.Run("succeeds for writable path", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "audit.log")
+
+		err := ensureAuditFileWritable(filePath)
+		require.NoError(t, err)
+
+		// Verify the file was created
+		_, statErr := os.Stat(filePath)
+		require.NoError(t, statErr)
+	})
+
+	t.Run("creates parent directories if needed", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "nested", "dirs", "audit.log")
+
+		err := ensureAuditFileWritable(filePath)
+		require.NoError(t, err)
+
+		// Verify the file was created
+		_, statErr := os.Stat(filePath)
+		require.NoError(t, statErr)
+	})
+
+	t.Run("fails for unwritable directory", func(t *testing.T) {
+		// Try to write to a system path that doesn't exist and can't be created
+		err := ensureAuditFileWritable("/nonexistent/readonly/system/path/audit.log")
+		require.Error(t, err)
+	})
+}
+
+// TestJSONLAuditWriter_FailFast tests that the audit writer fails at startup
+// when the log file cannot be written (e.g., unwritable directory)
+func TestJSONLAuditWriter_FailFast(t *testing.T) {
+	t.Run("succeeds with stdout", func(t *testing.T) {
+		writer, err := NewJSONLAuditWriter("stdout", "", config.RotationConfig{}, "all")
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+		_ = writer.Close()
+	})
+
+	t.Run("succeeds with stderr", func(t *testing.T) {
+		writer, err := NewJSONLAuditWriter("stderr", "", config.RotationConfig{}, "all")
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+		_ = writer.Close()
+	})
+
+	t.Run("succeeds with writable file path", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		writer, err := NewJSONLAuditWriter("audit.log", tmpDir, config.RotationConfig{}, "all")
+		require.NoError(t, err)
+		require.NotNil(t, writer)
+		_ = writer.Close()
+	})
+
+	t.Run("fails fast with unwritable directory", func(t *testing.T) {
+		// Use a path that cannot be written to
+		_, err := NewJSONLAuditWriter("audit.log", "/nonexistent/readonly/system/path", config.RotationConfig{}, "all")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot write to audit log file")
+	})
+}

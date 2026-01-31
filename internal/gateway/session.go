@@ -392,6 +392,11 @@ func WithRequestID(ctx context.Context, requestID string) context.Context {
 	return context.WithValue(ctx, RequestIDKey, requestID)
 }
 
+// WithSessionID adds a session ID to the context for logging purposes
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, config.SessionIDKey, sessionID)
+}
+
 // testSessionIDKey is a context key used for testing to inject a mock session ID.
 // This allows tests to bypass the SDK's session mechanism.
 type testSessionIDKeyType struct{}

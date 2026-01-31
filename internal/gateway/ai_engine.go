@@ -290,9 +290,23 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		// Create completion channel for async results
 		completionChan := make(chan AsyncCompletion, 1)
 
+		// Extract request_id and session_id for async logging (original ctx may be cancelled)
+		requestID := "-"
+		if rid, ok := ctx.Value(config.RequestIDKey).(string); ok {
+			requestID = rid
+		}
+		sessionID := "-"
+		if sid, ok := ctx.Value(config.SessionIDKey).(string); ok {
+			sessionID = sid
+		}
+
 		// Start background goroutine to collect all results
 		go func() {
 			defer close(completionChan)
+
+			// Create a context with request_id and session_id for async logging
+			asyncCtx := context.WithValue(context.Background(), config.RequestIDKey, requestID)
+			asyncCtx = context.WithValue(asyncCtx, config.SessionIDKey, sessionID)
 
 			auditResults := make([]AuditAIRuleResult, 0, len(e.policies))
 			for i := 0; i < len(e.policies); i++ {
@@ -311,7 +325,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 
 				// Log successful results (errors are logged at ERROR level elsewhere)
 				if result.err == nil {
-					e.logger.Debug(context.Background(), "AI policy evaluation result (async)",
+					e.logger.Debug(asyncCtx, "AI policy evaluation result (async)",
 						zap.String("rule", result.rule),
 						zap.String("action", string(result.action)),
 						zap.String("result", result.result),
@@ -339,7 +353,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				EvaluationMs: evaluationMs,
 			}
 
-			e.logger.Debug(context.Background(), "Tool call evaluation complete (async)",
+			e.logger.Debug(asyncCtx, "Tool call evaluation complete (async)",
 				zap.Bool("allowed", true),
 				zap.Int64("blocked_ms", int64(0)),
 				zap.Int64("evaluation_ms", evaluationMs),
@@ -352,7 +366,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		results.AllowCount = 1
 		results.AsyncCompletion = completionChan
 
-		e.logger.Debug(ctx, "AI validation returning immediately - all policies are audit_only")
+		e.logger.Debug(ctx, "AI request validation returning immediately - all policies are audit_only")
 		return results, nil
 	}
 

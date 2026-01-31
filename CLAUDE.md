@@ -63,7 +63,7 @@ The gateway supports multiple MCP transport types per client:
 
 ### Configuration Hierarchy
 Configuration is loaded in this order (later overrides earlier):
-1. YAML config file (`maybe-dont.yaml`, with fallback to deprecated `maybedont.yaml` and `gateway-config.yaml`)
+1. YAML config file (`maybe-dont.yaml`)
 2. Environment variables (prefix: `MAYBE_DONT_`)
 3. Command-line flags
 
@@ -277,6 +277,88 @@ Key environment variables for configuration:
 - Environment variables follow the pattern: `MAYBE_DONT_{CONFIG_PATH}` where CONFIG_PATH uses underscores
 - Use `${VAR_NAME}` syntax in config files for environment variable substitution (e.g., `api_key: "${OPENAI_API_KEY}"`)
 
+### Directory Resolution
+
+The gateway follows [XDG Base Directory conventions](https://specifications.freedesktop.org/basedir/latest/) for locating configuration and log files.
+
+**Config Directory** (in priority order):
+1. `--config-dir` CLI flag
+2. `MAYBE_DONT_CONFIG_DIR` environment variable
+3. `$XDG_CONFIG_HOME/maybe-dont`
+4. `$HOME/.config/maybe-dont` (XDG default)
+
+**Log Directory** (in priority order):
+1. `--log-dir` CLI flag
+2. `MAYBE_DONT_LOG_DIR` environment variable
+3. `$XDG_STATE_HOME/maybe-dont`
+4. `$HOME/.local/state/maybe-dont` (XDG default)
+
+### Docker Volume Mount Patterns
+
+The Docker image uses XDG Base Directory conventions. The binary embeds default configuration files and writes them on first run if they don't exist.
+
+**Default XDG Paths in Container:**
+- Config: `/home/maybedont/.config/maybe-dont/`
+- State/Logs: `/home/maybedont/.local/state/maybe-dont/`
+
+**Basic Usage (XDG defaults):**
+```yaml
+# docker-compose.yml
+services:
+  gateway:
+    image: ghcr.io/maybedont/maybe-dont:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount config read-only after initial setup
+      - ./config:/home/maybedont/.config/maybe-dont:ro
+      # Mount state read-write for logs, metrics, installation ID
+      - ./state:/home/maybedont/.local/state/maybe-dont
+```
+
+**With Read-Only Root Filesystem:**
+```yaml
+services:
+  gateway:
+    image: ghcr.io/maybedont/maybe-dont:latest
+    read_only: true
+    volumes:
+      - ./config:/home/maybedont/.config/maybe-dont:ro
+      - ./state:/home/maybedont/.local/state/maybe-dont
+```
+
+**Using XDG Environment Variables:**
+```yaml
+services:
+  gateway:
+    image: ghcr.io/maybedont/maybe-dont:latest
+    environment:
+      - XDG_CONFIG_HOME=/xdg/config
+      - XDG_STATE_HOME=/xdg/state
+    volumes:
+      - ./config:/xdg/config/maybe-dont:ro
+      - ./state:/xdg/state/maybe-dont
+```
+
+**Using App-Specific Environment Variables:**
+```yaml
+services:
+  gateway:
+    image: ghcr.io/maybedont/maybe-dont:latest
+    environment:
+      - MAYBE_DONT_CONFIG_DIR=/config
+      - MAYBE_DONT_LOG_DIR=/logs
+    volumes:
+      - ./config:/config:ro
+      - ./logs:/logs
+```
+
+**First-Run Workflow:**
+1. Start container without config volume to generate defaults
+2. Copy defaults from container or use `defaults export` command
+3. Customize configuration files
+4. Restart with config volume mounted read-only
+
 ### Downstream MCP Server Configuration via Environment Variables
 
 Configure downstream servers entirely via environment variables (no YAML file required):
@@ -326,8 +408,8 @@ The following anonymized metrics are collected:
 
 ### How It Works
 
-- Metrics are stored locally in `~/.maybe-dont/.maybedont-metrics` (or `./.maybedont-metrics` if home directory is unavailable)
-- Metrics are reported once per day (24-hour interval) to Axiom if configured
+- Metrics state files (`installation-id`, `metrics-state`) are stored in `XDG_STATE_HOME/maybe-dont` (default: `~/.local/state/maybe-dont`)
+- Metrics are reported once per day (24-hour interval) to Axiom
 - Reporting is done via HTTPS POST to `https://api.axiom.co/v1/datasets/{dataset_name}/ingest`
 - The gateway continues to function normally even if metrics reporting fails
 
@@ -347,7 +429,9 @@ When opted out:
 
 ### Configuration
 
-Metrics configuration is built into the binary at compile time and cannot be modified by users. This ensures consistent metrics collection across all installations.
+Metrics configuration (Axiom dataset and API token) is built into the binary at compile time. This means:
+- **Release builds**: Metrics collection is enabled by default (installation ID created on first run)
+- **Development builds**: Metrics collection is disabled (no installation ID created) unless you build with `-ldflags "-X main.metricsDataset=... -X main.metricsAPIToken=..."`
 
 ## Environment Variable Substitution
 

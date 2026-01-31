@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/maybedont/maybe-dont/internal/metrics"
@@ -13,7 +14,6 @@ import (
 
 var (
 	cfgDir           string
-	cfgPath          string // Deprecated: use cfgDir instead
 	logDir           string
 	cfgFileName      string
 	cfg              *config.Config
@@ -33,40 +33,53 @@ var rootCmd = &cobra.Command{
 	Use:           "maybe-dont",
 	SilenceUsage:  true,
 	SilenceErrors: true,
-	Short:         "Maybe Don't, an MCP Security Gateway - Enterprise-grade security controls for MCP communications",
-	Long: `MCP Security Gateway is a Go-based middleware service that provides enterprise-grade 
-security controls for Model Context Protocol (MCP) communications. It acts as a transparent
-gateway between MCP clients and servers, enforcing security policies, validating requests, 
-and providing comprehensive audit logging.`,
+	Short:         "Maybe Don't AI is an MCP gateway for validating and auditing tool calls",
+	Long: `Maybe Don't AI is an MCP gateway that acts as a transparent proxy between MCP clients
+and servers. It validates requests using configurable policies, provides comprehensive audit
+logging, and gives you visibility into what AI agents are doing with your tools.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		var err error
 
 		// Resolve config directory from CLI flag or environment variable
-		// Falls back to deprecated --config-path for backwards compatibility
 		resolvedCfgDir := cfgDir
 		if resolvedCfgDir == "" {
 			resolvedCfgDir = os.Getenv("MAYBE_DONT_CONFIG_DIR")
 		}
-		if resolvedCfgDir == "" && cfgPath != "" {
-			// Backwards compatibility: use deprecated --config-path
-			// Note: Cobra already prints a deprecation warning via MarkDeprecated
-			resolvedCfgDir = cfgPath
-		}
 		// Apply fallback logic for config directory
-		resolvedCfgDir = config.ResolveConfigDir(resolvedCfgDir)
-
-		// Resolve log directory from CLI flag or environment variable
-		// If not specified, derives from config directory (e.g., ./config → ./config/logs)
-		ResolvedLogDir = logDir
-		if ResolvedLogDir == "" {
-			ResolvedLogDir = os.Getenv("MAYBE_DONT_LOG_DIR")
+		resolvedCfgDir, err = config.ResolveConfigDir(resolvedCfgDir)
+		if err != nil {
+			return fmt.Errorf("failed to resolve config directory: %w", err)
 		}
-		ResolvedLogDir = config.ResolveLogDir(ResolvedLogDir, resolvedCfgDir)
 
 		// Resolve config file name from CLI flag or environment variable
 		resolvedCfgFileName := cfgFileName
 		if resolvedCfgFileName == "" {
 			resolvedCfgFileName = os.Getenv("MAYBE_DONT_CONFIG_FILE_NAME")
+		}
+		if resolvedCfgFileName == "" {
+			resolvedCfgFileName = "maybe-dont.yaml"
+		}
+
+		// Write default config files if they don't exist (first-run bootstrap)
+		createdFiles, err := config.WriteDefaultsIfMissing(resolvedCfgDir)
+		if err != nil {
+			return fmt.Errorf("failed to write default config files: %w", err)
+		}
+		if len(createdFiles) > 0 {
+			fmt.Printf("Configuration initialized at %s\n", resolvedCfgDir)
+		} else {
+			fmt.Printf("Using configuration %s\n", filepath.Join(resolvedCfgDir, resolvedCfgFileName))
+		}
+
+		// Resolve log directory from CLI flag or environment variable
+		// If not specified, uses XDG_STATE_HOME or $HOME/.local/state/maybe-dont
+		ResolvedLogDir = logDir
+		if ResolvedLogDir == "" {
+			ResolvedLogDir = os.Getenv("MAYBE_DONT_LOG_DIR")
+		}
+		ResolvedLogDir, err = config.ResolveLogDir(ResolvedLogDir)
+		if err != nil {
+			return fmt.Errorf("failed to resolve log directory: %w", err)
 		}
 
 		cfg, err = config.LoadConfig(resolvedCfgDir, resolvedCfgFileName)
@@ -76,6 +89,11 @@ and providing comprehensive audit logging.`,
 
 		if err := config.ValidateConfig(cfg); err != nil {
 			return fmt.Errorf("invalid config: %w", err)
+		}
+
+		// Print log directory if file-based logging is configured
+		if cfg.Logger.Path != "" && cfg.Logger.Path != "stdout" && cfg.Logger.Path != "stderr" {
+			fmt.Printf("Logging to %s\n", ResolvedLogDir)
 		}
 
 		Logger, err = config.GetLogger(cfg, ResolvedLogDir)
@@ -130,11 +148,9 @@ func Execute(VERSION string, COMMIT string, DATE string, metricsCfg metrics.Conf
 
 func init() {
 	// Global flags
-	rootCmd.PersistentFlags().StringVar(&cfgDir, "config-dir", "", "Config directory (env: MAYBE_DONT_CONFIG_DIR, default: ./config or $HOME/.maybe-dont/config)")
-	rootCmd.PersistentFlags().StringVar(&logDir, "log-dir", "", "Log directory (env: MAYBE_DONT_LOG_DIR, default: <config-dir>/logs)")
+	rootCmd.PersistentFlags().StringVar(&cfgDir, "config-dir", "",
+		"Config directory (env: MAYBE_DONT_CONFIG_DIR, default: $XDG_CONFIG_HOME/maybe-dont or ~/.config/maybe-dont)")
+	rootCmd.PersistentFlags().StringVar(&logDir, "log-dir", "",
+		"Log directory (env: MAYBE_DONT_LOG_DIR, default: $XDG_STATE_HOME/maybe-dont or ~/.local/state/maybe-dont)")
 	rootCmd.PersistentFlags().StringVar(&cfgFileName, "config-file-name", "", "Config file name (env: MAYBE_DONT_CONFIG_FILE_NAME, default: maybe-dont.yaml)")
-
-	// Deprecated flags for backwards compatibility
-	rootCmd.PersistentFlags().StringVar(&cfgPath, "config-path", "", "Deprecated: use --config-dir instead")
-	_ = rootCmd.PersistentFlags().MarkDeprecated("config-path", "use --config-dir instead")
 }

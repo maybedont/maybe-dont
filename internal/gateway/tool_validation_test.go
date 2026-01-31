@@ -158,21 +158,20 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 	err = celEngine.LoadPolicies(policies, "")
 	require.NoError(t, err)
 
-	// Create validation chain with real handlers
+	// Create validation chain with CEL handler
 	chain := NewToolValidationChain(
 		NewToolCELValidationHandler(sessionLogger, celEngine),
-		NewToolLoggingHandler(sessionLogger),
 	)
 
 	tests := []struct {
-		name           string
-		req            mcp.CallToolRequest
-		wantAllowed    bool
-		wantCELAction  string
-		wantCELRules   int // Number of CEL rules evaluated
+		name          string
+		req           mcp.CallToolRequest
+		wantAllowed   bool
+		wantCELAction string
+		wantCELRules  int // Number of CEL rules evaluated
 	}{
 		{
-			name: "read_file with CEL and logging handlers",
+			name: "read_file with CEL handler",
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{Method: "tools/call"},
 				Params: mcp.CallToolParams{
@@ -185,7 +184,7 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 			wantCELRules:  2, // Both rules evaluated
 		},
 		{
-			name: "delete_file with CEL and logging handlers",
+			name: "delete_file with CEL handler",
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{Method: "tools/call"},
 				Params: mcp.CallToolParams{
@@ -198,7 +197,7 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 			wantCELRules:  2, // Early termination on deny, but both rules evaluated before match
 		},
 		{
-			name: "unknown tool with CEL and logging handlers",
+			name: "unknown tool with CEL handler",
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{Method: "tools/call"},
 				Params: mcp.CallToolParams{
@@ -219,47 +218,12 @@ func TestValidationChain_RealHandlers(t *testing.T) {
 
 			assert.Equal(t, tt.wantAllowed, results.Allowed)
 
-			// Verify we have logging result
-			hasLogging := false
-			for _, result := range results.Results {
-				if result.PolicyType == "audit" {
-					hasLogging = true
-				}
-			}
-			assert.True(t, hasLogging, "Should have audit logging result")
-
 			// CEL results should be in RulesDetails now
 			assert.NotNil(t, results.RulesDetails, "Should have rules details")
 			assert.Equal(t, tt.wantCELAction, results.RulesDetails.Action, "Rules action should match")
 			assert.Len(t, results.RulesDetails.Results, tt.wantCELRules, "Should have expected number of rules results")
 		})
 	}
-}
-
-func TestLoggingHandler_Isolation(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	sessionLogger := config.NewSessionLogger(logger)
-	handler := NewToolLoggingHandler(sessionLogger)
-
-	req := mcp.CallToolRequest{
-		Request: mcp.Request{Method: "tools/call"},
-		Params: mcp.CallToolParams{
-			Name:      "read_file",
-			Arguments: map[string]any{"target_file": "test.txt"},
-		},
-	}
-
-	results, err := handler.HandleToolCall(context.Background(), req)
-	require.NoError(t, err)
-
-	// Logging handler should always allow and not interfere
-	assert.True(t, results.Allowed)
-	assert.Equal(t, 0, results.AllowCount) // No explicit allow/deny counts
-	assert.Equal(t, 0, results.DenyCount)
-	assert.Len(t, results.Results, 1) // Should have one audit log result
-	assert.Equal(t, "Audit Logging", results.Results[0].PolicyName)
-	assert.Equal(t, "audit", results.Results[0].PolicyType)
-	assert.Equal(t, config.PolicyActionAllow, results.Results[0].Action)
 }
 
 func TestCELValidationHandler_Isolation(t *testing.T) {

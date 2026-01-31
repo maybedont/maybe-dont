@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/maybedont/maybe-dont/internal/config"
@@ -59,6 +61,12 @@ func NewJSONLAuditWriter(auditPath string, logDir string, rotationCfg config.Rot
 		fullPath := auditPath
 		if logDir != "" && !isAbsolutePath(auditPath) {
 			fullPath = logDir + "/" + auditPath
+		}
+
+		// Fail fast: verify audit log file is writable before proceeding
+		// Lumberjack is lazy and wouldn't fail until first write, so we validate upfront
+		if err := ensureAuditFileWritable(fullPath); err != nil {
+			return nil, fmt.Errorf("cannot write to audit log file %s: %w", fullPath, err)
 		}
 
 		w.writer = &lumberjack.Logger{
@@ -138,4 +146,21 @@ func isAbsolutePath(path string) bool {
 		return true
 	}
 	return false
+}
+
+// ensureAuditFileWritable verifies that the audit log file can be created/written to.
+// Creates the parent directory if needed and attempts to open the file for appending.
+// This is used to fail fast at startup rather than on first write.
+func ensureAuditFileWritable(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("cannot create directory %s: %w", dir, err)
+	}
+
+	// Try to open the file for appending (creates if doesn't exist)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }

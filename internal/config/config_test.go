@@ -371,7 +371,7 @@ func TestLoadConfigWithEnvironmentVariableOverride(t *testing.T) {
 
 	// Create a temporary directory and config file
 	tmpDir := t.TempDir()
-	configPath := tmpDir + "/gateway-config.yaml"
+	configPath := tmpDir + "/maybe-dont.yaml"
 
 	// Create a minimal config file without API key
 	configContent := `
@@ -744,6 +744,7 @@ func TestViperConfigPathsMatchStruct(t *testing.T) {
 		"native_tools.list_sessions.enabled",
 		"native_tools.audit_log.max_entries",
 		"native_tools.audit_report.max_entries",
+		"native_tools.audit_report.timeout_seconds",
 		"logger.path",
 		"logger.level",
 		"logger.rotation.max_size_mb",
@@ -1666,9 +1667,10 @@ func createValidBaseConfig() *Config {
 				MaxEntries int  `mapstructure:"max_entries"`
 			} `mapstructure:"audit_log"`
 			AuditReport struct {
-				Enabled      bool   `mapstructure:"enabled"`
-				MaxEntries   int    `mapstructure:"max_entries"`
-				SystemPrompt string `mapstructure:"system_prompt"`
+				Enabled        bool   `mapstructure:"enabled"`
+				MaxEntries     int    `mapstructure:"max_entries"`
+				TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+				SystemPrompt   string `mapstructure:"system_prompt"`
 			} `mapstructure:"audit_report"`
 			ListServers struct {
 				Enabled bool `mapstructure:"enabled"`
@@ -1685,12 +1687,14 @@ func createValidBaseConfig() *Config {
 				MaxEntries: 100,
 			},
 			AuditReport: struct {
-				Enabled      bool   `mapstructure:"enabled"`
-				MaxEntries   int    `mapstructure:"max_entries"`
-				SystemPrompt string `mapstructure:"system_prompt"`
+				Enabled        bool   `mapstructure:"enabled"`
+				MaxEntries     int    `mapstructure:"max_entries"`
+				TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+				SystemPrompt   string `mapstructure:"system_prompt"`
 			}{
-				Enabled:    false,
-				MaxEntries: 1000,
+				Enabled:        false,
+				MaxEntries:     1000,
+				TimeoutSeconds: 180,
 			},
 		},
 	}
@@ -2065,3 +2069,320 @@ func TestConfigPathToEnvVar(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveConfigDir_XDGSupport tests XDG Base Directory support for config resolution
+func TestResolveConfigDir_XDGSupport(t *testing.T) {
+	// Save original env vars to restore after test
+	origXDGConfig := os.Getenv("XDG_CONFIG_HOME")
+	origHome := os.Getenv("HOME")
+	defer func() {
+		if origXDGConfig != "" {
+			_ = os.Setenv("XDG_CONFIG_HOME", origXDGConfig)
+		} else {
+			_ = os.Unsetenv("XDG_CONFIG_HOME")
+		}
+		if origHome != "" {
+			_ = os.Setenv("HOME", origHome)
+		}
+	}()
+
+	t.Run("CLI flag takes precedence over all", func(t *testing.T) {
+		_ = os.Setenv("XDG_CONFIG_HOME", "/should/be/ignored")
+		defer func() { _ = os.Unsetenv("XDG_CONFIG_HOME") }()
+
+		result, err := ResolveConfigDir("/explicit/path")
+		require.NoError(t, err)
+		require.Equal(t, "/explicit/path", result)
+	})
+
+	t.Run("XDG_CONFIG_HOME takes precedence when set", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+		defer func() { _ = os.Unsetenv("XDG_CONFIG_HOME") }()
+
+		result, err := ResolveConfigDir("")
+		require.NoError(t, err)
+		require.Equal(t, tmpDir+"/maybe-dont", result)
+
+		// Verify directory was created
+		info, err := os.Stat(result)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("falls back to HOME/.config/maybe-dont when XDG_CONFIG_HOME not set", func(t *testing.T) {
+		_ = os.Unsetenv("XDG_CONFIG_HOME")
+		tmpHome := t.TempDir()
+		_ = os.Setenv("HOME", tmpHome)
+
+		result, err := ResolveConfigDir("")
+		require.NoError(t, err)
+		require.Equal(t, tmpHome+"/.config/maybe-dont", result)
+
+		// Verify directory was created
+		info, err := os.Stat(result)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("returns error when no valid config directory found", func(t *testing.T) {
+		_ = os.Unsetenv("XDG_CONFIG_HOME")
+		_ = os.Setenv("HOME", "/nonexistent/readonly/path")
+
+		result, err := ResolveConfigDir("")
+		require.Error(t, err)
+		require.Empty(t, result)
+		require.Contains(t, err.Error(), "no config directory found")
+	})
+
+	t.Run("does not fall back to ./config - requires explicit flag", func(t *testing.T) {
+		_ = os.Unsetenv("XDG_CONFIG_HOME")
+		_ = os.Setenv("HOME", "/nonexistent/readonly/path")
+
+		// Create a temp directory with ./config inside it
+		tmpDir := t.TempDir()
+		oldWd, _ := os.Getwd()
+		_ = os.Chdir(tmpDir)
+		defer func() { _ = os.Chdir(oldWd) }()
+
+		_ = os.MkdirAll("./config", 0755)
+
+		// Should still fail - ./config is NOT a fallback
+		result, err := ResolveConfigDir("")
+		require.Error(t, err)
+		require.Empty(t, result)
+
+		// But if explicitly provided, it works
+		result, err = ResolveConfigDir("./config")
+		require.NoError(t, err)
+		require.Equal(t, "./config", result)
+	})
+
+	t.Run("directory created with 0700 permissions for security", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+		defer func() { _ = os.Unsetenv("XDG_CONFIG_HOME") }()
+
+		result, err := ResolveConfigDir("")
+		require.NoError(t, err)
+
+		info, err := os.Stat(result)
+		require.NoError(t, err)
+		// Check permissions (masking off type bits) - 0700 for security
+		require.Equal(t, os.FileMode(0700), info.Mode().Perm())
+	})
+}
+
+// TestResolveLogDir_XDGSupport tests XDG Base Directory support for log resolution
+func TestResolveLogDir_XDGSupport(t *testing.T) {
+	// Save original env vars to restore after test
+	origXDGState := os.Getenv("XDG_STATE_HOME")
+	origHome := os.Getenv("HOME")
+	defer func() {
+		if origXDGState != "" {
+			_ = os.Setenv("XDG_STATE_HOME", origXDGState)
+		} else {
+			_ = os.Unsetenv("XDG_STATE_HOME")
+		}
+		if origHome != "" {
+			_ = os.Setenv("HOME", origHome)
+		}
+	}()
+
+	t.Run("CLI flag takes precedence over all", func(t *testing.T) {
+		_ = os.Setenv("XDG_STATE_HOME", "/should/be/ignored")
+		defer func() { _ = os.Unsetenv("XDG_STATE_HOME") }()
+
+		result, err := ResolveLogDir("/explicit/path")
+		require.NoError(t, err)
+		require.Equal(t, "/explicit/path", result)
+	})
+
+	t.Run("XDG_STATE_HOME takes precedence when set", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		_ = os.Setenv("XDG_STATE_HOME", tmpDir)
+		defer func() { _ = os.Unsetenv("XDG_STATE_HOME") }()
+
+		result, err := ResolveLogDir("")
+		require.NoError(t, err)
+		require.Equal(t, tmpDir+"/maybe-dont", result)
+
+		// Verify directory was created
+		info, statErr := os.Stat(result)
+		require.NoError(t, statErr)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("falls back to HOME/.local/state/maybe-dont when XDG_STATE_HOME not set", func(t *testing.T) {
+		_ = os.Unsetenv("XDG_STATE_HOME")
+		tmpHome := t.TempDir()
+		_ = os.Setenv("HOME", tmpHome)
+
+		result, err := ResolveLogDir("")
+		require.NoError(t, err)
+		require.Equal(t, tmpHome+"/.local/state/maybe-dont", result)
+
+		// Verify directory was created
+		info, statErr := os.Stat(result)
+		require.NoError(t, statErr)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("directory created with 0700 permissions for security", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		_ = os.Setenv("XDG_STATE_HOME", tmpDir)
+		defer func() { _ = os.Unsetenv("XDG_STATE_HOME") }()
+
+		result, err := ResolveLogDir("")
+		require.NoError(t, err)
+
+		info, statErr := os.Stat(result)
+		require.NoError(t, statErr)
+		// 0700 for security - logs may contain sensitive data
+		require.Equal(t, os.FileMode(0700), info.Mode().Perm())
+	})
+}
+
+// TestEnsureDir tests the helper function for directory creation
+func TestEnsureDir(t *testing.T) {
+	t.Run("returns true when directory already exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		require.True(t, ensureDir(tmpDir))
+	})
+
+	t.Run("creates directory when it does not exist", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		newDir := tmpDir + "/new/nested/dir"
+
+		require.True(t, ensureDir(newDir))
+
+		info, err := os.Stat(newDir)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	})
+
+	t.Run("returns false when directory cannot be created", func(t *testing.T) {
+		// Try to create a directory in a non-existent path
+		result := ensureDir("/nonexistent/readonly/system/path/test")
+		require.False(t, result)
+	})
+
+	t.Run("returns false for file path instead of directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := tmpDir + "/existingfile"
+
+		// Create a file at the path
+		err := os.WriteFile(filePath, []byte("test"), 0644)
+		require.NoError(t, err)
+
+		// ensureDir should return false since it's a file, not a directory
+		require.False(t, ensureDir(filePath))
+	})
+}
+
+// TestEnsureFileWritable tests the helper function for file writability validation
+func TestEnsureFileWritable(t *testing.T) {
+	t.Run("succeeds for writable path", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := tmpDir + "/test.log"
+
+		err := ensureFileWritable(filePath)
+		require.NoError(t, err)
+
+		// Verify the file was created
+		_, statErr := os.Stat(filePath)
+		require.NoError(t, statErr)
+	})
+
+	t.Run("creates parent directories if needed", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := tmpDir + "/nested/dirs/test.log"
+
+		err := ensureFileWritable(filePath)
+		require.NoError(t, err)
+
+		// Verify the file was created
+		_, statErr := os.Stat(filePath)
+		require.NoError(t, statErr)
+	})
+
+	t.Run("fails for unwritable directory", func(t *testing.T) {
+		// Try to write to a system path that doesn't exist and can't be created
+		err := ensureFileWritable("/nonexistent/readonly/system/path/test.log")
+		require.Error(t, err)
+	})
+}
+
+// TestGetLogger_FailFast tests that GetLogger fails at startup when log file cannot be written
+func TestGetLogger_FailFast(t *testing.T) {
+	t.Run("succeeds with stdout", func(t *testing.T) {
+		cfg := &Config{
+			Logger: struct {
+				Level    string         `mapstructure:"level"`
+				Path     string         `mapstructure:"path"`
+				Rotation RotationConfig `mapstructure:"rotation"`
+			}{
+				Level: "info",
+				Path:  "stdout",
+			},
+		}
+
+		logger, err := GetLogger(cfg, "/any/path/ignored")
+		require.NoError(t, err)
+		require.NotNil(t, logger)
+	})
+
+	t.Run("succeeds with stderr", func(t *testing.T) {
+		cfg := &Config{
+			Logger: struct {
+				Level    string         `mapstructure:"level"`
+				Path     string         `mapstructure:"path"`
+				Rotation RotationConfig `mapstructure:"rotation"`
+			}{
+				Level: "info",
+				Path:  "stderr",
+			},
+		}
+
+		logger, err := GetLogger(cfg, "/any/path/ignored")
+		require.NoError(t, err)
+		require.NotNil(t, logger)
+	})
+
+	t.Run("succeeds with writable file path", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &Config{
+			Logger: struct {
+				Level    string         `mapstructure:"level"`
+				Path     string         `mapstructure:"path"`
+				Rotation RotationConfig `mapstructure:"rotation"`
+			}{
+				Level: "info",
+				Path:  "app.log",
+			},
+		}
+
+		logger, err := GetLogger(cfg, tmpDir)
+		require.NoError(t, err)
+		require.NotNil(t, logger)
+	})
+
+	t.Run("fails fast with unwritable file path", func(t *testing.T) {
+		cfg := &Config{
+			Logger: struct {
+				Level    string         `mapstructure:"level"`
+				Path     string         `mapstructure:"path"`
+				Rotation RotationConfig `mapstructure:"rotation"`
+			}{
+				Level: "info",
+				Path:  "app.log",
+			},
+		}
+
+		// Use a path that cannot be written to
+		_, err := GetLogger(cfg, "/nonexistent/readonly/system/path")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot write to log file")
+	})
+}
+

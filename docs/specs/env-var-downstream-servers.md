@@ -182,7 +182,7 @@ export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_TOOLS_ARGS=--verbose,--port=8081
 YAML provides base config, env vars override specific values:
 
 ```yaml
-# maybedont.yaml
+# maybe-dont.yaml
 downstream_mcp_servers:
   github:
     type: http
@@ -412,7 +412,7 @@ export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_FORM
 **Compact header format:** `source:target[:format]` with multiple headers separated by `;`
 ```
 
-### config/maybedont.yaml
+### config/maybe-dont.yaml
 
 Add comments showing env var equivalents for key fields.
 
@@ -435,6 +435,6 @@ Add comments showing env var equivalents for key fields.
 - [ ] Add unit tests for optional config file behavior
 - [ ] Add integration test for env-var-only startup
 - [ ] Update CLAUDE.md documentation
-- [ ] Update config/maybedont.yaml with env var comments
+- [ ] Update config/maybe-dont.yaml with env var comments
 - [ ] Run `make test` and fix any failures
 - [ ] Run `make lint` and fix any issues

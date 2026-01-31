@@ -193,9 +193,8 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	clientManager := NewClientManagerWithTimeout(ctx, logger, sessionTimeout)
 
 	// Create native tools handler with the resolved audit log path
-	// Note: NativeToolsHandler still uses logger for its internal logging
 	auditLogPath := config.ResolveAuditLogPath(cfg, logDir)
-	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, logger, auditLogPath)
+	nativeToolsHandler := NewNativeToolsHandler(cfg, logger, auditLogPath)
 
 	// Wire up the client config provider for native tools
 	nativeToolsHandler.SetClientConfigProvider(clientManager)
@@ -352,14 +351,18 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		g.metricsCollector.IncrementToolInvocations()
 	}
 
+	// Enrich context with session_id for logging (request_id is already set by middleware)
+	// This must happen before any tool handling so all log messages have session context
+	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	ctx = WithSessionID(ctx, sessionID)
+
 	// Check if this is a native gateway tool (not audited)
 	if IsNativeTool(req.Params.Name) {
 		g.logger.Debug(ctx, "Routing to native tool handler", zap.String("tool", req.Params.Name))
 		return g.nativeToolsHandler.HandleToolCall(ctx, req)
 	}
 
-	// Get session ID, client IP, user agent, and request ID for audit logging
-	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	// Get client IP, user agent, and request ID for audit logging
 	clientIP, _ := GetClientIP(ctx)
 	userAgent, _ := GetUserAgent(ctx)
 	requestID, _ := GetRequestID(ctx)
@@ -400,15 +403,36 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		audit.SetTotalBlockedMs(blockingBudget.TotalBlockedMs() + toolDuration)
 
 		// Check if there's async work pending (audit_only policies still running)
-		if audit.HasAsyncWork() {
+		hasAsyncWork := audit.HasAsyncWork()
+		g.logger.Debug(ctx, "Audit log write decision",
+			zap.Bool("has_async_work", hasAsyncWork),
+			zap.String("tool", audit.Entry().Tool.PrefixedName),
+		)
+
+		if hasAsyncWork {
 			// Track this async write for graceful shutdown
 			g.pendingAuditWrites.Add(1)
+			// Create a context with request_id and session_id for async logging (original ctx may be cancelled)
+			asyncCtx := context.WithValue(context.Background(), config.RequestIDKey, audit.Entry().UpstreamRequest.RequestID)
+			asyncCtx = context.WithValue(asyncCtx, config.SessionIDKey, audit.Entry().UpstreamRequest.SessionID)
+			toolName := audit.Entry().Tool.PrefixedName
 			// Write audit log asynchronously after all background work completes
 			go func() {
 				defer g.pendingAuditWrites.Done()
+				g.logger.Debug(asyncCtx, "Starting async audit log finalization",
+					zap.String("tool", toolName),
+				)
 				entry := audit.FinalizeAsync()
-				if _, err := g.auditWriter.Write(entry); err != nil {
-					g.logger.Error(context.Background(), "Failed to write audit log (async)", zap.Error(err))
+				written, err := g.auditWriter.Write(entry)
+				if err != nil {
+					g.logger.Error(asyncCtx, "Failed to write audit log (async)",
+						zap.Error(err),
+					)
+				} else {
+					g.logger.Debug(asyncCtx, "Async audit log write completed",
+						zap.Bool("written", written),
+						zap.String("tool", toolName),
+					)
 				}
 			}()
 		} else {
@@ -643,6 +667,12 @@ func (g *Gateway) populateRequestValidationAudit(audit *AuditContext, results Va
 
 	// Register async completion channel if present (for audit_only policies still running)
 	if results.AsyncCompletion != nil {
+		// Create a context with request_id and session_id for logging (we don't have the original ctx here)
+		logCtx := context.WithValue(context.Background(), config.RequestIDKey, audit.Entry().UpstreamRequest.RequestID)
+		logCtx = context.WithValue(logCtx, config.SessionIDKey, audit.Entry().UpstreamRequest.SessionID)
+		g.logger.Debug(logCtx, "Registering async request AI completion channel",
+			zap.String("tool", audit.Entry().Tool.PrefixedName),
+		)
 		audit.SetRequestAIResultsAsync(results.AsyncCompletion)
 	}
 }
@@ -665,6 +695,12 @@ func (g *Gateway) populateResponseValidationAudit(audit *AuditContext, results R
 
 	// Register async completion channel if present (for audit_only policies still running)
 	if results.AsyncCompletion != nil {
+		// Create a context with request_id and session_id for logging (we don't have the original ctx here)
+		logCtx := context.WithValue(context.Background(), config.RequestIDKey, audit.Entry().UpstreamRequest.RequestID)
+		logCtx = context.WithValue(logCtx, config.SessionIDKey, audit.Entry().UpstreamRequest.SessionID)
+		g.logger.Debug(logCtx, "Registering async response AI completion channel",
+			zap.String("tool", audit.Entry().Tool.PrefixedName),
+		)
 		audit.SetResponseAIResultsAsync(results.AsyncCompletion)
 	}
 }
