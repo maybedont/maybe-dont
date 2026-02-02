@@ -28,8 +28,8 @@ fi
 # Conventional commit regex pattern
 # Format: type(optional scope)!: description
 # The ! indicates a breaking change
-# Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
-PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_-]+\))?!?: .+'
+# Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert, bump
+PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|bump)(\([a-zA-Z0-9_-]+\))?!?: .+'
 
 if [[ ! "$TITLE" =~ $PATTERN ]]; then
     echo ""
@@ -41,7 +41,7 @@ if [[ ! "$TITLE" =~ $PATTERN ]]; then
     echo "  or: type: description"
     echo "  or: type!: description (breaking change)"
     echo ""
-    echo "Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+    echo "Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert, bump"
     echo ""
     echo "Examples:"
     echo "  feat: add user authentication"
@@ -50,6 +50,7 @@ if [[ ! "$TITLE" =~ $PATTERN ]]; then
     echo "  chore(deps): bump dependencies"
     echo "  feat!: breaking API change"
     echo "  refactor(core)!: rename public methods"
+    echo "  bump: version: 0.7.2 -> 1.0.0"
     echo ""
     echo "See: https://www.conventionalcommits.org/en/v1.0.0/"
     echo ""
