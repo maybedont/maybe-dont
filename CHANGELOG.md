@@ -1,3 +1,14 @@
+## v1.0.0 (2026-02-02)
+
+### BREAKING CHANGE
+
+- 1.0.0 is not compatible with previous versions.
+
+### Feat
+
+- implement XDG Base Directory support and self-contained binary (#77)
+- implement async audit-only AI validation (#67)
+
 ## v0.7.2 (2025-12-11)
 
 ### Fix
