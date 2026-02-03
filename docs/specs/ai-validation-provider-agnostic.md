@@ -66,7 +66,7 @@ Where `AIRequest` is a vendor-neutral structure:
 - `Model string`
 - `SystemPrompt string` (optional)
 - `UserPrompt string`
-- `ResponseSchema JSONSchema` (optional, for structured JSON responses)
+- `ResponseSchema any` (optional; output from `jsonschema.GenerateSchema[T]()`, adapter handles provider-specific formatting)
 - `Parameters map[string]any` (provider-specific parameters from config)
 - `Metadata map[string]string` (optional; for audit/correlation)
 
@@ -132,9 +132,7 @@ validation:
       api-version: "2024-02-15-preview"
     headers:                  # optional additional headers (passed to SDK via WithHeader options)
       X-Custom-Header: "value"
-    auth:
-      header: "Authorization" # optional override (default varies by provider)
-      prefix: "Bearer "       # optional override (default varies by provider)
+      # To override auth header, use: Authorization: "Bearer ${MY_TOKEN}"
 ```
 
 #### Provider Parameters
@@ -181,7 +179,7 @@ Notes:
 - `parameters` is a generic map for provider-specific API parameters; each adapter validates its required parameters during startup.
 - `query_params` is optional and appended to requests (useful for Azure's `api-version` requirement).
 - `headers` are passed to SDK clients via `WithHeader()` options, allowing custom headers for proxies or special requirements.
-- For `anthropic`, the adapter applies default header conventions (`x-api-key`, `anthropic-version`) unless overridden via `headers` or `auth`.
+- For `anthropic`, the adapter applies default header conventions (`x-api-key`, `anthropic-version`) unless overridden via `headers`.
 - Keep `endpoint`, `model`, and `api_key` as-is for backward compatibility.
 - Preserve environment-variable override behavior (e.g., `MAYBE_DONT_VALIDATION_AI_*`, `MAYBE_DONT_VALIDATION_AI_PARAMETERS_*`).
 
@@ -250,6 +248,8 @@ validation:
     model: "gpt-4o-mini"  # or any model configured in LiteLLM
     api_key: "${LITELLM_API_KEY}"
 ```
+
+**Note on `openai_compatible` rate limits:** Unlike `openai` and `anthropic` (which use SDKs with built-in retry), `openai_compatible` uses direct REST calls with no automatic retry. If you hit rate limits (HTTP 429), requests fail immediately. For rate-limit-sensitive workloads, consider using LiteLLM which provides its own rate limit handling.
 
 ### 4) HTTP Request Formats by Provider
 
@@ -848,86 +848,193 @@ Current policies are user-message-only. To preserve behavior:
 
 ## Implementation Checklist
 
-This checklist provides a concrete task list for implementing the spec. Tasks are ordered to maintain working tests throughout development.
+This checklist provides a concrete task list for implementing the spec. Tasks are ordered to maintain working tests throughout development. Each phase includes a verification step before proceeding.
 
 ### Phase 1: Configuration and Types
 
 - [ ] **1.1** Add new config fields to `internal/config/config.go`:
-  - `Provider string` (openai, openai_compatible, anthropic)
-  - `Parameters map[string]any` (provider-specific parameters)
-  - `QueryParams map[string]string` (URL query parameters)
+  ```go
+  AI struct {
+      Provider    string            `mapstructure:"provider"`
+      Endpoint    string            `mapstructure:"endpoint"`
+      Model       string            `mapstructure:"model"`
+      APIKey      string            `mapstructure:"api_key"`
+      Parameters  map[string]any    `mapstructure:"parameters"`
+      QueryParams map[string]string `mapstructure:"query_params"`
+      Headers     map[string]string `mapstructure:"headers"`
+  } `mapstructure:"ai"`
+  ```
   - Keep existing fields (`Endpoint`, `Model`, `APIKey`) for backward compatibility
+  - Note: `${VAR}` substitution works automatically in `Headers` map via existing `expandEnvironmentVariables`
 
 - [ ] **1.2** Add config validation in `internal/config/config.go`:
-  - Validate `provider` is one of: openai, openai_compatible, anthropic
+  - Validate `provider` is one of: openai, openai_compatible, anthropic (or empty for backward compat)
   - Default to "openai" with deprecation warning if `provider` is unset
-  - Require `endpoint` when `provider` is "openai_compatible"
+  - **Change existing validation**: `endpoint` required ONLY when `provider` is "openai_compatible"
+  - For `openai` and `anthropic`: apply default endpoints if `endpoint` is empty
   - Call provider-specific parameter validation
 
 - [ ] **1.3** Add provider parameter validation:
-  - For "anthropic": ensure `max_tokens` has a default (4096) if not specified
-  - Return clear error messages for missing required parameters
+  - For "anthropic": apply default `max_tokens` (4096) if not specified in `parameters`
+  - Handle type coercion: if `parameters["max_tokens"]` is string "4096", convert to int
+  - Return clear error messages for invalid parameter types
 
 - [ ] **1.4** Add config tests in `internal/config/config_test.go`:
-  - Test provider field loading and validation
-  - Test parameters map loading from YAML and env vars
-  - Test query_params loading
-  - Test backward compatibility (provider unset defaults to openai)
-  - Test env var override: `MAYBE_DONT_VALIDATION_AI_PARAMETERS_MAX_TOKENS`
+  - Test provider field loading and validation (valid: openai, openai_compatible, anthropic)
+  - Test invalid provider value returns error
+  - Test `endpoint` required only for `openai_compatible`, optional for others
+  - Test `parameters` map loading from YAML
+  - Test `parameters` map loading from env var: `MAYBE_DONT_VALIDATION_AI_PARAMETERS_MAX_TOKENS=4096`
+  - Test `query_params` loading
+  - Test `headers` loading with `${VAR}` substitution
+  - Test backward compatibility: config with NO `provider` field defaults to "openai" and logs deprecation warning
+  - Test backward compatibility: existing config format (endpoint/model/api_key only) still works
+
+- [ ] **1.5** Verify Phase 1: `make test` passes, config changes work
 
 ### Phase 2: Provider-Agnostic Interface
 
 - [ ] **2.1** Create `internal/gateway/ai_provider.go` with:
-  - `AIProviderClient` interface with `Generate(ctx, AIRequest) (AICompletionResult, error)`
-  - `AIRequest` struct (Model, SystemPrompt, UserPrompt, ResponseSchema, Parameters, Metadata)
-  - `AICompletionResult` struct (RawText, ParsedJSON, ProviderRequestID)
-  - `AIProviderError` struct (Category, Message, Retryable)
+  ```go
+  type AIProviderClient interface {
+      Generate(ctx context.Context, req AIRequest) (AICompletionResult, error)
+  }
+
+  type AIRequest struct {
+      Model          string
+      SystemPrompt   string
+      UserPrompt     string
+      ResponseSchema any              // JSON schema for structured output (provider handles format)
+      Parameters     map[string]any   // Provider-specific parameters from config
+      Metadata       map[string]string
+  }
+
+  type AICompletionResult struct {
+      RawText           string
+      ParsedJSON        json.RawMessage
+      ProviderRequestID string
+  }
+
+  type AIProviderError struct {
+      Category  string // api_error, timeout, canceled, parse_error, no_response, rate_limited, auth_error, invalid_request
+      Message   string
+      Retryable bool
+  }
+  ```
+  - `ResponseSchema` is `any` to hold jsonschema output from `GenerateSchema[T]()`
+  - Each adapter interprets the schema appropriately for its provider
 
 - [ ] **2.2** Create `internal/gateway/ai_provider_mock.go`:
-  - `MockAIProviderClient` for testing
-  - Configurable responses and error injection
+  - `MockAIProviderClient` implementing `AIProviderClient`
+  - Configurable responses via struct fields
+  - Error injection support for testing error paths
+  - Record received requests for test assertions
 
-### Phase 3: Provider Adapters
+- [ ] **2.3** Verify Phase 2: `make test` passes, new types compile
 
-- [ ] **3.1** Create `internal/gateway/ai_provider_openai.go`:
-  - Implement `AIProviderClient` using OpenAI SDK
-  - Support `WithBaseURL()` for custom endpoints
-  - Support `WithHeader()` for custom headers from config
+### Phase 3A: OpenAI Adapter (No New Dependencies)
+
+- [ ] **3A.1** Create `internal/gateway/ai_provider_openai.go`:
+  - Implement `AIProviderClient` using existing OpenAI SDK
+  - Support `WithBaseURL()` for custom endpoints from config
+  - Support `WithHeader()` for custom headers from `config.Headers`
   - Map `AIRequest` to OpenAI SDK types
+  - Map `ResponseSchema` to OpenAI's `response_format` JSON schema
   - Extract `ProviderRequestID` from response
+  - Normalize errors to `AIProviderError` categories
 
-- [ ] **3.2** Create `internal/gateway/ai_provider_openai_compatible.go`:
-  - Implement `AIProviderClient` using direct REST calls
+- [ ] **3A.2** Add OpenAI adapter tests:
+  - Test request mapping (AIRequest -> OpenAI SDK types)
+  - Test response mapping (OpenAI response -> AICompletionResult)
+  - Test custom endpoint via `WithBaseURL()`
+  - Test custom headers via `WithHeader()`
+  - Test error normalization:
+    - HTTP 429 -> `rate_limited` (retryable=true)
+    - HTTP 401/403 -> `auth_error` (retryable=false)
+    - HTTP 400 -> `invalid_request` (retryable=false)
+    - context.DeadlineExceeded -> `timeout`
+    - Empty choices -> `no_response`
+
+- [ ] **3A.3** Verify Phase 3A: `make test` passes, OpenAI adapter works
+
+### Phase 3B: OpenAI-Compatible Adapter (REST, No New Dependencies)
+
+- [ ] **3B.1** Create `internal/gateway/ai_provider_openai_compatible.go`:
+  - Implement `AIProviderClient` using direct REST calls (net/http)
   - Use full URL from config (no path appending)
   - Append `query_params` to URL
   - Set `Authorization: Bearer {api_key}` header
-  - Add custom headers from config
+  - Add custom headers from `config.Headers`
+  - Build OpenAI-format request body
   - Parse OpenAI-format response
-  - **Note**: No retry logic (add code comment about limitation)
+  - Extract request ID from response headers if available
+  - **Add code comment**: `// NOTE: No automatic retry logic for openai_compatible. See spec for rationale.`
 
-- [ ] **3.3** Create `internal/gateway/ai_provider_anthropic.go`:
+- [ ] **3B.2** Add OpenAI-compatible adapter tests:
+  - Test full URL is used as-is (no path appending)
+  - Test query_params appended correctly
+  - Test Authorization header set correctly
+  - Test custom headers added
+  - Test response parsing
+  - Test error handling (no retry, just normalize errors)
+
+- [ ] **3B.3** Verify Phase 3B: `make test` passes
+
+### Phase 3C: Anthropic Adapter (New Dependency)
+
+- [ ] **3C.1** Add Anthropic SDK dependency:
+  - `go get github.com/anthropics/anthropic-sdk-go`
+  - Run `go mod tidy`
+  - Note: This adds ~33 dependencies and ~4MB to binary (see Section 7)
+
+- [ ] **3C.2** Create `internal/gateway/ai_provider_anthropic.go`:
   - Implement `AIProviderClient` using Anthropic SDK
-  - Read `max_tokens` from parameters (default 4096)
+  - Read `max_tokens` from `parameters` (default 4096)
   - Map `AIRequest` to Anthropic SDK types
-  - Handle Anthropic's different response format
+  - **Handle JSON schema**: Anthropic lacks native JSON schema enforcement
+    - Embed schema instructions in the prompt (append to UserPrompt)
+    - Validate response JSON against schema locally
+    - Return `parse_error` if validation fails
+  - Handle Anthropic's different response format (`content[].text` vs `choices[].message.content`)
   - Extract `ProviderRequestID` from response
 
-- [ ] **3.4** Create adapter factory function:
-  - `NewAIProviderClient(config) (AIProviderClient, error)`
-  - Select adapter based on `provider` config
-  - Return configured adapter instance
+- [ ] **3C.3** Add Anthropic adapter tests:
+  - Test request mapping with max_tokens from parameters
+  - Test default max_tokens (4096) when not in parameters
+  - Test JSON schema embedded in prompt
+  - Test response JSON validation against schema
+  - Test response parsing from Anthropic format
+  - Test error normalization
 
-- [ ] **3.5** Add adapter tests:
-  - Test each adapter's request/response mapping
-  - Test header construction
-  - Test error normalization to `AIProviderError`
+- [ ] **3C.4** Verify Phase 3C: `make test` passes
+
+### Phase 3D: Adapter Factory
+
+- [ ] **3D.1** Create adapter factory in `internal/gateway/ai_provider.go`:
+  ```go
+  func NewAIProviderClient(cfg *config.Config) (AIProviderClient, error)
+  ```
+  - Select adapter based on `cfg.Validation.AI.Provider`
+  - Apply default endpoints for openai/anthropic if not specified
+  - Return configured adapter instance
+  - Return error for unknown provider
+
+- [ ] **3D.2** Add factory tests:
+  - Test factory returns OpenAI adapter for `provider: openai`
+  - Test factory returns OpenAI-compatible adapter for `provider: openai_compatible`
+  - Test factory returns Anthropic adapter for `provider: anthropic`
+  - Test factory returns OpenAI adapter when provider is empty (backward compat)
+  - Test factory returns error for unknown provider
+
+- [ ] **3D.3** Verify Phase 3D: `make test` passes, all adapters selectable
 
 ### Phase 4: Engine Updates
 
 - [ ] **4.1** Update `internal/gateway/ai_engine.go`:
   - Replace direct OpenAI SDK usage with `AIProviderClient`
-  - Use adapter factory to create client
+  - Use adapter factory to create client (or accept injected client for testing)
   - Remove OpenAI SDK type imports from this file
+  - Pass `ResponseSchema` through to adapter
 
 - [ ] **4.2** Update `internal/gateway/ai_response_engine.go`:
   - Replace direct OpenAI SDK usage with `AIProviderClient`
@@ -935,13 +1042,16 @@ This checklist provides a concrete task list for implementing the spec. Tasks ar
   - Remove OpenAI SDK type imports from this file
 
 - [ ] **4.3** Fix `internal/gateway/audit_report_tool.go`:
-  - **Bug fix**: Use configured `validation.ai.endpoint` (currently ignores it)
+  - **Bug fix**: Use configured `validation.ai.endpoint` (currently ignores it at line ~326)
   - Replace direct OpenAI SDK usage with `AIProviderClient`
   - Use adapter factory to create client
 
 - [ ] **4.4** Update engine tests:
   - Use `MockAIProviderClient` instead of OpenAI SDK mocks
-  - Verify engines work with all three provider types
+  - Update test assertions to use provider-agnostic types
+  - Verify engines work with mock returning various responses/errors
+
+- [ ] **4.5** Verify Phase 4: `make test` passes, engines use new interface
 
 ### Phase 5: Audit Log Updates
 
@@ -955,48 +1065,66 @@ This checklist provides a concrete task list for implementing the spec. Tasks ar
   }
   ```
 
-- [ ] **5.2** Add `AI *AuditAIProvider` field to `AuditEntry` struct
+- [ ] **5.2** Add `AI *AuditAIProvider` field to `AuditEntry` struct (with `omitempty`)
 
-- [ ] **5.3** Add `RequestID string` field to `AuditAIResult` struct
+- [ ] **5.3** Add `RequestID string` field to `AuditAIResult` struct (with `omitempty`)
 
 - [ ] **5.4** Update audit entry population:
   - Populate `AI` field when AI validation is enabled
-  - Parse endpoint URL to extract host and path (strip query params)
+  - Parse endpoint URL to extract host and path
+  - **Security**: Strip query params from `endpoint_path` (may contain secrets)
   - Populate `RequestID` from `AICompletionResult.ProviderRequestID`
 
 - [ ] **5.5** Update `docs/specs/validation-chain-audit-schema.md` with new fields
 
 - [ ] **5.6** Add audit entry tests:
-  - Verify new fields are populated correctly
-  - Verify query params are stripped from `endpoint_path`
-  - Verify `request_id` is captured when provider returns it
+  - Verify `AI` field populated when AI validation enabled
+  - Verify `AI` field omitted when AI validation disabled
+  - Verify `endpoint_path` strips query parameters
+  - Verify `request_id` captured when provider returns it
+  - Verify `request_id` omitted when provider doesn't return it
 
-### Phase 6: Dependencies and Cleanup
+- [ ] **5.7** Verify Phase 5: `make test` passes, audit logs correct
 
-- [ ] **6.1** Add Anthropic SDK dependency:
-  - `go get github.com/anthropics/anthropic-sdk-go`
-  - Run `go mod tidy`
+### Phase 6: Documentation and Cleanup
 
-- [ ] **6.2** Update example config file `config/maybe-dont.yaml`:
-  - Add `provider` field with default
-  - Add `parameters` section with examples
+- [ ] **6.1** Update example config file `config/maybe-dont.yaml`:
+  - Add `provider` field with default value
+  - Add `parameters` section with commented examples
+  - Add `query_params` section with commented Azure example
+  - Add `headers` section with commented example
   - Add comments explaining provider-specific options
 
-- [ ] **6.3** Run full test suite: `make test`
+- [ ] **6.2** Run full test suite: `make test`
 
-- [ ] **6.4** Run linter: `make lint`
+- [ ] **6.3** Run linter: `make lint`
 
-- [ ] **6.5** Manual testing:
-  - Test with OpenAI (default)
-  - Test with Anthropic (if API key available)
-  - Test with openai_compatible endpoint (e.g., local stub server)
+- [ ] **6.4** Manual testing (if API keys available):
+  - Test with OpenAI (default config, no provider field)
+  - Test with OpenAI (explicit `provider: openai`)
+  - Test with Anthropic (`provider: anthropic`)
+  - Test with openai_compatible using local stub server or LiteLLM
 
 ### Verification Criteria
 
 Before marking implementation complete:
-- [ ] All existing tests pass
-- [ ] New tests cover all adapters and config scenarios
-- [ ] Linter passes with no new warnings
-- [ ] Config with no `provider` field works (backward compatibility)
-- [ ] Audit logs contain new fields when AI validation runs
-- [ ] `audit_report_tool.go` uses configured endpoint (bug fixed)
+- [ ] All existing tests pass (`make test`)
+- [ ] Linter passes (`make lint`)
+- [ ] New tests cover:
+  - All three adapters (openai, openai_compatible, anthropic)
+  - Config loading and validation for all new fields
+  - Error normalization for each adapter
+  - Audit log field population
+- [ ] Backward compatibility verified:
+  - Config with no `provider` field works (defaults to openai)
+  - Existing config format (endpoint/model/api_key only) works
+  - Deprecation warning logged when `provider` is unset
+- [ ] Bug fix verified: `audit_report_tool.go` uses configured endpoint
+- [ ] Audit logs contain new fields (`ai.provider`, `ai.model`, `ai.endpoint_host`, `ai.endpoint_path`, `request_id`)
+
+### Known Limitations (Document in Code)
+
+When implementing, add comments for these documented limitations:
+1. **openai_compatible**: No automatic retry logic (add to 3B.1)
+2. **Anthropic JSON schema**: Embedded in prompt, validated locally (add to 3C.2)
+3. **Rate limits for openai_compatible**: Requests fail immediately on 429 (no backoff)
