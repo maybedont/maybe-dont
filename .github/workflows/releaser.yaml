@@ -52,16 +52,3 @@ jobs:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           METRICS_API_TOKEN: ${{ secrets.METRICS_API_TOKEN }}
           METRICS_DATASET: ${{ secrets.METRICS_DATASET }}
-      - name: Update website repository
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          VERSION=${{ github.ref }}
-          echo "Running release script for version: $VERSION"
-
-          # Set environment variables for the release script
-          export GITHUB_TOKEN="${{ secrets.WEBSITE_DEPLOY_TOKEN }}"
-          export VERSION="$VERSION"
-          export DIST_DIR="./dist"
-
-          # Run the release script
-          ./scripts/release.sh --merge
