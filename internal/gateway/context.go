@@ -27,6 +27,10 @@ const (
 	// for lazy credential extraction when making downstream requests.
 	// Value type: http.Header
 	RawRequestHeadersKey contextKey = "raw_request_headers"
+
+	// CallerKey stores the caller identifier from the gateway auth header.
+	// Value type: string
+	CallerKey contextKey = "caller"
 )
 
 // RequestIDKey stores the request ID for tracking capabilities per session
@@ -66,6 +70,17 @@ func WithRawRequestHeaders(ctx context.Context, headers http.Header) context.Con
 func GetRawRequestHeaders(ctx context.Context) (http.Header, bool) {
 	headers, ok := ctx.Value(RawRequestHeadersKey).(http.Header)
 	return headers, ok
+}
+
+// WithCaller adds the caller identifier to the context.
+func WithCaller(ctx context.Context, caller string) context.Context {
+	return context.WithValue(ctx, CallerKey, caller)
+}
+
+// GetCaller retrieves the caller identifier from the context.
+func GetCaller(ctx context.Context) (string, bool) {
+	caller, ok := ctx.Value(CallerKey).(string)
+	return caller, ok
 }
 
 // ServiceCredentials stores authentication credentials for all downstream MCP clients.

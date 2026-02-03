@@ -709,7 +709,7 @@ Place the skill file in one of:
 
 The core instruction for any AI agent:
 
-> All CLI commands that interact with external services must be prefixed with `maybe-dont cli --`. This routes commands through a security validation gateway. If a command is denied, explain the denial reason to the user and suggest alternatives.
+> All CLI commands that interact with external services must be prefixed with `maybe-dont cli --`. This routes commands through a validation gateway. If a command is denied, explain the denial reason to the user and suggest alternatives.
 
 **Adaptation patterns by agent:**
 
