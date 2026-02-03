@@ -845,3 +845,158 @@ Current policies are user-message-only. To preserve behavior:
 7. **Retry strategy**: SDK handles retries for `openai` and `anthropic` (429, 5xx, network errors with backoff). No automatic retries for `openai_compatible` (documented limitation; can be added later if needed).
 8. **Audit log metadata**: Include `provider`, `model`, `endpoint_host`, `endpoint_path` (no query params), and per-call `request_id` in audit logs for debugging.
 9. **Prompt reliability evaluation**: Out of scope for this spec. Will be addressed in a separate spec for AI validation testing and evaluation.
+
+## Implementation Checklist
+
+This checklist provides a concrete task list for implementing the spec. Tasks are ordered to maintain working tests throughout development.
+
+### Phase 1: Configuration and Types
+
+- [ ] **1.1** Add new config fields to `internal/config/config.go`:
+  - `Provider string` (openai, openai_compatible, anthropic)
+  - `Parameters map[string]any` (provider-specific parameters)
+  - `QueryParams map[string]string` (URL query parameters)
+  - Keep existing fields (`Endpoint`, `Model`, `APIKey`) for backward compatibility
+
+- [ ] **1.2** Add config validation in `internal/config/config.go`:
+  - Validate `provider` is one of: openai, openai_compatible, anthropic
+  - Default to "openai" with deprecation warning if `provider` is unset
+  - Require `endpoint` when `provider` is "openai_compatible"
+  - Call provider-specific parameter validation
+
+- [ ] **1.3** Add provider parameter validation:
+  - For "anthropic": ensure `max_tokens` has a default (4096) if not specified
+  - Return clear error messages for missing required parameters
+
+- [ ] **1.4** Add config tests in `internal/config/config_test.go`:
+  - Test provider field loading and validation
+  - Test parameters map loading from YAML and env vars
+  - Test query_params loading
+  - Test backward compatibility (provider unset defaults to openai)
+  - Test env var override: `MAYBE_DONT_VALIDATION_AI_PARAMETERS_MAX_TOKENS`
+
+### Phase 2: Provider-Agnostic Interface
+
+- [ ] **2.1** Create `internal/gateway/ai_provider.go` with:
+  - `AIProviderClient` interface with `Generate(ctx, AIRequest) (AICompletionResult, error)`
+  - `AIRequest` struct (Model, SystemPrompt, UserPrompt, ResponseSchema, Parameters, Metadata)
+  - `AICompletionResult` struct (RawText, ParsedJSON, ProviderRequestID)
+  - `AIProviderError` struct (Category, Message, Retryable)
+
+- [ ] **2.2** Create `internal/gateway/ai_provider_mock.go`:
+  - `MockAIProviderClient` for testing
+  - Configurable responses and error injection
+
+### Phase 3: Provider Adapters
+
+- [ ] **3.1** Create `internal/gateway/ai_provider_openai.go`:
+  - Implement `AIProviderClient` using OpenAI SDK
+  - Support `WithBaseURL()` for custom endpoints
+  - Support `WithHeader()` for custom headers from config
+  - Map `AIRequest` to OpenAI SDK types
+  - Extract `ProviderRequestID` from response
+
+- [ ] **3.2** Create `internal/gateway/ai_provider_openai_compatible.go`:
+  - Implement `AIProviderClient` using direct REST calls
+  - Use full URL from config (no path appending)
+  - Append `query_params` to URL
+  - Set `Authorization: Bearer {api_key}` header
+  - Add custom headers from config
+  - Parse OpenAI-format response
+  - **Note**: No retry logic (add code comment about limitation)
+
+- [ ] **3.3** Create `internal/gateway/ai_provider_anthropic.go`:
+  - Implement `AIProviderClient` using Anthropic SDK
+  - Read `max_tokens` from parameters (default 4096)
+  - Map `AIRequest` to Anthropic SDK types
+  - Handle Anthropic's different response format
+  - Extract `ProviderRequestID` from response
+
+- [ ] **3.4** Create adapter factory function:
+  - `NewAIProviderClient(config) (AIProviderClient, error)`
+  - Select adapter based on `provider` config
+  - Return configured adapter instance
+
+- [ ] **3.5** Add adapter tests:
+  - Test each adapter's request/response mapping
+  - Test header construction
+  - Test error normalization to `AIProviderError`
+
+### Phase 4: Engine Updates
+
+- [ ] **4.1** Update `internal/gateway/ai_engine.go`:
+  - Replace direct OpenAI SDK usage with `AIProviderClient`
+  - Use adapter factory to create client
+  - Remove OpenAI SDK type imports from this file
+
+- [ ] **4.2** Update `internal/gateway/ai_response_engine.go`:
+  - Replace direct OpenAI SDK usage with `AIProviderClient`
+  - Use adapter factory to create client
+  - Remove OpenAI SDK type imports from this file
+
+- [ ] **4.3** Fix `internal/gateway/audit_report_tool.go`:
+  - **Bug fix**: Use configured `validation.ai.endpoint` (currently ignores it)
+  - Replace direct OpenAI SDK usage with `AIProviderClient`
+  - Use adapter factory to create client
+
+- [ ] **4.4** Update engine tests:
+  - Use `MockAIProviderClient` instead of OpenAI SDK mocks
+  - Verify engines work with all three provider types
+
+### Phase 5: Audit Log Updates
+
+- [ ] **5.1** Add `AuditAIProvider` struct to `internal/gateway/audit_entry.go`:
+  ```go
+  type AuditAIProvider struct {
+      Provider     string `json:"provider"`
+      Model        string `json:"model"`
+      EndpointHost string `json:"endpoint_host"`
+      EndpointPath string `json:"endpoint_path"`
+  }
+  ```
+
+- [ ] **5.2** Add `AI *AuditAIProvider` field to `AuditEntry` struct
+
+- [ ] **5.3** Add `RequestID string` field to `AuditAIResult` struct
+
+- [ ] **5.4** Update audit entry population:
+  - Populate `AI` field when AI validation is enabled
+  - Parse endpoint URL to extract host and path (strip query params)
+  - Populate `RequestID` from `AICompletionResult.ProviderRequestID`
+
+- [ ] **5.5** Update `docs/specs/validation-chain-audit-schema.md` with new fields
+
+- [ ] **5.6** Add audit entry tests:
+  - Verify new fields are populated correctly
+  - Verify query params are stripped from `endpoint_path`
+  - Verify `request_id` is captured when provider returns it
+
+### Phase 6: Dependencies and Cleanup
+
+- [ ] **6.1** Add Anthropic SDK dependency:
+  - `go get github.com/anthropics/anthropic-sdk-go`
+  - Run `go mod tidy`
+
+- [ ] **6.2** Update example config file `config/maybe-dont.yaml`:
+  - Add `provider` field with default
+  - Add `parameters` section with examples
+  - Add comments explaining provider-specific options
+
+- [ ] **6.3** Run full test suite: `make test`
+
+- [ ] **6.4** Run linter: `make lint`
+
+- [ ] **6.5** Manual testing:
+  - Test with OpenAI (default)
+  - Test with Anthropic (if API key available)
+  - Test with openai_compatible endpoint (e.g., local stub server)
+
+### Verification Criteria
+
+Before marking implementation complete:
+- [ ] All existing tests pass
+- [ ] New tests cover all adapters and config scenarios
+- [ ] Linter passes with no new warnings
+- [ ] Config with no `provider` field works (backward compatibility)
+- [ ] Audit logs contain new fields when AI validation runs
+- [ ] `audit_report_tool.go` uses configured endpoint (bug fixed)
