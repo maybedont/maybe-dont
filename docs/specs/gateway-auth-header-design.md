@@ -86,9 +86,11 @@ Transports are mutually exclusive via the `server.type` configuration field. Aut
 | SSE (`type: sse`) | Yes | Server-Sent Events transport |
 | STDIO (`type: stdio`) | No | No HTTP layer, not applicable |
 
-**Inactive endpoint handling**: When a transport is not active, requests to its endpoint return a helpful 404:
+**Inactive endpoint handling**: When a transport is not active and auth is disabled, requests to its endpoint return a helpful 404:
 - `type: http` → requests to `/sse` return `404 Not Found: SSE transport not enabled. Server configured for HTTP transport.`
 - `type: sse` → requests to `/mcp` return `404 Not Found: HTTP transport not enabled. Server configured for SSE transport.`
+
+**Note**: When auth is enabled, unauthenticated requests to inactive endpoints return `401 Unauthorized` (not 404). This is intentional - authentication is enforced before endpoint routing to avoid leaking endpoint availability information to unauthenticated users.
 
 ### Value Handling
 

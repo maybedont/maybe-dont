@@ -432,6 +432,65 @@ func TestInactiveTransportEndpoint_MCP_Returns404(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), "SSE transport")
 }
 
+// TestInactiveTransportEndpoint_Returns401WhenAuthEnabled verifies that when auth is enabled,
+// unauthenticated requests to inactive endpoints return 401 (not 404).
+// This is the expected security behavior - don't reveal endpoint information to unauthenticated users.
+func TestInactiveTransportEndpoint_Returns401WhenAuthEnabled(t *testing.T) {
+	// Create mux with inactive endpoint handler
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/sse", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "Not Found: SSE transport not enabled.", http.StatusNotFound)
+	})
+
+	// Wrap with auth middleware (enabled)
+	cfg := &CallerAuthConfig{
+		HeaderName:    "X-MaybeDont-Caller",
+		AllowedValues: []AllowedValue{{Original: "allowed", IsGlob: false}},
+		Enabled:       true,
+	}
+	handler := AuthMiddleware(cfg, mux)
+
+	// Request to inactive endpoint WITHOUT auth header
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	// Should get 401, not 404 - auth takes precedence
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	assert.Contains(t, rr.Body.String(), "missing required header")
+}
+
+// TestInactiveTransportEndpoint_Returns404WhenAuthDisabled verifies that when auth is disabled,
+// requests to inactive endpoints return helpful 404 messages.
+func TestInactiveTransportEndpoint_Returns404WhenAuthDisabled(t *testing.T) {
+	// Create mux with inactive endpoint handler
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/sse", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "Not Found: SSE transport not enabled. Server configured for HTTP transport.", http.StatusNotFound)
+	})
+
+	// Wrap with auth middleware (disabled)
+	cfg := &CallerAuthConfig{Enabled: false}
+	handler := AuthMiddleware(cfg, mux)
+
+	// Request to inactive endpoint (no auth needed)
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	// Should get helpful 404
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+	assert.Contains(t, rr.Body.String(), "SSE transport not enabled")
+}
+
 // --- extractCallerFromRequest Tests ---
 
 // TestExtractCallerFromRequest_ExtractsCallerWhenAuthEnabled verifies caller is added to context.
