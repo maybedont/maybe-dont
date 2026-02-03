@@ -579,6 +579,20 @@ export MAYBE_DONT_REQUIRED_HEADER_VALUE="*@mycompany.com"
 |------|--------|
 | `internal/gateway/auth_middleware.go` | Create (middleware, config loading, glob matching) |
 | `internal/gateway/auth_middleware_test.go` | Create |
+| `internal/gateway/context.go` | Modify to add `CallerKey`, `WithCaller()`, `GetCaller()` |
 | `internal/gateway/gateway.go` | Modify to add `callerAuthConfig` field and load at startup |
-| `internal/gateway/server.go` | Modify `initHTTPServer`, `initSSEServer`, and `extractAuthFromRequest` |
-| `internal/gateway/session.go` | Modify to log caller at session init |
+| `internal/gateway/server.go` | Modify `initHTTPServer`, `initSSEServer`, `extractAuthFromRequest`, and `onSessionRegister` for caller logging |
+
+## Implementation Notes
+
+The following clarifications were added during implementation planning:
+
+1. **Config validation regardless of transport**: Invalid auth config patterns cause startup failure even for STDIO transport (fail-fast principle)
+
+2. **Context helpers location**: `CallerKey`, `WithCaller()`, and `GetCaller()` go in `context.go` following existing patterns
+
+3. **Session logging location**: Caller logging happens in `onSessionRegister()` in `server.go` (not a separate `session.go`)
+
+4. **SSE endpoint mounting**: SSEServer requires mounting both `/sse` and `/message` endpoints on the mux before wrapping with auth middleware
+
+5. **Server lifecycle preservation**: The custom `http.Server` approach must preserve existing error channel + context cancellation patterns for startup/shutdown
