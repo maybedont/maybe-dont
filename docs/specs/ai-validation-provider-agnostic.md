@@ -67,7 +67,7 @@ Where `AIRequest` is a vendor-neutral structure:
 - `SystemPrompt string` (optional)
 - `UserPrompt string`
 - `ResponseSchema JSONSchema` (optional, for structured JSON responses)
-- `Options map[string]any` (provider-specific options from config)
+- `Parameters map[string]any` (provider-specific parameters from config)
 - `Metadata map[string]string` (optional; for audit/correlation)
 
 To avoid colliding with the existing `AIResponse` (the validation schema), the provider response wrapper should be named
@@ -125,7 +125,7 @@ validation:
     endpoint: ""              # optional for openai/anthropic (uses default), required for openai_compatible
     model: "gpt-4o-mini"
     api_key: "${OPENAI_API_KEY}"
-    options:                  # provider-specific options (see Provider Options below)
+    parameters:               # provider-specific parameters (see Provider Parameters below)
       max_tokens: 4096
       temperature: 0.0
     query_params:             # optional query parameters (e.g., for Azure api-version)
@@ -137,9 +137,9 @@ validation:
       prefix: "Bearer "       # optional override (default varies by provider)
 ```
 
-#### Provider Options
+#### Provider Parameters
 
-The `options` field is a generic key-value map for provider-specific parameters. Each adapter reads the options it needs and validates required options during config validation (fail-fast).
+The `parameters` field is a generic key-value map for provider-specific API parameters. Each adapter reads the parameters it needs and validates required parameters during config validation (fail-fast).
 
 | Provider | Option | Required? | Default | Description |
 |----------|--------|-----------|---------|-------------|
@@ -149,11 +149,11 @@ The `options` field is a generic key-value map for provider-specific parameters.
 
 **Environment variable support:**
 ```bash
-export MAYBE_DONT_VALIDATION_AI_OPTIONS_MAX_TOKENS=4096
-export MAYBE_DONT_VALIDATION_AI_OPTIONS_TEMPERATURE=0.0
+export MAYBE_DONT_VALIDATION_AI_PARAMETERS_MAX_TOKENS=4096
+export MAYBE_DONT_VALIDATION_AI_PARAMETERS_TEMPERATURE=0.0
 ```
 
-**Provider validation:** During config validation, each provider adapter validates that required options are present. Missing required options cause startup failure with a clear error message (e.g., `provider "anthropic" requires option "max_tokens"`). If a required option has a sensible default (like `max_tokens: 4096`), the adapter applies the default rather than failing.
+**Provider validation:** During config validation, each provider adapter validates that required parameters are present. Missing required parameters cause startup failure with a clear error message (e.g., `provider "anthropic" requires parameter "max_tokens"`). If a required parameter has a sensible default (like `max_tokens: 4096`), the adapter applies the default rather than failing.
 
 #### Default Endpoints by Provider
 
@@ -178,12 +178,12 @@ The `endpoint` field has different semantics depending on the provider:
 Notes:
 - `provider` is required and explicit (no auto-detection from URL). For backward compatibility, if `provider` is unset, default to `openai` and log a deprecation warning.
 - `endpoint` is optional for `openai` and `anthropic` (sensible defaults applied); required for `openai_compatible`.
-- `options` is a generic map for provider-specific parameters; each adapter validates its required options during startup.
+- `parameters` is a generic map for provider-specific API parameters; each adapter validates its required parameters during startup.
 - `query_params` is optional and appended to requests (useful for Azure's `api-version` requirement).
 - `headers` are passed to SDK clients via `WithHeader()` options, allowing custom headers for proxies or special requirements.
 - For `anthropic`, the adapter applies default header conventions (`x-api-key`, `anthropic-version`) unless overridden via `headers` or `auth`.
 - Keep `endpoint`, `model`, and `api_key` as-is for backward compatibility.
-- Preserve environment-variable override behavior (e.g., `MAYBE_DONT_VALIDATION_AI_*`, `MAYBE_DONT_VALIDATION_AI_OPTIONS_*`).
+- Preserve environment-variable override behavior (e.g., `MAYBE_DONT_VALIDATION_AI_*`, `MAYBE_DONT_VALIDATION_AI_PARAMETERS_*`).
 
 #### Configuration Examples
 
@@ -215,7 +215,7 @@ validation:
     model: "claude-sonnet-4-5-20250929"
     api_key: "${ANTHROPIC_API_KEY}"
     # endpoint omitted - uses default https://api.anthropic.com/v1
-    options:
+    parameters:
       max_tokens: 4096  # required for Anthropic, default applied if omitted
 ```
 
@@ -514,9 +514,9 @@ if len(config.QueryParams) > 0 {
 client := anthropic.NewClient(option.WithAPIKey(apiKey))
 // SDK handles x-api-key header and anthropic-version automatically
 
-// Read max_tokens from options (required for Anthropic)
+// Read max_tokens from parameters (required for Anthropic)
 maxTokens := 4096 // default
-if v, ok := config.Options["max_tokens"]; ok {
+if v, ok := config.Parameters["max_tokens"]; ok {
     maxTokens = v.(int)
 }
 ```
@@ -756,7 +756,7 @@ Future CLI tool-call support:
 2. Create OpenAI adapter wrapping the existing SDK, supporting `WithBaseURL()` for custom endpoints.
 3. Create OpenAI-compatible adapter using direct REST calls for full URL control.
 4. Add Anthropic adapter using official SDK (`anthropic-sdk-go`).
-5. Update configuration to support `provider`, `options`, `query_params` fields.
+5. Update configuration to support `provider`, `parameters`, `query_params` fields.
 6. Update audit log schema with provider metadata fields (`endpoint_host`, `endpoint_path`).
 7. Add configuration docs and migration notes.
 
@@ -839,7 +839,7 @@ Current policies are user-message-only. To preserve behavior:
 1. **Provider detection**: Explicit `provider` configuration required (no auto-detection from URL). For backward compatibility, if `provider` is unset, default to `openai` with a deprecation warning. Default endpoints are applied per provider unless overridden.
 2. **SDK vs REST**: Using official SDKs for `openai` and `anthropic`. Using direct REST for `openai_compatible` to support arbitrary URL structures. REST-only alternative for all providers documented in Section 7 for future consideration.
 3. **Endpoint semantics**: For SDK providers (`openai`, `anthropic`), `endpoint` is a base URL and the SDK appends the API path. For `openai_compatible`, `endpoint` is the full URL to the chat completions endpoint.
-4. **Provider-specific options**: Added generic `options` map for provider-specific parameters (e.g., `max_tokens`, `temperature`). Each adapter validates required options during config validation (fail-fast). Supports env vars like `MAYBE_DONT_VALIDATION_AI_OPTIONS_MAX_TOKENS=4096`.
+4. **Provider-specific parameters**: Added generic `parameters` map for provider-specific API parameters (e.g., `max_tokens`, `temperature`). Each adapter validates required parameters during config validation (fail-fast). Supports env vars like `MAYBE_DONT_VALIDATION_AI_PARAMETERS_MAX_TOKENS=4096`.
 5. **Query parameters**: Added `query_params` config field for providers that require URL query parameters (e.g., Azure's `api-version`).
 6. **Custom headers**: The `headers` config field is passed to SDK clients via `WithHeader()` options, supporting proxies and custom requirements.
 7. **Retry strategy**: SDK handles retries for `openai` and `anthropic` (429, 5xx, network errors with backoff). No automatic retries for `openai_compatible` (documented limitation; can be added later if needed).
