@@ -68,7 +68,7 @@ Where `AIRequest` is a vendor-neutral structure:
 - `UserPrompt string`
 - `ResponseSchema JSONSchema` (optional, for structured JSON responses)
 - `Temperature *float64` (optional)
-- `MaxTokens *int` (optional)
+- `MaxTokens int` (from config, default 4096; required for Anthropic, optional for OpenAI)
 - `Metadata map[string]string` (optional; for audit/correlation)
 
 To avoid colliding with the existing `AIResponse` (the validation schema), the provider response wrapper should be named
@@ -126,7 +126,10 @@ validation:
     endpoint: ""              # optional for openai/anthropic (uses default), required for openai_compatible
     model: "gpt-4o-mini"
     api_key: "${OPENAI_API_KEY}"
-    headers:                  # optional additional headers
+    max_tokens: 4096          # optional, default 4096 (required for Anthropic, applied automatically)
+    query_params:             # optional query parameters (e.g., for Azure api-version)
+      api-version: "2024-02-15-preview"
+    headers:                  # optional additional headers (passed to SDK via WithHeader options)
       X-Custom-Header: "value"
     auth:
       header: "Authorization" # optional override (default varies by provider)
@@ -137,27 +140,52 @@ validation:
 
 | Provider | Default Endpoint | Endpoint Required? |
 |----------|------------------|-------------------|
-| `openai` | `https://api.openai.com/v1/chat/completions` | No (uses default, can override) |
-| `anthropic` | `https://api.anthropic.com/v1/messages` | No (uses default, can override) |
-| `openai_compatible` | None | **Yes** (must specify) |
+| `openai` | `https://api.openai.com/v1` | No (uses default, can override) |
+| `anthropic` | `https://api.anthropic.com/v1` | No (uses default, can override) |
+| `openai_compatible` | None | **Yes** (must specify full URL) |
+
+#### Endpoint Semantics by Provider
+
+The `endpoint` field has different semantics depending on the provider:
+
+| Provider | Endpoint Type | SDK/REST | Description |
+|----------|---------------|----------|-------------|
+| `openai` | Base URL | SDK | SDK appends `/chat/completions`. Example: `https://api.openai.com/v1` |
+| `anthropic` | Base URL | SDK | SDK appends `/messages`. Example: `https://api.anthropic.com/v1` |
+| `openai_compatible` | **Full URL** | REST | Complete URL to the chat completions endpoint. Example: `https://my-proxy.com/v1/chat/completions` |
+
+**Why the difference?** For `openai` and `anthropic`, we use official SDKs that expect a base URL and append their known API paths. For `openai_compatible`, we use direct REST calls to give full control over the URL structure, supporting any OpenAI-compatible endpoint regardless of path conventions.
 
 Notes:
-- `provider` is required and explicit (no auto-detection from URL).
+- `provider` is required and explicit (no auto-detection from URL). For backward compatibility, if `provider` is unset, default to `openai` and log a deprecation warning.
 - `endpoint` is optional for `openai` and `anthropic` (sensible defaults applied); required for `openai_compatible`.
+- `max_tokens` defaults to 4096. This is required for Anthropic API calls; the adapter applies it automatically.
+- `query_params` is optional and appended to requests (useful for Azure's `api-version` requirement).
+- `headers` are passed to SDK clients via `WithHeader()` options, allowing custom headers for proxies or special requirements.
 - For `anthropic`, the adapter applies default header conventions (`x-api-key`, `anthropic-version`) unless overridden via `headers` or `auth`.
 - Keep `endpoint`, `model`, and `api_key` as-is for backward compatibility.
 - Preserve environment-variable override behavior (e.g., `MAYBE_DONT_VALIDATION_AI_*`).
 
 #### Configuration Examples
 
-**Google Gemini (via OpenAI-compatible endpoint):**
+**OpenAI (default, minimal config):**
 ```yaml
 validation:
   ai:
-    provider: "openai_compatible"
-    endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/"
-    model: "gemini-2.5-flash"  # Use 2.5+ for full JSON schema support
-    api_key: "${GEMINI_API_KEY}"
+    provider: "openai"
+    model: "gpt-4o-mini"
+    api_key: "${OPENAI_API_KEY}"
+    # endpoint omitted - uses default https://api.openai.com/v1
+```
+
+**OpenAI with custom proxy (base URL):**
+```yaml
+validation:
+  ai:
+    provider: "openai"
+    endpoint: "https://my-proxy.com/openai/v1"  # SDK appends /chat/completions
+    model: "gpt-4o-mini"
+    api_key: "${OPENAI_API_KEY}"
 ```
 
 **Anthropic Claude:**
@@ -165,9 +193,32 @@ validation:
 validation:
   ai:
     provider: "anthropic"
-    endpoint: "https://api.anthropic.com/v1/messages"
     model: "claude-sonnet-4-5-20250929"
     api_key: "${ANTHROPIC_API_KEY}"
+    # endpoint omitted - uses default https://api.anthropic.com/v1
+    # max_tokens omitted - uses default 4096
+```
+
+**Google Gemini (via OpenAI-compatible endpoint):**
+```yaml
+validation:
+  ai:
+    provider: "openai_compatible"
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"  # Full URL
+    model: "gemini-2.5-flash"  # Use 2.5+ for full JSON schema support
+    api_key: "${GEMINI_API_KEY}"
+```
+
+**Azure OpenAI (with query params):**
+```yaml
+validation:
+  ai:
+    provider: "openai_compatible"
+    endpoint: "https://my-resource.openai.azure.com/openai/deployments/my-deployment/chat/completions"
+    model: "gpt-4o-mini"
+    api_key: "${AZURE_OPENAI_API_KEY}"
+    query_params:
+      api-version: "2024-02-15-preview"
 ```
 
 **LiteLLM (routing to any backend):**
@@ -175,7 +226,7 @@ validation:
 validation:
   ai:
     provider: "openai_compatible"
-    endpoint: "http://localhost:4000/v1/chat/completions"
+    endpoint: "http://localhost:4000/v1/chat/completions"  # Full URL
     model: "gpt-4o-mini"  # or any model configured in LiteLLM
     api_key: "${LITELLM_API_KEY}"
 ```
@@ -372,15 +423,17 @@ For future reference, here is the analysis for removing all SDKs and using REST 
 - ~100 lines of existing code to modify
 - Need to handle edge cases SDKs already handle
 
-#### Decision: SDK Approach
+#### Decision: SDK for Known Providers, REST for OpenAI-Compatible
 
-Given that SDK binary impact is modest (+4 MB for Anthropic) and reduces code maintenance burden, we will use **official SDKs for all providers**:
+Given that SDK binary impact is modest (+4 MB for Anthropic) and reduces code maintenance burden, we will use **official SDKs for known providers** and **direct REST for openai_compatible**:
 
 | Provider | Approach | Rationale |
 |----------|----------|-----------|
 | `openai` | **OpenAI SDK** | Already integrated, lightweight (+0.5 MB, 5 deps) |
-| `openai_compatible` | **OpenAI SDK** | Same SDK with `WithBaseURL()` option |
+| `openai_compatible` | **Direct REST** | Full control over URL structure; no path assumptions |
 | `anthropic` | **Anthropic SDK** | Official SDK, +4 MB acceptable vs. ~150 lines custom code |
+
+**Why REST for `openai_compatible`?** The OpenAI SDK's `WithBaseURL()` expects a base URL and appends `/chat/completions`. This doesn't work for endpoints with non-standard path structures. Using direct REST calls for `openai_compatible` gives users full control over the URL.
 
 **Final binary impact:**
 - Current: 35 MB, 72 dependencies
@@ -390,43 +443,73 @@ Given that SDK binary impact is modest (+4 MB for Anthropic) and reduces code ma
 
 #### Provider Implementation Summary
 
-| Provider | SDK | API Endpoint | Auth |
-|----------|-----|--------------|------|
-| `openai` | `github.com/openai/openai-go` | `https://api.openai.com/v1/chat/completions` | `Authorization: Bearer {key}` |
-| `openai_compatible` | `github.com/openai/openai-go` | Configurable via `endpoint` | `Authorization: Bearer {key}` |
-| `anthropic` | `github.com/anthropics/anthropic-sdk-go` | `https://api.anthropic.com/v1/messages` | `x-api-key: {key}` |
+| Provider | Implementation | API Endpoint | Auth |
+|----------|----------------|--------------|------|
+| `openai` | OpenAI SDK | `https://api.openai.com/v1` (base) | `Authorization: Bearer {key}` |
+| `openai_compatible` | Direct REST | Full URL from config | `Authorization: Bearer {key}` |
+| `anthropic` | Anthropic SDK | `https://api.anthropic.com/v1` (base) | `x-api-key: {key}` |
 
 #### Implementation Details
 
-**OpenAI and OpenAI-compatible** (SDK):
+**OpenAI** (SDK):
 ```go
 // openai (default endpoint)
 client := openai.NewClient(option.WithAPIKey(apiKey))
 
-// openai_compatible (custom endpoint)
+// openai with custom base URL (e.g., proxy)
 client := openai.NewClient(
     option.WithAPIKey(apiKey),
-    option.WithBaseURL(endpoint), // e.g., Gemini, LiteLLM, Azure
+    option.WithBaseURL(endpoint), // base URL only, SDK appends /chat/completions
 )
+
+// Custom headers passed via SDK options
+client := openai.NewClient(
+    option.WithAPIKey(apiKey),
+    option.WithHeader("X-Custom-Header", "value"),
+)
+```
+
+**OpenAI-compatible** (Direct REST):
+```go
+// Direct HTTP call to the configured full URL
+req, _ := http.NewRequest("POST", endpoint, body) // endpoint is full URL
+req.Header.Set("Authorization", "Bearer "+apiKey)
+req.Header.Set("Content-Type", "application/json")
+// Add any custom headers from config
+for k, v := range config.Headers {
+    req.Header.Set(k, v)
+}
+// Append query params if configured
+if len(config.QueryParams) > 0 {
+    q := req.URL.Query()
+    for k, v := range config.QueryParams {
+        q.Set(k, v)
+    }
+    req.URL.RawQuery = q.Encode()
+}
 ```
 
 **Anthropic** (SDK):
 ```go
 client := anthropic.NewClient(option.WithAPIKey(apiKey))
 // SDK handles x-api-key header and anthropic-version automatically
+// max_tokens is required - use config value or default (4096)
 ```
 
 #### Common OpenAI-compatible Endpoints
 
-| Service | Endpoint |
-|---------|----------|
-| OpenAI | `https://api.openai.com/v1/chat/completions` (default) |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` |
-| Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{deployment}/` |
-| LiteLLM | `http://localhost:4000/v1/chat/completions` (configurable) |
-| Ollama | `http://localhost:11434/v1/chat/completions` |
-| vLLM | `http://localhost:8000/v1/chat/completions` |
-| OpenRouter | `https://openrouter.ai/api/v1/chat/completions` |
+These are full URLs for use with `provider: openai_compatible`:
+
+| Service | Full Endpoint URL | Notes |
+|---------|-------------------|-------|
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | Use Gemini 2.5+ for JSON schema |
+| Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions` | Requires `query_params: {api-version: "2024-02-15-preview"}` |
+| LiteLLM | `http://localhost:4000/v1/chat/completions` | Port configurable |
+| Ollama | `http://localhost:11434/v1/chat/completions` | Local models |
+| vLLM | `http://localhost:8000/v1/chat/completions` | Local models |
+| OpenRouter | `https://openrouter.ai/api/v1/chat/completions` | Multi-provider routing |
+
+For standard OpenAI, use `provider: openai` (not `openai_compatible`) with the SDK.
 
 ### 8) Backward Compatibility
 
@@ -484,7 +567,8 @@ New top-level `ai` field added (present when AI validation is enabled):
   "ai": {
     "provider": "anthropic",
     "model": "claude-sonnet-4-5-20250929",
-    "endpoint_host": "api.anthropic.com"
+    "endpoint_host": "api.anthropic.com",
+    "endpoint_path": "/v1/messages"
   },
   "request_validation": {
     "ai": {
@@ -517,7 +601,8 @@ New top-level `ai` field added (present when AI validation is enabled):
 |-------|------|----------|-------------|
 | `provider` | string | Always | Provider name: `openai`, `openai_compatible`, or `anthropic` |
 | `model` | string | Always | Model identifier from config |
-| `endpoint_host` | string | Always | Host (and port if non-default) only; no scheme, path, or query |
+| `endpoint_host` | string | Always | Host (and port if non-default) only; no scheme or query |
+| `endpoint_path` | string | Always | URL path only; no scheme, host, or query params (query params may contain secrets) |
 
 **Per-validation `request_id`** (in `request_validation.ai` and `response_validation.ai`):
 
@@ -535,7 +620,8 @@ Note: `request_id` stays in the per-validation section because each AI API call 
   "ai": {
     "provider": "openai",
     "model": "gpt-4o-mini",
-    "endpoint_host": "api.openai.com"
+    "endpoint_host": "api.openai.com",
+    "endpoint_path": "/v1/chat/completions"
   },
   "request_validation": {
     "ai": {
@@ -552,7 +638,8 @@ Note: `request_id` stays in the per-validation section because each AI API call 
   "ai": {
     "provider": "anthropic",
     "model": "claude-sonnet-4-5-20250929",
-    "endpoint_host": "api.anthropic.com"
+    "endpoint_host": "api.anthropic.com",
+    "endpoint_path": "/v1/messages"
   },
   "request_validation": {
     "ai": {
@@ -569,16 +656,30 @@ Note: `request_id` stays in the per-validation section because each AI API call 
   "ai": {
     "provider": "openai_compatible",
     "model": "gemini-2.5-flash",
-    "endpoint_host": "generativelanguage.googleapis.com"
+    "endpoint_host": "generativelanguage.googleapis.com",
+    "endpoint_path": "/v1beta/openai/chat/completions"
+  }
+}
+```
+
+**OpenAI-compatible (Azure with deployment):**
+```json
+{
+  "ai": {
+    "provider": "openai_compatible",
+    "model": "gpt-4o-mini",
+    "endpoint_host": "my-resource.openai.azure.com",
+    "endpoint_path": "/openai/deployments/my-deployment/chat/completions"
   }
 }
 ```
 
 #### Implementation Notes
 
-- Add new `AuditAIProvider` struct in `internal/gateway/audit_entry.go`
+- Add new `AuditAIProvider` struct in `internal/gateway/audit_entry.go` with fields: `Provider`, `Model`, `EndpointHost`, `EndpointPath`
 - Add `AIProvider *AuditAIProvider` field to `AuditEntry` struct
 - Add `RequestID` field to `AuditAIResult` struct
+- When populating `EndpointPath`, strip query parameters to avoid logging secrets
 - Update `docs/specs/validation-chain-audit-schema.md` with new fields
 - Update audit entry tests to verify new fields are populated
 
@@ -627,11 +728,12 @@ Future CLI tool-call support:
 ## Rollout Plan
 
 1. Add provider-agnostic interface (`AIProviderClient`) and types (`AIRequest`, `AICompletionResult`).
-2. Update OpenAI adapter to support `WithBaseURL()` for `openai_compatible` provider.
-3. Add Anthropic adapter using official SDK (`anthropic-sdk-go`).
-4. Update configuration to support `provider` field with default endpoints.
-5. Update audit log schema with provider metadata fields.
-6. Add configuration docs and migration notes.
+2. Create OpenAI adapter wrapping the existing SDK, supporting `WithBaseURL()` for custom endpoints.
+3. Create OpenAI-compatible adapter using direct REST calls for full URL control.
+4. Add Anthropic adapter using official SDK (`anthropic-sdk-go`).
+5. Update configuration to support `provider`, `max_tokens`, `query_params` fields.
+6. Update audit log schema with provider metadata fields (`endpoint_host`, `endpoint_path`).
+7. Add configuration docs and migration notes.
 
 ## Migration Strategy
 
@@ -641,7 +743,7 @@ Future CLI tool-call support:
 
 2. **Adapter layer**:
    - Create OpenAI adapter implementing `AIProviderClient` that wraps the existing OpenAI SDK.
-   - Add `WithBaseURL()` support for `openai_compatible` provider.
+   - Create OpenAI-compatible adapter using direct REST calls for full URL control.
    - Add Anthropic adapter using official `anthropic-sdk-go` SDK.
 
 3. **Update engines**:
@@ -654,8 +756,9 @@ Future CLI tool-call support:
    - Update tests to assert on provider-agnostic request payloads rather than OpenAI SDK structs.
 
 5. **De-risk rollout**:
-   - Ship OpenAI/OpenAI-compatible adapter first to preserve behavior.
-   - Add Anthropic adapter once OpenAI adapter is validated.
+   - Ship OpenAI adapter first to preserve existing behavior.
+   - Add OpenAI-compatible adapter (REST-based) next.
+   - Add Anthropic adapter once OpenAI adapters are validated.
 
 ## Error Handling and Normalization
 
@@ -683,11 +786,21 @@ Engines continue using existing categories; new categories may appear in audit l
 
 ## Retry and Backoff Strategy
 
-Adapters should implement retries for retryable errors:
-- Retry on: network errors, timeouts, 429, and 5xx.
-- No retry on: auth errors, invalid requests, or parse errors.
-- Strategy: exponential backoff with jitter (e.g., 200ms, 500ms, 1s), max 2 retries.
-- Must respect context deadlines and `max_rule_evaluation_ms` (do not exceed the configured budget).
+Retry behavior varies by provider implementation:
+
+| Provider | Retry Handling | Behavior |
+|----------|----------------|----------|
+| `openai` | **SDK handles retries** | SDK retries on 429 (rate limit), 5xx (server errors), and network errors with exponential backoff |
+| `anthropic` | **SDK handles retries** | SDK retries on 429, 5xx, and network errors with exponential backoff |
+| `openai_compatible` | **No automatic retries** | Direct REST calls without retry logic (see limitation below) |
+
+**SDK retry behavior:**
+- SDKs retry on: 429 (rate limited), 5xx (server errors), transient network errors
+- SDKs do not retry on: 401/403 (auth errors), 400/422 (invalid requests)
+- SDKs use exponential backoff with jitter
+- Context deadlines are respected (retries stop when `max_rule_evaluation_ms` budget is exhausted)
+
+**Limitation: `openai_compatible` has no retry logic.** Since we use direct REST calls for `openai_compatible` to support arbitrary URL structures, there is no automatic retry on transient errors. If retry support is needed for `openai_compatible` endpoints, this can be added in a future enhancement. Implementation note: add a code comment indicating this limitation when implementing the REST client.
 
 ## System Prompt Handling
 
@@ -698,7 +811,12 @@ Current policies are user-message-only. To preserve behavior:
 
 ## Resolved Questions
 
-1. **Provider detection**: Explicit `provider` configuration required (no auto-detection from URL). Default endpoints are applied per provider unless overridden.
-2. **SDK vs REST**: Using official SDKs for both OpenAI and Anthropic. REST-only alternative documented in Section 7 for future consideration if binary size/dependency count becomes a concern.
-3. **Audit log metadata**: Yes, include `provider`, `model`, `endpoint_host`, and `request_id` in audit logs for debugging and traceability.
-4. **Prompt reliability evaluation**: Out of scope for this spec. Will be addressed in a separate spec for AI validation testing and evaluation.
+1. **Provider detection**: Explicit `provider` configuration required (no auto-detection from URL). For backward compatibility, if `provider` is unset, default to `openai` with a deprecation warning. Default endpoints are applied per provider unless overridden.
+2. **SDK vs REST**: Using official SDKs for `openai` and `anthropic`. Using direct REST for `openai_compatible` to support arbitrary URL structures. REST-only alternative for all providers documented in Section 7 for future consideration.
+3. **Endpoint semantics**: For SDK providers (`openai`, `anthropic`), `endpoint` is a base URL and the SDK appends the API path. For `openai_compatible`, `endpoint` is the full URL to the chat completions endpoint.
+4. **max_tokens handling**: Added `max_tokens` config field with default of 4096. This is required for Anthropic API calls; the adapter applies it automatically.
+5. **Query parameters**: Added `query_params` config field for providers that require URL query parameters (e.g., Azure's `api-version`).
+6. **Custom headers**: The `headers` config field is passed to SDK clients via `WithHeader()` options, supporting proxies and custom requirements.
+7. **Retry strategy**: SDK handles retries for `openai` and `anthropic` (429, 5xx, network errors with backoff). No automatic retries for `openai_compatible` (documented limitation; can be added later if needed).
+8. **Audit log metadata**: Include `provider`, `model`, `endpoint_host`, `endpoint_path` (no query params), and per-call `request_id` in audit logs for debugging.
+9. **Prompt reliability evaluation**: Out of scope for this spec. Will be addressed in a separate spec for AI validation testing and evaluation.
