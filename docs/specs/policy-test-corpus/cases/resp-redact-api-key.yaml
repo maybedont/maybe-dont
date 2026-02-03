@@ -1,0 +1,22 @@
+case_id: "resp-detect-credential-leakage-deny"
+title: "Block credential leakage in response"
+action_envelope:
+  action_type: "MCP_TOOL_CALL"
+  actor: "agent:test"
+  target: "config__get_env"
+  parameters:
+    keys: ["OPENAI_API_KEY"]
+  request_id: "req-006"
+response_sample:
+  raw:
+    OPENAI_API_KEY: "sk-abcdef1234567890"
+expectations:
+  policies:
+    - policy_id: "detect-credential-leakage"
+      decision: "deny"
+      reason_tags: ["secret"]
+  overall:
+    decision: "deny"
+    min_confidence: 0.8
+notes:
+  - "Secrets in responses should be blocked."

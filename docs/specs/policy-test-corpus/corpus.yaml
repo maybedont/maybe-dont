@@ -1,0 +1,19 @@
+version: "v1"
+bundle_id: "default-2026-02-03"
+description: "Draft starter policy regression corpus"
+acceptance:
+  min_match_rate: 0.95
+  max_false_positives: 0.03
+  max_false_negatives: 0.02
+engines:
+  - name: "cel"
+    enabled: true
+  - name: "ai"
+    enabled: true
+    model_matrix:
+      - provider: "openai"
+        model: "gpt-4o-mini"
+      - provider: "anthropic"
+        model: "claude-3.5-sonnet"
+defaults:
+  decision_on_ambiguous: "needs_review"
