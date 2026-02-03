@@ -144,23 +144,7 @@ For feature development or any sizeable code change, follow this spec-driven app
 6. **Check existing specs**: Before starting a new spec or feature, review `docs/specs/` for relevant existing specs. Consider updating an existing spec rather than creating a new one. When modifying an existing spec, you can create a temporary worklist file in `docs/specs/` to track implementation progress.
 
 ### Code Navigation with LSP
-When exploring or navigating Go code, **prefer using `gopls` commands** over manual searching with grep/glob. The LSP provides accurate, semantic understanding of the code.
-
-**Common gopls commands** (format: `gopls <command> <file>:<line>:<column>`):
-- `gopls definition main.go:21:6` - Jump to where a symbol is defined
-- `gopls references main.go:21:6` - Find all usages of a symbol
-- `gopls implementation main.go:50:6` - Find all types implementing an interface
-- `gopls call_hierarchy main.go:21:6` - Show callers/callees of a function
-- `gopls symbols main.go` - List all symbols in a file
-- `gopls workspace_symbol MyFunc` - Search for symbols across the workspace
-
-Use LSP operations first when you need to:
-- Understand how a function or type is used
-- Navigate between related code (callers/callees)
-- Find where a struct field or method is defined
-- Trace through code paths
-
-Fall back to grep/glob only when gopls is unavailable or when searching for non-code patterns (comments, strings, config values).
+**Prefer `gopls` over grep/glob** for Go code navigation. See the `go-development` skill for command reference. Fall back to grep/glob only for non-code patterns (comments, strings, config values).
 
 ### Go Development Standards
 From `.cursor/rules/golang.mdc`:
@@ -197,9 +181,7 @@ When adding new configuration fields:
 - **ERROR**: Use only for unexpected errors that indicate something went wrong.
 
 ### Security
-**Security considerations:**
-- **Never log sensitive information**: Do not log Authorization headers, API keys, or tool parameters (they may contain secrets)
-- When in doubt about whether data is sensitive, err on the side of not logging it
+See the `security-review` skill for comprehensive security review checklist. Key principle: **never log sensitive information** (Authorization headers, API keys, tool parameters).
 
 ### Commit and PR Guidelines
 **Before committing**, perform a brief self-review:
@@ -208,7 +190,7 @@ When adding new configuration fields:
 - Ensure adequate test coverage for new or modified code
 
 **Before opening a PR**, conduct a thorough review as if you had dedicated reviewers:
-- **Security review**: Look for potential vulnerabilities (injection, auth issues, data exposure, etc.)
+- **Security review**: Use the `security-review` skill checklist for security-sensitive changes
 - **Performance review**: Identify potential bottlenecks, unnecessary allocations, or inefficient patterns
 - **Documentation review**: For larger features or behavior changes, ask if the documentation at https://maybedont.ai/docs should be reviewed for needed updates. If documentation changes are needed, create a checklist in the PR description for the developer to review.
 
@@ -232,34 +214,11 @@ The project uses Go's standard testing framework with testify for assertions. Ke
 - `internal/config/config_test.go` - Configuration loading tests
 
 ### Testing Patterns
-- **Use table-driven tests (data provider pattern)**: Structure tests with a slice of test cases that can be easily extended as new inputs need coverage. This promotes code reuse and ensures comprehensive input testing.
-- **Avoid single-input tests**: When writing a test, evaluate whether the test structure can accommodate multiple inputs rather than testing only one value.
-- **Check for existing coverage**: Before writing a new test, check if the use case is already covered by another test to avoid unnecessary duplication.
-- **Document test purpose**: Add a comment at the top of each test describing the use case being tested and the expected result. This is especially helpful when the test method name alone doesn't fully convey the intent.
-- **Test driven style**: When fixing a bug, prefer to write a test first to assert the error condition and expect the test to fail. Then fix the code, and ensure the test passes. This helps us ensure we are writing the correct tests. This strategy can also be used when building larger features if we have built a well defined spec with expected behaviors. In this case, you can write the tests first to assert the expected behaviors and this will help to ensure we delivered code that met these expectations. 
-
-Example table-driven test structure:
-```go
-func TestSomething(t *testing.T) {
-    // Tests that [describe what we're testing] behaves correctly
-    // for various [inputs/conditions].
-    tests := []struct {
-        name     string
-        input    string
-        expected string
-        wantErr  bool
-    }{
-        {"valid input", "foo", "bar", false},
-        {"empty input", "", "", true},
-        // Easy to add more cases here
-    }
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            // test implementation
-        })
-    }
-}
-```
+- **Use table-driven tests**: Structure tests with a slice of test cases for extensibility. See the `go-development` skill for the example pattern.
+- **Avoid single-input tests**: Evaluate whether the test structure can accommodate multiple inputs rather than testing only one value.
+- **Check for existing coverage**: Before writing a new test, check if the use case is already covered to avoid duplication.
+- **Document test purpose**: Add a comment at the top of each test describing the use case and expected result.
+- **Test-driven style**: When fixing a bug, write a test first to assert the error condition, watch it fail, then fix the code. This also applies to larger features with well-defined specs.
 
 ## Key Dependencies
 
