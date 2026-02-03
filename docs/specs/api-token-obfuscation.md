@@ -1,5 +1,9 @@
 # API Token Obfuscation Specification
 
+## Status
+**Draft** - Pending Review
+
+
 ## Overview
 
 This specification documents the approach for obfuscating the metrics API token embedded in the Maybe Don't Gateway binary to prevent casual extraction via tools like `strings` or hex editors.

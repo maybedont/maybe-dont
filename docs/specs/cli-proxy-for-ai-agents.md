@@ -77,6 +77,10 @@ Extend the Maybe Don't CLI to act as a proxy for CLI commands executed by AI age
 | Fallback | `exec.Command` (Windows) | Windows lacks direct exec replacement |
 | Fail mode | Fail-open (V1) | Allow command if gateway unreachable; configurable later |
 
+> REVIEW NOTE: Fail-open is a deliberate trade-off that weakens the safety goal
+> ("prevent AI agent mistakes"). Consider calling this out as a risk and decide
+> whether agent-driven use should default to fail-closed instead.
+
 ## CLI Interface
 
 ### Invocation Syntax
@@ -144,6 +148,11 @@ Warning: Unable to reach validation gateway, proceeding without validation
 | `--server` | `-s` | string | `http://localhost:8080` | Gateway endpoint URL |
 | `--timeout` | | duration | `30s` | Validation request timeout |
 | `--dry-run` | | bool | `false` | Validate only, don't execute |
+
+> REVIEW NOTE: The default gateway config is `server.type: stdio` with no `listen_addr`.
+> If the CLI defaults to `http://localhost:8080`, this will not work out of the box
+> unless the gateway is explicitly started in HTTP mode. Consider updating defaults
+> or adding a precondition in the spec.
 
 ### Future Flags (not in V1)
 
@@ -239,6 +248,10 @@ Mirrors existing `ValidationResults` structure with addition of `server_version`
 }
 ```
 
+> REVIEW NOTE: The CLI should be prepared for MCP JSON-RPC error responses (policy
+> denials can be returned as tool errors). Specify how the CLI maps JSON-RPC errors
+> to human-readable output and exit codes.
+
 **Denied response:**
 
 ```json
@@ -294,6 +307,11 @@ Content-Type: application/json
 }
 ```
 
+> REVIEW NOTE: The gateway HTTP server uses the `/mcp` endpoint and expects JSON-RPC
+> 2.0 envelopes. The example path and payload here look incompatible with the current
+> implementation. Confirm the exact endpoint, request shape, and response parsing
+> needed for `tools/call`.
+
 ## Server-Side Configuration
 
 The gateway controls which CLI commands require validation. No client-side allowlists.
@@ -318,6 +336,10 @@ cli_validation:
     - curl
     - docker
 ```
+
+> REVIEW NOTE: Command matching semantics are not specified. For example, `gh` may be
+> invoked as `/usr/local/bin/gh` or `./gh`. Decide whether `cli.command` is the basename,
+> full path, or PATH-resolved absolute path, and align allowlists/CEL rules with that.
 
 ### Unified Policy Rules
 
@@ -526,6 +548,45 @@ Cache validation responses locally with time-based expiration.
 3. If not cached or expired → call server, cache response
 4. Execute or deny based on response
 
+### Cache Key Strategies (Review Notes)
+
+The cache key design materially affects safety. Below are options, with pros/cons and assumptions.
+
+**Option A: Command-only key (e.g., "gh")**
+- Pros: Simple, highest cache hit rate.
+- Cons: Unsafe for commands with dangerous flags/args; can allow previously safe commands to bypass validation with new arguments.
+- Assumptions: The command is globally safe regardless of arguments (often false).
+
+**Option B: Full command hash (command + args + working_directory)**
+- Pros: Safest; validates exact invocation only.
+- Cons: Low cache hit rate; misses same command with harmless argument reordering or noise.
+- Assumptions: Argument order is semantically significant (often true), and exact-match caching is acceptable.
+
+**Option C: Normalized args hash**
+- Examples: sort flags alphabetically; separate flags from values; normalize paths; drop known-noise args.
+- Pros: Improves cache hit rate while keeping some specificity.
+- Cons: Risky without command-aware parsing; sorting can change meaning for positional args.
+- Assumptions: A generic normalization works across many CLIs (likely false).
+
+**Option D: Progressive keys (multiple keys per request)**
+- Example keys: `command_only`, `flags_only`, `full_hash`, `normalized_hash`.
+- Pros: Allows "closest match" cache use; can optimize for known-safe patterns.
+- Cons: Hard to reason about safety; risks false positives unless strict rules control which key can short-circuit validation.
+- Assumptions: We can define safe "fallback" levels without enabling bypass.
+
+**Option E: Server-provided cache keys (recommended for safety)**
+- Server returns one or more cache keys when `validation_required: false`.
+- Keys are computed using server policy knowledge and can include a `policy_revision` or `config_hash`.
+- Pros: Server retains control; safest way to use coarse keys; easier invalidation.
+- Cons: Requires server changes and a stable key schema.
+- Assumptions: Server can accurately classify which patterns are safe to cache.
+
+**Assumptions / Gaps to Address**
+- Command parsing: Without per-command parsers, generic normalization can be unsafe.
+- Policy versioning: Cache should be invalidated when policies/config change. Consider a `policy_revision` or `config_etag` and include it in the cache key or response.
+- Context sensitivity: Some commands are safe only in specific repos/dirs (e.g., git). Consider including `working_directory` or a repo identifier in the key when relevant.
+- Argument ordering: Many CLIs treat positional order as semantic; do not sort positional args unless command-specific logic exists.
+
 **Cache Structure:**
 
 ```json
@@ -551,6 +612,28 @@ Cache validation responses locally with time-based expiration.
 }
 ```
 
+**Server-Provided Cache Keys (example response):**
+
+```json
+{
+  "allowed": true,
+  "validation_required": false,
+  "message": "Command does not require validation",
+  "server_version": "1.3.0",
+  "policy_revision": "2026-02-03T18:22:10Z",
+  "cache_keys": [
+    "cmd:gh",
+    "cmd:gh:flags:pr,comment",
+    "cmd:gh:full:9d8c2a9f2f5d..."
+  ],
+  "results": []
+}
+```
+
+> REVIEW NOTE: Caching keyed only by command can allow a previously approved command
+> to run with new, dangerous arguments. If caching is kept, include arguments (or a
+> normalized hash) in the cache key or disable caching when `validation_required: true`.
+
 **TTL Strategy:**
 - Commands with `validation_required: false` → longer TTL (60 minutes)
 - Commands with `validation_required: true` → shorter TTL (5 minutes) or no caching
@@ -567,6 +650,24 @@ Server provides full allowlist via `Last-Modified` header pattern.
 4. Use local allowlist to skip server calls for non-validated commands
 
 **Deferred:** More complex, implement only if V2 caching is insufficient.
+
+> REVIEW NOTE: Risks/assumptions to address for V3:
+> - **Update flow paradox**: If the CLI skips server calls for non-validated commands,
+>   it will not receive the `X-MaybeDont-Config-Modified` header. V3 needs a periodic
+>   refresh (startup + TTL) or a dedicated sync endpoint.
+> - **Allowlist granularity**: Command-only allowlists assume a command is safe for
+>   all args. Any argument-sensitive rules should force validation for that command.
+> - **Normalization mismatch**: CLI and server must agree on `cli.command` semantics
+>   (basename vs absolute path vs PATH-resolved) or allowlists will be unreliable.
+> - **Audit log gaps**: Skipping server calls means no centralized audit entry for
+>   non-validated commands. Decide whether to accept this or add a lightweight audit ping.
+> - **Integrity risk**: Allowlist payloads should be protected (TLS, ETag/policy_revision,
+>   possibly signed) to avoid tampering or MITM.
+> - **Invalidation**: Timestamp-only invalidation is fragile (clock skew, granularity).
+>   Prefer a monotonic `policy_revision`/ETag.
+> - **Identity scoping**: If auth is added later, allowlists should be scoped per identity.
+> - **Failure mode**: Define behavior when allowlist sync fails (default validate-all
+>   vs allow-all).
 
 ### Session ID Enhancement (V2/V3)
 

@@ -1,5 +1,9 @@
 # Spec: Audit Report Timeout and Optimization
 
+## Status
+**Draft** - Pending Review
+
+
 ## Problem Statement
 
 The `maybedont__generate_audit_report` tool has a hardcoded 60-second timeout that may be insufficient for:
