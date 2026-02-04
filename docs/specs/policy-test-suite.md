@@ -156,7 +156,6 @@ This would provide clearer separation of concerns and room for growth. The `test
 | `--validate-only` | Run suite validation without executing tests | `false` |
 | `--include-disabled` | Include policies with `enabled: false` in test execution | `false` |
 | `--timeout` | Timeout per test case in milliseconds | From suite.yaml (default: 30000) |
-| `--delay` | Delay between test cases in milliseconds | From suite.yaml (default: 0) |
 
 ### Examples
 
@@ -257,7 +256,6 @@ acceptance:
 # Execution configuration
 execution:
   timeout_ms: 30000           # Timeout per test case (default: 30s)
-  delay_between_ms: 0         # Delay between tests (default: 0)
   retries: 2                  # Retry on transient errors (default: 2)
   retry_delay_ms: 1000        # Delay before retry (default: 1s)
 
@@ -306,17 +304,22 @@ rules/ai_request/
 
 ### Environment Variables
 
-**Not supported.** Suite configuration does not support environment variable substitution or overrides.
+Suite configuration does **not** support general environment variable substitution or overrides. Unlike runtime gateway configuration, test suites are typically run from known locations with explicit configuration.
 
-Rationale:
-- Test suites are typically run from known locations with explicit configuration
-- Multiple suite files can be created for different configurations
-- CLI flags provide sufficient dynamic control (engine, model, tags, filters)
-- Environment variables add complexity without clear benefit for test configuration
+**Exception: API keys.** The `api_key` field in model matrix entries supports `${VAR}` syntax for referencing environment variables. API keys should never be committed to suite files:
 
-This differs from runtime gateway configuration, where env vars are important for secrets (API keys), container deployments, and 12-factor app compliance.
+```yaml
+model_matrix:
+  - provider: "openai"
+    model: "gpt-4o-mini"
+    api_key: "${OPENAI_API_KEY}"      # Resolved at runtime
 
-Exception: The `api_key` field in model matrix entries supports `${VAR}` syntax for referencing environment variables, since API keys should not be committed to suite files.
+  - provider: "openai_compatible"
+    endpoint: "https://myorg.openai.azure.com/..."
+    api_key: "${AZURE_OPENAI_API_KEY}" # Resolved at runtime
+```
+
+The test harness reuses the gateway's existing `${VAR}` substitution logic for this field only. Other fields (paths, endpoints, parameters) are used as-is without substitution.
 
 ### Engines Configuration
 
@@ -429,21 +432,27 @@ acceptance:
 ```yaml
 execution:
   timeout_ms: 30000        # Timeout per test case (default: 30s)
-  delay_between_ms: 0      # Delay between test cases (default: 0, useful for rate limiting)
   retries: 2               # Retry on transient errors (default: 2)
   retry_delay_ms: 1000     # Delay before retry (default: 1s)
 ```
 
 **Execution behavior:**
-- Tests run **serially** (not in parallel) to avoid rate limiting issues
-- `timeout_ms` applies per test case; exceeded timeout is an error, not a failure
-- `retries` only apply to **transient errors** (network failures, rate limits, 5xx responses) - NOT to wrong decisions
-- `delay_between_ms` adds a pause between cases (useful when hitting rate limits)
+- Tests run **serially** (not in parallel)
+- `timeout_ms` applies per test case; exceeded timeout triggers a retry (if retries remain)
+- `retries` only apply to **transient errors**: network failures, timeouts, and 5xx server errors
+- Retries do **NOT** apply to: wrong decisions, 4xx client errors (including 429 rate limits)
+
+**Rate limit handling (429):**
+- When a provider returns 429, the harness **stops testing that model** for the remainder of the run
+- Remaining test cases for that model are marked as `skipped` with reason `rate_limited`
+- Other models in the matrix continue executing
+- The rate-limited model appears in the summary with partial results
+
+This fail-fast approach avoids wasting time on requests that will fail and provides clear feedback about rate limit issues.
 
 **CLI overrides:**
 ```bash
 --timeout 60000          # Override timeout to 60s
---delay 500              # Add 500ms delay between tests
 ```
 
 ## Test Case Schema
@@ -508,7 +517,7 @@ expectations:
   # Assert the actual redaction output
   redacted_content:
     - type: "text"
-      text: "User: John Doe, SSN: [REDACTED], Email: john@example.com"
+      text: "User: John Doe, SSN: [PII_REDACTED], Email: john@example.com"
 ```
 
 ### Field Reference
@@ -578,7 +587,7 @@ If `redacted_content` is omitted, the test only verifies the decision is `redact
 | `response` | `cel` | CEL response policies only |
 | `response` | `ai` | AI response policies only |
 | `response` | `both` | Both CEL and AI response policies |
-| `both` | `both` | All four policy types |
+| `both` | `both` | All four policy types (CEL request, AI request, CEL response, AI response) |
 
 When `phase: both`, the test case must include both `request` and `response` blocks.
 
@@ -668,8 +677,9 @@ Each test result includes:
 **Result status categories:**
 - `passed`: Test completed and expectations met
 - `failed`: Test completed but expectations not met (wrong decision)
-- `errored`: Test could not complete (timeout, API error, network failure)
+- `errored`: Test could not complete (timeout, 5xx error, network failure)
 - `skipped`: Test filtered out by tags, engine, or other criteria
+- `rate_limited`: Test skipped because provider returned 429 earlier in run
 
 **Confidence scoring**: Currently, policy responses are binary. Output includes `confidence: 1.0` as a placeholder for forward compatibility when confidence scoring is added.
 
@@ -1066,14 +1076,16 @@ These paths are resolved from the repository root, allowing test suites to refer
 - Directory paths must contain at least one `.yaml` file
 - File paths must be valid YAML
 
-### Validation Exit Codes
+**Exit codes for validation failures** use the same codes as the CI Integration section:
 
 | Code | Meaning |
 |------|---------|
-| 0 | Validation passed, tests can run |
-| 1 | Schema validation failed |
-| 2 | Policy integrity check failed (missing policies) |
-| 3 | Path resolution failed (file not found) |
+| 0 | Validation passed (with `--validate-only`) or tests passed |
+| 2 | Schema validation failed |
+| 3 | Policy integrity check failed (missing policies) |
+| 4 | Path resolution failed (file not found) |
+
+Note: Exit code 1 is reserved for "tests ran but thresholds not met" and is never returned during validation.
 
 **Validation always runs first.** Whether using `--validate-only` or running the full test suite, all four validation phases execute before any test case runs. This ensures fast failure on misconfigured suites.
 
@@ -1197,7 +1209,7 @@ When implemented, options include:
 - [ ] **1.2** Implement suite loading and validation (schema, policy integrity, path resolution)
 - [ ] **1.3** Implement test case discovery and recursive YAML parsing
 - [ ] **1.4** Add CLI flags: `--suite-dir`, `--engine`, `--format`, `--output`, `--validate-only`
-- [ ] **1.5** Add execution config flags: `--timeout`, `--delay`, `--include-disabled`
+- [ ] **1.5** Add execution config flags: `--timeout`, `--include-disabled`
 
 ### Phase 2: CEL Engine Testing
 
@@ -1212,8 +1224,9 @@ When implemented, options include:
 - [ ] **3.2** Add `--model` flag for single-model override
 - [ ] **3.3** Implement model matrix execution with `--matrix` flag (serial execution)
 - [ ] **3.4** Capture AI reasoning from `AIResponse.Message` in output
-- [ ] **3.5** Implement retry logic for transient errors (network, rate limits)
-- [ ] **3.6** Add timeout handling per test case
+- [ ] **3.5** Implement retry logic for transient errors (network failures, 5xx, timeouts)
+- [ ] **3.6** Implement rate limit handling (429 stops model, marks remaining as `rate_limited`)
+- [ ] **3.7** Add timeout handling per test case
 
 ### Phase 4: Output and Reporting
 

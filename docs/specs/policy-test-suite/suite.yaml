@@ -16,8 +16,7 @@ acceptance:
 # Execution configuration
 execution:
   timeout_ms: 30000           # Timeout per test case (default: 30s)
-  delay_between_ms: 100       # Small delay to avoid rate limiting
-  retries: 2                  # Retry on transient errors
+  retries: 2                  # Retry on transient errors (5xx, timeouts only)
   retry_delay_ms: 1000        # Delay before retry
 
 # Engine configuration
