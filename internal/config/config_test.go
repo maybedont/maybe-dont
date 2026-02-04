@@ -2765,3 +2765,65 @@ cli_request_validation:
 	require.Contains(t, err.Error(), "empty")
 }
 
+func TestCLIRequestValidationConfig_EnvVarOverride(t *testing.T) {
+	// Test: Environment variables override config file values for CLI validation settings.
+	// This validates that both enabled (bool) and validate_commands ([]string) can be
+	// set via environment variables, following the MAYBE_DONT_ prefix convention.
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: false
+  validate_commands: []
+`
+	writeConfigFile(t, configDir, configContent)
+
+	t.Setenv("MAYBE_DONT_CLI_REQUEST_VALIDATION_ENABLED", "true")
+	t.Setenv("MAYBE_DONT_CLI_REQUEST_VALIDATION_VALIDATE_COMMANDS", "gh,aws,kubectl")
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.True(t, cfg.CLIRequestValidation.Enabled)
+	require.Equal(t, []string{"gh", "aws", "kubectl"}, cfg.CLIRequestValidation.ValidateCommands)
+}
+
+func TestCLIRequestValidationConfig_EnvVarWildcard(t *testing.T) {
+	// Test: "*" works via environment variable for validate_commands.
+	// This validates that the wildcard value can be set via env var to enable
+	// validation of all CLI commands.
+	viper.Reset()
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	t.Setenv("MAYBE_DONT_CLI_REQUEST_VALIDATION_ENABLED", "true")
+	t.Setenv("MAYBE_DONT_CLI_REQUEST_VALIDATION_VALIDATE_COMMANDS", "*")
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.True(t, cfg.CLIRequestValidation.Enabled)
+	require.Equal(t, []string{"*"}, cfg.CLIRequestValidation.ValidateCommands)
+}
+
