@@ -714,7 +714,7 @@ We need a repeatable evaluation harness to ensure AI validation responses remain
 
 Suggested evaluation layers:
 1. **Local golden tests**:
-   - Create a corpus of MCP tool calls and expected validation outcomes.
+   - Create a test suite of MCP tool calls and expected validation outcomes (see `docs/specs/policy-test-suite/`).
    - Run in CI with a deterministic mock AI client.
 2. **External evals**: Out of scope for this spec - will be addressed in a separate prompt reliability evaluation spec.
 3. **Local model runners**: Out of scope for this spec - will be addressed in a separate prompt reliability evaluation spec.

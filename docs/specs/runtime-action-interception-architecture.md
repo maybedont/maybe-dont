@@ -235,9 +235,9 @@ Goal: keep accuracy while preventing policy count from linearly increasing laten
 Maintain accuracy over time across model vendors and policy changes, with local or CI‑friendly tests.
 
 **Approach**
-- Create a **policy test corpus**: example Action Envelopes (requests/responses) with expected outcomes.
+- Create a **policy test suite**: example Action Envelopes (requests/responses) with expected outcomes.
 - Store **expected decisions** per policy (allow/deny/needs_review) plus rationale tags.
-- Run the corpus through:
+- Run the test suite through:
   - Deterministic engines (CEL/compiled rules) as unit tests.
   - AI engines as smoke tests with acceptance thresholds (e.g., ≥95% match).
 
@@ -247,27 +247,27 @@ Maintain accuracy over time across model vendors and policy changes, with local 
 
 **Design tips**
 - Pin model versions where possible and use strict JSON outputs to reduce drift.
-- Track **false positives/negatives** and update policies or corpus with explicit, versioned changes.
-- Maintain a **“golden” policy bundle** per release so test expectations are stable.
+- Track **false positives/negatives** and update policies or test suite with explicit, versioned changes.
+- Maintain a **"golden" policy bundle** per release so test expectations are stable.
 
-### Policy Test Corpus Schema (CLI Harness)
+### Policy Test Suite Schema (CLI Harness)
 
 **Goals**
 - Make tests portable (local and CI).
 - Support multiple vendors/models with consistent inputs.
 - Allow per-policy expectations and global acceptance thresholds.
 
-**Corpus file layout**
-- `docs/specs/policy-test-corpus/`
-  - `corpus.yaml` (metadata + global thresholds)
+**Test suite file layout**
+- `docs/specs/policy-test-suite/`
+  - `suite.yaml` (metadata + global thresholds)
   - `cases/` (one YAML file per test case)
   - `policies/` (optional policy snapshots for reproducibility)
 
-**Corpus metadata (`corpus.yaml`)**
+**Suite metadata (`suite.yaml`)**
 ```yaml
 version: "v1"
 bundle_id: "default-2026-02-03"
-description: "Default policy regression corpus"
+description: "Default policy regression test suite"
 acceptance:
   min_match_rate: 0.95
   max_false_positives: 0.03
@@ -278,13 +278,42 @@ engines:
   - name: "ai"
     enabled: true
     model_matrix:
+      # OpenAI direct
       - provider: "openai"
         model: "gpt-4o-mini"
+        parameters:
+          temperature: 0.0
+
+      # Anthropic
       - provider: "anthropic"
-        model: "claude-3.5-sonnet"
+        model: "claude-sonnet-4-20250514"
+        parameters:
+          max_tokens: 4096
+          temperature: 0.0
+
+      # Example: Azure OpenAI (uncomment to test)
+      # - provider: "openai_compatible"
+      #   endpoint: "https://myorg.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions"
+      #   model: "gpt-4o-mini"
+      #   api_key: "${AZURE_OPENAI_API_KEY}"
+      #   query_params:
+      #     api-version: "2024-02-15-preview"
+      #   parameters:
+      #     temperature: 0.0
 defaults:
   decision_on_ambiguous: "needs_review"
 ```
+
+**Model matrix fields** (aligns with `validation.ai` config):
+| Field | Required | Description |
+|-------|----------|-------------|
+| `provider` | Yes | `openai`, `openai_compatible`, or `anthropic` |
+| `endpoint` | For openai_compatible | Full URL to chat completions API |
+| `model` | Yes | Model identifier |
+| `api_key` | No | API key or env var reference |
+| `parameters` | No | Provider-specific parameters (temperature, max_tokens, etc.) |
+| `query_params` | No | URL query parameters (e.g., Azure api-version) |
+| `headers` | No | Custom HTTP headers |
 
 **Policy identifiers**
 - `policy_id` should match the rule `name` from the loaded policy bundle (there is no separate ID today).
@@ -342,7 +371,7 @@ expectations:
 ```
 
 **Harness workflow**
-- Load `corpus.yaml`, then iterate `cases/*.yaml`.
+- Load `suite.yaml`, then iterate `cases/*.yaml`.
 - For each case:
   - Build Action Envelope input (and response sample if present).
   - Execute deterministic engines first (CEL/compiled).
@@ -354,8 +383,8 @@ expectations:
   - Drift report by model/vendor.
 
 **Policy source of truth**
-- The harness should read **the exact shipped policies** from `internal/config/defaults` (or from a configured rules directory) at runtime, not from copies embedded in the corpus.
-- Test cases should reference policy IDs from the shipped bundle; when policies are added (even if disabled by default), they can be included in the corpus and CI matrix.
+- The harness should read **the exact shipped policies** from `internal/config/defaults` (or from a configured rules directory) at runtime, not from copies embedded in the test suite.
+- Test cases should reference policy IDs from the shipped bundle; when policies are added (even if disabled by default), they can be included in the test suite and CI matrix.
 
 **Future-friendly policy storage**
 - Consider supporting a **rules directory** (one file per rule) in addition to monolithic files. This makes policy changes easier to review and version in source control.
@@ -382,41 +411,50 @@ rules/
 
 **CLI suggestions**
 ```bash
-maybe-dont test policies --corpus docs/specs/policy-test-corpus
-maybe-dont test policies --corpus docs/specs/policy-test-corpus --engine ai --model openai:gpt-4o-mini
-maybe-dont test policies --corpus docs/specs/policy-test-corpus --engine ai --matrix
+maybe-dont test policies --suite-dir docs/specs/policy-test-suite
+maybe-dont test policies --suite-dir docs/specs/policy-test-suite --engine ai --model openai:gpt-4o-mini
+maybe-dont test policies --suite-dir docs/specs/policy-test-suite --engine ai --matrix
 ```
 
 ### `maybe-dont test policies` Command (Draft Spec)
 
 **Purpose**
-- Validate policies against a corpus locally or in CI.
+- Validate policies against a test suite locally or in CI.
 - Compare behavior across engines/providers while keeping a stable input set.
 
 **Behavior**
-- Loads the corpus directory.
+- Loads the test suite directory (`suite.yaml` + `cases/*.yaml`).
 - Loads policies from defaults unless overridden by flags.
 - Runs deterministic rules first, then AI rules.
 - Emits a report and exits non‑zero if thresholds fail.
 
 **Flags (proposed)**
-- `--corpus <dir>`: Path to corpus root (required).
+- `--suite-dir <dir>`: Path to test suite directory (required). Expects `suite.yaml` and `cases/*.yaml`.
 - `--engine <cel|ai|all>`: Which engine(s) to run (default: `all`).
 - `--model <provider:model>`: Single model override for AI runs.
-- `--matrix`: Run the model matrix defined in `corpus.yaml`.
+- `--matrix`: Run the model matrix defined in `suite.yaml`.
 - `--policy-source <defaults|rules-dir|files>`: Where to load policies from.
 - `--rules-dir <dir>`: Load rules from a directory layout (when `policy-source=rules-dir`).
 - `--ai-request <file>` / `--ai-response <file>` / `--cel-request <file>` / `--cel-response <file>`: Override monolithic files (when `policy-source=files`).
-- `--include-disabled`: Include disabled rules in evaluation (default: true for corpus runs).
-- `--fail-on-disabled`: Fail if corpus references a rule that is disabled.
+- `--include-disabled`: Include disabled rules in evaluation (default: true for test suite runs).
+- `--fail-on-disabled`: Fail if test suite references a rule that is disabled.
 - `--timeout <duration>`: Per‑case timeout.
 - `--max-cost <usd>`: Budget for AI calls; exit early if exceeded.
-- `--format <text|json>`: Report output format.
+- `--format <text|junit|json>`: Report output format (see Output Format section in `docs/specs/policy-test-suite/README.md`).
 
 **Exit codes**
 - `0`: All thresholds met.
 - `2`: Thresholds failed (match rate / FP / FN exceeded).
-- `3`: Harness error (bad corpus, missing policies, schema violations).
+- `3`: Harness error (bad test suite, missing policies, schema violations).
+
+**Output format (open question)**
+The choice of output format(s) is documented in `docs/specs/policy-test-suite/README.md` with pros/cons and use cases for:
+- **Text**: Human-readable for local development
+- **JUnit XML**: Universal CI integration
+- **Go test JSON**: Go ecosystem compatibility
+- **Custom JSON**: Full data fidelity for policy-specific analysis
+
+See that spec for the detailed comparison and open questions.
 
 
 **Why this helps**

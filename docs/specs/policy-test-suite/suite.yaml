@@ -1,0 +1,93 @@
+version: "v1"
+bundle_id: "default-2026-02-03"
+description: "Draft starter policy regression test suite"
+acceptance:
+  min_match_rate: 0.95
+  max_false_positives: 0.03
+  max_false_negatives: 0.02
+engines:
+  - name: "cel"
+    enabled: true
+  - name: "ai"
+    enabled: true
+    # Model matrix includes a wide range of models to:
+    # 1. Discover cost optimization opportunities (nano/haiku may be sufficient)
+    # 2. Establish accuracy ceilings (high-tier models)
+    # 3. Validate policy robustness across model capabilities
+    # 4. Compare generations (4o vs 5.2) and providers (OpenAI vs Anthropic)
+    model_matrix:
+      # OpenAI 4o series (previous generation)
+      - provider: "openai"
+        model: "gpt-4o"
+        tier: "high-4o"
+        parameters:
+          temperature: 0.0
+
+      - provider: "openai"
+        model: "gpt-4o-mini"
+        tier: "mid-4o"
+        parameters:
+          temperature: 0.0
+
+      # OpenAI 5.2 series (current generation)
+      - provider: "openai"
+        model: "chatgpt-4o-latest"
+        tier: "high-5.2"
+        parameters:
+          temperature: 0.0
+
+      - provider: "openai"
+        model: "gpt-4.1-mini"
+        tier: "mid-5.2"
+        parameters:
+          temperature: 0.0
+
+      - provider: "openai"
+        model: "gpt-4.1-nano"
+        tier: "low-5.2"
+        parameters:
+          temperature: 0.0
+
+      # Anthropic models - high to low tier
+      - provider: "anthropic"
+        model: "claude-opus-4-20250514"
+        tier: "high"
+        parameters:
+          max_tokens: 4096
+          temperature: 0.0
+
+      - provider: "anthropic"
+        model: "claude-sonnet-4-20250514"
+        tier: "mid"
+        parameters:
+          max_tokens: 4096
+          temperature: 0.0
+
+      - provider: "anthropic"
+        model: "claude-3-5-haiku-20241022"
+        tier: "low"
+        parameters:
+          max_tokens: 4096
+          temperature: 0.0
+
+      # Example: Azure OpenAI (commented out - uncomment to test Azure endpoint)
+      # - provider: "openai_compatible"
+      #   endpoint: "https://myorg.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions"
+      #   model: "gpt-4o-mini"
+      #   tier: "mid"
+      #   api_key: "${AZURE_OPENAI_API_KEY}"
+      #   query_params:
+      #     api-version: "2024-02-15-preview"
+      #   parameters:
+      #     temperature: 0.0
+
+      # Example: Local Ollama (commented out - uncomment for local dev testing)
+      # - provider: "openai_compatible"
+      #   endpoint: "http://localhost:11434/v1/chat/completions"
+      #   model: "llama3"
+      #   tier: "local"
+      #   parameters:
+      #     temperature: 0.0
+
+defaults:
+  decision_on_ambiguous: "needs_review"
