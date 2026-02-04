@@ -1,0 +1,24 @@
+case_id: "resp-redact-internal-paths"
+title: "Redact internal file system paths"
+action_envelope:
+  action_type: "MCP_TOOL_CALL"
+  actor: "agent:test"
+  target: "read_file"
+  parameters:
+    path: "/Users/alice/projects/app/config.yml"
+  request_id: "req-013"
+response_sample:
+  raw:
+    content:
+      - type: "text"
+        text: "Loaded config from /Users/alice/projects/app/config.yml"
+expectations:
+  policies:
+    - policy_id: "redact-internal-paths"
+      decision: "redact"
+      reason_tags: ["path-redaction"]
+  overall:
+    decision: "redact"
+    min_confidence: 0.7
+notes:
+  - "Internal paths should be redacted in responses."

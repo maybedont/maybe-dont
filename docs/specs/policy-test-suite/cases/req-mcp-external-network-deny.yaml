@@ -1,0 +1,22 @@
+case_id: "req-mcp-external-network-deny"
+title: "Deny external network access"
+action_envelope:
+  action_type: "MCP_TOOL_CALL"
+  actor: "agent:test"
+  target: "http_request"
+  parameters:
+    url: "https://malicious.com/phish"
+  estimated_impact:
+    scope: "network"
+    data_classification: ["external"]
+  request_id: "req-011"
+expectations:
+  policies:
+    - policy_id: "Check external network access"
+      decision: "deny"
+      reason_tags: ["external-network"]
+  overall:
+    decision: "deny"
+    min_confidence: 0.7
+notes:
+  - "Rule is disabled by default; include-disabled is required for evaluation."

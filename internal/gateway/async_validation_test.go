@@ -14,6 +14,52 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
+// createAsyncTestMock creates a mock AI provider client configured for async validation tests.
+// It returns an AICompletionResult with the JSON-encoded AIResponse.
+func createAsyncTestMock(delay time.Duration, allowed bool, message string) *MockAIProviderClient {
+	mock := NewMockAIProviderClient()
+	mock.Delay = delay
+
+	// Create an AIResponse and JSON-encode it
+	resp := AIResponse{Allowed: allowed, Message: message}
+	jsonBytes, _ := json.Marshal(resp)
+
+	mock.Response = AICompletionResult{
+		RawText:           string(jsonBytes),
+		ParsedJSON:        jsonBytes,
+		ProviderRequestID: "mock-request-id",
+	}
+	return mock
+}
+
+// createAsyncTestEngine creates an AIPolicyEngine configured for async validation tests.
+func createAsyncTestEngine(mock *MockAIProviderClient, maxRuleEvaluationMs int) *AIPolicyEngine {
+	cfg := &config.Config{}
+	cfg.Validation.AI.Model = "gpt-4o-mini"
+	cfg.Validation.AI.APIKey = "test-key"
+	cfg.Validation.AI.Provider = "openai"
+
+	return &AIPolicyEngine{
+		cfg:                 cfg,
+		maxRuleEvaluationMs: maxRuleEvaluationMs,
+		providerClient:      mock,
+	}
+}
+
+// createAsyncTestResponseEngine creates an AIResponsePolicyEngine configured for async validation tests.
+func createAsyncTestResponseEngine(mock *MockAIProviderClient, maxRuleEvaluationMs int) *AIResponsePolicyEngine {
+	cfg := &config.Config{}
+	cfg.Validation.AI.Model = "gpt-4o-mini"
+	cfg.Validation.AI.APIKey = "test-key"
+	cfg.Validation.AI.Provider = "openai"
+
+	return &AIResponsePolicyEngine{
+		cfg:                 cfg,
+		maxRuleEvaluationMs: maxRuleEvaluationMs,
+		providerClient:      mock,
+	}
+}
+
 // TestAsyncValidation_AllAuditOnlyReturnsImmediately verifies that when all policies
 // are audit_only, EvaluateToolCall returns immediately with AsyncCompletion channel.
 func TestAsyncValidation_AllAuditOnlyReturnsImmediately(t *testing.T) {
@@ -21,16 +67,8 @@ func TestAsyncValidation_AllAuditOnlyReturnsImmediately(t *testing.T) {
 	sessionLogger := config.NewSessionLogger(logger)
 
 	// Create mock client with slow response to simulate real AI call
-	mockClient := NewMockAIClient()
-	mockClient.DefaultDelay = 500 * time.Millisecond
-	mockClient.DefaultResponse = AIResponse{Allowed: true, Message: "Approved"}
-
-	engine := &AIPolicyEngine{
-		apiKey:              "test-key",
-		model:               "gpt-4o-mini",
-		maxRuleEvaluationMs: 30000,
-		client:              mockClient, // Inject mock
-	}
+	mockClient := createAsyncTestMock(500*time.Millisecond, true, "Approved")
+	engine := createAsyncTestEngine(mockClient, 30000)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -88,16 +126,8 @@ func TestAsyncValidation_EnabledPoliciesBlock(t *testing.T) {
 	sessionLogger := config.NewSessionLogger(logger)
 
 	// Create mock client with configurable delay
-	mockClient := NewMockAIClient()
-	mockClient.DefaultDelay = 200 * time.Millisecond
-	mockClient.DefaultResponse = AIResponse{Allowed: true, Message: "Approved"}
-
-	engine := &AIPolicyEngine{
-		apiKey:              "test-key",
-		model:               "gpt-4o-mini",
-		maxRuleEvaluationMs: 30000,
-		client:              mockClient,
-	}
+	mockClient := createAsyncTestMock(200*time.Millisecond, true, "Approved")
+	engine := createAsyncTestEngine(mockClient, 30000)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -144,16 +174,8 @@ func TestAsyncValidation_MixedModePolicies(t *testing.T) {
 	sessionLogger := config.NewSessionLogger(logger)
 
 	// Create mock client
-	mockClient := NewMockAIClient()
-	mockClient.DefaultDelay = 100 * time.Millisecond
-	mockClient.DefaultResponse = AIResponse{Allowed: true, Message: "Approved"}
-
-	engine := &AIPolicyEngine{
-		apiKey:              "test-key",
-		model:               "gpt-4o-mini",
-		maxRuleEvaluationMs: 30000,
-		client:              mockClient,
-	}
+	mockClient := createAsyncTestMock(100*time.Millisecond, true, "Approved")
+	engine := createAsyncTestEngine(mockClient, 30000)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -248,18 +270,9 @@ func TestAsyncValidation_ValidationChainPropagatesAsync(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
-	// Create mock client
-	mockClient := NewMockAIClient()
-	mockClient.DefaultDelay = 100 * time.Millisecond
-	mockClient.DefaultResponse = AIResponse{Allowed: true, Message: "Approved"}
-
-	// Create AI engine with all audit_only policies
-	engine := &AIPolicyEngine{
-		apiKey:              "test-key",
-		model:               "gpt-4o-mini",
-		maxRuleEvaluationMs: 30000,
-		client:              mockClient,
-	}
+	// Create mock client and engine
+	mockClient := createAsyncTestMock(100*time.Millisecond, true, "Approved")
+	engine := createAsyncTestEngine(mockClient, 30000)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -299,16 +312,8 @@ func TestAsyncCompletion_ChannelDeliversCorrectResults(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
-	mockClient := NewMockAIClient()
-	mockClient.DefaultDelay = 50 * time.Millisecond
-	mockClient.DefaultResponse = AIResponse{Allowed: false, Message: "Suspicious activity"}
-
-	engine := &AIPolicyEngine{
-		apiKey:              "test-key",
-		model:               "gpt-4o-mini",
-		maxRuleEvaluationMs: 30000,
-		client:              mockClient,
-	}
+	mockClient := createAsyncTestMock(50*time.Millisecond, false, "Suspicious activity")
+	engine := createAsyncTestEngine(mockClient, 30000)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -353,16 +358,8 @@ func TestAsyncValidation_ResponseEngine_AllAuditOnly(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
-	mockClient := NewMockAIClient()
-	mockClient.DefaultDelay = 200 * time.Millisecond
-	mockClient.DefaultResponse = AIResponse{Allowed: true, Message: "Safe response"}
-
-	engine := &AIResponsePolicyEngine{
-		apiKey:              "test-key",
-		model:               "gpt-4o-mini",
-		maxRuleEvaluationMs: 30000,
-		client:              mockClient,
-	}
+	mockClient := createAsyncTestMock(200*time.Millisecond, true, "Safe response")
+	engine := createAsyncTestResponseEngine(mockClient, 30000)
 	err := InitAIResponsePolicyEngine(context.Background(), sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -428,16 +425,8 @@ func TestAsyncValidation_FullChainWithCELAndAI(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create AI engine with audit_only policy
-	mockClient := NewMockAIClient()
-	mockClient.DefaultDelay = 100 * time.Millisecond
-	mockClient.DefaultResponse = AIResponse{Allowed: true, Message: "Approved"}
-
-	aiEngine := &AIPolicyEngine{
-		apiKey:              "test-key",
-		model:               "gpt-4o-mini",
-		maxRuleEvaluationMs: 30000,
-		client:              mockClient,
-	}
+	mockClient := createAsyncTestMock(100*time.Millisecond, true, "Approved")
+	aiEngine := createAsyncTestEngine(mockClient, 30000)
 	err = InitAIPolicyEngine(sessionLogger, aiEngine)
 	require.NoError(t, err)
 	err = aiEngine.LoadPolicies([]config.AIPolicy{
@@ -652,16 +641,8 @@ func TestAsyncValidation_AllAuditOnlyWritesAuditLog(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create AI engine with audit_only policy
-	mockClient := NewMockAIClient()
-	mockClient.DefaultDelay = 50 * time.Millisecond // Short delay for test speed
-	mockClient.DefaultResponse = AIResponse{Allowed: false, Message: "Would deny"} // AI says deny
-
-	aiEngine := &AIPolicyEngine{
-		apiKey:              "test-key",
-		model:               "gpt-4o-mini",
-		maxRuleEvaluationMs: 30000,
-		client:              mockClient,
-	}
+	mockClient := createAsyncTestMock(50*time.Millisecond, false, "Would deny")
+	aiEngine := createAsyncTestEngine(mockClient, 30000)
 	err = InitAIPolicyEngine(sessionLogger, aiEngine)
 	require.NoError(t, err)
 	err = aiEngine.LoadPolicies([]config.AIPolicy{

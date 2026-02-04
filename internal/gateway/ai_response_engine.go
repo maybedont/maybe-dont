@@ -9,7 +9,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/maybedont/maybe-dont/internal/config"
-	"github.com/openai/openai-go"
 	"go.uber.org/zap"
 )
 
@@ -28,19 +27,17 @@ type AIResponsePolicyEngine struct {
 	logger              *config.SessionLogger
 	policies            []AIResponsePolicy
 	mu                  sync.RWMutex
-	endpoint            string
-	model               string
-	apiKey              string
-	client              AIClient
-	maxRuleEvaluationMs int // Max time for any single rule to complete
+	cfg                 *config.Config   // Full config needed for AIProviderClient factory
+	providerClient      AIProviderClient // Provider-agnostic AI client
+	maxRuleEvaluationMs int              // Max time for any single rule to complete
 }
 
 // InitAIResponsePolicyEngine initializes the AI response policy engine
 func InitAIResponsePolicyEngine(ctx context.Context, logger *config.SessionLogger, engine *AIResponsePolicyEngine) error {
 	engine.logger = logger
 	// Only create client if not already set (allows injecting mock for tests)
-	if engine.client == nil {
-		engine.client = NewOpenAIClient(engine.apiKey)
+	if engine.providerClient == nil {
+		engine.providerClient = NewAIProviderClient(engine.cfg)
 	}
 	return nil
 }
@@ -219,29 +216,18 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 			policyCtx, cancel := context.WithTimeout(context.Background(), ruleTimeout)
 			defer cancel()
 
-			schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
-				Name:        "ai_response_evaluation",
-				Description: openai.String("AI evaluation of a tool response"),
-				Schema:      GenerateSchema[AIResponseEvaluation](),
-				Strict:      openai.Bool(true),
-			}
-
-			chatCompletion, err := e.client.CreateChatCompletion(policyCtx, openai.ChatCompletionNewParams{
-				Messages: []openai.ChatCompletionMessageParamUnion{
-					openai.UserMessage(fmt.Sprintf(p.Prompt, responseStr)),
-				},
-				Model: openai.ChatModel(e.model),
-				ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-					OfJSONSchema: &openai.ResponseFormatJSONSchemaParam{
-						JSONSchema: schemaParam,
-					},
-				},
+			// Call the AI API using the provider-agnostic interface
+			result, err := e.providerClient.Generate(policyCtx, AIRequest{
+				Model:          e.cfg.Validation.AI.Model,
+				UserPrompt:     fmt.Sprintf(p.Prompt, responseStr),
+				ResponseSchema: GenerateSchema[AIResponseEvaluation](),
+				Parameters:     e.cfg.Validation.AI.Parameters,
 			})
 
 			durationMs := time.Since(startTime).Milliseconds()
 
 			if err != nil {
-				errCategory := classifyContextError(policyCtx, "api_error")
+				errCategory := classifyProviderError(err)
 				resultChan <- aiResponseRuleResult{
 					policy:       p,
 					result:       "error",
@@ -253,20 +239,8 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				return
 			}
 
-			if len(chatCompletion.Choices) == 0 {
-				resultChan <- aiResponseRuleResult{
-					policy:       p,
-					result:       "error",
-					message:      "No response from AI model",
-					evaluationMs: durationMs,
-					err:          fmt.Errorf("API returned empty choices"),
-					errCategory:  "no_response",
-				}
-				return
-			}
-
 			var evaluation AIResponseEvaluation
-			err = json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &evaluation)
+			err = json.Unmarshal(result.ParsedJSON, &evaluation)
 			if err != nil {
 				resultChan <- aiResponseRuleResult{
 					policy:       p,

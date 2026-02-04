@@ -61,6 +61,8 @@ type Gateway struct {
 	policyEngine *CELPolicyEngine
 	// AI policy engine
 	aiPolicyEngine *AIPolicyEngine
+	// AI provider info for audit logging (populated when AI validation is enabled)
+	aiProviderInfo *AuditAIProvider
 	// Response validation chain
 	responseValidationChain *ResponseValidationChain
 	// CEL response policy engine
@@ -97,6 +99,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 	// Initialize policy engines
 	var policyEngine *CELPolicyEngine
 	var aiPolicyEngine *AIPolicyEngine
+	var aiProviderInfo *AuditAIProvider
 
 	// Initialize CEL request policy engine only if enabled
 	if cfg.RequestValidation.CEL.Enabled {
@@ -120,9 +123,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		aiMode := cfg.RequestValidation.AI.Mode
 		logger.Info(ctx, "Initializing AI request policy engine", zap.String("mode", string(aiMode)))
 		aiPolicyEngine = &AIPolicyEngine{
-			endpoint:            cfg.Validation.AI.Endpoint,
-			model:               cfg.Validation.AI.Model,
-			apiKey:              cfg.Validation.AI.APIKey,
+			cfg:                 cfg,
 			maxRuleEvaluationMs: cfg.Validation.MaxRuleEvaluationMs,
 		}
 
@@ -131,6 +132,9 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to init AI request policy engine: %w", err)
 		}
+
+		// Capture AI provider info for audit logging (shared by both request and response validation)
+		aiProviderInfo = NewAuditAIProvider(aiPolicyEngine.providerClient.ProviderInfo())
 
 		// Load policies from configuration with the resolved mode
 		if err := aiPolicyEngine.LoadPolicies(cfg.RequestValidation.AI.Rules, aiMode); err != nil {
@@ -166,9 +170,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		aiResponseMode := cfg.ResponseValidation.AI.Mode
 		logger.Info(ctx, "Initializing AI response policy engine", zap.String("mode", string(aiResponseMode)))
 		aiResponsePolicyEngine = &AIResponsePolicyEngine{
-			endpoint:            cfg.Validation.AI.Endpoint,
-			model:               cfg.Validation.AI.Model,
-			apiKey:              cfg.Validation.AI.APIKey,
+			cfg:                 cfg,
 			maxRuleEvaluationMs: cfg.Validation.MaxRuleEvaluationMs,
 		}
 
@@ -176,6 +178,12 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		err = InitAIResponsePolicyEngine(ctx, logger, aiResponsePolicyEngine)
 		if err != nil {
 			return nil, fmt.Errorf("failed to init AI response policy engine: %w", err)
+		}
+
+		// Capture AI provider info for audit logging if not already captured by request validation
+		// (request and response share the same AI config)
+		if aiProviderInfo == nil {
+			aiProviderInfo = NewAuditAIProvider(aiResponsePolicyEngine.providerClient.ProviderInfo())
 		}
 
 		// Load policies from configuration with the resolved mode
@@ -225,6 +233,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		clientManager:          clientManager,
 		policyEngine:           policyEngine,
 		aiPolicyEngine:         aiPolicyEngine,
+		aiProviderInfo:         aiProviderInfo,
 		responsePolicyEngine:   responsePolicyEngine,
 		aiResponsePolicyEngine: aiResponsePolicyEngine,
 		nativeToolsHandler:     nativeToolsHandler,
@@ -388,6 +397,11 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	// Set User-Agent header
 	audit.SetUserAgent(userAgent)
+
+	// Set AI provider info if AI validation is enabled
+	if g.aiProviderInfo != nil {
+		audit.SetAIProvider(g.aiProviderInfo)
+	}
 
 	// Set request params (convert to map for audit)
 	if params, ok := req.Params.Arguments.(map[string]interface{}); ok {

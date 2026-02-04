@@ -194,6 +194,13 @@ See the `security-review` skill for comprehensive security review checklist. Key
 - **Performance review**: Identify potential bottlenecks, unnecessary allocations, or inefficient patterns
 - **Documentation review**: For larger features or behavior changes, ask if the documentation at https://maybedont.ai/docs should be reviewed for needed updates. If documentation changes are needed, create a checklist in the PR description for the developer to review.
 
+### Code Review Configuration
+When performing automated code reviews, report issues that score 70 or higher on the confidence scale. Issues directly violating CLAUDE.md guidance should always be flagged regardless of score. The confidence scale is:
+- **0-25**: Likely false positive or pre-existing issue
+- **50**: Real issue but minor or unlikely to be hit in practice
+- **75**: Verified issue that will likely be hit, or directly mentioned in CLAUDE.md
+- **100**: Definitely a real issue with clear evidence
+
 ### Common Pitfalls
 - **Unintended behavior changes**: When modifying existing code, bolster test coverage around the affected areas to catch regressions
 - **Naming inconsistencies**: If breaking or changing a naming convention, flag it for review and discussion

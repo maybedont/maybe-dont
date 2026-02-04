@@ -1,0 +1,23 @@
+case_id: "req-mcp-large-file-deny"
+title: "Deny excessively large file operations"
+action_envelope:
+  action_type: "MCP_TOOL_CALL"
+  actor: "agent:test"
+  target: "read_file"
+  parameters:
+    path: "huge.csv"
+    size: "200MB"
+  estimated_impact:
+    scope: "filesystem"
+    data_classification: ["internal"]
+  request_id: "req-010"
+expectations:
+  policies:
+    - policy_id: "Check large file operations"
+      decision: "deny"
+      reason_tags: ["large-file"]
+  overall:
+    decision: "deny"
+    min_confidence: 0.7
+notes:
+  - "Large file operations should be blocked."

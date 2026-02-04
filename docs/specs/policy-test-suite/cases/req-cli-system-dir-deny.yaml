@@ -1,0 +1,22 @@
+case_id: "req-cli-system-dir-deny"
+title: "Deny access to system directories"
+action_envelope:
+  action_type: "CLI_EXEC"
+  actor: "agent:test"
+  target: "read_file"
+  parameters:
+    path: "/etc/passwd"
+  estimated_impact:
+    scope: "filesystem"
+    data_classification: ["system"]
+  request_id: "req-002"
+expectations:
+  policies:
+    - policy_id: "Check system directory access"
+      decision: "deny"
+      reason_tags: ["system-directory"]
+  overall:
+    decision: "deny"
+    min_confidence: 0.8
+notes:
+  - "System directory access should be blocked."

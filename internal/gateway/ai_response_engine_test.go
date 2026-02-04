@@ -10,12 +10,25 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
+// createTestResponseConfig creates a minimal config for testing the AIResponsePolicyEngine.
+func createTestResponseConfig() *config.Config {
+	cfg := &config.Config{}
+	cfg.Validation.AI.Model = "gpt-4o-mini"
+	cfg.Validation.AI.APIKey = "test-key"
+	cfg.Validation.AI.Provider = "openai"
+	return cfg
+}
+
 func TestAIResponsePolicyEngine_DuplicatePolicyNames(t *testing.T) {
 	// Tests that LoadPolicies rejects policies with duplicate names
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
-	engine := &AIResponsePolicyEngine{}
+	engine := &AIResponsePolicyEngine{
+		cfg:                 createTestResponseConfig(),
+		maxRuleEvaluationMs: 30000,
+		providerClient:      NewMockAIProviderClient(),
+	}
 	err := InitAIResponsePolicyEngine(context.Background(), sessionLogger, engine)
 	require.NoError(t, err)
 

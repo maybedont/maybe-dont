@@ -281,8 +281,8 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 		},
 		RequestValidation: RequestValidationConfig{
 			AI: AIRequestValidationConfig{
-				Enabled: true, // AI enabled without credentials - Error 11, 12, 13
-				// AI credentials are now in validation.ai
+				Enabled: true, // AI enabled without credentials - Error 11 (api_key), 12 (model)
+				// Note: endpoint is not required for default provider (openai)
 			},
 		},
 	}
@@ -294,7 +294,8 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 	errMsg := err.Error()
 
 	// Check for multiple errors reported
-	require.Contains(t, errMsg, "13 error(s)")
+	// Note: 12 errors because endpoint is no longer required for default provider (openai)
+	require.Contains(t, errMsg, "12 error(s)")
 
 	// Check for specific errors (new format includes env var hints for key errors)
 	require.Contains(t, errMsg, "invalid server type: invalid-type")
@@ -349,6 +350,137 @@ func TestValidateConfigSuccess(t *testing.T) {
 
 	err := ValidateConfig(config)
 	require.NoError(t, err)
+}
+
+func TestAIProviderValidation(t *testing.T) {
+	// Helper to create a minimal valid config with AI enabled
+	baseConfig := func() *Config {
+		return &Config{
+			Server: struct {
+				Type       ServerType `mapstructure:"type"`
+				ListenAddr string     `mapstructure:"listen_addr"`
+				SSE        struct {
+					TLS struct {
+						Enabled  bool   `mapstructure:"enabled"`
+						CertFile string `mapstructure:"cert_file"`
+						KeyFile  string `mapstructure:"key_file"`
+					} `mapstructure:"tls"`
+				} `mapstructure:"sse"`
+				TrustedProxies        []string `mapstructure:"trusted_proxies"`
+				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			}{
+				Type: ServerTypeSTDIO,
+			},
+			DownstreamMCPServers: map[string]ClientConfig{
+				"test": {Type: "stdio", Command: "echo"},
+			},
+			Validation: struct {
+				MaxBlockingMs       int `mapstructure:"max_blocking_ms"`
+				MaxRuleEvaluationMs int `mapstructure:"max_rule_evaluation_ms"`
+				AI                  struct {
+					Provider    string            `mapstructure:"provider"`
+					Endpoint    string            `mapstructure:"endpoint"`
+					Model       string            `mapstructure:"model"`
+					APIKey      string            `mapstructure:"api_key"`
+					Parameters  map[string]any    `mapstructure:"parameters"`
+					QueryParams map[string]string `mapstructure:"query_params"`
+					Headers     map[string]string `mapstructure:"headers"`
+				} `mapstructure:"ai"`
+			}{
+				AI: struct {
+					Provider    string            `mapstructure:"provider"`
+					Endpoint    string            `mapstructure:"endpoint"`
+					Model       string            `mapstructure:"model"`
+					APIKey      string            `mapstructure:"api_key"`
+					Parameters  map[string]any    `mapstructure:"parameters"`
+					QueryParams map[string]string `mapstructure:"query_params"`
+					Headers     map[string]string `mapstructure:"headers"`
+				}{
+					APIKey: "test-key",
+					Model:  "gpt-4",
+				},
+			},
+			RequestValidation: RequestValidationConfig{
+				AI: AIRequestValidationConfig{Enabled: true},
+			},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		provider    string
+		endpoint    string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "empty provider defaults to openai (valid)",
+			provider: "",
+			endpoint: "",
+			wantErr:  false,
+		},
+		{
+			name:     "explicit openai provider without endpoint (valid)",
+			provider: "openai",
+			endpoint: "",
+			wantErr:  false,
+		},
+		{
+			name:     "explicit openai provider with endpoint (valid)",
+			provider: "openai",
+			endpoint: "https://custom-proxy.com/v1",
+			wantErr:  false,
+		},
+		{
+			name:     "anthropic provider without endpoint (valid)",
+			provider: "anthropic",
+			endpoint: "",
+			wantErr:  false,
+		},
+		{
+			name:     "anthropic provider with endpoint (valid)",
+			provider: "anthropic",
+			endpoint: "https://custom-proxy.com/v1",
+			wantErr:  false,
+		},
+		{
+			name:     "openai_compatible with endpoint (valid)",
+			provider: "openai_compatible",
+			endpoint: "https://my-server.com/v1/chat/completions",
+			wantErr:  false,
+		},
+		{
+			name:        "openai_compatible without endpoint (invalid)",
+			provider:    "openai_compatible",
+			endpoint:    "",
+			wantErr:     true,
+			errContains: "required when provider is openai_compatible",
+		},
+		{
+			name:        "invalid provider value",
+			provider:    "invalid_provider",
+			endpoint:    "",
+			wantErr:     true,
+			errContains: "must be one of: openai, openai_compatible, anthropic",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseConfig()
+			cfg.Validation.AI.Provider = tt.provider
+			cfg.Validation.AI.Endpoint = tt.endpoint
+
+			err := ValidateConfig(cfg)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errContains)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestLoadConfigWithEnvironmentVariableOverride(t *testing.T) {

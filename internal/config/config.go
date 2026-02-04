@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -119,9 +120,13 @@ type Config struct {
 		MaxRuleEvaluationMs int `mapstructure:"max_rule_evaluation_ms"` // Max time for any single rule to complete (default: 45000ms)
 		// AI settings shared by all AI-powered validation (request, response) and AI tools (audit report)
 		AI struct {
-			Endpoint string `mapstructure:"endpoint"` // OpenAI-compatible API endpoint
-			Model    string `mapstructure:"model"`    // Model to use for AI validation
-			APIKey   string `mapstructure:"api_key"`  // API key for AI endpoint
+			Provider    string            `mapstructure:"provider"`     // AI provider: openai, openai_compatible, anthropic (default: openai)
+			Endpoint    string            `mapstructure:"endpoint"`     // API endpoint (required for openai_compatible, optional for others)
+			Model       string            `mapstructure:"model"`        // Model to use for AI validation
+			APIKey      string            `mapstructure:"api_key"`      // API key for AI endpoint
+			Parameters  map[string]any    `mapstructure:"parameters"`   // Provider-specific parameters (e.g., max_tokens, temperature)
+			QueryParams map[string]string `mapstructure:"query_params"` // URL query parameters (e.g., api-version for Azure)
+			Headers     map[string]string `mapstructure:"headers"`      // Additional HTTP headers
 		} `mapstructure:"ai"`
 	} `mapstructure:"validation"`
 
@@ -1415,12 +1420,36 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 	auditReportEnabled := cfg.NativeTools.AuditReport.Enabled
 
 	if aiRequestEnabled || aiResponseEnabled || auditReportEnabled {
+		// Validate provider (empty string defaults to "openai" at runtime)
+		validProviders := map[string]bool{"": true, "openai": true, "openai_compatible": true, "anthropic": true}
+		if !validProviders[cfg.Validation.AI.Provider] {
+			errors = append(errors, configError("validation.ai.provider",
+				fmt.Sprintf("must be one of: openai, openai_compatible, anthropic (got %q)", cfg.Validation.AI.Provider)))
+		}
+
+		// Log deprecation warning if provider is not explicitly set
+		if cfg.Validation.AI.Provider == "" {
+			fmt.Fprintf(os.Stderr, "DEPRECATION: validation.ai.provider not set, defaulting to 'openai'. "+
+				"Please explicitly set the provider field; this will be required in a future version.\n")
+		}
+
 		if cfg.Validation.AI.APIKey == "" {
 			errors = append(errors, configError("validation.ai.api_key", "required when AI validation or audit report is enabled"))
 		}
-		if cfg.Validation.AI.Endpoint == "" {
-			errors = append(errors, configError("validation.ai.endpoint", "required when AI validation or audit report is enabled"))
+
+		// Endpoint is required only for openai_compatible; openai and anthropic have sensible defaults
+		if cfg.Validation.AI.Provider == "openai_compatible" && cfg.Validation.AI.Endpoint == "" {
+			errors = append(errors, configError("validation.ai.endpoint", "required when provider is openai_compatible"))
 		}
+
+		// Validate endpoint URL format if provided
+		if cfg.Validation.AI.Endpoint != "" {
+			if _, err := url.Parse(cfg.Validation.AI.Endpoint); err != nil {
+				errors = append(errors, configError("validation.ai.endpoint",
+					fmt.Sprintf("invalid URL: %v", err)))
+			}
+		}
+
 		if cfg.Validation.AI.Model == "" {
 			errors = append(errors, configError("validation.ai.model", "required when AI validation or audit report is enabled"))
 		}

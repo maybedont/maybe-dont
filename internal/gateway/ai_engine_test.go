@@ -17,10 +17,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 	sessionLogger := config.NewSessionLogger(logger)
 
 	t.Run("loads_enabled_policies", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -49,10 +46,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 	})
 
 	t.Run("skips_disabled_policies", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -79,10 +73,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 	})
 
 	t.Run("respects_default_mode", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -103,10 +94,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 	})
 
 	t.Run("policy_audit_only_overrides_default", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -127,10 +115,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 	})
 
 	t.Run("rejects_invalid_action", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -149,10 +134,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 	})
 
 	t.Run("allows_deny_action", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -172,10 +154,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 	})
 
 	t.Run("allows_allow_action", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -195,10 +174,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 	})
 
 	t.Run("loads_audit_only_policies", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -218,10 +194,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 	})
 
 	t.Run("rejects_duplicate_policy_names", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -250,10 +223,7 @@ func TestAIPolicyEngine_NoPolicies(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
-	engine := &AIPolicyEngine{
-		apiKey: "test-key",
-		model:  "gpt-4o-mini",
-	}
+	engine := createTestAIPolicyEngine(0)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -271,10 +241,7 @@ func TestAIPolicyEngine_CountEnabledPolicies(t *testing.T) {
 	sessionLogger := config.NewSessionLogger(logger)
 
 	t.Run("all_audit_only", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -303,10 +270,7 @@ func TestAIPolicyEngine_CountEnabledPolicies(t *testing.T) {
 	})
 
 	t.Run("mixed_modes", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -609,11 +573,7 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 
 	t.Run("respects_exhausted_budget", func(t *testing.T) {
 		// Create an engine with a large maxRuleEvaluationMs
-		engine := &AIPolicyEngine{
-			apiKey:              "test-key",
-			model:               "gpt-4o-mini",
-			maxRuleEvaluationMs: 30000, // 30 seconds per rule
-		}
+		engine := createTestAIPolicyEngine(30000) // 30 seconds per rule
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -651,11 +611,7 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 	t.Run("uses_remaining_budget_not_maxBlockingMs", func(t *testing.T) {
 		// This test verifies the engine uses the shared budget's remaining time,
 		// not its own maxBlockingMs field
-		engine := &AIPolicyEngine{
-			apiKey:              "test-key",
-			model:               "gpt-4o-mini",
-			maxRuleEvaluationMs: 30000,
-		}
+		engine := createTestAIPolicyEngine(30000)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -696,11 +652,7 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 
 	t.Run("nil_budget_still_works", func(t *testing.T) {
 		// Backward compatibility: when budget is nil, engine should still function
-		engine := &AIPolicyEngine{
-			apiKey:              "test-key",
-			model:               "gpt-4o-mini",
-			maxRuleEvaluationMs: 5000,
-		}
+		engine := createTestAIPolicyEngine(5000)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -1064,6 +1016,24 @@ func createTestToolRequest(toolName string) mcp.CallToolRequest {
 	}
 }
 
+// createTestAIConfig creates a test config with AI settings
+func createTestAIConfig() *config.Config {
+	cfg := &config.Config{}
+	cfg.Validation.AI.Model = "gpt-4o-mini"
+	cfg.Validation.AI.APIKey = "test-key"
+	cfg.Validation.AI.Provider = "openai"
+	return cfg
+}
+
+// createTestAIPolicyEngine creates a test AI policy engine with mock client
+func createTestAIPolicyEngine(maxRuleEvaluationMs int) *AIPolicyEngine {
+	return &AIPolicyEngine{
+		cfg:                 createTestAIConfig(),
+		maxRuleEvaluationMs: maxRuleEvaluationMs,
+		providerClient:      NewMockAIProviderClient(),
+	}
+}
+
 // TestAIPolicyEngine_AuditModeBypassFlag verifies that the AuditModeBypass flag
 // is correctly set when an audit_only policy would have denied the request.
 func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
@@ -1071,10 +1041,7 @@ func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
 	sessionLogger := config.NewSessionLogger(logger)
 
 	t.Run("audit_only_deny_sets_bypass_flag", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -1101,10 +1068,7 @@ func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
 	})
 
 	t.Run("enabled_policy_count_excludes_audit_only", func(t *testing.T) {
-		engine := &AIPolicyEngine{
-			apiKey: "test-key",
-			model:  "gpt-4o-mini",
-		}
+		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
