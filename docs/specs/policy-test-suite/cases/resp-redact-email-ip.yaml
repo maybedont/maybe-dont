@@ -5,7 +5,7 @@ notes:
   - "Both rules are disabled by default; may need include-disabled for evaluation"
 
 phase: "response"
-engine: "ai"
+engine: "cel"
 
 request:
   tool_name: "logs__get_recent"

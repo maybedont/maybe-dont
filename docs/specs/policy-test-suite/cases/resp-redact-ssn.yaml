@@ -22,7 +22,7 @@ expectations:
   decision: "redact"
   redacted_content:
     - type: "text"
-      text: "Customer: Jane Doe, SSN: [REDACTED]"
+      text: "Customer: Jane Doe, SSN: [PII_REDACTED]"
   policies:
     - policy_name: "detect-pii-in-response"
       decision: "redact"

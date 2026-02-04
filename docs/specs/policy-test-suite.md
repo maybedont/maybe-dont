@@ -1,7 +1,6 @@
 # Policy Test Suite
 
-## Status
-**Ready for Implementation** - Schema design complete, ready for review and implementation
+> **Status**: See [docs/specs/README.md](README.md) for current status.
 
 ## Overview
 

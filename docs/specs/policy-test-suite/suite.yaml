@@ -6,8 +6,8 @@ description: "Policy regression test suite for Maybe Don't Gateway"
 policies:
   cel_request_rules: "internal/config/defaults/cel_request_rules.yaml"
   ai_request_rules: "internal/config/defaults/ai_request_rules.yaml"
-  # cel_response_rules: "internal/config/defaults/cel_response_rules.yaml"
-  # ai_response_rules: "internal/config/defaults/ai_response_rules.yaml"
+  cel_response_rules: "internal/config/defaults/cel_response_rules.yaml"
+  ai_response_rules: "internal/config/defaults/ai_response_rules.yaml"
 
 # Acceptance thresholds (default: strict matching)
 acceptance:

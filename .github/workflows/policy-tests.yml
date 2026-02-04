@@ -156,24 +156,15 @@ jobs:
             --format junit \
             --output ai-results.xml
 
-          # Also output JSON for detailed analysis
-          ./maybe-dont test policies \
-            --suite-dir ${{ env.SUITE_DIR }} \
-            --engine ai \
-            $MODEL_FLAG \
-            $DISABLED_FLAG \
-            $TAGS_FLAG \
-            --format json \
-            --output ai-results.json
+          # Note: JSON output would require a second run, doubling API cost.
+          # Use local CLI with --format json for detailed analysis when needed.
 
       - name: Upload AI results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ai-test-results
-          path: |
-            ai-results.xml
-            ai-results.json
+          path: ai-results.xml
 
   summary:
     name: Test Summary

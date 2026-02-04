@@ -26,12 +26,12 @@ Each spec should have a `## Status` section near the top with one of these value
 | Spec | Description |
 |------|-------------|
 | [ai-validation-provider-agnostic](ai-validation-provider-agnostic.md) | Multi-provider AI validation (OpenAI, Anthropic, OpenAI-compatible) |
+| [policy-test-suite](policy-test-suite.md) | CLI-based policy test harness with model matrix |
 
 ### Draft
 
 | Spec | Description |
 |------|-------------|
-| [policy-test-suite](policy-test-suite.md) | CLI-based policy test harness with model matrix |
 | [api-token-obfuscation](api-token-obfuscation.md) | Obfuscate sensitive tokens in logs and audit entries |
 | [audit-report-timeout-optimization](audit-report-timeout-optimization.md) | Optimize audit report generation timeouts |
 | [cli-proxy-for-ai-agents](cli-proxy-for-ai-agents.md) | CLI proxy mode for AI agent integrations |

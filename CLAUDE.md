@@ -144,16 +144,15 @@ For feature development or any sizeable code change, follow this spec-driven app
 6. **Check existing specs**: Before starting a new spec or feature, review `docs/specs/` for relevant existing specs. Consider updating an existing spec rather than creating a new one. When modifying an existing spec, you can create a temporary worklist file in `docs/specs/` to track implementation progress.
 
 ### Spec Status Management
-Each spec should have a `## Status` section near the top with one of these values:
+Spec status is tracked in `docs/specs/README.md` (single source of truth). Valid statuses:
 - **Draft** - Work in progress, not ready for implementation
 - **Ready for Implementation** - Design approved, ready to build
 - **Implemented** - Feature shipped, spec is reference documentation
 - **Superseded** - Replaced by another spec (link to replacement)
 
 When creating or updating specs:
-1. Always include a `## Status` section after the title
-2. Update the status as the spec progresses through its lifecycle
-3. Update `docs/specs/README.md` to keep the index in sync with status changes
+1. Add or move the spec to the appropriate section in `docs/specs/README.md`
+2. Specs can optionally include a note pointing to README for status: `> **Status**: See [README.md](README.md)`
 
 ### Code Navigation with LSP
 **Prefer `gopls` over grep/glob** for Go code navigation. See the `go-development` skill for command reference. Fall back to grep/glob only for non-code patterns (comments, strings, config values).
