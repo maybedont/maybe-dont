@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -156,10 +157,18 @@ func (p *anthropicProvider) buildRequestBody(req AIRequest) ([]byte, error) {
 	// max_tokens is required for Anthropic - use default if not in parameters
 	maxTokens := anthropicDefaultMaxTokens
 	if v, ok := p.parameters["max_tokens"]; ok {
-		maxTokens = toInt(v, anthropicDefaultMaxTokens)
+		mt, err := toInt(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid max_tokens in provider parameters: %w", err)
+		}
+		maxTokens = mt
 	}
 	if v, ok := req.Parameters["max_tokens"]; ok {
-		maxTokens = toInt(v, maxTokens)
+		mt, err := toInt(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid max_tokens in request parameters: %w", err)
+		}
+		maxTokens = mt
 	}
 	body["max_tokens"] = maxTokens
 
@@ -237,7 +246,7 @@ func (p *anthropicProvider) parseResponse(respBody []byte) (AICompletionResult, 
 // normalizeError converts HTTP errors to AIProviderError with appropriate categories.
 func (p *anthropicProvider) normalizeError(err error, statusCode int) *AIProviderError {
 	// Check for context errors first
-	if err == context.DeadlineExceeded {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return &AIProviderError{
 			Category:  ErrCategoryTimeout,
 			Message:   "request timed out",
@@ -245,7 +254,7 @@ func (p *anthropicProvider) normalizeError(err error, statusCode int) *AIProvide
 			Cause:     err,
 		}
 	}
-	if err == context.Canceled {
+	if errors.Is(err, context.Canceled) {
 		return &AIProviderError{
 			Category:  ErrCategoryCanceled,
 			Message:   "request was canceled",
@@ -320,20 +329,17 @@ func (p *anthropicProvider) ProviderInfo() AIProviderInfo {
 	return p.info
 }
 
-// toInt converts a value to int, returning defaultVal if conversion fails.
-// Handles both int and float64 (JSON numbers are parsed as float64).
-func toInt(v any, defaultVal int) int {
+// toInt converts a value to int, returning an error if conversion fails.
+// Handles int, int64, and float64 (JSON numbers are parsed as float64).
+func toInt(v any) (int, error) {
 	switch val := v.(type) {
 	case int:
-		return val
+		return val, nil
 	case int64:
-		return int(val)
+		return int(val), nil
 	case float64:
-		return int(val)
-	case string:
-		// Could add string parsing if needed
-		return defaultVal
+		return int(val), nil
 	default:
-		return defaultVal
+		return 0, fmt.Errorf("cannot convert %T to int", v)
 	}
 }

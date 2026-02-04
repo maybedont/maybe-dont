@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"math"
 	"math/rand"
 	"net/http"
@@ -39,7 +40,7 @@ func isRetryableError(err error) bool {
 		return false
 	}
 	// Context errors are not retryable (deadline/cancellation)
-	if err == context.DeadlineExceeded || err == context.Canceled {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return false
 	}
 	// Transient network errors are retryable

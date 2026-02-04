@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1419,11 +1420,17 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 	auditReportEnabled := cfg.NativeTools.AuditReport.Enabled
 
 	if aiRequestEnabled || aiResponseEnabled || auditReportEnabled {
-		// Validate provider (empty string defaults to "openai" at runtime with deprecation warning)
+		// Validate provider (empty string defaults to "openai" at runtime)
 		validProviders := map[string]bool{"": true, "openai": true, "openai_compatible": true, "anthropic": true}
 		if !validProviders[cfg.Validation.AI.Provider] {
 			errors = append(errors, configError("validation.ai.provider",
 				fmt.Sprintf("must be one of: openai, openai_compatible, anthropic (got %q)", cfg.Validation.AI.Provider)))
+		}
+
+		// Log deprecation warning if provider is not explicitly set
+		if cfg.Validation.AI.Provider == "" {
+			fmt.Fprintf(os.Stderr, "DEPRECATION: validation.ai.provider not set, defaulting to 'openai'. "+
+				"Please explicitly set the provider field; this will be required in a future version.\n")
 		}
 
 		if cfg.Validation.AI.APIKey == "" {
@@ -1433,6 +1440,14 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		// Endpoint is required only for openai_compatible; openai and anthropic have sensible defaults
 		if cfg.Validation.AI.Provider == "openai_compatible" && cfg.Validation.AI.Endpoint == "" {
 			errors = append(errors, configError("validation.ai.endpoint", "required when provider is openai_compatible"))
+		}
+
+		// Validate endpoint URL format if provided
+		if cfg.Validation.AI.Endpoint != "" {
+			if _, err := url.Parse(cfg.Validation.AI.Endpoint); err != nil {
+				errors = append(errors, configError("validation.ai.endpoint",
+					fmt.Sprintf("invalid URL: %v", err)))
+			}
 		}
 
 		if cfg.Validation.AI.Model == "" {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -225,7 +226,7 @@ func (p *openAIProvider) parseResponse(respBody []byte) (AICompletionResult, int
 // normalizeError converts HTTP errors to AIProviderError with appropriate categories.
 func (p *openAIProvider) normalizeError(err error, statusCode int) *AIProviderError {
 	// Check for context errors first
-	if err == context.DeadlineExceeded {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return &AIProviderError{
 			Category:  ErrCategoryTimeout,
 			Message:   "request timed out",
@@ -233,7 +234,7 @@ func (p *openAIProvider) normalizeError(err error, statusCode int) *AIProviderEr
 			Cause:     err,
 		}
 	}
-	if err == context.Canceled {
+	if errors.Is(err, context.Canceled) {
 		return &AIProviderError{
 			Category:  ErrCategoryCanceled,
 			Message:   "request was canceled",
