@@ -10,7 +10,6 @@ import (
 	"github.com/invopop/jsonschema"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/maybedont/maybe-dont/internal/config"
-	"github.com/openai/openai-go"
 	"go.uber.org/zap"
 )
 
@@ -29,11 +28,9 @@ type AIPolicyEngine struct {
 	logger              *config.SessionLogger
 	policies            []AIPolicy
 	mu                  sync.RWMutex
-	endpoint            string
-	model               string
-	apiKey              string
+	cfg                 *config.Config // Full config needed for AIProviderClient factory
 	maxRuleEvaluationMs int
-	client              AIClient
+	providerClient      AIProviderClient
 }
 
 // InitAIPolicyEngine creates a new AI policy engine
@@ -42,8 +39,8 @@ func InitAIPolicyEngine(logger *config.SessionLogger, engine *AIPolicyEngine) er
 	engine.logger = logger
 
 	// Only create client if not already set (allows injecting mock for tests)
-	if engine.client == nil {
-		engine.client = NewOpenAIClient(engine.apiKey)
+	if engine.providerClient == nil {
+		engine.providerClient = NewAIProviderClient(engine.cfg)
 	}
 	return nil
 }
@@ -110,14 +107,15 @@ type AIResponse struct {
 
 // aiRuleResult represents the result of a single AI rule evaluation (internal use)
 type aiRuleResult struct {
-	rule         string              // Rule name
-	action       config.PolicyAction // Rule's configured action
-	mode         config.PolicyMode   // Rule's mode
-	result       string              // "allow", "deny", or "error"
-	message      string              // AI response message
-	evaluationMs int64               // Time for this rule to complete
-	err          error               // Actual error if result is "error"
-	errCategory  string              // Error classification: "api_error", "timeout", "canceled", "parse_error", "no_response"
+	rule              string              // Rule name
+	action            config.PolicyAction // Rule's configured action
+	mode              config.PolicyMode   // Rule's mode
+	result            string              // "allow", "deny", or "error"
+	message           string              // AI response message
+	evaluationMs      int64               // Time for this rule to complete
+	err               error               // Actual error if result is "error"
+	errCategory       string              // Error classification: "api_error", "timeout", "canceled", "parse_error", "no_response"
+	providerRequestID string              // Provider request ID for debugging/tracing
 }
 
 // EvaluateToolCall evaluates a tool call request against all policies with early termination.
@@ -184,31 +182,19 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			policyCtx, cancel := context.WithTimeout(context.Background(), ruleTimeout)
 			defer cancel()
 
-			schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
-				Name:        "ai_response",
-				Description: openai.String("Response from the AI policy engine"),
-				Schema:      GenerateSchema[AIResponse](),
-				Strict:      openai.Bool(true),
-			}
-
-			// Call the AI API
-			chatCompletion, err := e.client.CreateChatCompletion(policyCtx, openai.ChatCompletionNewParams{
-				Messages: []openai.ChatCompletionMessageParamUnion{
-					openai.UserMessage(fmt.Sprintf(p.Prompt, toolCallStr)),
-				},
-				Model: openai.ChatModel(e.model),
-				ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-					OfJSONSchema: &openai.ResponseFormatJSONSchemaParam{
-						JSONSchema: schemaParam,
-					},
-				},
+			// Call the AI API using the provider-agnostic interface
+			result, err := e.providerClient.Generate(policyCtx, AIRequest{
+				Model:          e.cfg.Validation.AI.Model,
+				UserPrompt:     fmt.Sprintf(p.Prompt, toolCallStr),
+				ResponseSchema: GenerateSchema[AIResponse](),
+				Parameters:     e.cfg.Validation.AI.Parameters,
 			})
 
 			durationMs := time.Since(startTime).Milliseconds()
 
 			// Handle errors
 			if err != nil {
-				errCategory := classifyContextError(policyCtx, "api_error")
+				errCategory := classifyProviderError(err)
 				resultChan <- aiRuleResult{
 					rule:         p.Name,
 					action:       p.Action,
@@ -221,22 +207,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				return
 			}
 
-			if len(chatCompletion.Choices) == 0 {
-				resultChan <- aiRuleResult{
-					rule:         p.Name,
-					action:       p.Action,
-					mode:         p.Mode,
-					result:       "error",
-					evaluationMs: durationMs,
-					err:          fmt.Errorf("API returned empty choices"),
-					errCategory:  "no_response",
-				}
-				return
-			}
-
 			// Parse the response as JSON
 			var aiResp AIResponse
-			if err := json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &aiResp); err != nil {
+			if err := json.Unmarshal(result.ParsedJSON, &aiResp); err != nil {
 				resultChan <- aiRuleResult{
 					rule:         p.Name,
 					action:       p.Action,
@@ -270,12 +243,13 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			}
 
 			resultChan <- aiRuleResult{
-				rule:         p.Name,
-				action:       p.Action,
-				mode:         p.Mode,
-				result:       resultAction,
-				message:      aiResp.Message,
-				evaluationMs: durationMs,
+				rule:              p.Name,
+				action:            p.Action,
+				mode:              p.Mode,
+				result:            resultAction,
+				message:           aiResp.Message,
+				evaluationMs:      durationMs,
+				providerRequestID: result.ProviderRequestID,
 			}
 		}(policy)
 	}
@@ -309,6 +283,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			asyncCtx = context.WithValue(asyncCtx, config.SessionIDKey, sessionID)
 
 			auditResults := make([]AuditAIRuleResult, 0, len(e.policies))
+			var lastRequestID string
 			for i := 0; i < len(e.policies); i++ {
 				result := <-resultChan
 				auditResult := AuditAIRuleResult{
@@ -322,6 +297,11 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 					auditResult.Error = formatAuditError(result.errCategory, result.err)
 				}
 				auditResults = append(auditResults, auditResult)
+
+				// Capture the last non-empty request ID for audit
+				if result.providerRequestID != "" {
+					lastRequestID = result.providerRequestID
+				}
 
 				// Log successful results (errors are logged at ERROR level elsewhere)
 				if result.err == nil {
@@ -345,6 +325,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				Action:       "allow",
 				BlockedMs:    0,
 				EvaluationMs: evaluationMs,
+				RequestID:    lastRequestID,
 				Results:      auditResults,
 			}
 
@@ -377,8 +358,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	var blockedMs int64
 	var decided bool
 	var finalAction = "allow"
-	var auditOnlyDeny bool // Track if any audit_only policy returned deny
-	var failedOpen bool    // Track if we failed open due to errors
+	var auditOnlyDeny bool    // Track if any audit_only policy returned deny
+	var failedOpen bool       // Track if we failed open due to errors
+	var lastRequestID string  // Track last provider request ID for audit
 
 	// BlockingBudget is required - fail fast if not provided
 	if budget == nil {
@@ -442,6 +424,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				capturedDecidingReason := decidingReason
 				capturedFinalAction := finalAction
 				capturedBlockedMs := blockedMs
+				capturedRequestID := lastRequestID
 
 				go func() {
 					defer close(completionChan)
@@ -463,6 +446,11 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 						}
 						asyncResults = append(asyncResults, auditResult)
 
+						// Track last provider request ID for audit
+						if result.providerRequestID != "" {
+							capturedRequestID = result.providerRequestID
+						}
+
 						// Log successful results (errors are logged at ERROR level elsewhere)
 						if result.err == nil {
 							e.logger.Debug(context.Background(), "AI policy evaluation result (async continuation)",
@@ -479,6 +467,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 						Action:       capturedFinalAction,
 						BlockedMs:    capturedBlockedMs,
 						EvaluationMs: evaluationMs,
+						RequestID:    capturedRequestID,
 						Results:      asyncResults,
 					}
 					if capturedDecidingRule != "" {
@@ -519,6 +508,11 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				auditResult.Error = formatAuditError(result.errCategory, result.err)
 			}
 			auditResults = append(auditResults, auditResult)
+
+			// Track last provider request ID for audit
+			if result.providerRequestID != "" {
+				lastRequestID = result.providerRequestID
+			}
 
 			// Track audit_only denies for AuditModeBypass
 			if result.mode == config.PolicyModeAuditOnly && result.result == "deny" {
@@ -597,6 +591,7 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			Action:       finalAction,
 			BlockedMs:    blockedMs,
 			EvaluationMs: evaluationMs,
+			RequestID:    lastRequestID,
 			Results:      auditResults,
 		}
 		if decidingRule != "" {
@@ -651,6 +646,15 @@ func classifyContextError(ctx context.Context, defaultCategory string) string {
 		return "canceled"
 	}
 	return defaultCategory
+}
+
+// classifyProviderError extracts the error category from an AIProviderError.
+// If the error is not an AIProviderError, returns "api_error" as a fallback.
+func classifyProviderError(err error) string {
+	if providerErr, ok := err.(*AIProviderError); ok {
+		return providerErr.Category
+	}
+	return "api_error"
 }
 
 // formatAuditError formats an error for the audit log as "category: message".

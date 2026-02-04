@@ -4,6 +4,28 @@ import (
 	"time"
 )
 
+// AuditAIProvider contains AI provider metadata for audit logging.
+// This is populated when AI validation is enabled and provides traceability
+// for debugging and monitoring AI-powered validation.
+type AuditAIProvider struct {
+	Provider     string `json:"provider"`                // Provider name: "openai", "anthropic", "openai_compatible"
+	Model        string `json:"model"`                   // Model identifier used for validation
+	EndpointHost string `json:"endpoint_host"`           // API endpoint host (e.g., "api.openai.com")
+	EndpointPath string `json:"endpoint_path,omitempty"` // API endpoint path (query params stripped for security)
+}
+
+// NewAuditAIProvider creates an AuditAIProvider from provider info.
+// The AIProviderInfo already contains sanitized endpoint host and path
+// (query params stripped for security, as they may contain secrets).
+func NewAuditAIProvider(info AIProviderInfo) *AuditAIProvider {
+	return &AuditAIProvider{
+		Provider:     info.Provider,
+		Model:        info.Model,
+		EndpointHost: info.EndpointHost,
+		EndpointPath: info.EndpointPath,
+	}
+}
+
 // AuditEntry represents a single consolidated audit log entry for a tool call
 type AuditEntry struct {
 	// Temporal fields - all in RFC3339Nano format
@@ -15,6 +37,9 @@ type AuditEntry struct {
 
 	// Upstream request metadata (about the incoming request, not the tool call)
 	UpstreamRequest UpstreamRequestInfo `json:"upstream_request"`
+
+	// AI provider metadata (populated when AI validation is enabled)
+	AI *AuditAIProvider `json:"ai,omitempty"`
 
 	// Validation results
 	RequestValidation  *AuditValidationInfo `json:"request_validation,omitempty"`
@@ -84,6 +109,7 @@ type AuditAIResult struct {
 	EvaluationMs int64               `json:"evaluation_ms"`           // Total wall-clock time for all rules to complete
 	DecidingRule string              `json:"deciding_rule,omitempty"` // Rule that caused the decision (omitted if none)
 	Reason       string              `json:"reason,omitempty"`        // Message from deciding rule's AI response
+	RequestID    string              `json:"request_id,omitempty"`    // Provider request ID for debugging/tracing
 	Results      []AuditAIRuleResult `json:"results"`                 // Per-rule results ordered by completion time
 }
 
@@ -136,6 +162,12 @@ func (ac *AuditContext) SetToolParams(params map[string]interface{}) {
 // SetUserAgent sets the User-Agent header from the incoming request
 func (ac *AuditContext) SetUserAgent(userAgent string) {
 	ac.entry.UpstreamRequest.UserAgent = userAgent
+}
+
+// SetAIProvider sets the AI provider metadata for the audit entry.
+// This should be called when AI validation is enabled.
+func (ac *AuditContext) SetAIProvider(provider *AuditAIProvider) {
+	ac.entry.AI = provider
 }
 
 // SetToolCalledAt records when the downstream tool was invoked

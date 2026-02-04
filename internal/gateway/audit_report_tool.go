@@ -9,8 +9,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/maybedont/maybe-dont/internal/config"
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
 	"go.uber.org/zap"
 )
 
@@ -322,17 +320,16 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 		zap.Int("user_prompt_size", len(userPrompt)),
 	)
 
-	// Create OpenAI client
-	client := openai.NewClient(
-		option.WithAPIKey(h.config.Validation.AI.APIKey),
-	)
+	// Create provider-agnostic AI client (uses configured endpoint, fixing the bug where
+	// endpoint was ignored and always defaulted to OpenAI)
+	client := NewAIProviderClient(h.config)
 
-	// Prepare the schema for structured output
-	schemaParam := openai.ResponseFormatJSONSchemaJSONSchemaParam{
-		Name:        "audit_report",
-		Description: openai.String("Audit log analysis report"),
-		Schema:      GenerateSchema[AIReportResponse](),
-		Strict:      openai.Bool(true),
+	// Build the AI request with structured output schema
+	aiRequest := AIRequest{
+		Model:          h.config.Validation.AI.Model,
+		SystemPrompt:   h.config.NativeTools.AuditReport.SystemPrompt,
+		UserPrompt:     userPrompt,
+		ResponseSchema: GenerateSchema[AIReportResponse](),
 	}
 
 	// Call the AI with configurable timeout
@@ -341,18 +338,7 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 	defer cancel()
 
 	apiStart := time.Now()
-	chatCompletion, err := client.Chat.Completions.New(aiCtx, openai.ChatCompletionNewParams{
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(h.config.NativeTools.AuditReport.SystemPrompt),
-			openai.UserMessage(userPrompt),
-		},
-		Model: openai.ChatModel(h.config.Validation.AI.Model),
-		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONSchema: &openai.ResponseFormatJSONSchemaParam{
-				JSONSchema: schemaParam,
-			},
-		},
-	})
+	result, err := client.Generate(aiCtx, aiRequest)
 	apiDuration := time.Since(apiStart)
 
 	if err != nil {
@@ -366,26 +352,40 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 			return nil, fmt.Errorf("AI API call timed out after %v (consider increasing native_tools.audit_report.timeout_seconds or reducing time_range): %w", timeout, err)
 		}
 
-		// For OpenAI API errors, the error message includes status code and response body
-		h.logger.Debug(ctx, "Audit report AI API call failed",
-			zap.Duration("duration", apiDuration),
-			zap.Error(err),
-		)
+		// Check for specific error types
+		var aiErr *AIProviderError
+		if errors.As(err, &aiErr) {
+			h.logger.Debug(ctx, "Audit report AI API call failed",
+				zap.Duration("duration", apiDuration),
+				zap.String("category", aiErr.Category),
+				zap.Bool("retryable", aiErr.Retryable),
+				zap.Error(err),
+			)
+		} else {
+			h.logger.Debug(ctx, "Audit report AI API call failed",
+				zap.Duration("duration", apiDuration),
+				zap.Error(err),
+			)
+		}
 		return nil, fmt.Errorf("AI API call failed: %w", err)
 	}
 
 	h.logger.Debug(ctx, "Audit report AI API call completed",
 		zap.Duration("duration", apiDuration),
+		zap.String("provider_request_id", result.ProviderRequestID),
 	)
 
-	if len(chatCompletion.Choices) == 0 {
-		return nil, fmt.Errorf("no response from AI model")
-	}
-
-	// Parse the AI response
+	// Parse the AI response from the provider-agnostic result
 	var aiResponse AIReportResponse
-	if err := json.Unmarshal([]byte(chatCompletion.Choices[0].Message.Content), &aiResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse AI response: %w", err)
+	if result.ParsedJSON != nil {
+		if err := json.Unmarshal(result.ParsedJSON, &aiResponse); err != nil {
+			return nil, fmt.Errorf("failed to parse AI response: %w", err)
+		}
+	} else {
+		// Fallback to raw text if no parsed JSON
+		if err := json.Unmarshal([]byte(result.RawText), &aiResponse); err != nil {
+			return nil, fmt.Errorf("failed to parse AI response: %w", err)
+		}
 	}
 
 	// Build the full report
