@@ -40,7 +40,7 @@ func (g *Gateway) initServer(ctx context.Context) error {
 }
 
 // onSessionRegister handles new upstream client sessions.
-// Session metadata (client IP, user agent) is stored immediately.
+// Session metadata (client IP, user agent, caller) is stored immediately.
 // Tool discovery is deferred until the client calls tools/list (lazy discovery).
 func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSession) {
 	sessionID := session.SessionID()
@@ -48,13 +48,22 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 	// Extract values from context for metadata storage
 	clientIP, hasClientIP := GetClientIP(ctx)
 	userAgent, hasUserAgent := GetUserAgent(ctx)
+	caller, hasCaller := GetCaller(ctx)
 
 	// Determine if this session has credentials (helps identify initialization vs SSE sessions)
 	hasCredentials := g.hasPassThroughCredentials(ctx)
 
-	g.logger.Info(ctx, "New upstream session registered",
+	// Build log fields - always include session_id and has_credentials
+	logFields := []zap.Field{
 		zap.String("session_id", sessionID),
-		zap.Bool("has_credentials", hasCredentials))
+		zap.Bool("has_credentials", hasCredentials),
+	}
+	// Include caller in log if present (for audit correlation)
+	if hasCaller && caller != "" {
+		logFields = append(logFields, zap.String("caller", caller))
+	}
+
+	g.logger.Info(ctx, "New upstream session registered", logFields...)
 
 	// Create the session synchronously so we can store client metadata immediately.
 	g.clientManager.sessionManager.CreateSession(sessionID)
@@ -625,14 +634,44 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 
 	g.server = srv
 
+	// Log if auth is enabled
+	if g.callerAuthConfig != nil && g.callerAuthConfig.Enabled {
+		g.logger.Info(ctx, "Required header authentication enabled",
+			zap.String("header", g.callerAuthConfig.HeaderName),
+			zap.Strings("allowed_values", g.callerAuthConfig.OriginalValues()))
+	}
+
+	// Create mux and mount both SSE endpoints
+	mux := http.NewServeMux()
+	mux.Handle("/sse", sseSrv.SSEHandler())
+	mux.Handle("/message", sseSrv.MessageHandler())
+
+	// Add helpful 404 for HTTP endpoint when SSE transport is active
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Not Found: HTTP transport not enabled. Server configured for SSE transport.", http.StatusNotFound)
+	})
+
+	// Wrap with auth middleware
+	handler := AuthMiddleware(g.callerAuthConfig, mux)
+
+	// Create custom HTTP server
+	httpServer := &http.Server{
+		Addr:    g.config.Server.ListenAddr,
+		Handler: handler,
+	}
+
 	// Create error channel for startup confirmation
 	errChan := make(chan error, 1)
 
 	// Start server in a goroutine
 	go func() {
 		defer close(errChan)
-		if err := sseSrv.Start(g.config.Server.ListenAddr); err != nil {
-			g.logger.Error(context.Background(), "Failed to start SSE server", zap.Error(err))
+		if err := httpServer.ListenAndServe(); err != nil {
+			if errors.Is(err, http.ErrServerClosed) {
+				// Expected during graceful shutdown
+				return
+			}
+			g.logger.Error(context.Background(), "SSE server failed", zap.Error(err))
 			errChan <- err
 		}
 	}()
@@ -643,7 +682,7 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		// Use timeout context for shutdown
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := sseSrv.Shutdown(shutdownCtx); err != nil {
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			g.logger.Error(shutdownCtx, "Error shutting down SSE server", zap.Error(err))
 		}
 	}()
@@ -669,13 +708,39 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
 
-	// Create HTTP server with auth extraction context function
-	httpSrv := server.NewStreamableHTTPServer(srv,
+	// Create streamable HTTP server as an http.Handler
+	// Note: We set the endpoint path but will mount it ourselves on a mux
+	mcpHandler := server.NewStreamableHTTPServer(srv,
 		server.WithEndpointPath("/mcp"),
 		server.WithHTTPContextFunc(g.extractAuthFromRequest),
 	)
 
 	g.server = srv
+
+	// Log if auth is enabled
+	if g.callerAuthConfig != nil && g.callerAuthConfig.Enabled {
+		g.logger.Info(ctx, "Required header authentication enabled",
+			zap.String("header", g.callerAuthConfig.HeaderName),
+			zap.Strings("allowed_values", g.callerAuthConfig.OriginalValues()))
+	}
+
+	// Create mux and mount the MCP handler
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcpHandler)
+
+	// Add helpful 404 for SSE endpoint when HTTP transport is active
+	mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Not Found: SSE transport not enabled. Server configured for HTTP transport.", http.StatusNotFound)
+	})
+
+	// Wrap with auth middleware
+	handler := AuthMiddleware(g.callerAuthConfig, mux)
+
+	// Create custom HTTP server
+	httpServer := &http.Server{
+		Addr:    g.config.Server.ListenAddr,
+		Handler: handler,
+	}
 
 	// Create error channel for startup confirmation
 	errChan := make(chan error, 1)
@@ -683,7 +748,7 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 	// Start server in a goroutine
 	go func() {
 		defer close(errChan)
-		if err := httpSrv.Start(g.config.Server.ListenAddr); err != nil {
+		if err := httpServer.ListenAndServe(); err != nil {
 			if errors.Is(err, http.ErrServerClosed) {
 				// Expected during graceful shutdown
 				return
@@ -699,7 +764,7 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		// Use timeout context for shutdown
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			g.logger.Error(shutdownCtx, "Error shutting down HTTP server", zap.Error(err))
 		}
 	}()
@@ -792,7 +857,13 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 	// Store raw request headers in context for lazy credential extraction.
 	// Credentials will be extracted on-demand when making downstream requests,
 	// avoiding unnecessary extraction for native tool calls.
-	return WithRawRequestHeaders(ctx, r.Header)
+	ctx = WithRawRequestHeaders(ctx, r.Header)
+
+	// Extract caller identifier if auth is enabled.
+	// The middleware already validated the header value; we just store it in context.
+	ctx = extractCallerFromRequest(ctx, r, g.callerAuthConfig)
+
+	return ctx
 }
 
 // hasPassThroughCredentials checks if any pass-through source headers are present

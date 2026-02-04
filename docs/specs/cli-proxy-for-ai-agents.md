@@ -15,6 +15,7 @@ Extend the Maybe Don't CLI to act as a proxy for CLI commands executed by AI age
 4. Server-controlled command filtering (no client-side allowlists)
 5. Transparent execution - after validation, behave identically to direct command execution
 6. Support AI agent workflows via skill/instruction definitions
+7. Support users who don't use MCP (REST API doesn't require MCP gateway configuration)
 
 ## Non-Goals
 
@@ -22,6 +23,7 @@ Extend the Maybe Don't CLI to act as a proxy for CLI commands executed by AI age
 2. Validating commands executed outside AI agent contexts
 3. Preventing determined users from bypassing validation
 4. Protecting against malicious users (threat model is AI agent mistakes, not adversaries)
+5. Response validation for CLI commands (see [Response Validation Limitations](#response-validation-limitation))
 
 ## Architecture
 
@@ -36,6 +38,7 @@ Extend the Maybe Don't CLI to act as a proxy for CLI commands executed by AI age
 │  └─────────────┘    └────────┬─────────┘    └────────────────────┘  │
 │                              │                        ▲             │
 │                              │ HTTP/HTTPS             │ syscall.Exec│
+│                              │ REST API               │             │
 │                              │                        │             │
 └──────────────────────────────┼────────────────────────┼─────────────┘
                                │                        │
@@ -45,10 +48,10 @@ Extend the Maybe Don't CLI to act as a proxy for CLI commands executed by AI age
 │  ┌────────────────────────────────────────────────────────────────┐  │
 │  │                    Maybe Don't Gateway                         │  │
 │  │  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────┐  │  │
-│  │  │  Native Tool:   │  │   CEL Engine    │  │   AI Engine    │  │  │
-│  │  │  validate_cli   │─▶│   (policies)    │─▶│   (OpenAI)     │  │  │
-│  │  └─────────────────┘  └─────────────────┘  └────────────────┘  │  │
-│  │                                │                               │  │
+│  │  │  REST Endpoint  │  │   CEL Engine    │  │   AI Engine    │  │  │
+│  │  │ /api/v1/cli/    │─▶│   (policies)    │─▶│   (OpenAI)     │  │  │
+│  │  │    validate     │  └─────────────────┘  └────────────────┘  │  │
+│  │  └─────────────────┘           │                               │  │
 │  │                                ▼                               │  │
 │  │                       ┌─────────────────┐                      │  │
 │  │                       │   Audit Log     │                      │  │
@@ -61,8 +64,8 @@ Extend the Maybe Don't CLI to act as a proxy for CLI commands executed by AI age
 
 1. AI agent executes: `maybe-dont cli -- gh pr comment 123 --body "LGTM"`
 2. CLI wrapper parses arguments, extracts command and args
-3. CLI wrapper sends HTTP POST to gateway's native tool endpoint
-4. Gateway validates via CEL rules and/or AI policies
+3. CLI wrapper sends HTTP POST to gateway's REST endpoint (`/api/v1/cli/validate`)
+4. Gateway validates via CEL rules and/or AI policies (request validation only)
 5. Gateway returns: allowed/denied + validation_required flag
 6. If allowed: CLI wrapper uses `syscall.Exec` to replace itself with target command
 7. If denied: CLI wrapper outputs error to stderr, exits non-zero
@@ -71,15 +74,13 @@ Extend the Maybe Don't CLI to act as a proxy for CLI commands executed by AI age
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Transport | HTTP/HTTPS only | Gateway is centrally managed; stdio/SSE not applicable |
+| Transport | REST API (not MCP) | Simpler client; supports users without MCP; no session overhead |
+| API Path | `/api/v1/cli/validate` | Resource-oriented REST; path versioning for clarity |
 | Authentication | None (V1) | Defer to future; network isolation assumed initially |
 | Execution | `syscall.Exec` (Unix) | Transparent replacement; identical behavior to direct execution |
 | Fallback | `exec.Command` (Windows) | Windows lacks direct exec replacement |
 | Fail mode | Fail-open (V1) | Allow command if gateway unreachable; configurable later |
-
-> REVIEW NOTE: Fail-open is a deliberate trade-off that weakens the safety goal
-> ("prevent AI agent mistakes"). Consider calling this out as a risk and decide
-> whether agent-driven use should default to fail-closed instead.
+| Validation scope | Request only | Response validation not possible with `syscall.Exec` |
 
 ## CLI Interface
 
@@ -112,6 +113,8 @@ maybe-dont cli --dry-run -- rm -rf /tmp/data
 
 ### Error Handling
 
+All errors and warnings are written to **stderr** to avoid interfering with command output or piping.
+
 **Missing separator:**
 ```
 $ maybe-dont cli gh pr comment 123
@@ -138,7 +141,14 @@ Reason: Repository deletion is not permitted without explicit approval
 ```
 $ maybe-dont cli -- gh pr comment 123 --body "LGTM"
 Warning: Unable to reach validation gateway, proceeding without validation
-# Command executes
+# Command executes (warning written to stderr, does not affect stdout/piping)
+```
+
+**CLI validation disabled on gateway:**
+```
+$ maybe-dont cli -- gh pr comment 123
+Error: CLI validation is not enabled on this gateway
+Configure cli_request_validation.enabled: true to enable this feature
 ```
 
 ### V1 Flags
@@ -149,66 +159,33 @@ Warning: Unable to reach validation gateway, proceeding without validation
 | `--timeout` | | duration | `30s` | Validation request timeout |
 | `--dry-run` | | bool | `false` | Validate only, don't execute |
 
-> REVIEW NOTE: The default gateway config is `server.type: stdio` with no `listen_addr`.
-> If the CLI defaults to `http://localhost:8080`, this will not work out of the box
-> unless the gateway is explicitly started in HTTP mode. Consider updating defaults
-> or adding a precondition in the spec.
-
 ### Future Flags (not in V1)
 
 | Flag | Description |
 |------|-------------|
 | `--fail-closed` | Deny command if gateway unreachable |
 | `--output-format` | `text` or `json` for error output |
-| `--session-id` | Session identifier for cache scoping |
+| `--correlation-id` | Correlation ID for audit log linking |
 
-## Native Tool Design
+## REST API Design
 
-The gateway exposes a native MCP tool that the CLI wrapper calls to validate commands.
+The gateway exposes a REST endpoint for CLI validation. This is separate from the MCP protocol, allowing users who don't use MCP to still validate CLI commands.
 
-### Tool Definition
+### Endpoint
 
-```json
-{
-  "name": "maybedont__validate_cli",
-  "description": "[EXPERIMENTAL] Validates a CLI command against security policies before execution",
-  "annotations": {
-    "readOnlyHint": true
-  },
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "command": {
-        "type": "string",
-        "description": "The CLI executable (e.g., 'gh', 'aws', 'kubectl')"
-      },
-      "arguments": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "Command arguments"
-      },
-      "working_directory": {
-        "type": "string",
-        "description": "Current working directory where command will execute"
-      },
-      "client_info": {
-        "type": "object",
-        "properties": {
-          "hostname": { "type": "string" },
-          "os": { "type": "string" },
-          "os_version": { "type": "string" },
-          "arch": { "type": "string" },
-          "shell": { "type": "string" },
-          "cli_version": { "type": "string" }
-        }
-      }
-    },
-    "required": ["command", "arguments"]
-  }
-}
+```
+POST /api/v1/cli/validate
 ```
 
-### Request Example
+### Request Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Content-Type` | Yes | Must be `application/json` |
+| `X-Correlation-ID` | No | Optional ID for correlating with MCP sessions or other requests |
+| `X-Request-ID` | No | Optional request tracing ID (generated if not provided) |
+
+### Request Body
 
 ```json
 {
@@ -217,6 +194,7 @@ The gateway exposes a native MCP tool that the CLI wrapper calls to validate com
   "working_directory": "/home/user/project",
   "client_info": {
     "hostname": "dev-workstation-1",
+    "username": "developer",
     "os": "darwin",
     "os_version": "24.1.0",
     "arch": "arm64",
@@ -226,9 +204,23 @@ The gateway exposes a native MCP tool that the CLI wrapper calls to validate com
 }
 ```
 
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `command` | string | Yes | The CLI executable name (e.g., `gh`, `aws`, `kubectl`) |
+| `arguments` | string[] | Yes | Command arguments (can be empty array) |
+| `working_directory` | string | No | Current working directory where command will execute |
+| `client_info` | object | No | Client environment information |
+| `client_info.hostname` | string | No | Client machine hostname |
+| `client_info.username` | string | No | Current user (from `$USER` or equivalent) |
+| `client_info.os` | string | No | Operating system (e.g., `darwin`, `linux`, `windows`) |
+| `client_info.os_version` | string | No | OS version string |
+| `client_info.arch` | string | No | CPU architecture (e.g., `amd64`, `arm64`) |
+| `client_info.shell` | string | No | User's shell (e.g., `/bin/zsh`) |
+| `client_info.cli_version` | string | No | Version of the `maybe-dont` CLI |
+
 ### Response Structure
 
-Mirrors existing `ValidationResults` structure with addition of `server_version`:
+**Success (allowed):**
 
 ```json
 {
@@ -237,6 +229,7 @@ Mirrors existing `ValidationResults` structure with addition of `server_version`
   "message": "Command approved by policy",
   "action_reason": "",
   "server_version": "1.3.0",
+  "client_version": "1.2.0",
   "results": [
     {
       "policy_name": "github-cli-policy",
@@ -248,11 +241,7 @@ Mirrors existing `ValidationResults` structure with addition of `server_version`
 }
 ```
 
-> REVIEW NOTE: The CLI should be prepared for MCP JSON-RPC error responses (policy
-> denials can be returned as tool errors). Specify how the CLI maps JSON-RPC errors
-> to human-readable output and exit codes.
-
-**Denied response:**
+**Denied:**
 
 ```json
 {
@@ -261,6 +250,7 @@ Mirrors existing `ValidationResults` structure with addition of `server_version`
   "message": "Policy 'no-destructive-github-actions' denied: Repository deletion is not permitted",
   "action_reason": "request_policy",
   "server_version": "1.3.0",
+  "client_version": "1.2.0",
   "results": [
     {
       "policy_name": "no-destructive-github-actions",
@@ -272,7 +262,7 @@ Mirrors existing `ValidationResults` structure with addition of `server_version`
 }
 ```
 
-**No validation required (command not in server allowlist):**
+**No validation required (command not in allowlist):**
 
 ```json
 {
@@ -280,37 +270,52 @@ Mirrors existing `ValidationResults` structure with addition of `server_version`
   "validation_required": false,
   "message": "Command does not require validation",
   "server_version": "1.3.0",
+  "client_version": "1.2.0",
   "results": []
 }
 ```
 
-### HTTP Endpoint
+### Error Responses
 
-The CLI wrapper calls the gateway via HTTP, invoking the native tool:
+**400 Bad Request - CLI validation disabled:**
 
-```
-POST /mcp/tools/call HTTP/1.1
-Host: gateway.internal:8443
-Content-Type: application/json
-
+```json
 {
-  "method": "tools/call",
-  "params": {
-    "name": "maybedont__validate_cli",
-    "arguments": {
-      "command": "gh",
-      "arguments": ["pr", "comment", "123", "--body", "LGTM"],
-      "working_directory": "/home/user/project",
-      "client_info": { ... }
-    }
-  }
+  "error": "cli_validation_disabled",
+  "message": "CLI validation is not enabled on this gateway. Set cli_request_validation.enabled: true in configuration."
 }
 ```
 
-> REVIEW NOTE: The gateway HTTP server uses the `/mcp` endpoint and expects JSON-RPC
-> 2.0 envelopes. The example path and payload here look incompatible with the current
-> implementation. Confirm the exact endpoint, request shape, and response parsing
-> needed for `tools/call`.
+**400 Bad Request - Invalid request:**
+
+```json
+{
+  "error": "invalid_request",
+  "message": "Missing required field: command"
+}
+```
+
+**500 Internal Server Error:**
+
+```json
+{
+  "error": "internal_error",
+  "message": "Failed to evaluate policies"
+}
+```
+
+### Correlation ID for Audit Linking
+
+To correlate CLI validation requests with MCP sessions or other contexts, the AI agent skill can instruct the agent to set an environment variable:
+
+```bash
+export MAYBEDONT_CORRELATION_ID="session-abc123"
+maybe-dont cli -- gh pr comment 123 --body "LGTM"
+```
+
+The CLI wrapper reads this environment variable and sends it as the `X-Correlation-ID` header. The audit log entry includes this correlation ID, enabling later analysis to link CLI calls with MCP tool calls from the same agent session.
+
+**Note:** This is optional and requires the AI agent skill to instruct correlation ID usage. Without it, audit logs still capture hostname, username, working directory, and timestamp for attribution.
 
 ## Server-Side Configuration
 
@@ -321,11 +326,12 @@ The gateway controls which CLI commands require validation. No client-side allow
 ```yaml
 # maybe-dont.yaml
 
-cli_validation:
+cli_request_validation:
   enabled: true
 
-  # Commands that require validation (allowlist)
-  # If empty, ALL commands require validation
+  # Commands that require validation
+  # Use "*" to validate ALL commands
+  # Empty list is a configuration error when enabled=true
   validate_commands:
     - gh
     - aws
@@ -337,15 +343,35 @@ cli_validation:
     - docker
 ```
 
-> REVIEW NOTE: Command matching semantics are not specified. For example, `gh` may be
-> invoked as `/usr/local/bin/gh` or `./gh`. Decide whether `cli.command` is the basename,
-> full path, or PATH-resolved absolute path, and align allowlists/CEL rules with that.
+### Configuration Validation
 
-### Unified Policy Rules
+| Condition | Behavior |
+|-----------|----------|
+| `enabled: false` | CLI validation disabled; endpoint returns 400 |
+| `enabled: true`, `validate_commands: []` | **Configuration error** at startup |
+| `enabled: true`, `validate_commands: ["*"]` | All commands require validation |
+| `enabled: true`, `validate_commands: ["gh", "aws"]` | Only listed commands require validation |
+
+**Rationale for requiring explicit `*`:** An empty list could be accidental. Requiring `*` makes "validate everything" an intentional choice and surfaces the performance implications (every command hits the gateway).
+
+### Environment Variable Support
+
+```bash
+# Enable CLI validation
+export MAYBE_DONT_CLI_REQUEST_VALIDATION_ENABLED=true
+
+# Set validate_commands (comma-separated)
+export MAYBE_DONT_CLI_REQUEST_VALIDATION_VALIDATE_COMMANDS=gh,aws,kubectl
+
+# Validate all commands
+export MAYBE_DONT_CLI_REQUEST_VALIDATION_VALIDATE_COMMANDS=*
+```
+
+## Unified Policy Rules
 
 CEL and AI rules support both MCP tool calls and CLI commands in a single rule definition.
 
-#### CEL Rules
+### CEL Rules
 
 Use `expression` for MCP tool calls and `cli_expression` for CLI commands. At least one must be defined.
 
@@ -396,7 +422,12 @@ rules:
 | ✗ | ✓ | Skip rule | Evaluate `cli_expression` |
 | ✗ | ✗ | Invalid (config error) | Invalid (config error) |
 
-#### AI Rules
+**Config Validation:**
+
+- Error at load time if both `expression` and `cli_expression` are empty/missing
+- Warning at load time if `cli_expression` exists but `cli_request_validation.enabled: false`
+
+### AI Rules
 
 AI rules use a unified `operation` structure that works for both MCP and CLI:
 
@@ -440,6 +471,8 @@ For CLI command:
 {"type": "cli", "name": "gh", "arguments": ["issue", "create", "-R", "foo", "-t", "bar"]}
 ```
 
+**Note:** Review existing AI policies for CLI compatibility. The prompt should be written to handle both structured MCP arguments (objects) and positional CLI arguments (arrays).
+
 ### CEL Context Variables
 
 The CEL engine receives a `cli` object for CLI commands:
@@ -450,10 +483,43 @@ The CEL engine receives a `cli` object for CLI commands:
 | `cli.arguments` | list(string) | Command arguments |
 | `cli.working_directory` | string | Working directory path |
 | `cli.client_info.hostname` | string | Client hostname |
+| `cli.client_info.username` | string | Current user |
 | `cli.client_info.os` | string | Operating system |
 | `cli.client_info.arch` | string | CPU architecture |
 | `cli.client_info.shell` | string | User's shell |
 | `cli.client_info.cli_version` | string | CLI wrapper version |
+
+### CEL Policy Loading
+
+Both expressions are compiled and stored at load time:
+
+```go
+type CELPolicy struct {
+    Name           string
+    Description    string
+    MCPExpression  *cel.Program  // compiled from `expression`
+    CLIExpression  *cel.Program  // compiled from `cli_expression`
+    Action         config.PolicyAction
+    Message        string
+    Mode           config.PolicyMode
+}
+```
+
+At validation time:
+- MCP tool call → use `MCPExpression` (skip rule if nil)
+- CLI call → use `CLIExpression` (skip rule if nil)
+
+## Response Validation Limitation
+
+**CLI commands support request validation only.** Response validation is not possible because:
+
+1. After validation passes, the CLI uses `syscall.Exec` to replace itself with the target command
+2. Once `syscall.Exec` runs, our process is gone - we cannot intercept the command's output
+3. Even if we used `exec.Command` with output capture, the side effect has already occurred
+
+This is an architectural constraint, not a missing feature. For operations that modify state (like `gh repo delete`), there's no meaningful response validation - the action already happened.
+
+**See also:** [Response Validation for State-Changing Operations](./response-validation-state-changes.md) for a broader discussion of this issue in MCP tool validation.
 
 ## Binary Distribution
 
@@ -475,10 +541,11 @@ Structure code to enable future split if needed:
 internal/
   cliproxy/              # CLI proxy logic (isolated package)
     proxy.go             # Main proxy logic
-    client.go            # HTTP client for gateway
+    client.go            # HTTP client for gateway REST API
     exec.go              # Command execution (syscall.Exec)
     exec_windows.go      # Windows fallback (exec.Command)
   gateway/               # Existing gateway logic
+    cli_validation.go    # CLI validation endpoint handler
     ...
 cmd/
   root.go
@@ -548,45 +615,6 @@ Cache validation responses locally with time-based expiration.
 3. If not cached or expired → call server, cache response
 4. Execute or deny based on response
 
-### Cache Key Strategies (Review Notes)
-
-The cache key design materially affects safety. Below are options, with pros/cons and assumptions.
-
-**Option A: Command-only key (e.g., "gh")**
-- Pros: Simple, highest cache hit rate.
-- Cons: Unsafe for commands with dangerous flags/args; can allow previously safe commands to bypass validation with new arguments.
-- Assumptions: The command is globally safe regardless of arguments (often false).
-
-**Option B: Full command hash (command + args + working_directory)**
-- Pros: Safest; validates exact invocation only.
-- Cons: Low cache hit rate; misses same command with harmless argument reordering or noise.
-- Assumptions: Argument order is semantically significant (often true), and exact-match caching is acceptable.
-
-**Option C: Normalized args hash**
-- Examples: sort flags alphabetically; separate flags from values; normalize paths; drop known-noise args.
-- Pros: Improves cache hit rate while keeping some specificity.
-- Cons: Risky without command-aware parsing; sorting can change meaning for positional args.
-- Assumptions: A generic normalization works across many CLIs (likely false).
-
-**Option D: Progressive keys (multiple keys per request)**
-- Example keys: `command_only`, `flags_only`, `full_hash`, `normalized_hash`.
-- Pros: Allows "closest match" cache use; can optimize for known-safe patterns.
-- Cons: Hard to reason about safety; risks false positives unless strict rules control which key can short-circuit validation.
-- Assumptions: We can define safe "fallback" levels without enabling bypass.
-
-**Option E: Server-provided cache keys (recommended for safety)**
-- Server returns one or more cache keys when `validation_required: false`.
-- Keys are computed using server policy knowledge and can include a `policy_revision` or `config_hash`.
-- Pros: Server retains control; safest way to use coarse keys; easier invalidation.
-- Cons: Requires server changes and a stable key schema.
-- Assumptions: Server can accurately classify which patterns are safe to cache.
-
-**Assumptions / Gaps to Address**
-- Command parsing: Without per-command parsers, generic normalization can be unsafe.
-- Policy versioning: Cache should be invalidated when policies/config change. Consider a `policy_revision` or `config_etag` and include it in the cache key or response.
-- Context sensitivity: Some commands are safe only in specific repos/dirs (e.g., git). Consider including `working_directory` or a repo identifier in the key when relevant.
-- Argument ordering: Many CLIs treat positional order as semantic; do not sort positional args unless command-specific logic exists.
-
 **Cache Structure:**
 
 ```json
@@ -612,28 +640,6 @@ The cache key design materially affects safety. Below are options, with pros/con
 }
 ```
 
-**Server-Provided Cache Keys (example response):**
-
-```json
-{
-  "allowed": true,
-  "validation_required": false,
-  "message": "Command does not require validation",
-  "server_version": "1.3.0",
-  "policy_revision": "2026-02-03T18:22:10Z",
-  "cache_keys": [
-    "cmd:gh",
-    "cmd:gh:flags:pr,comment",
-    "cmd:gh:full:9d8c2a9f2f5d..."
-  ],
-  "results": []
-}
-```
-
-> REVIEW NOTE: Caching keyed only by command can allow a previously approved command
-> to run with new, dangerous arguments. If caching is kept, include arguments (or a
-> normalized hash) in the cache key or disable caching when `validation_required: true`.
-
 **TTL Strategy:**
 - Commands with `validation_required: false` → longer TTL (60 minutes)
 - Commands with `validation_required: true` → shorter TTL (5 minutes) or no caching
@@ -651,33 +657,16 @@ Server provides full allowlist via `Last-Modified` header pattern.
 
 **Deferred:** More complex, implement only if V2 caching is insufficient.
 
-> REVIEW NOTE: Risks/assumptions to address for V3:
-> - **Update flow paradox**: If the CLI skips server calls for non-validated commands,
->   it will not receive the `X-MaybeDont-Config-Modified` header. V3 needs a periodic
->   refresh (startup + TTL) or a dedicated sync endpoint.
-> - **Allowlist granularity**: Command-only allowlists assume a command is safe for
->   all args. Any argument-sensitive rules should force validation for that command.
-> - **Normalization mismatch**: CLI and server must agree on `cli.command` semantics
->   (basename vs absolute path vs PATH-resolved) or allowlists will be unreliable.
-> - **Audit log gaps**: Skipping server calls means no centralized audit entry for
->   non-validated commands. Decide whether to accept this or add a lightweight audit ping.
-> - **Integrity risk**: Allowlist payloads should be protected (TLS, ETag/policy_revision,
->   possibly signed) to avoid tampering or MITM.
-> - **Invalidation**: Timestamp-only invalidation is fragile (clock skew, granularity).
->   Prefer a monotonic `policy_revision`/ETag.
-> - **Identity scoping**: If auth is added later, allowlists should be scoped per identity.
-> - **Failure mode**: Define behavior when allowlist sync fails (default validate-all
->   vs allow-all).
+### Correlation ID Enhancement (V2/V3)
 
-### Session ID Enhancement (V2/V3)
-
-If AI agent provides session ID, scope cache by session:
+If AI agent provides correlation ID, scope cache by correlation:
 
 ```bash
-maybe-dont cli --session-id abc123 -- gh pr comment 123
+export MAYBEDONT_CORRELATION_ID="session-abc123"
+maybe-dont cli -- gh pr comment 123
 ```
 
-Cache key becomes `{command}:{session_id}` - new session invalidates cache.
+Cache key becomes `{command}:{correlation_id}` - new session invalidates cache.
 
 ## Skill Management Subcommand
 
@@ -758,6 +747,13 @@ All shell/CLI commands must be executed through the Maybe Don't CLI proxy:
 maybe-dont cli -- <command> [args...]
 \`\`\`
 
+### Session Correlation (Optional)
+
+To correlate CLI validation with your session for audit analysis, set:
+\`\`\`bash
+export MAYBEDONT_CORRELATION_ID="your-session-id"
+\`\`\`
+
 ### Examples
 
 \`\`\`bash
@@ -810,7 +806,7 @@ Place the skill file in one of:
 
 The core instruction for any AI agent:
 
-> All CLI commands that interact with external services must be prefixed with `maybe-dont cli --`. This routes commands through a security validation gateway. If a command is denied, explain the denial reason to the user and suggest alternatives.
+> All CLI commands that interact with external services must be prefixed with `maybe-dont cli --`. This routes commands through a validation gateway. If a command is denied, explain the denial reason to the user and suggest alternatives.
 
 **Adaptation patterns by agent:**
 
@@ -835,7 +831,9 @@ The core instruction for any AI agent:
 | Limitation | Description | Mitigation |
 |------------|-------------|------------|
 | **Sensitive data in arguments** | CLI arguments (e.g., `--password xyz`) are sent to gateway for validation | Document as known limitation. If secrets are in CLI args, they're already exposed to the AI agent. Users should use environment variables or credential managers instead. |
+| **Working directory in logs** | Working directory paths may contain sensitive info (usernames, project names) | Accept as known limitation. Same exposure model as MCP tool calls. |
 | **No environment variable validation** | Commands may behave differently based on env vars the gateway can't see | Accept limitation. Policies validate explicit args only. |
+| **No response validation** | CLI uses `syscall.Exec`; command output cannot be intercepted or validated | Request-only validation. Response validation remains MCP-only. See [Response Validation Limitation](#response-validation-limitation). |
 | **Bypass by determined users** | Users can run commands directly without the wrapper | Not the threat model. We protect against AI agent mistakes, not malicious users. |
 | **Network dependency** | Requires connectivity to gateway | Fail-open (V1) allows execution if unreachable. Configurable in future. |
 
@@ -847,7 +845,7 @@ The core instruction for any AI agent:
 | **Binary output** | Transparent. `syscall.Exec` replaces our process; stdout is untouched. |
 | **Interactive commands** | Transparent. stdin/stdout/stderr inherited directly. |
 | **Long-running commands** | Transparent. After exec, we're gone; no timeout applies. |
-| **Piping** | Transparent. `maybe-dont cli -- aws s3 cp ... - \| tar xz` works normally. |
+| **Piping** | Transparent. `maybe-dont cli -- aws s3 cp ... - \| tar xz` works normally. Warnings go to stderr. |
 | **Exit codes** | Direct from target command (via `syscall.Exec`). |
 
 ### Security Considerations
@@ -864,7 +862,7 @@ The core instruction for any AI agent:
 |---------------|----------------|
 | **Gateway availability** | Single point of dependency. Deploy with high availability if critical. |
 | **Latency impact** | 10-50ms per validation. Acceptable for most workflows. V2 caching reduces further. |
-| **Versioning** | `server_version` in response enables compatibility checks if needed. |
+| **Versioning** | `server_version` and `client_version` in response enable compatibility checks if needed. |
 
 ### Out of Scope
 
@@ -873,13 +871,37 @@ The following are explicitly not addressed:
 - Validating commands executed outside AI agent context
 - Complete audit of all system calls (this is CLI-level, not syscall-level)
 - Protecting against shell aliases or PATH manipulation
+- Response validation for CLI commands (architectural constraint)
 
 ## Implementation Checklist
 
-### Phase 1: Core CLI Proxy
+### Phase 1: Configuration
+
+- [ ] Add `cli_request_validation` section to config schema
+- [ ] Add `cli_request_validation.enabled` flag (default: false)
+- [ ] Add `cli_request_validation.validate_commands` allowlist
+- [ ] Validate: error if enabled + empty list; require `*` for "all commands"
+- [ ] Add environment variable support (`MAYBE_DONT_CLI_REQUEST_VALIDATION_*`)
+- [ ] Update `config/maybe-dont.yaml` with CLI examples (commented out)
+- [ ] Add config validation tests
+
+### Phase 2: REST API Endpoint
+
+- [ ] Add REST endpoint handler at `/api/v1/cli/validate`
+- [ ] Define request/response JSON schemas
+- [ ] Extract validation logic into shared function (reusable by MCP native tool)
+- [ ] Return 400 with JSON error if CLI validation disabled
+- [ ] Support `X-Correlation-ID` header for audit linking
+- [ ] Support `X-Request-ID` header (generate if not provided)
+- [ ] Add audit logging for CLI validations
+- [ ] Add unit tests for endpoint
+- [ ] Add integration tests for validation flow
+
+### Phase 3: Core CLI Proxy
 
 - [ ] Create `internal/cliproxy/` package
-- [ ] Implement HTTP client for gateway communication
+- [ ] Implement HTTP client for gateway REST API
+- [ ] Read `MAYBEDONT_CORRELATION_ID` env var, send as header
 - [ ] Implement `syscall.Exec` execution (Unix)
 - [ ] Implement `exec.Command` fallback (Windows)
 - [ ] Add `cmd/cli.go` subcommand with Cobra
@@ -888,42 +910,25 @@ The following are explicitly not addressed:
 - [ ] Support `--dry-run` flag
 - [ ] Implement `--` separator parsing
 - [ ] Implement human-readable error output to stderr
-- [ ] Implement fail-open behavior when gateway unreachable
+- [ ] Implement fail-open behavior when gateway unreachable (warning to stderr)
 - [ ] Add unit tests for argument parsing
 - [ ] Add unit tests for HTTP client
 - [ ] Add integration tests for end-to-end flow
 
-### Phase 2: Gateway Native Tool
-
-- [ ] Create `maybedont__validate_cli` native tool
-- [ ] Define input schema (command, arguments, working_directory, client_info)
-- [ ] Define output schema (allowed, validation_required, message, server_version, results)
-- [ ] Implement command allowlist configuration (`cli_validation.validate_commands`)
-- [ ] Wire to existing CEL engine with `cli` context variables
-- [ ] Wire to existing AI engine with unified `operation` structure
-- [ ] Add audit logging for CLI validations
-- [ ] Add unit tests for native tool
-- [ ] Add integration tests for validation flow
-
-### Phase 3: Unified Policy Rules
+### Phase 4: Unified Policy Rules
 
 - [ ] Add `cli_expression` field to CEL rule schema
+- [ ] Update CEL engine to compile and store both expressions
 - [ ] Update CEL engine to evaluate `cli_expression` for CLI context
-- [ ] Normalize MCP tool calls and CLI commands for AI rules
+- [ ] Skip rules without applicable expression for context type
+- [ ] Normalize MCP tool calls and CLI commands for AI rules (`operation` structure)
 - [ ] Add `operation.type` ("mcp_tool" or "cli") to AI rule context
 - [ ] Update config validation (require at least one of `expression` or `cli_expression`)
+- [ ] Warn at load if `cli_expression` exists but CLI validation disabled
 - [ ] Add unit tests for mixed rules
 - [ ] Add example rules to `config/` directory
+- [ ] Review default AI policies for CLI compatibility
 - [ ] Update documentation
-
-### Phase 4: Configuration
-
-- [ ] Add `cli_validation` section to config schema
-- [ ] Add `cli_validation.enabled` flag
-- [ ] Add `cli_validation.validate_commands` allowlist
-- [ ] Add environment variable support (`MAYBE_DONT_CLI_VALIDATION_*`)
-- [ ] Update `config/maybe-dont.yaml` with CLI examples
-- [ ] Add config validation tests
 
 ### Phase 5: Skill Management
 
@@ -946,10 +951,11 @@ The following are explicitly not addressed:
 ### Future Enhancements (Not in V1)
 
 - [ ] V2: TTL-based response caching
-- [ ] V2: Session ID support for cache scoping
+- [ ] V2: Correlation ID support for cache scoping
 - [ ] V3: Server-managed allowlist with `Last-Modified`
 - [ ] Configurable fail mode (`fail_mode: open | closed`)
 - [ ] `--output-format json` flag
 - [ ] Slim binary build target (`maybe-dont-cli`)
 - [ ] Authentication between CLI and gateway
 - [ ] Additional skill formats (Cursor, Copilot, etc.)
+- [ ] MCP native tool wrapper (for users who prefer MCP interface)

@@ -73,6 +73,8 @@ type Gateway struct {
 	nativeToolsHandler *NativeToolsHandler
 	// Trusted proxy checker for extracting client IPs
 	trustedProxyChecker *TrustedProxyChecker
+	// Caller authentication config (loaded once at startup)
+	callerAuthConfig *CallerAuthConfig
 	// WaitGroup for tracking pending async audit writes
 	pendingAuditWrites sync.WaitGroup
 	// Singleflight group for deduplicating concurrent lazy discovery requests per session
@@ -216,6 +218,12 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 			zap.Int("count", len(cfg.Server.TrustedProxies)))
 	}
 
+	// Load and validate caller auth config (fail fast on invalid patterns)
+	callerAuthConfig, err := LoadCallerAuthConfig()
+	if err != nil {
+		return nil, fmt.Errorf("invalid caller auth configuration: %w", err)
+	}
+
 	return &Gateway{
 		logger:                 logger,
 		auditWriter:            auditWriter,
@@ -230,6 +238,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		aiResponsePolicyEngine: aiResponsePolicyEngine,
 		nativeToolsHandler:     nativeToolsHandler,
 		trustedProxyChecker:    trustedProxyChecker,
+		callerAuthConfig:       callerAuthConfig,
 	}, nil
 }
 
