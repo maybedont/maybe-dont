@@ -99,3 +99,24 @@ native_tools:
     enabled: true
   list_sessions:
     enabled: true
+
+# CLI Request Validation
+# Validates CLI commands from AI agents via REST API endpoint.
+# See docs/specs/cli-proxy-for-ai-agents.md for details.
+#
+# cli_request_validation:
+#   # Enable the /api/v1/cli/validate REST endpoint
+#   enabled: false
+#
+#   # Commands that require validation.
+#   # Use "*" to validate ALL commands (has performance implications).
+#   # Empty list when enabled=true is a configuration error.
+#   validate_commands:
+#     - gh
+#     - aws
+#     - kubectl
+#     - gcloud
+#     - az
+#     - terraform
+#     - curl
+#     - docker
