@@ -1,24 +1,28 @@
 case_id: "resp-redact-passwd"
 title: "Redact /etc/passwd content in response"
-action_envelope:
-  action_type: "MCP_TOOL_CALL"
-  actor: "agent:test"
-  target: "read_file"
-  parameters:
-    path: "/etc/passwd"
-  request_id: "req-007"
-response_sample:
-  raw:
-    content:
-      - type: "text"
-        text: "root:x:0:0:root:/root:/bin/bash\n.../etc/passwd..."
-expectations:
-  policies:
-    - policy_id: "redact-passwd-content"
-      decision: "redact"
-      reason_tags: ["system-file"]
-  overall:
-    decision: "redact"
-    min_confidence: 0.9
+tags: ["security", "system-file", "cel"]
 notes:
-  - "CEL response rule should redact passwd content."
+  - "CEL response rule should redact passwd content"
+
+phase: "response"
+engine: "cel"
+
+request:
+  tool_name: "read_file"
+  arguments:
+    path: "/etc/passwd"
+
+response:
+  content:
+    - type: "text"
+      text: "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin"
+  is_error: false
+
+expectations:
+  decision: "redact"
+  redacted_content:
+    - type: "text"
+      text: "[SYSTEM_FILE_REDACTED]"
+  policies:
+    - policy_name: "redact-passwd-content"
+      decision: "redact"

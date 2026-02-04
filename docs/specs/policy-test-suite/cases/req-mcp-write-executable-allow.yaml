@@ -1,23 +1,20 @@
 case_id: "req-mcp-write-executable-allow"
 title: "Allow script creation in approved directory"
-action_envelope:
-  action_type: "MCP_TOOL_CALL"
-  actor: "agent:test"
-  target: "write_file"
-  parameters:
+tags: ["allow", "filesystem", "ai"]
+notes:
+  - "Executable scripts are allowed in ./scripts/ per default AI rule"
+
+phase: "request"
+engine: "ai"
+
+request:
+  tool_name: "write_file"
+  arguments:
     path: "./scripts/build.py"
     content: "print('ok')"
-  estimated_impact:
-    scope: "filesystem"
-    data_classification: ["internal"]
-  request_id: "req-004"
+
 expectations:
+  decision: "allow"
   policies:
-    - policy_id: "Check executable file creation"
+    - policy_name: "Check executable file creation"
       decision: "allow"
-      reason_tags: ["approved-directory"]
-  overall:
-    decision: "allow"
-    min_confidence: 0.6
-notes:
-  - "Executable scripts are allowed in ./scripts/ per default AI rule."

@@ -1,14 +1,30 @@
 version: "v1"
 bundle_id: "default-2026-02-03"
-description: "Draft starter policy regression test suite"
+description: "Policy regression test suite for Maybe Don't Gateway"
+
+# Policy sources - files or directories (recursive YAML discovery)
+policies:
+  cel_request_rules: "internal/config/defaults/cel_request_rules.yaml"
+  ai_request_rules: "internal/config/defaults/ai_request_rules.yaml"
+  # cel_response_rules: "internal/config/defaults/cel_response_rules.yaml"
+  # ai_response_rules: "internal/config/defaults/ai_response_rules.yaml"
+
+# Acceptance thresholds (default: strict matching)
 acceptance:
-  min_match_rate: 0.95
-  max_false_positives: 0.03
-  max_false_negatives: 0.02
+  min_match_rate: 1.0         # 1.0 = all tests must pass (strict)
+
+# Execution configuration
+execution:
+  timeout_ms: 30000           # Timeout per test case (default: 30s)
+  delay_between_ms: 100       # Small delay to avoid rate limiting
+  retries: 2                  # Retry on transient errors
+  retry_delay_ms: 1000        # Delay before retry
+
+# Engine configuration
 engines:
-  - name: "cel"
+  cel:
     enabled: true
-  - name: "ai"
+  ai:
     enabled: true
     # Model matrix includes a wide range of models to:
     # 1. Discover cost optimization opportunities (nano/haiku may be sufficient)
@@ -89,5 +105,8 @@ engines:
       #   parameters:
       #     temperature: 0.0
 
-defaults:
-  decision_on_ambiguous: "needs_review"
+# Optional: Default filters (can be overridden by CLI flags)
+filters:
+  tags: []                    # Only run cases with these tags (empty = all)
+  exclude_tags: []            # Skip cases with these tags
+  case_pattern: "*"           # Glob pattern for case IDs

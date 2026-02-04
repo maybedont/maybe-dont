@@ -1,0 +1,227 @@
+# Policy Test Suite
+#
+# Runs policy regression tests against CEL and AI validation engines.
+# See docs/specs/policy-test-suite.md for full specification.
+#
+# Triggers:
+#   - PR to main when policy files change
+#   - Manual dispatch with configurable options
+#
+# Model matrix is defined in suite.yaml, not hardcoded here.
+# Tests run serially to avoid rate limiting issues.
+
+name: Policy Test Suite
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/config/defaults/**/*.yaml'
+      - 'docs/specs/policy-test-suite/**'
+  workflow_dispatch:
+    inputs:
+      suite_dir:
+        description: 'Suite directory'
+        type: string
+        default: 'docs/specs/policy-test-suite'
+      engine:
+        description: 'Engine to test'
+        type: choice
+        options: ['all', 'cel', 'ai']
+        default: 'all'
+      model:
+        description: 'Specific model (e.g., openai:gpt-4o-mini) - overrides matrix'
+        type: string
+        required: false
+      tags:
+        description: 'Tags to filter (comma-separated)'
+        type: string
+        required: false
+      include_disabled:
+        description: 'Include disabled policies'
+        type: boolean
+        default: false
+
+env:
+  SUITE_DIR: ${{ github.event.inputs.suite_dir || 'docs/specs/policy-test-suite' }}
+
+jobs:
+  validate:
+    name: Validate Suite Configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: make build
+
+      - name: Validate suite
+        run: |
+          ./maybe-dont test policies \
+            --suite-dir ${{ env.SUITE_DIR }} \
+            --validate-only
+
+  test-cel:
+    name: CEL Policy Tests
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event.inputs.engine != 'ai'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: make build
+
+      - name: Run CEL tests
+        run: |
+          DISABLED_FLAG=""
+          if [ "${{ github.event.inputs.include_disabled }}" == "true" ]; then
+            DISABLED_FLAG="--include-disabled"
+          fi
+
+          TAGS_FLAG=""
+          if [ -n "${{ github.event.inputs.tags }}" ]; then
+            TAGS_FLAG="--tags ${{ github.event.inputs.tags }}"
+          fi
+
+          ./maybe-dont test policies \
+            --suite-dir ${{ env.SUITE_DIR }} \
+            --engine cel \
+            $DISABLED_FLAG \
+            $TAGS_FLAG \
+            --format junit \
+            --output cel-results.xml
+
+      - name: Upload CEL results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cel-test-results
+          path: cel-results.xml
+
+  test-ai:
+    name: AI Policy Tests
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event.inputs.engine != 'cel'
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: make build
+
+      - name: Run AI tests
+        run: |
+          DISABLED_FLAG=""
+          if [ "${{ github.event.inputs.include_disabled }}" == "true" ]; then
+            DISABLED_FLAG="--include-disabled"
+          fi
+
+          TAGS_FLAG=""
+          if [ -n "${{ github.event.inputs.tags }}" ]; then
+            TAGS_FLAG="--tags ${{ github.event.inputs.tags }}"
+          fi
+
+          # Use specific model if provided, otherwise run full matrix from suite.yaml
+          if [ -n "${{ github.event.inputs.model }}" ]; then
+            MODEL_FLAG="--model ${{ github.event.inputs.model }}"
+          else
+            MODEL_FLAG="--matrix"
+          fi
+
+          ./maybe-dont test policies \
+            --suite-dir ${{ env.SUITE_DIR }} \
+            --engine ai \
+            $MODEL_FLAG \
+            $DISABLED_FLAG \
+            $TAGS_FLAG \
+            --format junit \
+            --output ai-results.xml
+
+          # Also output JSON for detailed analysis
+          ./maybe-dont test policies \
+            --suite-dir ${{ env.SUITE_DIR }} \
+            --engine ai \
+            $MODEL_FLAG \
+            $DISABLED_FLAG \
+            $TAGS_FLAG \
+            --format json \
+            --output ai-results.json
+
+      - name: Upload AI results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-test-results
+          path: |
+            ai-results.xml
+            ai-results.json
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-cel, test-ai]
+    if: always()
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          path: results
+
+      - name: Generate summary
+        run: |
+          echo "## Policy Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Tests | Passed | Failed | Errored | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|-------|--------|--------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          overall_status="pass"
+
+          for dir in results/*/; do
+            if [ -d "$dir" ]; then
+              for file in "$dir"*.xml; do
+                if [ -f "$file" ]; then
+                  name=$(basename "$file" .xml)
+                  # Parse JUnit XML for summary
+                  tests=$(grep -oP 'tests="\K[0-9]+' "$file" 2>/dev/null | head -1 || echo "0")
+                  failures=$(grep -oP 'failures="\K[0-9]+' "$file" 2>/dev/null | head -1 || echo "0")
+                  errors=$(grep -oP 'errors="\K[0-9]+' "$file" 2>/dev/null | head -1 || echo "0")
+                  passed=$((tests - failures - errors))
+
+                  if [ "$failures" -gt 0 ] || [ "$errors" -gt 0 ]; then
+                    status=":x: Failed"
+                    overall_status="fail"
+                  else
+                    status=":white_check_mark: Passed"
+                  fi
+
+                  echo "| $name | $tests | $passed | $failures | $errors | $status |" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$overall_status" == "fail" ]; then
+            echo ":warning: **Some tests failed or errored.** Review the artifacts for details." >> $GITHUB_STEP_SUMMARY
+          else
+            echo ":tada: **All tests passed!**" >> $GITHUB_STEP_SUMMARY
+          fi
