@@ -2649,3 +2649,119 @@ cli_request_validation:
 	require.Equal(t, []string{"*"}, cfg.CLIRequestValidation.ValidateCommands)
 }
 
+func TestCLIRequestValidationConfig_ErrorWhenEnabledWithEmptyList(t *testing.T) {
+	// Test: enabled=true with empty validate_commands is a config error.
+	// This catches misconfigurations where CLI validation is enabled but
+	// no commands are specified to validate.
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: true
+  validate_commands: []
+`
+	writeConfigFile(t, configDir, configContent)
+
+	_, err := LoadConfig(configDir, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validate_commands")
+	require.Contains(t, err.Error(), "empty")
+}
+
+func TestCLIRequestValidationConfig_NoErrorWhenDisabled(t *testing.T) {
+	// Test: enabled=false with empty list is OK.
+	// When CLI validation is disabled, an empty validate_commands list is acceptable.
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: false
+  validate_commands: []
+`
+	writeConfigFile(t, configDir, configContent)
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+	require.False(t, cfg.CLIRequestValidation.Enabled)
+}
+
+func TestCLIRequestValidationConfig_ErrorWhenEnabledWithOmittedList(t *testing.T) {
+	// Test: enabled=true with validate_commands omitted entirely (nil slice) is a config error.
+	// This catches the case where someone enables CLI validation but forgets to add commands.
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: true
+`
+	writeConfigFile(t, configDir, configContent)
+
+	_, err := LoadConfig(configDir, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validate_commands")
+	require.Contains(t, err.Error(), "empty")
+}
+

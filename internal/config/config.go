@@ -1508,6 +1508,12 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		}
 	}
 
+	// Validate CLI request validation config
+	if cfg.CLIRequestValidation.Enabled && len(cfg.CLIRequestValidation.ValidateCommands) == 0 {
+		errors = append(errors, configError("cli_request_validation.validate_commands",
+			"cannot be empty when enabled=true; use [\"*\"] to validate all commands"))
+	}
+
 	// Return collected errors with contextual guidance
 	if len(errors) > 0 {
 		errMsg := fmt.Sprintf("configuration validation failed with %d error(s):\n", len(errors))
