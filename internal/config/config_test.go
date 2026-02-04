@@ -2518,3 +2518,134 @@ func TestGetLogger_FailFast(t *testing.T) {
 	})
 }
 
+// writeMinimalConfig writes a minimal valid config file to the given directory.
+// This creates a config with all validation disabled and a basic downstream server.
+func writeMinimalConfig(t *testing.T, configDir string) {
+	t.Helper()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+`
+	writeConfigFile(t, configDir, configContent)
+}
+
+// writeConfigFile writes the given config content to maybe-dont.yaml in the config directory.
+func writeConfigFile(t *testing.T, configDir, configContent string) {
+	t.Helper()
+	err := os.WriteFile(configDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+}
+
+func TestCLIRequestValidationConfig_Defaults(t *testing.T) {
+	// Test: CLI request validation should be disabled by default with empty validate_commands
+	viper.Reset()
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.False(t, cfg.CLIRequestValidation.Enabled)
+	require.Empty(t, cfg.CLIRequestValidation.ValidateCommands)
+}
+
+func TestCLIRequestValidationConfig_Enabled(t *testing.T) {
+	// Test: CLI request validation can be enabled with specific commands
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: true
+  validate_commands:
+    - gh
+    - aws
+    - kubectl
+`
+	writeConfigFile(t, configDir, configContent)
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.True(t, cfg.CLIRequestValidation.Enabled)
+	require.Equal(t, []string{"gh", "aws", "kubectl"}, cfg.CLIRequestValidation.ValidateCommands)
+}
+
+func TestCLIRequestValidationConfig_WildcardAll(t *testing.T) {
+	// Test: "*" validates all commands
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: true
+  validate_commands:
+    - "*"
+`
+	writeConfigFile(t, configDir, configContent)
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.True(t, cfg.CLIRequestValidation.Enabled)
+	require.Equal(t, []string{"*"}, cfg.CLIRequestValidation.ValidateCommands)
+}
+

@@ -136,6 +136,9 @@ type Config struct {
 	// Response validation configuration (CEL and AI)
 	ResponseValidation ResponseValidationConfig `mapstructure:"response_validation"`
 
+	// CLIRequestValidation configures validation of CLI commands via REST API.
+	CLIRequestValidation CLIRequestValidationConfig `mapstructure:"cli_request_validation"`
+
 	// Downstream MCP servers configuration
 	DownstreamMCPServers map[string]ClientConfig `mapstructure:"downstream_mcp_servers"`
 
@@ -345,6 +348,18 @@ type AIResponseValidationConfig struct {
 	Mode      PolicyMode         `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
 	RulesFile string             `mapstructure:"rules_file"`
 	Rules     []AIResponsePolicy `mapstructure:"rules"`
+}
+
+// CLIRequestValidationConfig configures CLI command validation via REST API.
+type CLIRequestValidationConfig struct {
+	// Enabled controls whether the CLI validation endpoint is active.
+	// When false, the /api/v1/cli/validate endpoint returns 400.
+	Enabled bool `mapstructure:"enabled"`
+
+	// ValidateCommands lists CLI executables that require validation.
+	// Use "*" to validate all commands.
+	// Empty list when enabled=true is a configuration error.
+	ValidateCommands []string `mapstructure:"validate_commands"`
 }
 
 // LoadPoliciesFromFile loads deterministic policies from a file
