@@ -5,17 +5,46 @@ import (
 	_ "embed"
 )
 
-// CLISkill contains the Claude Code skill definition for CLI proxy usage.
-// This skill instructs AI agents how to route commands through the gateway.
+// Embedded skill content for each format
 //
 //go:embed cli.md
-var CLISkill string
+var cliSkillClaude string
 
-// Skill represents an embedded skill definition.
+//go:embed cli.cursorrules
+var cliSkillCursor string
+
+//go:embed cli.copilot.md
+var cliSkillCopilot string
+
+//go:embed cli.generic.md
+var cliSkillGeneric string
+
+// CLISkill is kept for backward compatibility.
+// New code should use GetSkill("cli") with the desired format.
+var CLISkill = cliSkillClaude
+
+// Format constants for skill output
+const (
+	FormatClaude  = "claude"
+	FormatCursor  = "cursor"
+	FormatCopilot = "copilot"
+	FormatGeneric = "generic"
+)
+
+// DefaultFormat is the default output format
+const DefaultFormat = FormatClaude
+
+// Skill represents an embedded skill definition with multiple format options.
 type Skill struct {
-	Name        string // Short name used for lookup (e.g., "cli")
-	Description string // Brief description shown in skill list
-	Content     string // Full skill content (markdown)
+	Name        string            // Short name used for lookup (e.g., "cli")
+	Description string            // Brief description shown in skill list
+	Formats     map[string]string // format name -> content
+}
+
+// Content returns the skill content in the default (Claude) format.
+// This maintains backward compatibility with code expecting a single Content field.
+func (s *Skill) Content() string {
+	return s.Formats[DefaultFormat]
 }
 
 // Skills returns all available embedded skills.
@@ -23,8 +52,13 @@ func Skills() []Skill {
 	return []Skill{
 		{
 			Name:        "cli",
-			Description: "Claude Code skill for CLI command validation",
-			Content:     CLISkill,
+			Description: "CLI command validation skill for AI agents",
+			Formats: map[string]string{
+				FormatClaude:  cliSkillClaude,
+				FormatCursor:  cliSkillCursor,
+				FormatCopilot: cliSkillCopilot,
+				FormatGeneric: cliSkillGeneric,
+			},
 		},
 	}
 }
@@ -37,4 +71,9 @@ func GetSkill(name string) *Skill {
 		}
 	}
 	return nil
+}
+
+// AvailableFormats returns the list of supported format names.
+func AvailableFormats() []string {
+	return []string{FormatClaude, FormatCursor, FormatCopilot, FormatGeneric}
 }

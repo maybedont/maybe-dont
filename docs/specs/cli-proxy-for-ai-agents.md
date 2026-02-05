@@ -917,9 +917,10 @@ $ maybe-dont skill view cli
 # Deploy to project
 $ maybe-dont skill view cli > .claude/skills/maybe-dont-cli.md
 
-# Future: other formats
+# Other formats
 $ maybe-dont skill view cli --format cursor > .cursorrules
 $ maybe-dont skill view cli --format copilot > .github/copilot-instructions.md
+$ maybe-dont skill view cli --format generic > system-prompt.md
 ```
 
 ### V1 Scope
@@ -929,19 +930,25 @@ $ maybe-dont skill view cli --format copilot > .github/copilot-instructions.md
 | `skill list` | ✓ | |
 | `skill view cli` | ✓ | |
 | `--format claude` (default) | ✓ | |
-| `--format cursor` | | ✓ |
-| `--format copilot` | | ✓ |
+| `--format cursor` | ✓ | |
+| `--format copilot` | ✓ | |
+| `--format generic` | ✓ | |
 | Additional skills | | ✓ |
 
 ### Implementation
 
 ```go
-//go:embed skills/cli.md
+//go:embed cli.md
 var cliSkillClaude string
 
-// Future: embed multiple formats
-//go:embed skills/cli.cursorrules
+//go:embed cli.cursorrules
 var cliSkillCursor string
+
+//go:embed cli.copilot.md
+var cliSkillCopilot string
+
+//go:embed cli.generic.md
+var cliSkillGeneric string
 ```
 
 ## AI Agent Integration
@@ -1181,5 +1188,5 @@ The following are explicitly not addressed:
 - [ ] `--output-format json` flag
 - [ ] Slim binary build target (`maybe-dont-cli`)
 - [ ] Authentication between CLI and gateway
-- [ ] Additional skill formats (Cursor, Copilot, etc.)
+- [ ] Additional skills beyond `cli` (e.g., MCP-specific skills)
 - [ ] MCP native tool wrapper (for users who prefer MCP interface)
