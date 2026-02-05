@@ -30,6 +30,12 @@ Maybe Don't Gateway is a security middleware service built in Go that acts as a 
 - `./maybe-dont start --config-dir {some dir}` - Start the gateway with a specific location for the config file
 - `./maybe-dont version` - Show version information
 
+### CLI Proxy
+- `./maybe-dont cli -s <gateway-url> -- <command> [args...]` - Validate and execute CLI commands
+- `./maybe-dont cli -s <gateway-url> --dry-run -- <command>` - Validate only (don't execute)
+- `./maybe-dont skill list` - List available skills for AI agents
+- `./maybe-dont skill view <name>` - Output a skill definition
+
 ### Release Management
 - `make bump-version` - Bump version using commitizen
 - `make snapshot` - Create a snapshot release (for testing)
@@ -66,6 +72,23 @@ Configuration is loaded in this order (later overrides earlier):
 1. YAML config file (`maybe-dont.yaml`)
 2. Environment variables (prefix: `MAYBE_DONT_`)
 3. Command-line flags
+
+### CLI Request Validation
+The gateway can validate CLI commands from AI agents via the `/api/v1/cli/validate` endpoint:
+
+```yaml
+cli_request_validation:
+  enabled: true
+  validate_commands:
+    - gh
+    - aws
+    - kubectl
+    - "*"  # Use "*" to validate all commands
+```
+
+Environment variables:
+- `MAYBE_DONT_CLI_REQUEST_VALIDATION_ENABLED=true`
+- `MAYBE_DONT_CLI_REQUEST_VALIDATION_VALIDATE_COMMANDS=gh,aws,kubectl`
 
 ### Validation Policy Configuration
 Each validation phase (CEL request, AI request, CEL response, AI response) has two settings:
@@ -112,6 +135,22 @@ When the blocking budget is exhausted, remaining validations continue asynchrono
 - **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `response_validation.ai.enabled` is true
 - **Multi-Client Validation**: Policies can target specific clients using name prefixes
 - **Required When Enabled**: Rules files must be specified in config when their corresponding validation phase is enabled
+
+### CLI Expression Support in CEL Rules
+CEL rules can have separate expressions for MCP tool calls and CLI commands:
+- `mcp_expression`: Evaluated for MCP tool calls (or use legacy `expression` field)
+- `cli_expression`: Evaluated for CLI commands
+
+Example rule that blocks destructive GitHub operations on both MCP and CLI:
+```yaml
+- name: no-destructive-github-actions
+  mcp_expression: |
+    tool.name == "github__delete_repo"
+  cli_expression: |
+    cli.command == "gh" && cli.arguments[1] == "delete"
+  action: deny
+  message: "Destructive GitHub operations not permitted"
+```
 
 ### Native Tools
 The gateway provides built-in introspection tools (prefixed with `maybedont__`):
