@@ -2,10 +2,15 @@ package gateway
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zaptest"
 )
 
 // TestCLIValidationRequest_JSONMarshaling verifies that CLIValidationRequest
@@ -186,4 +191,121 @@ func TestCLIPolicyResult_AIType(t *testing.T) {
 
 	assert.Contains(t, string(data), `"policy_type":"ai"`)
 	assert.Contains(t, string(data), `"action":"deny"`)
+}
+
+// TestHandleCLIValidation_DisabledReturns400 verifies that when CLI validation is disabled,
+// the handler returns a 400 error with "cli_validation_disabled" error code.
+func TestHandleCLIValidation_DisabledReturns400(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          false,
+		ValidateCommands: []string{},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["pr", "list"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var errResp CLIValidationError
+	err := json.Unmarshal(w.Body.Bytes(), &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "cli_validation_disabled", errResp.Error)
+}
+
+// TestHandleCLIValidation_MissingCommand verifies that when the command field is empty,
+// the handler returns a 400 error with "missing_command" error code.
+func TestHandleCLIValidation_MissingCommand(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+	})
+
+	reqBody := `{"command": "", "arguments": []}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var errResp CLIValidationError
+	err := json.Unmarshal(w.Body.Bytes(), &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "missing_command", errResp.Error)
+}
+
+// TestHandleCLIValidation_CommandNotInAllowlist verifies that a command not in the
+// validate_commands list returns validation_required: false and is allowed without
+// policy evaluation.
+func TestHandleCLIValidation_CommandNotInAllowlist(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"gh", "aws"}, // "cat" not in list
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+	})
+
+	reqBody := `{"command": "cat", "arguments": ["README.md"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp CLIValidationResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.True(t, resp.Allowed)
+	assert.False(t, resp.ValidationRequired)
+	assert.Equal(t, "Command does not require validation", resp.Message)
+}
+
+// TestHandleCLIValidation_WildcardMatchesAll verifies that "*" in the validate_commands
+// list matches all commands and requires validation.
+func TestHandleCLIValidation_WildcardMatchesAll(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		// No policy engines = allow by default
+	})
+
+	reqBody := `{"command": "any-command", "arguments": []}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp CLIValidationResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.True(t, resp.Allowed)
+	assert.True(t, resp.ValidationRequired)
 }

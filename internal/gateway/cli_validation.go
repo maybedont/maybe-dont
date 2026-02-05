@@ -1,5 +1,12 @@
 package gateway
 
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/maybedont/maybe-dont/internal/config"
+)
+
 // CLIValidationRequest represents a CLI command validation request sent to the gateway.
 // This is the JSON request body for POST /api/v1/cli/validate.
 type CLIValidationRequest struct {
@@ -102,4 +109,125 @@ type CLIValidationError struct {
 
 	// Message is a human-readable description of the error.
 	Message string `json:"message"`
+}
+
+// CLIValidationHandlerConfig configures the CLI validation HTTP handler.
+type CLIValidationHandlerConfig struct {
+	// Enabled indicates whether CLI validation is enabled.
+	Enabled bool
+
+	// ValidateCommands is the list of commands that require validation.
+	// Use "*" to match all commands.
+	ValidateCommands []string
+
+	// Logger is the session logger for request logging.
+	Logger *config.SessionLogger
+
+	// Version is the gateway version string returned in responses.
+	Version string
+
+	// Future: CELEngine, AIEngine for policy evaluation
+}
+
+// CLIValidationHandler handles /api/v1/cli/validate requests.
+type CLIValidationHandler struct {
+	config CLIValidationHandlerConfig
+}
+
+// NewCLIValidationHandler creates a new CLI validation handler.
+func NewCLIValidationHandler(cfg CLIValidationHandlerConfig) *CLIValidationHandler {
+	return &CLIValidationHandler{config: cfg}
+}
+
+// ServeHTTP handles CLI validation requests.
+func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Check if CLI validation is enabled
+	if !h.config.Enabled {
+		h.writeError(w, http.StatusBadRequest, "cli_validation_disabled",
+			"CLI validation is not enabled on this gateway. Set cli_request_validation.enabled: true in configuration.")
+		return
+	}
+
+	// Validate Content-Type
+	if r.Header.Get("Content-Type") != "application/json" {
+		h.writeError(w, http.StatusBadRequest, "invalid_content_type",
+			"Content-Type must be application/json")
+		return
+	}
+
+	// Parse request body
+	var req CLIValidationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid_request",
+			"Failed to parse request body: "+err.Error())
+		return
+	}
+
+	// Validate required fields
+	if req.Command == "" {
+		h.writeError(w, http.StatusBadRequest, "missing_command",
+			"Required field 'command' is empty")
+		return
+	}
+
+	// Check if command requires validation
+	if !h.requiresValidation(req.Command) {
+		resp := CLIValidationResponse{
+			Allowed:            true,
+			ValidationRequired: false,
+			Message:            "Command does not require validation",
+			ServerVersion:      h.config.Version,
+			ClientVersion:      h.getClientVersion(&req),
+			Results:            []CLIPolicyResult{},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	// Command requires validation - evaluate policies
+	// TODO: Integrate with CEL and AI engines in later tasks
+	resp := CLIValidationResponse{
+		Allowed:            true, // Default allow when no policies configured
+		ValidationRequired: true,
+		Message:            "Command approved by policy",
+		ServerVersion:      h.config.Version,
+		ClientVersion:      h.getClientVersion(&req),
+		Results:            []CLIPolicyResult{},
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// requiresValidation checks if the command is in the validate_commands list.
+func (h *CLIValidationHandler) requiresValidation(command string) bool {
+	// "*" matches all commands
+	for _, c := range h.config.ValidateCommands {
+		if c == "*" {
+			return true
+		}
+	}
+	for _, c := range h.config.ValidateCommands {
+		if c == command {
+			return true
+		}
+	}
+	return false
+}
+
+// getClientVersion extracts client version from request.
+func (h *CLIValidationHandler) getClientVersion(req *CLIValidationRequest) string {
+	if req.ClientInfo != nil {
+		return req.ClientInfo.CLIVersion
+	}
+	return ""
+}
+
+// writeError writes a JSON error response.
+func (h *CLIValidationHandler) writeError(w http.ResponseWriter, status int, code, message string) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(CLIValidationError{
+		Error:   code,
+		Message: message,
+	})
 }
