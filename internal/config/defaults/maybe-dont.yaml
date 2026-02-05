@@ -114,3 +114,8 @@ cli_request_validation:
   #   - aws
   #   - kubectl
   validate_commands: []
+
+  # Include full argument values in audit log entries.
+  # When true (default), full argument values are logged for forensic analysis.
+  # When false, only argument flags/names are logged to protect sensitive data.
+  include_argument_values: true

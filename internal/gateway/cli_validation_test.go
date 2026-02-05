@@ -604,11 +604,12 @@ func TestHandleCLIValidation_AuditEntryPopulated(t *testing.T) {
 	auditWriter := &mockAuditWriter{}
 
 	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
-		Enabled:          true,
-		ValidateCommands: []string{"*"},
-		Logger:           sessionLogger,
-		Version:          "1.0.0",
-		AuditWriter:      auditWriter,
+		Enabled:               true,
+		ValidateCommands:      []string{"*"},
+		Logger:                sessionLogger,
+		Version:               "1.0.0",
+		AuditWriter:           auditWriter,
+		IncludeArgumentValues: true,
 	})
 
 	reqBody := `{

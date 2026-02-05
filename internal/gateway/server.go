@@ -662,6 +662,7 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		AIEngine:            g.aiPolicyEngine,
 		MaxBlockingMs:       g.config.Validation.MaxBlockingMs,
 		MaxRuleEvaluationMs: g.config.Validation.MaxRuleEvaluationMs,
+		IncludeArgumentValues: g.config.CLIRequestValidation.ShouldIncludeArgumentValues(),
 	})
 	mux.Handle("/api/v1/cli/validate", cliHandler)
 	if g.config.CLIRequestValidation.Enabled {
@@ -763,6 +764,7 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		AIEngine:            g.aiPolicyEngine,
 		MaxBlockingMs:       g.config.Validation.MaxBlockingMs,
 		MaxRuleEvaluationMs: g.config.Validation.MaxRuleEvaluationMs,
+		IncludeArgumentValues: g.config.CLIRequestValidation.ShouldIncludeArgumentValues(),
 	})
 	mux.Handle("/api/v1/cli/validate", cliHandler)
 	if g.config.CLIRequestValidation.Enabled {

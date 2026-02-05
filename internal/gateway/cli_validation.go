@@ -169,6 +169,10 @@ type CLIValidationHandlerConfig struct {
 	// MaxRuleEvaluationMs is the maximum time for any single rule evaluation
 	// (default: 45000ms).
 	MaxRuleEvaluationMs int
+
+	// IncludeArgumentValues controls whether full argument values are included in audit entries.
+	// When true (default), full values are included. When false, only flag names are included.
+	IncludeArgumentValues bool
 }
 
 // CLIValidationHandler handles /api/v1/cli/validate requests.
@@ -323,6 +327,16 @@ func (h *CLIValidationHandler) writeError(w http.ResponseWriter, status int, cod
 	})
 }
 
+// getAuditArguments returns the arguments to log based on the IncludeArgumentValues config.
+// When IncludeArgumentValues is true, returns full arguments.
+// When false, returns sanitized arguments with values replaced by "[value]".
+func (h *CLIValidationHandler) getAuditArguments(args []string) []string {
+	if h.config.IncludeArgumentValues {
+		return args
+	}
+	return extractCLIArgumentFlags(args)
+}
+
 // writeAuditEntry creates and writes an audit entry for a CLI validation request.
 // This is a no-op if AuditWriter is nil.
 func (h *CLIValidationHandler) writeAuditEntry(
@@ -343,7 +357,7 @@ func (h *CLIValidationHandler) writeAuditEntry(
 		CreatedAt:         now.Format(time.RFC3339Nano),
 		CLI: &AuditCLIInfo{
 			Command:          req.Command,
-			Arguments:        req.Arguments,
+			Arguments:        h.getAuditArguments(req.Arguments),
 			WorkingDirectory: req.WorkingDirectory,
 			ClientInfo:       req.ClientInfo,
 		},
@@ -498,12 +512,15 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 		actionReason = string(ActionReasonFailOpen)
 	}
 
+	// Get arguments to log based on config (full or sanitized)
+	auditArgs := h.getAuditArguments(req.Arguments)
+
 	entry := &AuditEntry{
 		ValidationStarted: validationStart.Format(time.RFC3339Nano),
 		CreatedAt:         now.Format(time.RFC3339Nano),
 		CLI: &AuditCLIInfo{
 			Command:          req.Command,
-			Arguments:        req.Arguments,
+			Arguments:        auditArgs,
 			WorkingDirectory: req.WorkingDirectory,
 			ClientInfo:       req.ClientInfo,
 		},
@@ -534,7 +551,7 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 						CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 						CLI: &AuditCLIInfo{
 							Command:          req.Command,
-							Arguments:        req.Arguments,
+							Arguments:        auditArgs,
 							WorkingDirectory: req.WorkingDirectory,
 							ClientInfo:       req.ClientInfo,
 						},
