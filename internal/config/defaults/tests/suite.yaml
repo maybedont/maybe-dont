@@ -1,0 +1,39 @@
+# Test suite for the default shipped policies
+# This validates that the default CEL and AI policies work as expected
+version: "v1"
+bundle_id: default-policies
+description: "Test suite for shipped default policies"
+
+policies:
+  cel_request_rules: "../cel_request_rules.yaml"
+  ai_request_rules: "../ai_request_rules.yaml"
+  cel_response_rules: "../cel_response_rules.yaml"
+  ai_response_rules: "../ai_response_rules.yaml"
+
+acceptance:
+  min_match_rate: 1.0  # All tests must pass for default policies
+
+execution:
+  timeout_ms: 30000
+  retries: 2
+  retry_delay_ms: 1000
+
+engines:
+  cel:
+    enabled: true
+  ai:
+    enabled: true
+    model_matrix:
+      - provider: openai
+        model: gpt-4o-mini
+        api_key: "${OPENAI_API_KEY}"
+        tier: economy
+      - provider: anthropic
+        model: claude-3-haiku-20240307
+        api_key: "${ANTHROPIC_API_KEY}"
+        tier: economy
+
+filters:
+  tags: []
+  exclude_tags: []
+  case_pattern: ""

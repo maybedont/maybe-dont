@@ -17,13 +17,13 @@ on:
     branches: [main]
     paths:
       - 'internal/config/defaults/**/*.yaml'
-      - 'docs/specs/policy-test-suite/**'
+      - 'internal/config/defaults/tests/**'
   workflow_dispatch:
     inputs:
       suite_dir:
         description: 'Suite directory'
         type: string
-        default: 'docs/specs/policy-test-suite'
+        default: 'internal/config/defaults/tests'
       engine:
         description: 'Engine to test'
         type: choice
@@ -43,7 +43,7 @@ on:
         default: false
 
 env:
-  SUITE_DIR: ${{ github.event.inputs.suite_dir || 'docs/specs/policy-test-suite' }}
+  SUITE_DIR: ${{ github.event.inputs.suite_dir || 'internal/config/defaults/tests' }}
 
 jobs:
   validate:

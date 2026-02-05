@@ -75,20 +75,21 @@ rules:
     enabled: true
     action: redact
     prompt: |-
-      ANALYZE: Does this response contain internal file system paths that should be redacted?
+      ANALYZE: Does this response contain internal file system paths or infrastructure details that should be redacted?
 
-      Look for absolute paths like:
-      - /home/username/...
-      - /Users/username/...
-      - C:\Users\username\...
-      - /var/lib/...
-      - Internal application paths
+      Look for:
+      - Unix absolute paths: /home/*, /Users/*, /opt/*, /srv/*, /var/*, /etc/*
+      - Windows absolute paths: C:\Users\*, C:\Program Files\*, C:\Windows\*, D:\*
+      - Deployment paths: paths containing "deployments", "releases", version numbers (v1.2.3)
+      - Internal hostnames: *.local, *.internal, *.corp.*, *-prod-*, *-staging-*
+      - Application paths in stack traces or error messages
+      - Paths revealing infrastructure: /app/, /services/, specific usernames
 
       Response content: %s
 
-      If internal paths are found:
-      - Set "allowed" to true
-      - Provide redacted content with paths replaced by [PATH_REDACTED]
+      If internal paths or infrastructure details are found:
+      - Set "allowed" to true (we redact, not block)
+      - Provide redacted content with sensitive parts replaced by [PATH_REDACTED] or [HOST_REDACTED]
       - Explain what was redacted
 
       If no sensitive paths are found:
@@ -114,12 +115,18 @@ rules:
       ANALYZE: Does this response contain sensitive business information that should not be shared?
 
       Look for:
-      - Financial data (revenue, costs, margins)
+      - Financial data (revenue, costs, margins, pricing)
       - Strategic plans or roadmaps
-      - Customer lists or customer data
+      - Customer lists with names, emails, or contact information
+      - Individual customer records or PII
       - Proprietary algorithms or trade secrets
       - Confidential meeting notes
-      - Internal employee information
+      - Internal employee information (names, salaries, reviews)
+
+      NOT sensitive (allow these):
+      - Aggregated counts or statistics (e.g., "total_users: 15234")
+      - Public metrics without individual identifiers
+      - General system status or health information
 
       Response content: %s
 

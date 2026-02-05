@@ -1,0 +1,97 @@
+# Test cases for AI response policy: redact-internal-paths
+# This policy detects and redacts internal filesystem paths that could reveal infrastructure
+
+# Test: Response with internal server paths
+- case_id: ai-resp-010
+  title: "Redact internal deployment paths"
+  tags: [ai, response, internal-paths, infrastructure]
+  notes:
+    - "Realistic scenario: Error message reveals deployment structure"
+  phase: response
+  engine: ai
+  request:
+    tool_name: "shell__execute"
+    arguments:
+      command: "npm start"
+  response:
+    content:
+      - type: text
+        text: "Error: Cannot find module '/opt/deployments/prod-east-1/app-v2.3.1/node_modules/express'\n    at /opt/deployments/prod-east-1/app-v2.3.1/server.js:15:1"
+  expectations:
+    decision: redact
+
+# Test: Response with home directory paths
+- case_id: ai-resp-011
+  title: "Redact user home directory paths"
+  tags: [ai, response, internal-paths, user]
+  notes:
+    - "Realistic scenario: Stack trace reveals user directories"
+  phase: response
+  engine: ai
+  request:
+    tool_name: "shell__execute"
+    arguments:
+      command: "python script.py"
+  response:
+    content:
+      - type: text
+        text: "Traceback:\n  File \"/home/deploy-user/services/api-gateway/handlers/auth.py\", line 42"
+  expectations:
+    decision: redact
+
+# Test: Response with internal network paths
+- case_id: ai-resp-012
+  title: "Redact internal hostname in logs"
+  tags: [ai, response, internal-paths, network]
+  notes:
+    - "Realistic scenario: Log shows internal hostname and deployment paths"
+  phase: response
+  engine: ai
+  request:
+    tool_name: "filesystem__read_file"
+    arguments:
+      path: "/var/log/app.log"
+  response:
+    content:
+      - type: text
+        text: "2024-01-15 Connected to database at internal-db-prod-3.corp.example.local:5432\nApplication started from /opt/deployments/prod-east-1/app-v2.3.1/"
+  expectations:
+    decision: redact
+
+# Test: Allow public paths
+- case_id: ai-resp-013
+  title: "Allow responses with public paths"
+  tags: [ai, response, allow, paths]
+  notes:
+    - "Public URL paths don't need redaction"
+  phase: response
+  engine: ai
+  request:
+    tool_name: "http__get"
+    arguments:
+      url: "https://api.example.com/docs"
+  response:
+    content:
+      - type: text
+        text: "API Documentation available at https://docs.example.com/api/v2\nExample: curl https://api.example.com/users"
+  expectations:
+    decision: allow
+
+# Test: Allow generic error messages
+- case_id: ai-resp-014
+  title: "Allow error messages without path disclosure"
+  tags: [ai, response, allow, error]
+  notes:
+    - "Generic errors without specific paths are safe"
+  phase: response
+  engine: ai
+  request:
+    tool_name: "shell__execute"
+    arguments:
+      command: "make build"
+  response:
+    content:
+      - type: text
+        text: "Build failed: syntax error in main.go line 42\nExpected '}' but found 'EOF'"
+  expectations:
+    decision: allow

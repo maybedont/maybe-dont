@@ -1,0 +1,185 @@
+package testsuite
+
+// RunnerOptions configures the test suite runner from CLI flags.
+type RunnerOptions struct {
+	// SuiteDir is the directory containing suite.yaml and cases/
+	SuiteDir string
+
+	// Engine selects which engine to test: "cel", "ai", or "all"
+	// Empty string means use the suite.yaml configuration
+	Engine string
+
+	// Model overrides the model for AI tests (format: "provider:model")
+	Model string
+
+	// RunMatrix runs the full model matrix from suite.yaml
+	RunMatrix bool
+
+	// OutputFormat selects the output format: "text", "junit", or "json"
+	OutputFormat string
+
+	// OutputFile writes structured output (JSON/JUnit) to a file
+	OutputFile string
+
+	// Quiet suppresses stdout output (streaming progress)
+	Quiet bool
+
+	// Tags filters test cases to only those with these tags (comma-separated)
+	Tags string
+
+	// ExcludeTags skips test cases with these tags (comma-separated)
+	ExcludeTags string
+
+	// CasePattern is a glob pattern for filtering case IDs
+	CasePattern string
+
+	// ValidateOnly runs validation without executing tests
+	ValidateOnly bool
+
+	// IncludeDisabled includes policies with enabled: false
+	IncludeDisabled bool
+
+	// TimeoutMs overrides the per-test-case timeout in milliseconds
+	TimeoutMs int
+}
+
+// RunResult contains the overall result of a test suite run.
+type RunResult struct {
+	// ThresholdsMet indicates whether acceptance thresholds were met
+	ThresholdsMet bool
+
+	// TotalCases is the total number of test cases
+	TotalCases int
+
+	// Passed is the count of passing test cases
+	Passed int
+
+	// Failed is the count of failing test cases
+	Failed int
+
+	// Errored is the count of errored test cases (timeouts, API errors)
+	Errored int
+
+	// Skipped is the count of skipped test cases
+	Skipped int
+
+	// MatchRate is the percentage of tests that passed (0.0-1.0)
+	MatchRate float64
+}
+
+// Suite represents a parsed suite.yaml configuration.
+type Suite struct {
+	Version     string            `yaml:"version"`
+	BundleID    string            `yaml:"bundle_id"`
+	Description string            `yaml:"description"`
+	Policies    PoliciesConfig    `yaml:"policies"`
+	Acceptance  AcceptanceConfig  `yaml:"acceptance"`
+	Execution   ExecutionConfig   `yaml:"execution"`
+	Engines     EnginesConfig     `yaml:"engines"`
+	Filters     FiltersConfig     `yaml:"filters"`
+}
+
+// PoliciesConfig specifies the paths to policy files or directories.
+type PoliciesConfig struct {
+	CELRequestRules  string `yaml:"cel_request_rules"`
+	AIRequestRules   string `yaml:"ai_request_rules"`
+	CELResponseRules string `yaml:"cel_response_rules"`
+	AIResponseRules  string `yaml:"ai_response_rules"`
+}
+
+// AcceptanceConfig defines pass/fail thresholds.
+type AcceptanceConfig struct {
+	MinMatchRate float64 `yaml:"min_match_rate"`
+}
+
+// ExecutionConfig defines test execution parameters.
+type ExecutionConfig struct {
+	TimeoutMs    int `yaml:"timeout_ms"`
+	Retries      int `yaml:"retries"`
+	RetryDelayMs int `yaml:"retry_delay_ms"`
+}
+
+// EnginesConfig configures which engines to test.
+type EnginesConfig struct {
+	CEL CELEngineConfig `yaml:"cel"`
+	AI  AIEngineConfig  `yaml:"ai"`
+}
+
+// CELEngineConfig configures the CEL engine for testing.
+type CELEngineConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// AIEngineConfig configures the AI engine for testing.
+type AIEngineConfig struct {
+	Enabled     bool          `yaml:"enabled"`
+	ModelMatrix []ModelConfig `yaml:"model_matrix"`
+}
+
+// ModelConfig represents a single model in the test matrix.
+type ModelConfig struct {
+	Provider    string         `yaml:"provider"`
+	Endpoint    string         `yaml:"endpoint,omitempty"`
+	Model       string         `yaml:"model"`
+	APIKey      string         `yaml:"api_key,omitempty"`
+	Parameters  map[string]any `yaml:"parameters,omitempty"`
+	QueryParams map[string]any `yaml:"query_params,omitempty"`
+	Headers     map[string]any `yaml:"headers,omitempty"`
+	Tier        string         `yaml:"tier,omitempty"`
+}
+
+// FiltersConfig defines default test case filters.
+type FiltersConfig struct {
+	Tags        []string `yaml:"tags"`
+	ExcludeTags []string `yaml:"exclude_tags"`
+	CasePattern string   `yaml:"case_pattern"`
+}
+
+// TestCase represents a single test case from the cases/ directory.
+type TestCase struct {
+	CaseID       string              `yaml:"case_id"`
+	Title        string              `yaml:"title"`
+	Tags         []string            `yaml:"tags,omitempty"`
+	Notes        []string            `yaml:"notes,omitempty"`
+	Phase        string              `yaml:"phase,omitempty"`   // request, response, or both (default: request)
+	Engine       string              `yaml:"engine,omitempty"`  // cel, ai, or both (default: both)
+	Request      RequestConfig       `yaml:"request"`
+	Response     *ResponseConfig     `yaml:"response,omitempty"`
+	Expectations ExpectationsConfig  `yaml:"expectations"`
+}
+
+// RequestConfig defines the request being validated.
+type RequestConfig struct {
+	ToolName   string         `yaml:"tool_name"`
+	Arguments  map[string]any `yaml:"arguments"`
+	// Future: CLICmd, WorkingDir for CLI command testing
+}
+
+// ResponseConfig defines the response for response validation tests.
+type ResponseConfig struct {
+	Content []ContentItem `yaml:"content"`
+	IsError bool          `yaml:"is_error"`
+}
+
+// ContentItem represents a content item in a response.
+type ContentItem struct {
+	Type string `yaml:"type"` // text, image, resource
+	Text string `yaml:"text,omitempty"`
+}
+
+// ExpectationsConfig defines the expected outcomes.
+type ExpectationsConfig struct {
+	Decision        string             `yaml:"decision"` // allow, deny, or redact
+	Policies        []PolicyExpectation `yaml:"policies,omitempty"`
+	RedactedContent []ContentItem      `yaml:"redacted_content,omitempty"`
+}
+
+// PolicyExpectation defines the expected decision for a specific policy.
+type PolicyExpectation struct {
+	PolicyName string `yaml:"policy_name"`
+	Decision   string `yaml:"decision"`
+}
+
+// ProgressCallback is called after each test completes during execution.
+// This enables streaming output for text format.
+type ProgressCallback func(result TestResult)

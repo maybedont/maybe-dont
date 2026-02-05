@@ -1201,6 +1201,51 @@ When implemented, options include:
 2. **Pre-estimate** - Count input tokens, apply pricing, estimate max cost before running
 3. **Case-count estimate** - Rough estimate based on average tokens per case
 
+### Policy Coverage Research
+
+Research the most common types of errors, security incidents, and unintended behaviors when AI agents use MCP tools or CLI commands. Use this research to evaluate whether the shipped default policy set is comprehensive enough or needs expansion.
+
+**Research areas to explore:**
+- Published security incidents involving AI agents (tool misuse, data leakage, unintended side effects)
+- Common MCP tool patterns that lead to problems (file system access, network requests, command execution)
+- OWASP and security community guidance on LLM/agent security
+- Real-world examples from Claude Code, Cursor, Copilot, and similar tools
+- Categories of harm: data exfiltration, unauthorized access, resource abuse, privilege escalation
+
+**Goal:** Ship a comprehensive set of default policies (even if some are disabled by default) that customers can review, enable, and customize. The policies should cover realistic threat scenarios, not just obvious malicious inputs.
+
+**Output:** Document findings and recommendations in a separate spec or update the default policy files with additional rules.
+
+### Policy Execution Optimization
+
+Running N policies on every tool call is expensive, especially for AI policies. Research and design an algorithm to reduce the number of policies evaluated per request while maintaining security coverage.
+
+**Potential approaches to explore:**
+
+1. **Historical scoring** - Track which policies actually trigger for different tool types. Build a relevance score based on historical data. Skip low-relevance policies for certain tool patterns (e.g., "read_file has never triggered the mass-deletion policy").
+
+2. **Lightweight pre-classification** - Use a single, cheap AI call (or CEL rules) to classify the request first:
+   - Read-only vs state-changing
+   - Tool category (file system, network, command execution, database)
+   - Risk tier (low/medium/high)
+   Then only run policies relevant to that classification.
+
+3. **Policy routing rules** - Define explicit routing in policy configuration:
+   ```yaml
+   applies_to:
+     tool_patterns: ["shell__*", "exec__*"]
+     categories: [command_execution]
+   ```
+   Skip policies that don't match the current tool.
+
+4. **Tiered evaluation** - Run cheap CEL policies first. Only invoke AI policies if CEL policies don't produce a definitive result.
+
+5. **Caching/memoization** - Cache policy results for identical or similar requests within a session.
+
+**Goal:** Reduce average policy evaluations per request from N to a smaller subset while maintaining security guarantees. Document the tradeoffs between cost savings and coverage gaps.
+
+**Note:** This optimization is especially important for production deployments where latency and API costs compound across many requests.
+
 ## Implementation Checklist
 
 ### Phase 1: CLI Foundation
@@ -1241,8 +1286,40 @@ When implemented, options include:
 ### Phase 6: Documentation
 
 - [ ] **6.1** Add CLI help text and examples
+  - Document `maybe-dont test policies` command in user docs
+  - Include all flags with descriptions and examples
+  - Show common usage patterns (CEL-only, AI-only, matrix runs)
+
 - [ ] **6.2** Document suite configuration in user docs
-- [ ] **6.3** Add troubleshooting guide for common issues
+  - Explain `suite.yaml` schema and all fields
+  - Document test case YAML schema with examples
+  - Explain phase/engine combinations
+  - Document model matrix configuration for different providers
+  - Explain environment variable substitution for API keys (`${VAR}` syntax)
+
+- [ ] **6.3** Document test case authoring guide
+  - How to write effective test cases for CEL policies (exercise all expression conditions)
+  - How to write test cases for AI policies (realistic MCP calls that aren't obviously malicious)
+  - Explain expectations structure and per-policy assertions
+  - Document response validation test cases with redaction examples
+
+- [ ] **6.4** Add troubleshooting guide for common issues
+  - Rate limiting (429) behavior and how to handle it
+  - Timeout handling and retry configuration
+  - Schema validation errors and how to fix them
+  - Policy integrity errors (missing policy references)
+  - Path resolution errors
+
+- [ ] **6.5** Document CI integration
+  - How to set up GitHub Actions secrets (OPENAI_API_KEY, ANTHROPIC_API_KEY)
+  - Workflow trigger conditions and manual dispatch options
+  - Reading JUnit XML results in CI
+  - Exit codes and their meanings
+
+- [ ] **6.6** Document shipped default policy test suite
+  - Location: `internal/config/defaults/tests/`
+  - How to run the default tests locally
+  - Test case coverage for each default policy
 
 ## Test Cases Reference
 

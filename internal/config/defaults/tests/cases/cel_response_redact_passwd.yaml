@@ -1,0 +1,61 @@
+# Test cases for redact-passwd-content CEL response policy
+# This policy redacts responses where the text CONTAINS the literal string "/etc/passwd"
+# NOTE: Due to current implementation, redact policies return "allow" as the decision
+# but the actual redaction is applied. The policy result shows "redact".
+
+# Test: Response containing "/etc/passwd" string in text
+- case_id: cel-resp-001
+  title: "Redact response mentioning /etc/passwd path"
+  tags: [cel, response, passwd, redact]
+  notes:
+    - "Policy matches responses where text contains literal string '/etc/passwd'"
+    - "Due to implementation detail, overall decision is 'allow' but content is redacted"
+  phase: response
+  engine: cel
+  request:
+    tool_name: "shell__execute"
+    arguments:
+      command: "cat /etc/passwd"
+  response:
+    content:
+      - type: text
+        text: "Contents of /etc/passwd:\nroot:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin"
+  expectations:
+    decision: allow  # Redact policies currently return allow; content is redacted separately
+    policies:
+      - policy_name: redact-passwd-content
+        decision: redact
+
+# Test: Response from different file is allowed
+- case_id: cel-resp-002
+  title: "Allow reading other system files"
+  tags: [cel, response, allow]
+  phase: response
+  engine: cel
+  request:
+    tool_name: "filesystem__read_file"
+    arguments:
+      path: "/etc/hostname"
+  response:
+    content:
+      - type: text
+        text: "myserver.example.com"
+  expectations:
+    decision: allow
+
+# Test: Response from user config is allowed
+- case_id: cel-resp-003
+  title: "Allow reading user configuration files"
+  tags: [cel, response, allow]
+  phase: response
+  engine: cel
+  request:
+    tool_name: "filesystem__read_file"
+    arguments:
+      path: "/home/user/.bashrc"
+  response:
+    content:
+      - type: text
+        text: "export PATH=$PATH:/usr/local/bin\nalias ll='ls -la'"
+  expectations:
+    decision: allow
