@@ -19,7 +19,6 @@ var (
 
 // Default values for CLI command
 const (
-	defaultCLIServer  = "http://localhost:8080"
 	defaultCLITimeout = 30 * time.Second
 )
 
@@ -35,9 +34,9 @@ Fail-open behavior: If the gateway is unreachable, the command will execute
 with a warning. This ensures commands don't fail when the gateway is down.
 
 Examples:
-  maybe-dont cli -- gh pr comment 123 --body "LGTM"
+  maybe-dont cli -s http://localhost:8080 -- gh pr comment 123 --body "LGTM"
   maybe-dont cli --server https://gateway:8443 -- aws s3 ls
-  maybe-dont cli --dry-run -- kubectl delete pod my-pod
+  maybe-dont cli -s http://localhost:8080 --dry-run -- kubectl delete pod my-pod
 
 Environment Variables:
   MAYBE_DONT_CLIENT_ID    Client identifier sent with validation requests`,
@@ -49,12 +48,14 @@ Environment Variables:
 }
 
 func init() {
-	cliCmd.Flags().StringVarP(&cliServer, "server", "s", defaultCLIServer,
-		"Gateway base URL")
+	cliCmd.Flags().StringVarP(&cliServer, "server", "s", "",
+		"Gateway base URL (required)")
 	cliCmd.Flags().DurationVar(&cliTimeout, "timeout", defaultCLITimeout,
 		"Validation request timeout")
 	cliCmd.Flags().BoolVar(&cliDryRun, "dry-run", false,
 		"Validate only, don't execute the command")
+
+	_ = cliCmd.MarkFlagRequired("server")
 
 	rootCmd.AddCommand(cliCmd)
 }
