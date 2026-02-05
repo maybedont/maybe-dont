@@ -27,7 +27,7 @@ func TestJSONLAuditWriter_WriteEntry(t *testing.T) {
 	// Create a test audit entry
 	entry := &AuditEntry{
 		CreatedAt: "2024-01-15T12:00:00Z",
-		Tool: AuditToolInfo{
+		Tool: &AuditToolInfo{
 			Name:         "test_tool",
 			Client:       "test_client",
 			PrefixedName: "test_client__test_tool",
@@ -71,7 +71,7 @@ func TestJSONLAuditWriter_FilterDenyOnly(t *testing.T) {
 	// Test that allowed entries are filtered out
 	allowEntry := &AuditEntry{
 		CreatedAt: "2024-01-15T12:00:00Z",
-		Tool: AuditToolInfo{
+		Tool: &AuditToolInfo{
 			Name:         "test_tool",
 			Client:       "test_client",
 			PrefixedName: "test_client__test_tool",
@@ -86,7 +86,7 @@ func TestJSONLAuditWriter_FilterDenyOnly(t *testing.T) {
 	// Test that denied entries are written
 	denyEntry := &AuditEntry{
 		CreatedAt: "2024-01-15T12:00:01Z",
-		Tool: AuditToolInfo{
+		Tool: &AuditToolInfo{
 			Name:         "test_tool2",
 			Client:       "test_client",
 			PrefixedName: "test_client__test_tool2",
@@ -147,7 +147,7 @@ func TestJSONLAuditWriter_StdoutStderr(t *testing.T) {
 			// but verifies the path doesn't error)
 			entry := &AuditEntry{
 				CreatedAt: "2024-01-15T12:00:00Z",
-				Tool: AuditToolInfo{
+				Tool: &AuditToolInfo{
 					Name:         "test_tool",
 					Client:       "test_client",
 					PrefixedName: "test_client__test_tool",
@@ -180,7 +180,7 @@ func TestJSONLAuditWriter_RelativePathWithLogDir(t *testing.T) {
 
 	entry := &AuditEntry{
 		CreatedAt: "2024-01-15T12:00:00Z",
-		Tool: AuditToolInfo{
+		Tool: &AuditToolInfo{
 			Name:         "test_tool",
 			Client:       "test_client",
 			PrefixedName: "test_client__test_tool",
@@ -218,7 +218,7 @@ func TestJSONLAuditWriter_DefaultFilterIsAll(t *testing.T) {
 	// Both allow and deny entries should be written
 	allowEntry := &AuditEntry{
 		CreatedAt: "2024-01-15T12:00:00Z",
-		Tool: AuditToolInfo{
+		Tool: &AuditToolInfo{
 			PrefixedName: "client__tool1",
 		},
 		Action: string(config.PolicyActionAllow),
@@ -230,7 +230,7 @@ func TestJSONLAuditWriter_DefaultFilterIsAll(t *testing.T) {
 
 	denyEntry := &AuditEntry{
 		CreatedAt: "2024-01-15T12:00:01Z",
-		Tool: AuditToolInfo{
+		Tool: &AuditToolInfo{
 			PrefixedName: "client__tool2",
 		},
 		Action: string(config.PolicyActionDeny),

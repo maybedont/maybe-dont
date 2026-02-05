@@ -26,14 +26,17 @@ func NewAuditAIProvider(info AIProviderInfo) *AuditAIProvider {
 	}
 }
 
-// AuditEntry represents a single consolidated audit log entry for a tool call
+// AuditEntry represents a single consolidated audit log entry for a tool call or CLI validation
 type AuditEntry struct {
 	// Temporal fields - all in RFC3339Nano format
 	ValidationStarted string `json:"validation_started"` // When we received the tool call and began validation
 	CreatedAt         string `json:"created_at"`         // When this audit entry was finalized and written
 
-	// Tool call information (identity + execution details)
-	Tool AuditToolInfo `json:"tool"`
+	// Tool is populated for MCP tool calls (nil for CLI validations).
+	Tool *AuditToolInfo `json:"tool,omitempty"`
+
+	// CLI is populated for CLI command validations (nil for MCP tool calls).
+	CLI *AuditCLIInfo `json:"cli,omitempty"`
 
 	// Upstream request metadata (about the incoming request, not the tool call)
 	UpstreamRequest UpstreamRequestInfo `json:"upstream_request"`
@@ -55,7 +58,8 @@ type AuditEntry struct {
 	TotalBlockedMs int64 `json:"total_blocked_ms"`  // Time caller was blocked (validation + tool call)
 }
 
-// AuditToolInfo contains tool identification and execution details
+// AuditToolInfo contains tool identification and execution details.
+// Populated for MCP tool calls, nil for CLI validations.
 type AuditToolInfo struct {
 	// Identity
 	Name         string `json:"name"`
@@ -66,6 +70,15 @@ type AuditToolInfo struct {
 	Params     map[string]interface{} `json:"params,omitempty"`
 	CalledAt   string                 `json:"called_at,omitempty"`   // When downstream tool was invoked (omitted if denied)
 	DurationMs *int64                 `json:"duration_ms,omitempty"` // Downstream call duration (omitted if denied)
+}
+
+// AuditCLIInfo contains information about a CLI command validation.
+// Populated for CLI validations, nil for MCP tool calls.
+type AuditCLIInfo struct {
+	Command          string         `json:"command"`
+	Arguments        []string       `json:"arguments"`
+	WorkingDirectory string         `json:"working_directory,omitempty"`
+	ClientInfo       *CLIClientInfo `json:"client_info,omitempty"`
 }
 
 // UpstreamRequestInfo contains metadata about the incoming request
@@ -139,7 +152,7 @@ func NewAuditContext(prefixedToolName, clientName, toolName, sessionID, clientIP
 	return &AuditContext{
 		entry: &AuditEntry{
 			ValidationStarted: now.Format(time.RFC3339Nano),
-			Tool: AuditToolInfo{
+			Tool: &AuditToolInfo{
 				Name:         toolName,
 				Client:       clientName,
 				PrefixedName: prefixedToolName,

@@ -89,7 +89,7 @@ func parseAuditLine(line []byte) (*AuditLogEntry, time.Time, error) {
 	var directEntry AuditEntry
 	if err := json.Unmarshal(line, &directEntry); err == nil {
 		// Check if this looks like a direct AuditEntry (has validation_started which is unique to new format)
-		if directEntry.ValidationStarted != "" && directEntry.Tool.PrefixedName != "" {
+		if directEntry.ValidationStarted != "" && directEntry.Tool != nil && directEntry.Tool.PrefixedName != "" {
 			// Parse timestamp from created_at
 			var entryTime time.Time
 			if directEntry.CreatedAt != "" {
@@ -164,7 +164,7 @@ func parseAuditLine(line []byte) (*AuditLogEntry, time.Time, error) {
 	// Try parsing as new zap-formatted log entry with new AuditEntry schema
 	var newEntry AuditLogEntry
 	if err := json.Unmarshal(line, &newEntry); err == nil {
-		if newEntry.Audit != nil && newEntry.Audit.Tool.PrefixedName != "" {
+		if newEntry.Audit != nil && newEntry.Audit.Tool != nil && newEntry.Audit.Tool.PrefixedName != "" {
 			entryTime := timestampToTime(newEntry.Timestamp)
 			return &newEntry, entryTime, nil
 		}
@@ -181,7 +181,7 @@ func convertLegacyEntry(legacy *legacyAuditEntry) *AuditEntry {
 
 	entry := &AuditEntry{
 		CreatedAt: legacy.CreatedAt,
-		Tool: AuditToolInfo{
+		Tool: &AuditToolInfo{
 			Name:         legacy.Tool.Name,
 			Client:       legacy.Tool.Client,
 			PrefixedName: legacy.Tool.PrefixedName,
@@ -532,9 +532,9 @@ func (h *NativeToolsHandler) matchesFilter(entry AuditLogEntry, filter AuditLogF
 		return false
 	}
 
-	// Skip entries that don't have the new format structure
-	// Old format entries will have empty Tool.PrefixedName
-	if entry.Audit.Tool.PrefixedName == "" {
+	// Skip entries that don't have tool info (required for MCP tool audits)
+	// CLI audit entries will have CLI field instead - handle those separately when needed
+	if entry.Audit.Tool == nil || entry.Audit.Tool.PrefixedName == "" {
 		return false
 	}
 
