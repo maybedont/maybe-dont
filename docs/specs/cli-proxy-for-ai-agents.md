@@ -905,22 +905,22 @@ Available skills:
 Use 'maybe-dont skill view <name>' to output a skill definition.
 ```
 
-**`maybe-dont skill view <name> [--format <format>]`**
+**`maybe-dont skill view <name> --format <format>`**
 
-Outputs the specified skill definition to stdout.
+Outputs the specified skill definition to stdout. The `--format` flag is required.
 
 ```bash
-# Default (Claude Code format)
-$ maybe-dont skill view cli
-# <outputs markdown skill definition>
+# Claude Code format
+$ maybe-dont skill view cli --format claude > .claude/skills/maybe-dont-cli.md
 
-# Deploy to project
-$ maybe-dont skill view cli > .claude/skills/maybe-dont-cli.md
-
-# Other formats
+# Cursor format
 $ maybe-dont skill view cli --format cursor > .cursorrules
+
+# GitHub Copilot format
 $ maybe-dont skill view cli --format copilot > .github/copilot-instructions.md
-$ maybe-dont skill view cli --format generic > system-prompt.md
+
+# Generic format (for any AI system prompt)
+$ maybe-dont skill view cli --format generic > instructions.md
 ```
 
 ### V1 Scope
@@ -928,8 +928,8 @@ $ maybe-dont skill view cli --format generic > system-prompt.md
 | Feature | V1 | Future |
 |---------|-----|--------|
 | `skill list` | ✓ | |
-| `skill view cli` | ✓ | |
-| `--format claude` (default) | ✓ | |
+| `skill view cli --format <format>` | ✓ | |
+| `--format claude` | ✓ | |
 | `--format cursor` | ✓ | |
 | `--format copilot` | ✓ | |
 | `--format generic` | ✓ | |
@@ -1167,7 +1167,7 @@ The following are explicitly not addressed:
 - [ ] Implement `skill list` command
 - [ ] Implement `skill view <name>` command
 - [ ] Embed `skills/cli.md` in binary using `//go:embed`
-- [ ] Add `--format` flag (default: `claude`, others deferred)
+- [ ] Add `--format` flag (required)
 - [ ] Add help text and examples
 - [ ] Add unit tests for skill commands
 
