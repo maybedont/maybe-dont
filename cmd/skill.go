@@ -33,27 +33,29 @@ var skillListCmd = &cobra.Command{
 }
 
 var skillViewCmd = &cobra.Command{
-	Use:   "view <name>",
+	Use:   "view <name> --format <format>",
 	Short: "Output a skill definition to stdout",
 	Long: `Output the specified skill definition to stdout.
 
 Supported formats:
-  claude   - Claude Code skill format (default)
+  claude   - Claude Code skill format
   cursor   - Cursor .cursorrules format
   copilot  - GitHub Copilot instructions format
   generic  - Generic markdown for any AI agent
 
 Examples:
-  maybe-dont skill view cli > .claude/skills/maybe-dont-cli.md
+  maybe-dont skill view cli --format claude > .claude/skills/maybe-dont-cli.md
   maybe-dont skill view cli --format cursor > .cursorrules
-  maybe-dont skill view cli --format copilot > .github/copilot-instructions.md`,
+  maybe-dont skill view cli --format copilot > .github/copilot-instructions.md
+  maybe-dont skill view cli --format generic > instructions.md`,
 	Args: cobra.ExactArgs(1),
 	Run:  runSkillView,
 }
 
 func init() {
-	skillViewCmd.Flags().StringVar(&skillFormat, "format", skills.DefaultFormat,
-		"Output format: claude, cursor, copilot, generic")
+	skillViewCmd.Flags().StringVar(&skillFormat, "format", "",
+		"Output format (required): claude, cursor, copilot, generic")
+	_ = skillViewCmd.MarkFlagRequired("format")
 
 	skillCmd.AddCommand(skillListCmd)
 	skillCmd.AddCommand(skillViewCmd)
@@ -70,7 +72,7 @@ func runSkillList(cmd *cobra.Command, args []string) {
 	fmt.Println()
 	fmt.Printf("Supported formats: %s\n", strings.Join(skills.AvailableFormats(), ", "))
 	fmt.Println()
-	fmt.Println("Use 'maybe-dont skill view <name> [--format <format>]' to output a skill definition.")
+	fmt.Println("Use 'maybe-dont skill view <name> --format <format>' to output a skill definition.")
 }
 
 func runSkillView(cmd *cobra.Command, args []string) {
