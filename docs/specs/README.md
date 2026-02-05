@@ -19,6 +19,7 @@ Each spec should have a `## Status` section near the top with one of these value
 
 | Spec | Description |
 |------|-------------|
+| [policy-test-suite](policy-test-suite.md) | CLI-based policy test harness with model matrix |
 | [xdg-base-directory-support](xdg-base-directory-support.md) | XDG Base Directory conventions for config/state files |
 
 ### Ready for Implementation
@@ -26,7 +27,6 @@ Each spec should have a `## Status` section near the top with one of these value
 | Spec | Description |
 |------|-------------|
 | [ai-validation-provider-agnostic](ai-validation-provider-agnostic.md) | Multi-provider AI validation (OpenAI, Anthropic, OpenAI-compatible) |
-| [policy-test-suite](policy-test-suite.md) | CLI-based policy test harness with model matrix |
 
 ### Draft
 
