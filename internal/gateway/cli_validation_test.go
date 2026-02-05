@@ -309,3 +309,87 @@ func TestHandleCLIValidation_WildcardMatchesAll(t *testing.T) {
 	assert.True(t, resp.Allowed)
 	assert.True(t, resp.ValidationRequired)
 }
+
+// TestHandleCLIValidation_InvalidContentType verifies that when Content-Type is not
+// application/json, the handler returns a 400 error with "invalid_content_type" error code.
+func TestHandleCLIValidation_InvalidContentType(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+	})
+
+	reqBody := `{"command": "gh", "arguments": []}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "text/plain")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var errResp CLIValidationError
+	err := json.Unmarshal(w.Body.Bytes(), &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "invalid_content_type", errResp.Error)
+}
+
+// TestHandleCLIValidation_ContentTypeWithCharset verifies that Content-Type with charset
+// parameter (e.g., "application/json; charset=utf-8") is accepted.
+func TestHandleCLIValidation_ContentTypeWithCharset(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+	})
+
+	reqBody := `{"command": "gh", "arguments": []}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp CLIValidationResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.True(t, resp.Allowed)
+}
+
+// TestHandleCLIValidation_InvalidJSON verifies that when the JSON body is malformed,
+// the handler returns a 400 error with "invalid_request" error code.
+func TestHandleCLIValidation_InvalidJSON(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+	})
+
+	reqBody := `{invalid json}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var errResp CLIValidationError
+	err := json.Unmarshal(w.Body.Bytes(), &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "invalid_request", errResp.Error)
+}

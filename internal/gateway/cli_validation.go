@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 )
@@ -150,8 +151,8 @@ func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validate Content-Type
-	if r.Header.Get("Content-Type") != "application/json" {
+	// Validate Content-Type (accept with charset parameters like "application/json; charset=utf-8")
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		h.writeError(w, http.StatusBadRequest, "invalid_content_type",
 			"Content-Type must be application/json")
 		return
