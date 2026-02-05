@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/maybedont/maybe-dont/internal/config"
@@ -516,5 +517,237 @@ func TestHandleCLIValidation_ResponseIncludesRequestID(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "test-request-id", resp.RequestID)
+}
+
+// mockAuditWriter is a test implementation of AuditWriter that captures entries.
+type mockAuditWriter struct {
+	entries []*AuditEntry
+	mu      sync.Mutex
+}
+
+func (m *mockAuditWriter) Write(entry *AuditEntry) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.entries = append(m.entries, entry)
+	return true, nil
+}
+
+func (m *mockAuditWriter) Close() error {
+	return nil
+}
+
+func (m *mockAuditWriter) getEntries() []*AuditEntry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.entries
+}
+
+// TestHandleCLIValidation_AuditLogWritten verifies that when an AuditWriter is configured,
+// the handler writes an audit entry for each CLI validation request.
+func TestHandleCLIValidation_AuditLogWritten(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		AuditWriter:      auditWriter,
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["pr", "list"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify audit entry was written
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1, "Expected exactly one audit entry to be written")
+}
+
+// TestHandleCLIValidation_AuditLogNotWrittenWhenNilWriter verifies that when no AuditWriter
+// is configured (nil), the handler still works and does not panic.
+func TestHandleCLIValidation_AuditLogNotWrittenWhenNilWriter(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		AuditWriter:      nil, // Explicitly nil
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["pr", "list"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	// Should not panic
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestHandleCLIValidation_AuditEntryPopulated verifies that the audit entry is correctly
+// populated with CLI information, upstream request metadata, timing, and action.
+func TestHandleCLIValidation_AuditEntryPopulated(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		AuditWriter:      auditWriter,
+	})
+
+	reqBody := `{
+		"command": "gh",
+		"arguments": ["pr", "comment", "123", "--body", "LGTM"],
+		"working_directory": "/home/user/project",
+		"client_info": {
+			"hostname": "dev-workstation",
+			"username": "developer",
+			"os": "darwin",
+			"os_version": "24.1.0",
+			"arch": "arm64",
+			"shell": "/bin/zsh",
+			"cli_version": "1.2.0"
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "test-request-id-456")
+	req.Header.Set("X-Maybe-Dont-Client-ID", "developer@company.com")
+	req.Header.Set("User-Agent", "maybe-dont-cli/1.2.0")
+	req.RemoteAddr = "192.168.1.100:54321"
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify audit entry fields
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1, "Expected exactly one audit entry")
+	entry := entries[0]
+
+	// Verify CLI info is populated (not Tool)
+	assert.Nil(t, entry.Tool, "Tool should be nil for CLI validations")
+	require.NotNil(t, entry.CLI, "CLI should be populated for CLI validations")
+	assert.Equal(t, "gh", entry.CLI.Command)
+	assert.Equal(t, []string{"pr", "comment", "123", "--body", "LGTM"}, entry.CLI.Arguments)
+	assert.Equal(t, "/home/user/project", entry.CLI.WorkingDirectory)
+
+	// Verify client info
+	require.NotNil(t, entry.CLI.ClientInfo)
+	assert.Equal(t, "dev-workstation", entry.CLI.ClientInfo.Hostname)
+	assert.Equal(t, "developer", entry.CLI.ClientInfo.Username)
+	assert.Equal(t, "darwin", entry.CLI.ClientInfo.OS)
+	assert.Equal(t, "24.1.0", entry.CLI.ClientInfo.OSVersion)
+	assert.Equal(t, "arm64", entry.CLI.ClientInfo.Arch)
+	assert.Equal(t, "/bin/zsh", entry.CLI.ClientInfo.Shell)
+	assert.Equal(t, "1.2.0", entry.CLI.ClientInfo.CLIVersion)
+
+	// Verify upstream request info
+	assert.Equal(t, "test-request-id-456", entry.UpstreamRequest.RequestID)
+	assert.Equal(t, "developer@company.com", entry.UpstreamRequest.ClientID)
+	assert.Equal(t, "192.168.1.100:54321", entry.UpstreamRequest.ClientIP)
+	assert.Equal(t, "maybe-dont-cli/1.2.0", entry.UpstreamRequest.UserAgent)
+
+	// Verify timing fields are populated
+	assert.NotEmpty(t, entry.ValidationStarted, "ValidationStarted should be populated")
+	assert.NotEmpty(t, entry.CreatedAt, "CreatedAt should be populated")
+	assert.GreaterOrEqual(t, entry.DurationMs, int64(0), "DurationMs should be non-negative")
+
+	// Verify action
+	assert.Equal(t, "allow", entry.Action)
+	assert.Empty(t, entry.ActionReason, "ActionReason should be empty for allowed commands")
+
+	// Verify request validation is nil (no policy engines yet)
+	assert.Nil(t, entry.RequestValidation, "RequestValidation should be nil until policy engines are integrated")
+}
+
+// TestHandleCLIValidation_AuditEntryNoValidationRequired verifies that audit entries
+// are written even when the command does not require validation.
+func TestHandleCLIValidation_AuditEntryNoValidationRequired(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"gh", "aws"}, // "cat" not in list
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		AuditWriter:      auditWriter,
+	})
+
+	reqBody := `{"command": "cat", "arguments": ["README.md"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify audit entry was written even for non-validated commands
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1, "Expected audit entry even for non-validated commands")
+	entry := entries[0]
+
+	assert.Equal(t, "cat", entry.CLI.Command)
+	assert.Equal(t, "allow", entry.Action)
+}
+
+// TestHandleCLIValidation_AuditEntryMinimalRequest verifies that audit entries
+// are correctly populated even with minimal request data (no client_info).
+func TestHandleCLIValidation_AuditEntryMinimalRequest(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		AuditWriter:      auditWriter,
+	})
+
+	reqBody := `{"command": "ls", "arguments": ["-la"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+	entry := entries[0]
+
+	// Verify CLI info with minimal data
+	require.NotNil(t, entry.CLI)
+	assert.Equal(t, "ls", entry.CLI.Command)
+	assert.Equal(t, []string{"-la"}, entry.CLI.Arguments)
+	assert.Empty(t, entry.CLI.WorkingDirectory)
+	assert.Nil(t, entry.CLI.ClientInfo, "ClientInfo should be nil when not provided")
+
+	// Verify request ID was generated
+	assert.NotEmpty(t, entry.UpstreamRequest.RequestID)
+	assert.Len(t, entry.UpstreamRequest.RequestID, 32, "Generated request ID should be 32 characters")
 }
 

@@ -84,6 +84,7 @@ type AuditCLIInfo struct {
 // UpstreamRequestInfo contains metadata about the incoming request
 type UpstreamRequestInfo struct {
 	RequestID string `json:"id,omitempty"`
+	ClientID  string `json:"client_id,omitempty"`  // Caller identifier for audit attribution (from X-Maybe-Dont-Client-ID header)
 	SessionID string `json:"session_id,omitempty"`
 	ClientIP  string `json:"client_ip,omitempty"`
 	UserAgent string `json:"user_agent,omitempty"` // User-Agent header from incoming request

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
@@ -144,6 +145,10 @@ type CLIValidationHandlerConfig struct {
 	// Version is the gateway version string returned in responses.
 	Version string
 
+	// AuditWriter is used to write audit log entries for CLI validations.
+	// If nil, no audit logging is performed.
+	AuditWriter AuditWriter
+
 	// OnValidation is an optional callback invoked during validation processing.
 	// This is primarily used for testing to capture the validation context.
 	OnValidation func(*CLIValidationContext)
@@ -163,6 +168,9 @@ func NewCLIValidationHandler(cfg CLIValidationHandlerConfig) *CLIValidationHandl
 
 // ServeHTTP handles CLI validation requests.
 func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Record validation start time for audit logging
+	validationStart := time.Now().UTC()
+
 	w.Header().Set("Content-Type", "application/json")
 
 	// Check if CLI validation is enabled
@@ -214,6 +222,9 @@ func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			Results:            []CLIPolicyResult{},
 		}
 		_ = json.NewEncoder(w).Encode(resp)
+
+		// Write audit entry for non-validated commands
+		h.writeAuditEntry(validationStart, r, &req, ctx, "allow", "")
 		return
 	}
 
@@ -229,6 +240,9 @@ func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		Results:            []CLIPolicyResult{},
 	}
 	_ = json.NewEncoder(w).Encode(resp)
+
+	// Write audit entry for validated commands
+	h.writeAuditEntry(validationStart, r, &req, ctx, "allow", "")
 }
 
 // requiresValidation checks if the command is in the validate_commands list.
@@ -286,4 +300,43 @@ func (h *CLIValidationHandler) writeError(w http.ResponseWriter, status int, cod
 		Error:   code,
 		Message: message,
 	})
+}
+
+// writeAuditEntry creates and writes an audit entry for a CLI validation request.
+// This is a no-op if AuditWriter is nil.
+func (h *CLIValidationHandler) writeAuditEntry(
+	validationStart time.Time,
+	r *http.Request,
+	req *CLIValidationRequest,
+	ctx *CLIValidationContext,
+	action string,
+	actionReason string,
+) {
+	if h.config.AuditWriter == nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	entry := &AuditEntry{
+		ValidationStarted: validationStart.Format(time.RFC3339Nano),
+		CreatedAt:         now.Format(time.RFC3339Nano),
+		CLI: &AuditCLIInfo{
+			Command:          req.Command,
+			Arguments:        req.Arguments,
+			WorkingDirectory: req.WorkingDirectory,
+			ClientInfo:       req.ClientInfo,
+		},
+		UpstreamRequest: UpstreamRequestInfo{
+			RequestID: ctx.RequestID,
+			ClientID:  ctx.ClientID,
+			ClientIP:  r.RemoteAddr,
+			UserAgent: r.Header.Get("User-Agent"),
+		},
+		Action:       action,
+		ActionReason: actionReason,
+		DurationMs:   now.Sub(validationStart).Milliseconds(),
+	}
+
+	// Write the audit entry (ignore errors - audit logging should not affect response)
+	_, _ = h.config.AuditWriter.Write(entry)
 }
