@@ -68,10 +68,12 @@ func runCLI(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Get working directory
+	// Get working directory for policy evaluation context.
+	// Empty string is acceptable if os.Getwd() fails (e.g., directory deleted,
+	// permission issues). CEL rules checking cli.working_directory will evaluate
+	// against empty string, which is fail-open behavior.
 	workingDir, err := os.Getwd()
 	if err != nil {
-		// Non-fatal - continue with empty working directory
 		workingDir = ""
 	}
 

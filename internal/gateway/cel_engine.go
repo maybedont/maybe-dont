@@ -201,7 +201,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 
 	e.logger.Debug(ctx, "Evaluating tool call with CEL policies",
 		zap.String("tool", req.Params.Name),
-		zap.Any("arguments", req.Params.Arguments),
+		zap.Strings("argument_keys", extractMCPArgumentKeys(req.Params.Arguments)),
 		zap.Int("policy_count", len(e.policies)),
 	)
 
@@ -498,7 +498,8 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 
 	e.logger.Debug(ctx, "Evaluating CLI command with CEL policies",
 		zap.String("command", req.Command),
-		zap.Strings("arguments", req.Arguments),
+		zap.Strings("argument_flags", extractCLIArgumentFlags(req.Arguments)),
+		zap.Int("argument_count", len(req.Arguments)),
 		zap.Int("policy_count", len(e.policies)),
 	)
 
@@ -793,4 +794,75 @@ func BuildCLIContext(req *CLIValidationRequest) map[string]interface{} {
 			"client_info":       clientInfo,
 		},
 	}
+}
+
+// extractCLIArgumentFlags extracts flag names from CLI arguments without exposing values.
+// This is used for debug logging to avoid leaking sensitive data like tokens and passwords.
+// Examples:
+//   - ["--token", "secret123"] -> ["--token", "[value]"]
+//   - ["--token=secret123"] -> ["--token"]
+//   - ["-p", "password"] -> ["-p", "[value]"]
+//   - ["subcommand", "--flag"] -> ["subcommand", "--flag"]
+func extractCLIArgumentFlags(args []string) []string {
+	if len(args) == 0 {
+		return []string{}
+	}
+
+	result := make([]string, 0, len(args))
+	skipNext := false
+
+	for i, arg := range args {
+		if skipNext {
+			result = append(result, "[value]")
+			skipNext = false
+			continue
+		}
+
+		if len(arg) > 0 && arg[0] == '-' {
+			// This is a flag
+			if idx := indexOf(arg, '='); idx > 0 {
+				// Format: --flag=value -> just keep --flag
+				result = append(result, arg[:idx])
+			} else {
+				// Format: --flag or -f (value might be next arg)
+				result = append(result, arg)
+				// Check if next arg looks like a value (not a flag)
+				if i+1 < len(args) && len(args[i+1]) > 0 && args[i+1][0] != '-' {
+					skipNext = true
+				}
+			}
+		} else {
+			// Positional argument - could be a subcommand or a value
+			result = append(result, arg)
+		}
+	}
+	return result
+}
+
+// indexOf returns the index of the first occurrence of char in s, or -1 if not found.
+func indexOf(s string, char byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == char {
+			return i
+		}
+	}
+	return -1
+}
+
+// extractMCPArgumentKeys extracts parameter keys from MCP tool arguments without exposing values.
+// This is used for debug logging to avoid leaking sensitive data.
+func extractMCPArgumentKeys(args any) []string {
+	if args == nil {
+		return []string{}
+	}
+
+	// map[string]any and map[string]interface{} are the same type
+	if v, ok := args.(map[string]any); ok {
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		return keys
+	}
+	return []string{}
 }

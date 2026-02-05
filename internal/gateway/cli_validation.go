@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -153,7 +154,21 @@ type CLIValidationHandlerConfig struct {
 	// This is primarily used for testing to capture the validation context.
 	OnValidation func(*CLIValidationContext)
 
-	// Future: CELEngine, AIEngine for policy evaluation
+	// CELEngine is the CEL policy engine for deterministic rule evaluation.
+	// If nil, CEL validation is skipped.
+	CELEngine *CELPolicyEngine
+
+	// AIEngine is the AI policy engine for context-aware validation.
+	// If nil, AI validation is skipped.
+	AIEngine *AIPolicyEngine
+
+	// MaxBlockingMs is the maximum cumulative time to block a request
+	// waiting for all validation decisions (default: 90000ms).
+	MaxBlockingMs int
+
+	// MaxRuleEvaluationMs is the maximum time for any single rule evaluation
+	// (default: 45000ms).
+	MaxRuleEvaluationMs int
 }
 
 // CLIValidationHandler handles /api/v1/cli/validate requests.
@@ -229,20 +244,26 @@ func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Command requires validation - evaluate policies
-	// TODO: Integrate with CEL and AI engines in later tasks
+	validationResults := h.evaluatePolicies(r.Context(), &req)
+
+	// Build response from validation results
 	resp := CLIValidationResponse{
 		RequestID:          ctx.RequestID,
-		Allowed:            true, // Default allow when no policies configured
+		Allowed:            validationResults.Allowed,
 		ValidationRequired: true,
-		Message:            "Command approved by policy",
+		Message:            validationResults.Message,
 		ServerVersion:      h.config.Version,
 		ClientVersion:      h.getClientVersion(&req),
-		Results:            []CLIPolicyResult{},
+		Results:            h.convertToResults(validationResults),
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 
-	// Write audit entry for validated commands
-	h.writeAuditEntry(validationStart, r, &req, ctx, "allow", "")
+	// Determine audit action based on validation result
+	auditAction := "allow"
+	if !validationResults.Allowed {
+		auditAction = "deny"
+	}
+	h.writeAuditEntryWithValidation(validationStart, r, &req, ctx, auditAction, validationResults)
 }
 
 // requiresValidation checks if the command is in the validate_commands list.
@@ -339,4 +360,203 @@ func (h *CLIValidationHandler) writeAuditEntry(
 
 	// Write the audit entry (ignore errors - audit logging should not affect response)
 	_, _ = h.config.AuditWriter.Write(entry)
+}
+
+// evaluatePolicies runs the CLI command through CEL and AI policy engines.
+// Returns combined validation results from all configured engines.
+func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIValidationRequest) ValidationResults {
+	// If no engines configured, allow by default
+	if h.config.CELEngine == nil && h.config.AIEngine == nil {
+		return ValidationResults{
+			Results: []ValidationResult{},
+			Allowed: true,
+			Message: "No validation policies configured",
+		}
+	}
+
+	// Create blocking budget for validation timing
+	maxBlockingMs := h.config.MaxBlockingMs
+	if maxBlockingMs == 0 {
+		maxBlockingMs = 90000 // Default 90s
+	}
+	budget := NewBlockingBudget(int64(maxBlockingMs))
+
+	var finalResults ValidationResults
+	finalResults.Allowed = true // Start with allow, any deny will flip this
+
+	// Evaluate CEL policies if engine is configured
+	if h.config.CELEngine != nil {
+		celResults, err := h.config.CELEngine.EvaluateCLICommand(ctx, req, budget)
+		if err != nil {
+			h.config.Logger.Error(ctx, "CEL CLI validation failed",
+				zap.Error(err),
+				zap.String("command", req.Command),
+			)
+			// Continue with fail-open behavior
+		} else {
+			finalResults.Results = append(finalResults.Results, celResults.Results...)
+			finalResults.AllowCount += celResults.AllowCount
+			finalResults.DenyCount += celResults.DenyCount
+			if celResults.RulesDetails != nil {
+				finalResults.RulesDetails = celResults.RulesDetails
+			}
+			// If CEL denies and it's not audit-only, update final result
+			if !celResults.Allowed && !celResults.AuditModeBypass {
+				finalResults.Allowed = false
+				if finalResults.Message == "" {
+					finalResults.Message = celResults.Message
+				}
+			}
+		}
+	}
+
+	// Evaluate AI policies if engine is configured
+	if h.config.AIEngine != nil {
+		aiResults, err := h.config.AIEngine.EvaluateCLICommand(ctx, req, budget)
+		if err != nil {
+			h.config.Logger.Error(ctx, "AI CLI validation failed",
+				zap.Error(err),
+				zap.String("command", req.Command),
+			)
+			// Continue with fail-open behavior
+		} else {
+			finalResults.Results = append(finalResults.Results, aiResults.Results...)
+			finalResults.AllowCount += aiResults.AllowCount
+			finalResults.DenyCount += aiResults.DenyCount
+			if aiResults.AIDetails != nil {
+				finalResults.AIDetails = aiResults.AIDetails
+			}
+			// Capture async completion channel for audit logging
+			if aiResults.AsyncCompletion != nil {
+				finalResults.AsyncCompletion = aiResults.AsyncCompletion
+			}
+			// If AI denies and it's not audit-only, update final result
+			if !aiResults.Allowed && !aiResults.AuditModeBypass {
+				finalResults.Allowed = false
+				if finalResults.Message == "" {
+					finalResults.Message = aiResults.Message
+				}
+			}
+		}
+	}
+
+	// Set default message if none set
+	if finalResults.Message == "" {
+		if finalResults.Allowed {
+			finalResults.Message = "Command approved by policy"
+		} else {
+			finalResults.Message = "Command denied by policy"
+		}
+	}
+
+	return finalResults
+}
+
+// convertToResults converts ValidationResults to CLIPolicyResult slice for the response.
+func (h *CLIValidationHandler) convertToResults(results ValidationResults) []CLIPolicyResult {
+	policyResults := make([]CLIPolicyResult, 0, len(results.Results))
+	for _, r := range results.Results {
+		policyResults = append(policyResults, CLIPolicyResult{
+			PolicyName: r.PolicyName,
+			PolicyType: r.PolicyType,
+			Action:     string(r.Action),
+			Message:    r.Message,
+		})
+	}
+	return policyResults
+}
+
+// writeAuditEntryWithValidation creates and writes an audit entry including validation results.
+func (h *CLIValidationHandler) writeAuditEntryWithValidation(
+	validationStart time.Time,
+	r *http.Request,
+	req *CLIValidationRequest,
+	ctx *CLIValidationContext,
+	action string,
+	results ValidationResults,
+) {
+	if h.config.AuditWriter == nil {
+		return
+	}
+
+	now := time.Now().UTC()
+
+	// Build validation info from results
+	var requestValidation *AuditValidationInfo
+	if results.RulesDetails != nil || results.AIDetails != nil {
+		requestValidation = &AuditValidationInfo{
+			CEL: results.RulesDetails,
+			AI:  results.AIDetails,
+		}
+	}
+
+	// Determine action reason
+	actionReason := ""
+	if results.AuditModeBypass {
+		actionReason = string(ActionReasonAuditMode)
+	} else if results.FailedOpen {
+		actionReason = string(ActionReasonFailOpen)
+	}
+
+	entry := &AuditEntry{
+		ValidationStarted: validationStart.Format(time.RFC3339Nano),
+		CreatedAt:         now.Format(time.RFC3339Nano),
+		CLI: &AuditCLIInfo{
+			Command:          req.Command,
+			Arguments:        req.Arguments,
+			WorkingDirectory: req.WorkingDirectory,
+			ClientInfo:       req.ClientInfo,
+		},
+		UpstreamRequest: UpstreamRequestInfo{
+			RequestID: ctx.RequestID,
+			ClientID:  ctx.ClientID,
+			ClientIP:  r.RemoteAddr,
+			UserAgent: r.Header.Get("User-Agent"),
+		},
+		RequestValidation: requestValidation,
+		Action:            action,
+		ActionReason:      actionReason,
+		DurationMs:        now.Sub(validationStart).Milliseconds(),
+	}
+
+	// Write the audit entry (ignore errors - audit logging should not affect response)
+	_, _ = h.config.AuditWriter.Write(entry)
+
+	// Handle async AI completion for audit logging
+	if results.AsyncCompletion != nil {
+		go func() {
+			select {
+			case completion := <-results.AsyncCompletion:
+				// Update audit entry with complete AI results
+				if completion.AIDetails != nil && h.config.AuditWriter != nil {
+					asyncEntry := &AuditEntry{
+						ValidationStarted: validationStart.Format(time.RFC3339Nano),
+						CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+						CLI: &AuditCLIInfo{
+							Command:          req.Command,
+							Arguments:        req.Arguments,
+							WorkingDirectory: req.WorkingDirectory,
+							ClientInfo:       req.ClientInfo,
+						},
+						UpstreamRequest: UpstreamRequestInfo{
+							RequestID: ctx.RequestID + "-async",
+							ClientID:  ctx.ClientID,
+						},
+						RequestValidation: &AuditValidationInfo{
+							AI: completion.AIDetails,
+						},
+						Action:       action,
+						ActionReason: "async_completion",
+						DurationMs:   completion.EvaluationMs,
+					}
+					_, _ = h.config.AuditWriter.Write(asyncEntry)
+				}
+			case <-time.After(5 * time.Minute):
+				// Timeout waiting for async completion
+				h.config.Logger.Debug(r.Context(), "Timeout waiting for async AI completion",
+					zap.String("request_id", ctx.RequestID),
+				)
+			}
+		}()
+	}
 }
