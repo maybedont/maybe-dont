@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -1119,4 +1120,380 @@ func TestActionReasonConstants(t *testing.T) {
 			assert.Equal(t, tt.value, string(tt.constant), "ActionReason constant value should match expected string")
 		})
 	}
+}
+
+// TestNewMCPOperation verifies that NewMCPOperation correctly creates an Operation
+// from an MCP tool call request.
+func TestNewMCPOperation(t *testing.T) {
+	tests := []struct {
+		name         string
+		toolName     string
+		arguments    map[string]interface{}
+		expectedType string
+		expectedName string
+	}{
+		{
+			name:         "github create issue tool",
+			toolName:     "github__create_issue",
+			arguments:    map[string]interface{}{"repo": "foo", "title": "bar"},
+			expectedType: OperationTypeMCP,
+			expectedName: "github__create_issue",
+		},
+		{
+			name:         "tool with no arguments",
+			toolName:     "list_files",
+			arguments:    map[string]interface{}{},
+			expectedType: OperationTypeMCP,
+			expectedName: "list_files",
+		},
+		{
+			name:         "tool with nil arguments",
+			toolName:     "get_status",
+			arguments:    nil,
+			expectedType: OperationTypeMCP,
+			expectedName: "get_status",
+		},
+		{
+			name:     "tool with nested arguments",
+			toolName: "complex_tool",
+			arguments: map[string]interface{}{
+				"nested": map[string]interface{}{"key": "value"},
+				"array":  []interface{}{"a", "b"},
+			},
+			expectedType: OperationTypeMCP,
+			expectedName: "complex_tool",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := mcp.CallToolRequest{
+				Request: mcp.Request{Method: "tools/call"},
+				Params: mcp.CallToolParams{
+					Name:      tt.toolName,
+					Arguments: tt.arguments,
+				},
+			}
+			op := NewMCPOperation(req)
+
+			assert.Equal(t, tt.expectedType, op.Type, "Operation type should be mcp_tool")
+			assert.Equal(t, tt.expectedName, op.Name, "Operation name should match tool name")
+			assert.Equal(t, tt.arguments, op.Arguments, "Operation arguments should match request arguments")
+		})
+	}
+}
+
+// TestNewCLIOperation verifies that NewCLIOperation correctly creates an Operation
+// from a CLI validation request.
+func TestNewCLIOperation(t *testing.T) {
+	tests := []struct {
+		name         string
+		command      string
+		arguments    []string
+		expectedType string
+		expectedName string
+	}{
+		{
+			name:         "gh repo list command",
+			command:      "gh",
+			arguments:    []string{"repo", "list"},
+			expectedType: OperationTypeCLI,
+			expectedName: "gh",
+		},
+		{
+			name:         "aws s3 copy command",
+			command:      "aws",
+			arguments:    []string{"s3", "cp", "s3://bucket/file", "./local"},
+			expectedType: OperationTypeCLI,
+			expectedName: "aws",
+		},
+		{
+			name:         "command with no arguments",
+			command:      "kubectl",
+			arguments:    []string{},
+			expectedType: OperationTypeCLI,
+			expectedName: "kubectl",
+		},
+		{
+			name:         "command with nil arguments",
+			command:      "docker",
+			arguments:    nil,
+			expectedType: OperationTypeCLI,
+			expectedName: "docker",
+		},
+		{
+			name:         "command with special characters in args",
+			command:      "gh",
+			arguments:    []string{"pr", "comment", "123", "--body", "This has 'quotes' and \"double quotes\""},
+			expectedType: OperationTypeCLI,
+			expectedName: "gh",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &CLIValidationRequest{
+				Command:   tt.command,
+				Arguments: tt.arguments,
+			}
+			op := NewCLIOperation(req)
+
+			assert.Equal(t, tt.expectedType, op.Type, "Operation type should be cli")
+			assert.Equal(t, tt.expectedName, op.Name, "Operation name should match command")
+			assert.Equal(t, tt.arguments, op.Arguments, "Operation arguments should match request arguments")
+		})
+	}
+}
+
+// TestFormatOperation verifies that formatOperation produces valid JSON output
+// for both MCP and CLI operations.
+func TestFormatOperation(t *testing.T) {
+	tests := []struct {
+		name        string
+		operation   Operation
+		description string
+	}{
+		{
+			name: "MCP tool operation",
+			operation: Operation{
+				Type:      OperationTypeMCP,
+				Name:      "github__create_issue",
+				Arguments: map[string]interface{}{"repo": "foo", "title": "bar"},
+			},
+			description: "MCP tool operations should produce valid JSON",
+		},
+		{
+			name: "CLI command operation",
+			operation: Operation{
+				Type:      OperationTypeCLI,
+				Name:      "gh",
+				Arguments: []string{"issue", "create", "-R", "foo", "-t", "bar"},
+			},
+			description: "CLI command operations should produce valid JSON",
+		},
+		{
+			name: "operation with nil arguments",
+			operation: Operation{
+				Type:      OperationTypeMCP,
+				Name:      "simple_tool",
+				Arguments: nil,
+			},
+			description: "Operations with nil arguments should produce valid JSON",
+		},
+		{
+			name: "operation with empty map arguments",
+			operation: Operation{
+				Type:      OperationTypeMCP,
+				Name:      "empty_args_tool",
+				Arguments: map[string]interface{}{},
+			},
+			description: "Operations with empty map arguments should produce valid JSON",
+		},
+		{
+			name: "operation with empty slice arguments",
+			operation: Operation{
+				Type:      OperationTypeCLI,
+				Name:      "kubectl",
+				Arguments: []string{},
+			},
+			description: "Operations with empty slice arguments should produce valid JSON",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatOperation(tt.operation)
+
+			// Verify it's valid JSON by parsing it
+			var parsed Operation
+			err := json.Unmarshal([]byte(result), &parsed)
+			require.NoError(t, err, "formatOperation should produce valid JSON")
+
+			// Verify the parsed values match
+			assert.Equal(t, tt.operation.Type, parsed.Type, "Type should match after parsing")
+			assert.Equal(t, tt.operation.Name, parsed.Name, "Name should match after parsing")
+			// Note: Arguments comparison is tricky due to type differences after JSON round-trip
+		})
+	}
+}
+
+// TestOperationTypeConstants verifies that the operation type constants are defined correctly.
+func TestOperationTypeConstants(t *testing.T) {
+	tests := []struct {
+		name     string
+		constant string
+		expected string
+	}{
+		{"OperationTypeMCP", OperationTypeMCP, "mcp_tool"},
+		{"OperationTypeCLI", OperationTypeCLI, "cli"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.constant, "Operation type constant should match expected value")
+		})
+	}
+}
+
+// TestFormatOperationContainsExpectedFields verifies that the formatted output
+// contains the expected fields in a readable format.
+func TestFormatOperationContainsExpectedFields(t *testing.T) {
+	op := Operation{
+		Type:      OperationTypeMCP,
+		Name:      "test_tool",
+		Arguments: map[string]interface{}{"key": "value"},
+	}
+
+	result := formatOperation(op)
+
+	// The output should contain the key fields
+	assert.Contains(t, result, "mcp_tool", "Output should contain the operation type")
+	assert.Contains(t, result, "test_tool", "Output should contain the operation name")
+	assert.Contains(t, result, "key", "Output should contain the argument key")
+	assert.Contains(t, result, "value", "Output should contain the argument value")
+}
+
+// TestAIPolicyEngine_EvaluateCLICommand_NoPolicies verifies that EvaluateCLICommand
+// returns allowed=true when no policies are configured.
+func TestAIPolicyEngine_EvaluateCLICommand_NoPolicies(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	engine := createTestAIPolicyEngine(0)
+	err := InitAIPolicyEngine(sessionLogger, engine)
+	require.NoError(t, err)
+
+	// Don't load any policies
+	req := &CLIValidationRequest{
+		Command:   "gh",
+		Arguments: []string{"pr", "list"},
+	}
+	results, err := engine.EvaluateCLICommand(context.Background(), req, nil)
+	require.NoError(t, err)
+
+	assert.True(t, results.Allowed)
+	assert.Equal(t, "No policies configured", results.Message)
+	assert.Nil(t, results.AIDetails)
+}
+
+// TestAIPolicyEngine_EvaluateCLICommand_RequiresBudget verifies that EvaluateCLICommand
+// requires a BlockingBudget when policies are configured (non-audit_only).
+func TestAIPolicyEngine_EvaluateCLICommand_RequiresBudget(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	engine := createTestAIPolicyEngine(5000)
+	err := InitAIPolicyEngine(sessionLogger, engine)
+	require.NoError(t, err)
+
+	// Load a non-audit_only policy
+	policies := []config.AIPolicy{
+		{
+			Name:   "test_policy",
+			Prompt: "Check: %s",
+			Action: config.PolicyActionDeny,
+			// Mode not set - can block
+		},
+	}
+	err = engine.LoadPolicies(policies, "")
+	require.NoError(t, err)
+
+	req := &CLIValidationRequest{
+		Command:   "gh",
+		Arguments: []string{"repo", "delete"},
+	}
+
+	// Should fail when budget is nil
+	_, err = engine.EvaluateCLICommand(context.Background(), req, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "BlockingBudget is required")
+}
+
+// TestAIPolicyEngine_EvaluateCLICommand_AuditOnlyReturnsImmediately verifies that
+// when all policies are audit_only, EvaluateCLICommand returns immediately with
+// an async completion channel.
+func TestAIPolicyEngine_EvaluateCLICommand_AuditOnlyReturnsImmediately(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	engine := createTestAIPolicyEngine(5000)
+	err := InitAIPolicyEngine(sessionLogger, engine)
+	require.NoError(t, err)
+
+	// Load only audit_only policies
+	policies := []config.AIPolicy{
+		{
+			Name:   "audit_policy",
+			Prompt: "Check: %s",
+			Action: config.PolicyActionDeny,
+			Mode:   config.PolicyModeAuditOnly,
+		},
+	}
+	err = engine.LoadPolicies(policies, config.PolicyModeAuditOnly)
+	require.NoError(t, err)
+
+	req := &CLIValidationRequest{
+		Command:   "kubectl",
+		Arguments: []string{"get", "pods"},
+	}
+
+	// Create a budget (though it shouldn't be consumed for audit_only)
+	budget := NewBlockingBudget(5000)
+
+	results, err := engine.EvaluateCLICommand(context.Background(), req, budget)
+	require.NoError(t, err)
+
+	// Should return immediately with allow decision
+	assert.True(t, results.Allowed)
+	assert.Contains(t, results.Message, "audit_only")
+	assert.NotNil(t, results.AsyncCompletion, "Should have async completion channel")
+
+	// Wait for async completion
+	completion := <-results.AsyncCompletion
+	assert.NotNil(t, completion.AIDetails)
+	assert.Equal(t, int64(0), completion.AIDetails.BlockedMs, "Audit-only should not block")
+}
+
+// TestAIPolicyEngine_EvaluateCLICommand_ExhaustedBudget verifies that
+// EvaluateCLICommand fails open when the budget is already exhausted.
+func TestAIPolicyEngine_EvaluateCLICommand_ExhaustedBudget(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	engine := createTestAIPolicyEngine(30000)
+	err := InitAIPolicyEngine(sessionLogger, engine)
+	require.NoError(t, err)
+
+	// Load a policy that would normally take time to evaluate
+	policies := []config.AIPolicy{
+		{
+			Name:   "test_policy",
+			Prompt: "Check: %s",
+			Action: config.PolicyActionDeny,
+			// Mode not set - can block
+		},
+	}
+	err = engine.LoadPolicies(policies, "")
+	require.NoError(t, err)
+
+	// Create a budget that is already exhausted
+	budget := NewBlockingBudget(1000)
+	budget.ConsumeBlocking(1001) // Consume more than budget
+
+	assert.True(t, budget.IsExhausted(), "Budget should be exhausted")
+
+	req := &CLIValidationRequest{
+		Command:   "aws",
+		Arguments: []string{"s3", "rm", "s3://bucket/"},
+	}
+
+	// Call EvaluateCLICommand with exhausted budget
+	ctx := context.Background()
+	results, err := engine.EvaluateCLICommand(ctx, req, budget)
+	require.NoError(t, err)
+
+	// With exhausted budget, should allow (fail-open)
+	assert.True(t, results.Allowed, "Should allow when budget is exhausted (fail-open)")
+	assert.NotNil(t, results.AIDetails)
+	assert.Equal(t, int64(0), results.AIDetails.BlockedMs, "Should not block when budget is exhausted")
 }
