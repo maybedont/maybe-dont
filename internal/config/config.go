@@ -230,13 +230,22 @@ type CredentialMapping struct {
 
 // Policy represents a single deterministic policy rule (uses CEL expressions internally)
 type Policy struct {
-	Name        string       `mapstructure:"name"`
-	Description string       `mapstructure:"description"`
-	Expression  string       `mapstructure:"expression"`
-	Action      PolicyAction `mapstructure:"action"`  // allow or deny
-	Message     string       `mapstructure:"message"`
-	Enabled     *bool        `mapstructure:"enabled"` // Whether this rule runs (default: true)
-	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or empty (default: follows top-level)
+	Name        string `mapstructure:"name" yaml:"name"`
+	Description string `mapstructure:"description" yaml:"description"`
+	// Expression is the legacy CEL expression field, kept for backwards compatibility.
+	// New configs should use MCPExpression and/or CLIExpression instead.
+	// At load time, if MCPExpression is empty, Expression is used as a fallback for MCP validation.
+	Expression string `mapstructure:"expression" yaml:"expression"`
+	// MCPExpression is the CEL expression used for MCP tool call validation.
+	// If empty and Expression is set, Expression is used as fallback.
+	MCPExpression string `mapstructure:"mcp_expression" yaml:"mcp_expression"`
+	// CLIExpression is the CEL expression used for CLI command validation.
+	// This expression has access to different context variables than MCPExpression.
+	CLIExpression string       `mapstructure:"cli_expression" yaml:"cli_expression"`
+	Action        PolicyAction `mapstructure:"action" yaml:"action"`   // allow or deny
+	Message       string       `mapstructure:"message" yaml:"message"`
+	Enabled       *bool        `mapstructure:"enabled" yaml:"enabled"` // Whether this rule runs (default: true)
+	Mode          PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only" or empty (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
