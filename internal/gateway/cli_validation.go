@@ -1,13 +1,12 @@
 package gateway
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/maybedont/maybe-dont/internal/config"
+	"go.uber.org/zap"
 )
 
 // CLIValidationRequest represents a CLI command validation request sent to the gateway.
@@ -266,22 +265,18 @@ func (h *CLIValidationHandler) extractContext(r *http.Request) *CLIValidationCon
 
 	// Generate request ID if not provided
 	if ctx.RequestID == "" {
-		ctx.RequestID = generateRequestID()
+		id, err := GenerateRequestID()
+		if err != nil {
+			// Log the error - this indicates a serious system problem (crypto/rand failure)
+			h.config.Logger.Logger().Warn("failed to generate request ID, using fallback",
+				zap.Error(err))
+			ctx.RequestID = "00000000000000000000000000000000"
+		} else {
+			ctx.RequestID = id
+		}
 	}
 
 	return ctx
-}
-
-// generateRequestID generates a 32-character hex string (16 random bytes).
-func generateRequestID() string {
-	b := make([]byte, 16)
-	_, err := rand.Read(b)
-	if err != nil {
-		// Fallback to a predictable but unique-ish value if crypto/rand fails
-		// This should essentially never happen in practice
-		return "00000000000000000000000000000000"
-	}
-	return hex.EncodeToString(b)
 }
 
 // writeError writes a JSON error response.

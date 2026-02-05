@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -454,7 +455,7 @@ func TestHandleCLIValidation_GeneratesRequestID(t *testing.T) {
 	assert.Len(t, capturedCtx.RequestID, 32, "Generated request ID should be 32 characters")
 
 	// Verify it's valid hex
-	_, err := decodeHex(capturedCtx.RequestID)
+	_, err := hex.DecodeString(capturedCtx.RequestID)
 	assert.NoError(t, err, "Generated request ID should be valid hex")
 }
 
@@ -517,54 +518,3 @@ func TestHandleCLIValidation_ResponseIncludesRequestID(t *testing.T) {
 	assert.Equal(t, "test-request-id", resp.RequestID)
 }
 
-// decodeHex is a helper that decodes a hex string to verify validity.
-func decodeHex(s string) ([]byte, error) {
-	result := make([]byte, len(s)/2)
-	for i := 0; i < len(s); i += 2 {
-		var b byte
-		_, err := hexDecode(s[i:i+2], &b)
-		if err != nil {
-			return nil, err
-		}
-		result[i/2] = b
-	}
-	return result, nil
-}
-
-// hexDecode decodes a 2-character hex string into a byte.
-func hexDecode(s string, b *byte) (int, error) {
-	if len(s) < 2 {
-		return 0, &hexError{s}
-	}
-	high, ok := hexDigit(s[0])
-	if !ok {
-		return 0, &hexError{s}
-	}
-	low, ok := hexDigit(s[1])
-	if !ok {
-		return 0, &hexError{s}
-	}
-	*b = high<<4 | low
-	return 2, nil
-}
-
-// hexDigit converts a hex character to its value.
-func hexDigit(c byte) (byte, bool) {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0', true
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10, true
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10, true
-	}
-	return 0, false
-}
-
-type hexError struct {
-	s string
-}
-
-func (e *hexError) Error() string {
-	return "invalid hex string: " + e.s
-}
