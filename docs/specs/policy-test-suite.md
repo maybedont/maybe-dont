@@ -1300,6 +1300,7 @@ New CLI flags:
 ```
 
 Exit codes:
+
 | Code | Meaning |
 |------|---------|
 | 0 | All tests passed |
