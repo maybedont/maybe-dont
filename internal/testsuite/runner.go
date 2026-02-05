@@ -566,11 +566,13 @@ func (r *Runner) generateCoverageReport() (*CoverageReport, error) {
 	var enabledPolicies []policyInfo
 
 	for _, p := range allPolicies {
-		if p.enabled {
+		// When --include-disabled is set, treat disabled policies as enabled for coverage
+		effectivelyEnabled := p.enabled || r.opts.IncludeDisabled
+		if effectivelyEnabled {
 			enabledPolicies = append(enabledPolicies, p)
 			report.TotalPolicies++
 		} else {
-			// Track disabled policies as skipped
+			// Track disabled policies as skipped (only when not using --include-disabled)
 			report.DisabledSkipped = append(report.DisabledSkipped, PolicyCoverageItem{
 				Name:   p.name,
 				Engine: p.engine,
@@ -682,6 +684,10 @@ func (r *Runner) executeTests(ctx context.Context) (*RunResult, error) {
 	if isStreaming {
 		// Print header at start
 		fmt.Printf("Policy Test Suite: %s\n", r.suite.BundleID)
+		// Show how many test cases matched filters (especially useful when using --case-pattern)
+		if r.opts.CasePattern != "" && r.opts.CasePattern != "*" {
+			fmt.Printf("%d test case(s) matched pattern %q\n", len(cases), r.opts.CasePattern)
+		}
 		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 		// Set up callback to print each result as it completes

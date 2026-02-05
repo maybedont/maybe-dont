@@ -1246,6 +1246,246 @@ Running N policies on every tool call is expensive, especially for AI policies. 
 
 **Note:** This optimization is especially important for production deployments where latency and API costs compound across many requests.
 
+### Rate Limiting and Incremental Execution
+
+AI providers enforce rate limits (requests per minute, tokens per minute). Running a full test suite against multiple models can quickly hit these limits, causing failures. This section proposes a solution for:
+
+1. **Rate-limited execution** - Configurable delays between API calls
+2. **Incremental execution** - Run a subset of tests per invocation, resuming later
+3. **State tracking** - Remember which tests passed for which models
+4. **Change detection** - Re-run tests only when policies or test cases change
+
+#### Problem Statement
+
+When running AI policy tests:
+- Anthropic rate limits can be hit within seconds when running many tests
+- A full model matrix (8+ models) × many test cases = hundreds of API calls
+- CI environments have no persistent state between runs
+- Local development benefits from caching results to avoid redundant API calls
+- Policy or test case changes should invalidate cached results
+
+#### Proposed Solution
+
+##### 1. Rate Limiting Configuration
+
+Add to `suite.yaml`:
+
+```yaml
+execution:
+  timeout_ms: 30000
+  retries: 2
+  retry_delay_ms: 1000
+  # NEW: Rate limiting
+  rate_limit:
+    requests_per_minute: 20        # Max requests per minute per model
+    delay_between_requests_ms: 100 # Minimum delay between consecutive requests
+    retry_on_rate_limit: true      # Auto-retry with exponential backoff on 429
+    max_retry_delay_ms: 60000      # Cap on retry backoff (1 minute)
+```
+
+CLI override:
+```bash
+./maybe-dont test policies --suite-dir ./suite --rate-limit 10  # 10 req/min
+```
+
+##### 2. Incremental Execution Mode
+
+New CLI flags:
+```bash
+# Run at most N test cases per model, exit with special code if more remain
+./maybe-dont test policies --suite-dir ./suite --batch-size 5
+
+# Continue from previous state
+./maybe-dont test policies --suite-dir ./suite --batch-size 5 --state-file ./test-state.json
+```
+
+Exit codes:
+| Code | Meaning |
+|------|---------|
+| 0 | All tests passed |
+| 1 | Tests failed |
+| 5 | Batch complete, more tests remain (use with --batch-size) |
+
+##### 3. State File Schema
+
+The state file tracks test execution history:
+
+```json
+{
+  "version": "v1",
+  "suite_id": "default-policies",
+  "last_updated": "2026-02-05T12:00:00Z",
+  "entries": [
+    {
+      "case_id": "ai_request_command_execution",
+      "case_hash": "sha256:abc123...",
+      "policy_hashes": {
+        "Check command execution tools": "sha256:def456..."
+      },
+      "models": {
+        "anthropic:claude-3-5-haiku-20241022": {
+          "status": "passed",
+          "last_run": "2026-02-05T12:00:00Z",
+          "duration_ms": 1500
+        },
+        "openai:gpt-4o-mini": {
+          "status": "passed",
+          "last_run": "2026-02-05T11:55:00Z",
+          "duration_ms": 1200
+        }
+      }
+    }
+  ]
+}
+```
+
+**Hash calculation:**
+- `case_hash`: SHA256 of the test case YAML content
+- `policy_hashes`: SHA256 of each referenced policy's content
+
+When a hash changes, the cached result is invalidated and the test re-runs.
+
+##### 4. State Storage Options
+
+| Environment | Storage | Notes |
+|-------------|---------|-------|
+| Local dev | `XDG_STATE_HOME/maybe-dont/test-state.json` | Default location |
+| Local dev | `--state-file ./path/to/state.json` | Explicit path |
+| GitHub Actions | `actions/cache` with state file | Persists between runs |
+| GitHub Actions | Stateless | Use `--batch-size` without state, accept full runs |
+
+**GitHub Actions example with caching:**
+```yaml
+- name: Restore test state
+  uses: actions/cache@v4
+  with:
+    path: .test-state.json
+    key: policy-test-state-${{ github.ref }}
+    restore-keys: |
+      policy-test-state-
+
+- name: Run AI tests (incremental)
+  run: |
+    ./maybe-dont test policies \
+      --suite-dir ./internal/config/defaults/tests \
+      --state-file .test-state.json \
+      --batch-size 10 \
+      --rate-limit 20
+```
+
+##### 5. Behavior Modes
+
+| Flag Combination | Behavior |
+|-----------------|----------|
+| (none) | Run all tests, no state |
+| `--state-file` | Run only tests that need re-running (changed or not yet run) |
+| `--batch-size N` | Run at most N tests, exit with code 5 if more remain |
+| `--state-file` + `--batch-size N` | Incremental execution with persistence |
+| `--force` | Ignore state, re-run all tests |
+
+##### 6. Reporting with State
+
+When using state, the summary shows:
+```
+Results: 5 passed, 0 failed, 0 errored, 3 skipped (cached) (8 total)
+Remaining: 12 tests not yet run for this model
+Progress: 45% complete across all models
+```
+
+##### 7. CI Strategy for Rate-Limited APIs
+
+For APIs with strict rate limits, a multi-run CI strategy:
+
+```yaml
+# .github/workflows/policy-tests-incremental.yml
+name: Policy Tests (Incremental)
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Every 15 minutes
+  workflow_dispatch:
+
+jobs:
+  test-batch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore state
+        uses: actions/cache@v4
+        with:
+          path: .test-state.json
+          key: policy-tests-${{ github.sha }}
+          restore-keys: policy-tests-
+
+      - name: Run batch
+        id: batch
+        run: |
+          ./maybe-dont test policies \
+            --suite-dir ./internal/config/defaults/tests \
+            --state-file .test-state.json \
+            --batch-size 5 \
+            --rate-limit 10
+        continue-on-error: true
+
+      - name: Check completion
+        if: steps.batch.outcome == 'success'
+        run: echo "All tests complete!"
+
+      - name: Save state
+        uses: actions/cache/save@v4
+        with:
+          path: .test-state.json
+          key: policy-tests-${{ github.sha }}
+```
+
+This workflow:
+1. Runs every 15 minutes (or on-demand)
+2. Processes 5 tests per run at 10 req/min
+3. Persists state via GitHub Actions cache
+4. Completes full suite over multiple runs
+5. Final run exits with 0, indicating all tests passed
+
+#### Open Questions
+
+1. **State file in repo?** Should the state file be committed to the repo for visibility, or kept ephemeral? Committing creates noise but provides transparency.
+
+2. **Per-provider rate limits?** Different providers have different limits. Should the config be per-provider?
+   ```yaml
+   rate_limit:
+     openai:
+       requests_per_minute: 60
+     anthropic:
+       requests_per_minute: 20
+   ```
+
+3. **Parallel model execution with rate limits?** Currently models run in parallel. With rate limits, should we serialize or use per-model rate limiters?
+
+4. **State TTL?** Should cached results expire after N days regardless of hash changes?
+
+#### Implementation Phases
+
+**Phase A: Rate Limiting (MVP)**
+- Add `rate_limit` config to suite.yaml
+- Implement delay between requests
+- Add `--rate-limit` CLI override
+- Handle 429 responses with backoff
+
+**Phase B: Incremental Execution**
+- Add `--batch-size` flag
+- Add exit code 5 for "more tests remain"
+- Track pending tests per model
+
+**Phase C: State Persistence**
+- Add `--state-file` flag
+- Implement state file schema
+- Hash calculation for change detection
+- Skip tests with valid cached results
+
+**Phase D: CI Integration**
+- Document GitHub Actions caching pattern
+- Add example workflow for incremental runs
+
 ## Implementation Checklist
 
 ### Phase 1: CLI Foundation

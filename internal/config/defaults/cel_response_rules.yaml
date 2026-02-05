@@ -9,11 +9,12 @@ rules:
     expression: |-
       size(response.content) > 0 &&
       response.content[0].type == "text" &&
-      response.content[0].text.contains("/etc/passwd")
+      (response.content[0].text.matches("(?m)^[^:]+:x:[0-9]+:[0-9]+:") ||
+       response.content[0].text.contains("/etc/passwd"))
     action: redact
     message: Sensitive system file content redacted
-    redaction_pattern: ".*"
-    redaction_replacement: "[REDACTED: System file content removed by policy]"
+    redaction_pattern: "(?s).*"
+    redaction_replacement: "[SYSTEM_FILE_REDACTED]"
 
   # Example: Block responses containing credential patterns
   - name: block-credential-exposure

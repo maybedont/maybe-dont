@@ -95,7 +95,7 @@ func NewExecutor(suite *Suite, testCases []TestCase, suiteDir string, includeDis
 			policies = filterEnabledPolicies(policies)
 		}
 
-		if err := celEngine.LoadPolicies(policies, ""); err != nil {
+		if err := celEngine.LoadPolicies(policies, "", includeDisabled); err != nil {
 			return nil, fmt.Errorf("failed to load CEL policies into engine: %w", err)
 		}
 
@@ -119,7 +119,7 @@ func NewExecutor(suite *Suite, testCases []TestCase, suiteDir string, includeDis
 			policies = filterEnabledResponsePolicies(policies)
 		}
 
-		if err := celResponseEngine.LoadPolicies(policies, ""); err != nil {
+		if err := celResponseEngine.LoadPolicies(policies, "", includeDisabled); err != nil {
 			return nil, fmt.Errorf("failed to load CEL response policies into engine: %w", err)
 		}
 

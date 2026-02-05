@@ -30,16 +30,21 @@ engines:
     # 2. Establish accuracy ceilings (high-tier models)
     # 3. Validate policy robustness across model capabilities
     # 4. Compare generations (4o vs 5.2) and providers (OpenAI vs Anthropic)
+    #
+    # NOTE: Each model entry requires an api_key field for AI tests to work.
+    # Use environment variable syntax: api_key: "${OPENAI_API_KEY}"
     model_matrix:
       # OpenAI 4o series (previous generation)
       - provider: "openai"
         model: "gpt-4o"
+        api_key: "${OPENAI_API_KEY}"  # Required for AI tests
         tier: "high-4o"
         parameters:
           temperature: 0.0
 
       - provider: "openai"
         model: "gpt-4o-mini"
+        api_key: "${OPENAI_API_KEY}"  # Required for AI tests
         tier: "mid-4o"
         parameters:
           temperature: 0.0
@@ -47,18 +52,21 @@ engines:
       # OpenAI 5.2 series (current generation)
       - provider: "openai"
         model: "chatgpt-4o-latest"
+        api_key: "${OPENAI_API_KEY}"
         tier: "high-5.2"
         parameters:
           temperature: 0.0
 
       - provider: "openai"
         model: "gpt-4.1-mini"
+        api_key: "${OPENAI_API_KEY}"
         tier: "mid-5.2"
         parameters:
           temperature: 0.0
 
       - provider: "openai"
         model: "gpt-4.1-nano"
+        api_key: "${OPENAI_API_KEY}"
         tier: "low-5.2"
         parameters:
           temperature: 0.0
@@ -66,6 +74,7 @@ engines:
       # Anthropic models - high to low tier
       - provider: "anthropic"
         model: "claude-opus-4-20250514"
+        api_key: "${ANTHROPIC_API_KEY}"
         tier: "high"
         parameters:
           max_tokens: 4096
@@ -73,6 +82,7 @@ engines:
 
       - provider: "anthropic"
         model: "claude-sonnet-4-20250514"
+        api_key: "${ANTHROPIC_API_KEY}"
         tier: "mid"
         parameters:
           max_tokens: 4096
@@ -80,6 +90,7 @@ engines:
 
       - provider: "anthropic"
         model: "claude-3-5-haiku-20241022"
+        api_key: "${ANTHROPIC_API_KEY}"
         tier: "low"
         parameters:
           max_tokens: 4096
