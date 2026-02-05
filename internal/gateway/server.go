@@ -651,6 +651,15 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		http.Error(w, "Not Found: HTTP transport not enabled. Server configured for SSE transport.", http.StatusNotFound)
 	})
 
+	// Register CLI validation endpoint
+	cliHandler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          g.config.CLIRequestValidation.Enabled,
+		ValidateCommands: g.config.CLIRequestValidation.ValidateCommands,
+		Logger:           g.logger,
+		Version:          g.version,
+	})
+	mux.Handle("/api/v1/cli/validate", cliHandler)
+
 	// Wrap with auth middleware
 	handler := AuthMiddleware(g.callerAuthConfig, mux)
 
@@ -732,6 +741,15 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 	mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not Found: SSE transport not enabled. Server configured for HTTP transport.", http.StatusNotFound)
 	})
+
+	// Register CLI validation endpoint
+	cliHandler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          g.config.CLIRequestValidation.Enabled,
+		ValidateCommands: g.config.CLIRequestValidation.ValidateCommands,
+		Logger:           g.logger,
+		Version:          g.version,
+	})
+	mux.Handle("/api/v1/cli/validate", cliHandler)
 
 	// Wrap with auth middleware
 	handler := AuthMiddleware(g.callerAuthConfig, mux)
