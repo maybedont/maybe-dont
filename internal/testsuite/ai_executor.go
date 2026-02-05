@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -122,13 +123,85 @@ func toStringMap(m map[string]any) map[string]string {
 // loadAIPoliciesFromPath loads AI policies from a file or directory.
 func loadAIPoliciesFromPath(path, suiteDir string) ([]config.AIPolicy, error) {
 	resolvedPath := resolvePath(path, suiteDir)
+
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat path %s: %w", resolvedPath, err)
+	}
+
+	if info.IsDir() {
+		return loadAIPoliciesFromDirectory(resolvedPath)
+	}
+
 	return config.LoadAIPoliciesFromFile(resolvedPath)
+}
+
+// loadAIPoliciesFromDirectory loads all AI policy files from a directory recursively.
+func loadAIPoliciesFromDirectory(dir string) ([]config.AIPolicy, error) {
+	var allPolicies []config.AIPolicy
+
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".yaml" && filepath.Ext(path) != ".yml" {
+			return nil
+		}
+
+		policies, err := config.LoadAIPoliciesFromFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to load AI policies from %s: %w", path, err)
+		}
+		allPolicies = append(allPolicies, policies...)
+		return nil
+	})
+
+	return allPolicies, err
 }
 
 // loadAIResponsePoliciesFromPath loads AI response policies from a file or directory.
 func loadAIResponsePoliciesFromPath(path, suiteDir string) ([]config.AIResponsePolicy, error) {
 	resolvedPath := resolvePath(path, suiteDir)
+
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat path %s: %w", resolvedPath, err)
+	}
+
+	if info.IsDir() {
+		return loadAIResponsePoliciesFromDirectory(resolvedPath)
+	}
+
 	return config.LoadAIResponsePoliciesFromFile(resolvedPath)
+}
+
+// loadAIResponsePoliciesFromDirectory loads all AI response policy files from a directory recursively.
+func loadAIResponsePoliciesFromDirectory(dir string) ([]config.AIResponsePolicy, error) {
+	var allPolicies []config.AIResponsePolicy
+
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".yaml" && filepath.Ext(path) != ".yml" {
+			return nil
+		}
+
+		policies, err := config.LoadAIResponsePoliciesFromFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to load AI response policies from %s: %w", path, err)
+		}
+		allPolicies = append(allPolicies, policies...)
+		return nil
+	})
+
+	return allPolicies, err
 }
 
 // ExecuteTests runs test cases against AI policies.
@@ -187,8 +260,9 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 		CaseID: tc.CaseID,
 		Title:  tc.Title,
 		Expected: ExpectedResult{
-			Decision: tc.Expectations.Decision,
-			Policies: tc.Expectations.Policies,
+			Decision:        tc.Expectations.Decision,
+			Policies:        tc.Expectations.Policies,
+			RedactedContent: extractExpectedRedactedContent(tc.Expectations.RedactedContent),
 		},
 	}
 

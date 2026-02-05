@@ -360,11 +360,304 @@ func (r *Runner) validateTestCaseSchema(tc *TestCase, path string) error {
 	return nil
 }
 
-// validatePolicyIntegrity verifies that referenced policies exist
+// policyNameSets holds the names of loaded policies by category.
+type policyNameSets struct {
+	celRequest  map[string]bool
+	aiRequest   map[string]bool
+	celResponse map[string]bool
+	aiResponse  map[string]bool
+}
+
+// validatePolicyIntegrity verifies that referenced policies exist.
+// This prevents tests from silently passing when a referenced policy is deleted/renamed.
 func (r *Runner) validatePolicyIntegrity() error {
-	// TODO: Implement policy loading and cross-reference validation
-	// For now, skip integrity validation until policy loading is implemented
+	// Load all policy names from configured paths
+	policyNames, err := r.loadPolicyNames()
+	if err != nil {
+		return err
+	}
+
+	// Cross-reference test cases against loaded policy names
+	var errors []string
+	for _, tc := range r.testCases {
+		for _, pe := range tc.Expectations.Policies {
+			if pe.PolicyName == "" {
+				continue
+			}
+
+			// Determine which policy sets to check based on test case engine and phase
+			found := false
+			var checkedSets []string
+
+			// Check against appropriate policy sets based on phase and engine
+			if tc.Phase == "request" || tc.Phase == "both" || tc.Phase == "" {
+				if tc.Engine == "cel" || tc.Engine == "both" || tc.Engine == "" {
+					if policyNames.celRequest[pe.PolicyName] {
+						found = true
+					}
+					checkedSets = append(checkedSets, "CEL request")
+				}
+				if tc.Engine == "ai" || tc.Engine == "both" || tc.Engine == "" {
+					if policyNames.aiRequest[pe.PolicyName] {
+						found = true
+					}
+					checkedSets = append(checkedSets, "AI request")
+				}
+			}
+			if tc.Phase == "response" || tc.Phase == "both" {
+				if tc.Engine == "cel" || tc.Engine == "both" || tc.Engine == "" {
+					if policyNames.celResponse[pe.PolicyName] {
+						found = true
+					}
+					checkedSets = append(checkedSets, "CEL response")
+				}
+				if tc.Engine == "ai" || tc.Engine == "both" || tc.Engine == "" {
+					if policyNames.aiResponse[pe.PolicyName] {
+						found = true
+					}
+					checkedSets = append(checkedSets, "AI response")
+				}
+			}
+
+			if !found {
+				errors = append(errors, fmt.Sprintf(
+					"test case %q references policy %q but no such policy exists (checked: %s)",
+					tc.CaseID, pe.PolicyName, strings.Join(checkedSets, ", "),
+				))
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		// Build helpful error message with loaded policy names
+		var details strings.Builder
+		details.WriteString("Policy integrity check failed:\n\n")
+		for _, e := range errors {
+			details.WriteString("  - ")
+			details.WriteString(e)
+			details.WriteString("\n")
+		}
+		details.WriteString("\nLoaded policies:\n")
+		if len(policyNames.celRequest) > 0 {
+			details.WriteString("  CEL request: ")
+			details.WriteString(formatPolicyNames(policyNames.celRequest))
+			details.WriteString("\n")
+		}
+		if len(policyNames.aiRequest) > 0 {
+			details.WriteString("  AI request: ")
+			details.WriteString(formatPolicyNames(policyNames.aiRequest))
+			details.WriteString("\n")
+		}
+		if len(policyNames.celResponse) > 0 {
+			details.WriteString("  CEL response: ")
+			details.WriteString(formatPolicyNames(policyNames.celResponse))
+			details.WriteString("\n")
+		}
+		if len(policyNames.aiResponse) > 0 {
+			details.WriteString("  AI response: ")
+			details.WriteString(formatPolicyNames(policyNames.aiResponse))
+			details.WriteString("\n")
+		}
+
+		return &PolicyIntegrityError{
+			Message: fmt.Sprintf("%d policy reference(s) not found", len(errors)),
+			Details: details.String(),
+		}
+	}
+
 	return nil
+}
+
+// loadPolicyNames loads all policies and extracts their names into sets.
+func (r *Runner) loadPolicyNames() (*policyNameSets, error) {
+	names := &policyNameSets{
+		celRequest:  make(map[string]bool),
+		aiRequest:   make(map[string]bool),
+		celResponse: make(map[string]bool),
+		aiResponse:  make(map[string]bool),
+	}
+
+	// Load CEL request policy names
+	if r.suite.Policies.CELRequestRules != "" {
+		policies, err := loadPoliciesFromPath(r.suite.Policies.CELRequestRules, r.suiteDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load CEL request rules for integrity check: %w", err)
+		}
+		for _, p := range policies {
+			names.celRequest[p.Name] = true
+		}
+	}
+
+	// Load AI request policy names
+	if r.suite.Policies.AIRequestRules != "" {
+		policies, err := loadAIPoliciesFromPath(r.suite.Policies.AIRequestRules, r.suiteDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load AI request rules for integrity check: %w", err)
+		}
+		for _, p := range policies {
+			names.aiRequest[p.Name] = true
+		}
+	}
+
+	// Load CEL response policy names
+	if r.suite.Policies.CELResponseRules != "" {
+		policies, err := loadResponsePoliciesFromPath(r.suite.Policies.CELResponseRules, r.suiteDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load CEL response rules for integrity check: %w", err)
+		}
+		for _, p := range policies {
+			names.celResponse[p.Name] = true
+		}
+	}
+
+	// Load AI response policy names
+	if r.suite.Policies.AIResponseRules != "" {
+		policies, err := loadAIResponsePoliciesFromPath(r.suite.Policies.AIResponseRules, r.suiteDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load AI response rules for integrity check: %w", err)
+		}
+		for _, p := range policies {
+			names.aiResponse[p.Name] = true
+		}
+	}
+
+	return names, nil
+}
+
+// formatPolicyNames formats a set of policy names for display.
+func formatPolicyNames(names map[string]bool) string {
+	var list []string
+	for name := range names {
+		list = append(list, name)
+	}
+	if len(list) == 0 {
+		return "(none)"
+	}
+	return strings.Join(list, ", ")
+}
+
+// policyInfo holds information about a loaded policy.
+type policyInfo struct {
+	name    string
+	engine  string // "cel_request", "ai_request", "cel_response", "ai_response"
+	enabled bool
+}
+
+// generateCoverageReport creates a coverage report comparing loaded policies against test cases.
+func (r *Runner) generateCoverageReport() (*CoverageReport, error) {
+	// Load all policies with their enabled status
+	allPolicies, err := r.loadAllPoliciesWithStatus()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build set of policies referenced by test cases
+	referencedPolicies := make(map[string]bool)
+	for _, tc := range r.testCases {
+		for _, pe := range tc.Expectations.Policies {
+			if pe.PolicyName != "" {
+				referencedPolicies[pe.PolicyName] = true
+			}
+		}
+	}
+
+	// Build coverage report
+	report := &CoverageReport{}
+	var enabledPolicies []policyInfo
+
+	for _, p := range allPolicies {
+		if p.enabled {
+			enabledPolicies = append(enabledPolicies, p)
+			report.TotalPolicies++
+		} else {
+			// Track disabled policies as skipped
+			report.DisabledSkipped = append(report.DisabledSkipped, PolicyCoverageItem{
+				Name:   p.name,
+				Engine: p.engine,
+			})
+		}
+	}
+
+	// Find enabled policies without test coverage
+	for _, p := range enabledPolicies {
+		if referencedPolicies[p.name] {
+			report.PoliciesWithTests++
+		} else {
+			report.PoliciesWithoutTests = append(report.PoliciesWithoutTests, PolicyCoverageItem{
+				Name:   p.name,
+				Engine: p.engine,
+			})
+		}
+	}
+
+	return report, nil
+}
+
+// loadAllPoliciesWithStatus loads all policies and returns them with enabled status.
+func (r *Runner) loadAllPoliciesWithStatus() ([]policyInfo, error) {
+	var allPolicies []policyInfo
+
+	// Load CEL request policies
+	if r.suite.Policies.CELRequestRules != "" {
+		policies, err := loadPoliciesFromPath(r.suite.Policies.CELRequestRules, r.suiteDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load CEL request rules: %w", err)
+		}
+		for _, p := range policies {
+			allPolicies = append(allPolicies, policyInfo{
+				name:    p.Name,
+				engine:  "cel_request",
+				enabled: p.IsEnabled(),
+			})
+		}
+	}
+
+	// Load AI request policies
+	if r.suite.Policies.AIRequestRules != "" {
+		policies, err := loadAIPoliciesFromPath(r.suite.Policies.AIRequestRules, r.suiteDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load AI request rules: %w", err)
+		}
+		for _, p := range policies {
+			allPolicies = append(allPolicies, policyInfo{
+				name:    p.Name,
+				engine:  "ai_request",
+				enabled: p.IsEnabled(),
+			})
+		}
+	}
+
+	// Load CEL response policies
+	if r.suite.Policies.CELResponseRules != "" {
+		policies, err := loadResponsePoliciesFromPath(r.suite.Policies.CELResponseRules, r.suiteDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load CEL response rules: %w", err)
+		}
+		for _, p := range policies {
+			allPolicies = append(allPolicies, policyInfo{
+				name:    p.Name,
+				engine:  "cel_response",
+				enabled: p.IsEnabled(),
+			})
+		}
+	}
+
+	// Load AI response policies
+	if r.suite.Policies.AIResponseRules != "" {
+		policies, err := loadAIResponsePoliciesFromPath(r.suite.Policies.AIResponseRules, r.suiteDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load AI response rules: %w", err)
+		}
+		for _, p := range policies {
+			allPolicies = append(allPolicies, policyInfo{
+				name:    p.Name,
+				engine:  "ai_response",
+				enabled: p.IsEnabled(),
+			})
+		}
+	}
+
+	return allPolicies, nil
 }
 
 // executeTests runs the test cases and returns results
@@ -725,8 +1018,12 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 // If alreadyStreamed is true, only the summary is printed to stdout (results were already printed).
 // If OutputFile is set, structured output (JSON/JUnit) is written to the file.
 func (r *Runner) outputResults(results []TestResult, summary *RunResult, alreadyStreamed bool) error {
-	// TODO: Generate coverage report from loaded policies and test cases
-	var coverage *CoverageReport
+	// Generate coverage report from loaded policies and test cases
+	coverage, err := r.generateCoverageReport()
+	if err != nil {
+		// Don't fail - coverage is informational only
+		coverage = nil
+	}
 
 	// Write to stdout (unless --quiet)
 	if !r.opts.Quiet {

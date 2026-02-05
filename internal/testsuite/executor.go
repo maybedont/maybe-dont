@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -26,8 +27,9 @@ type TestResult struct {
 
 // ExpectedResult contains the expected outcomes from the test case.
 type ExpectedResult struct {
-	Decision string
-	Policies []PolicyExpectation
+	Decision        string
+	Policies        []PolicyExpectation
+	RedactedContent string // Expected content after redaction (for redact decision tests)
 }
 
 // ActualResult contains the actual outcomes from test execution.
@@ -36,6 +38,7 @@ type ActualResult struct {
 	Confidence       float64
 	Reasoning        string
 	PoliciesExecuted []PolicyResult
+	RedactedContent  string // Actual content after redaction
 }
 
 // PolicyResult contains the result from a single policy evaluation.
@@ -291,8 +294,9 @@ func (e *Executor) executeCELTest(ctx context.Context, tc TestCase) TestResult {
 		CaseID: tc.CaseID,
 		Title:  tc.Title,
 		Expected: ExpectedResult{
-			Decision: tc.Expectations.Decision,
-			Policies: tc.Expectations.Policies,
+			Decision:        tc.Expectations.Decision,
+			Policies:        tc.Expectations.Policies,
+			RedactedContent: extractExpectedRedactedContent(tc.Expectations.RedactedContent),
 		},
 	}
 
@@ -372,6 +376,29 @@ func (e *Executor) executeCELTest(ctx context.Context, tc TestCase) TestResult {
 	return result
 }
 
+// extractExpectedRedactedContent extracts the expected redacted content as a string.
+// For now, we only support text content items and concatenate them.
+func extractExpectedRedactedContent(items []ContentItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var texts []string
+	for _, item := range items {
+		if item.Type == "text" && item.Text != "" {
+			texts = append(texts, item.Text)
+		}
+	}
+	if len(texts) == 0 {
+		return ""
+	}
+	// For a single text item, return it directly
+	if len(texts) == 1 {
+		return texts[0]
+	}
+	// For multiple items, join with newlines
+	return strings.Join(texts, "\n")
+}
+
 // buildCallToolRequest constructs an MCP CallToolRequest from test case request config.
 func buildCallToolRequest(req RequestConfig) mcp.CallToolRequest {
 	return mcp.CallToolRequest{
@@ -443,6 +470,11 @@ func mapResponseValidationResult(vr gateway.ResponseValidationResults) ActualRes
 		actual.Decision = "deny"
 	}
 
+	// Capture redacted content if available
+	if vr.RedactedContent != nil {
+		actual.RedactedContent = *vr.RedactedContent
+	}
+
 	// Map per-policy results
 	for _, pr := range vr.Results {
 		actual.PoliciesExecuted = append(actual.PoliciesExecuted, PolicyResult{
@@ -462,6 +494,15 @@ func compareResults(expected ExpectedResult, actual ActualResult) []string {
 	// Compare overall decision
 	if expected.Decision != actual.Decision {
 		failures = append(failures, fmt.Sprintf("expected decision %q but got %q", expected.Decision, actual.Decision))
+	}
+
+	// Compare redacted content if expected (for redact decision tests)
+	if expected.RedactedContent != "" {
+		if actual.RedactedContent == "" {
+			failures = append(failures, "expected redacted content but none was returned")
+		} else if expected.RedactedContent != actual.RedactedContent {
+			failures = append(failures, fmt.Sprintf("redacted content mismatch:\n  expected: %q\n  actual:   %q", expected.RedactedContent, actual.RedactedContent))
+		}
 	}
 
 	// Compare per-policy expectations if specified

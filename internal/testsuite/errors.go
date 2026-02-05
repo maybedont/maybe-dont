@@ -16,15 +16,17 @@ func (e *SchemaValidationError) Error() string {
 	return fmt.Sprintf("schema validation error: %s\n%v", e.Message, e.Details)
 }
 
-// PolicyIntegrityError indicates a test case references a policy that doesn't exist.
+// PolicyIntegrityError indicates test cases reference policies that don't exist.
 type PolicyIntegrityError struct {
-	CaseID     string
-	PolicyName string
-	Message    string
+	Message string
+	Details string
 }
 
 func (e *PolicyIntegrityError) Error() string {
-	return fmt.Sprintf("policy integrity error in case %q: %s", e.CaseID, e.Message)
+	if e.Details == "" {
+		return fmt.Sprintf("policy integrity error: %s", e.Message)
+	}
+	return fmt.Sprintf("policy integrity error: %s\n\n%s", e.Message, e.Details)
 }
 
 // PathResolutionError indicates a configured path could not be resolved.
