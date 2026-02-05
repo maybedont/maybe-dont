@@ -393,3 +393,178 @@ func TestHandleCLIValidation_InvalidJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "invalid_request", errResp.Error)
 }
+
+// TestHandleCLIValidation_RequestIDHeader verifies that when a X-Request-ID header
+// is provided, the handler uses that value as the request ID instead of generating one.
+func TestHandleCLIValidation_RequestIDHeader(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	var capturedCtx *CLIValidationContext
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		OnValidation: func(ctx *CLIValidationContext) {
+			capturedCtx = ctx
+		},
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["pr", "list"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "custom-request-id-123")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, capturedCtx, "OnValidation callback should have been called")
+	assert.Equal(t, "custom-request-id-123", capturedCtx.RequestID)
+}
+
+// TestHandleCLIValidation_GeneratesRequestID verifies that when no X-Request-ID header
+// is provided, the handler generates a 32-character hex string as the request ID.
+func TestHandleCLIValidation_GeneratesRequestID(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	var capturedCtx *CLIValidationContext
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		OnValidation: func(ctx *CLIValidationContext) {
+			capturedCtx = ctx
+		},
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["pr", "list"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	// No X-Request-ID header
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, capturedCtx, "OnValidation callback should have been called")
+	assert.Len(t, capturedCtx.RequestID, 32, "Generated request ID should be 32 characters")
+
+	// Verify it's valid hex
+	_, err := decodeHex(capturedCtx.RequestID)
+	assert.NoError(t, err, "Generated request ID should be valid hex")
+}
+
+// TestHandleCLIValidation_ClientIDHeader verifies that the X-Maybe-Dont-Client-ID
+// header is captured and available in the validation context.
+func TestHandleCLIValidation_ClientIDHeader(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	var capturedCtx *CLIValidationContext
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		OnValidation: func(ctx *CLIValidationContext) {
+			capturedCtx = ctx
+		},
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["pr", "list"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Maybe-Dont-Client-ID", "header-client-id")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, capturedCtx, "OnValidation callback should have been called")
+	assert.Equal(t, "header-client-id", capturedCtx.ClientID)
+}
+
+// TestHandleCLIValidation_ResponseIncludesRequestID verifies that the response JSON
+// includes the request_id field with the correct value from the request header.
+func TestHandleCLIValidation_ResponseIncludesRequestID(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["pr", "list"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-ID", "test-request-id")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp CLIValidationResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "test-request-id", resp.RequestID)
+}
+
+// decodeHex is a helper that decodes a hex string to verify validity.
+func decodeHex(s string) ([]byte, error) {
+	result := make([]byte, len(s)/2)
+	for i := 0; i < len(s); i += 2 {
+		var b byte
+		_, err := hexDecode(s[i:i+2], &b)
+		if err != nil {
+			return nil, err
+		}
+		result[i/2] = b
+	}
+	return result, nil
+}
+
+// hexDecode decodes a 2-character hex string into a byte.
+func hexDecode(s string, b *byte) (int, error) {
+	if len(s) < 2 {
+		return 0, &hexError{s}
+	}
+	high, ok := hexDigit(s[0])
+	if !ok {
+		return 0, &hexError{s}
+	}
+	low, ok := hexDigit(s[1])
+	if !ok {
+		return 0, &hexError{s}
+	}
+	*b = high<<4 | low
+	return 2, nil
+}
+
+// hexDigit converts a hex character to its value.
+func hexDigit(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
+}
+
+type hexError struct {
+	s string
+}
+
+func (e *hexError) Error() string {
+	return "invalid hex string: " + e.s
+}
