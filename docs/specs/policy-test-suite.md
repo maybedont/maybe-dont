@@ -1275,29 +1275,52 @@ execution:
   timeout_ms: 30000
   retries: 2
   retry_delay_ms: 1000
-  # NEW: Rate limiting
-  rate_limit:
-    requests_per_minute: 20        # Max requests per minute per model
-    delay_between_requests_ms: 100 # Minimum delay between consecutive requests
-    retry_on_rate_limit: true      # Auto-retry with exponential backoff on 429
-    max_retry_delay_ms: 60000      # Cap on retry backoff (1 minute)
+  # NEW: Rate limiting (per-provider)
+  rate_limits:
+    openai:
+      requests_per_minute: 60
+    anthropic:
+      requests_per_minute: 20
+    default:
+      requests_per_minute: 30       # Fallback for unlisted providers
+  delay_between_requests_ms: 100    # Minimum delay between consecutive requests
+  rate_limit_buffer_ms: 5000        # Extra buffer when hitting rate limit window
 ```
 
 CLI override:
 ```bash
-./maybe-dont test policies --suite-dir ./suite --rate-limit 10  # 10 req/min
+# Override requests-per-minute for all providers (useful for testing)
+./maybe-dont test policies --suite-dir ./suite --requests-per-minute 10
+# or shorthand:
+./maybe-dont test policies --suite-dir ./suite --rpm 10
 ```
+
+**Rate limit handling:**
+- When a 429 is received, the harness pauses until the rate limit window resets
+- The `rate_limit_buffer_ms` adds extra padding after a 429 to avoid immediately hitting the limit again (default: 5 seconds)
+- If `requests_per_minute` is set to N, the harness spaces requests to stay under that limit proactively
 
 ##### 2. Incremental Execution Mode
 
 New CLI flags:
 ```bash
 # Run at most N test cases per model, exit with special code if more remain
-./maybe-dont test policies --suite-dir ./suite --batch-size 5
+./maybe-dont test policies --suite-dir ./suite --max-tests 5
 
 # Continue from previous state
-./maybe-dont test policies --suite-dir ./suite --batch-size 5 --state-file ./test-state.json
+./maybe-dont test policies --suite-dir ./suite --max-tests 5 --state-file ./test-state.json
+
+# Local development: run continuously until all tests complete (respecting rate limits)
+./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json --wait
 ```
+
+**Flag behavior:**
+
+| Flag | Description |
+|------|-------------|
+| `--max-tests N` | Run at most N tests per model per invocation. If more tests remain, exit with code 5. Without `--wait`, the process exits after the batch. |
+| `--wait` | Keep running until all tests complete. When rate limited, waits and resumes. Useful for local development when you want to run the full suite without manual intervention. |
+| `--state-file` | Persist results to disk for incremental execution across invocations. |
 
 Exit codes:
 
@@ -1305,46 +1328,62 @@ Exit codes:
 |------|---------|
 | 0 | All tests passed |
 | 1 | Tests failed |
-| 5 | Batch complete, more tests remain (use with --batch-size) |
+| 5 | Batch complete, more tests remain (only with `--max-tests` and without `--wait`) |
 
 ##### 3. State File Schema
 
-The state file tracks test execution history:
+The state file tracks test execution history, keyed by content hashes for change detection:
 
 ```json
 {
-  "version": "v1",
+  "schema_version": "v1",
+  "product_version": "0.5.0",
   "suite_id": "default-policies",
   "last_updated": "2026-02-05T12:00:00Z",
-  "entries": [
-    {
+  "results": {
+    "sha256:abc123...": {
       "case_id": "ai_request_command_execution",
-      "case_hash": "sha256:abc123...",
-      "policy_hashes": {
-        "Check command execution tools": "sha256:def456..."
-      },
+      "policy_hashes": ["sha256:def456..."],
       "models": {
         "anthropic:claude-3-5-haiku-20241022": {
           "status": "passed",
+          "confidence": null,
           "last_run": "2026-02-05T12:00:00Z",
           "duration_ms": 1500
         },
         "openai:gpt-4o-mini": {
           "status": "passed",
+          "confidence": null,
           "last_run": "2026-02-05T11:55:00Z",
           "duration_ms": 1200
         }
       }
     }
-  ]
+  }
 }
 ```
 
-**Hash calculation:**
-- `case_hash`: SHA256 of the test case YAML content
-- `policy_hashes`: SHA256 of each referenced policy's content
+**Key design decisions:**
 
-When a hash changes, the cached result is invalidated and the test re-runs.
+- **Content-hash keys**: Results are keyed by the SHA256 hash of the test case content, not by `case_id`. This means:
+  - Renaming a suite doesn't invalidate cached results
+  - Renaming a `case_id` doesn't invalidate results (the content hash is the same)
+  - Any content change (even whitespace) invalidates the cached result
+  - PR branches with modified test cases get fresh results without polluting main branch cache
+
+- **Hash calculation:**
+  - Content hash: SHA256 of the normalized test case YAML content
+  - `policy_hashes`: Array of SHA256 hashes of each referenced policy's content
+  - If any policy hash changes, the cached result is invalidated
+
+- **Confidence field**: Currently `null` (policies return binary decisions). Reserved for future confidence scoring support.
+
+- **Product version**: Tracks which version of maybe-dont generated the results. When the product version changes, consider whether to invalidate cached results (TBD based on backward compatibility guarantees).
+
+**Stale hash pruning:**
+- Stale entries (hashes no longer matching any current test case) are pruned each time the state file is written
+- No TTL-based expiration; if the content hash matches and policies haven't changed, the result is valid
+- Historical results are preserved in git history if the state file is committed
 
 ##### 4. State Storage Options
 
@@ -1353,7 +1392,19 @@ When a hash changes, the cached result is invalidated and the test re-runs.
 | Local dev | `XDG_STATE_HOME/maybe-dont/test-state.json` | Default location |
 | Local dev | `--state-file ./path/to/state.json` | Explicit path |
 | GitHub Actions | `actions/cache` with state file | Persists between runs |
-| GitHub Actions | Stateless | Use `--batch-size` without state, accept full runs |
+| GitHub Actions | Commit to main branch | Canonical results visible in repo |
+
+**Recommended CI strategy:**
+1. State file is committed to `main` branch (e.g., `.policy-test-state.json`)
+2. PRs restore state from main, run tests, but don't commit state changes
+3. On merge to main, a workflow runs tests and commits updated state
+4. This ensures main branch has canonical test results while PRs don't pollute state
+
+**Branch isolation:**
+- Content-hash keys naturally isolate branch changes
+- A PR modifying a test case will re-run that test (different hash)
+- Unchanged tests on a PR reuse cached results from main
+- When the PR merges, the new hash enters the state file on main
 
 **GitHub Actions example with caching:**
 ```yaml
@@ -1363,15 +1414,15 @@ When a hash changes, the cached result is invalidated and the test re-runs.
     path: .test-state.json
     key: policy-test-state-${{ github.ref }}
     restore-keys: |
-      policy-test-state-
+      policy-test-state-refs/heads/main
 
 - name: Run AI tests (incremental)
   run: |
     ./maybe-dont test policies \
       --suite-dir ./internal/config/defaults/tests \
       --state-file .test-state.json \
-      --batch-size 10 \
-      --rate-limit 20
+      --max-tests 10 \
+      --rpm 20
 ```
 
 ##### 5. Behavior Modes
@@ -1380,8 +1431,9 @@ When a hash changes, the cached result is invalidated and the test re-runs.
 |-----------------|----------|
 | (none) | Run all tests, no state |
 | `--state-file` | Run only tests that need re-running (changed or not yet run) |
-| `--batch-size N` | Run at most N tests, exit with code 5 if more remain |
-| `--state-file` + `--batch-size N` | Incremental execution with persistence |
+| `--max-tests N` | Run at most N tests per model, exit with code 5 if more remain |
+| `--state-file` + `--max-tests N` | Incremental execution with persistence |
+| `--state-file` + `--wait` | Run until all tests complete, respecting rate limits (local dev mode) |
 | `--force` | Ignore state, re-run all tests |
 
 ##### 6. Reporting with State
@@ -1425,8 +1477,8 @@ jobs:
           ./maybe-dont test policies \
             --suite-dir ./internal/config/defaults/tests \
             --state-file .test-state.json \
-            --batch-size 5 \
-            --rate-limit 10
+            --max-tests 5 \
+            --rpm 10
         continue-on-error: true
 
       - name: Check completion
@@ -1447,45 +1499,45 @@ This workflow:
 4. Completes full suite over multiple runs
 5. Final run exits with 0, indicating all tests passed
 
-#### Open Questions
+#### Resolved Decisions
 
-1. **State file in repo?** Should the state file be committed to the repo for visibility, or kept ephemeral? Committing creates noise but provides transparency.
+1. **State file in repo?** Recommended: commit to main branch for visibility. PRs don't commit state changes; they use main's state as a starting point.
 
-2. **Per-provider rate limits?** Different providers have different limits. Should the config be per-provider?
-   ```yaml
-   rate_limit:
-     openai:
-       requests_per_minute: 60
-     anthropic:
-       requests_per_minute: 20
-   ```
+2. **Per-provider rate limits?** Yes, configured per-provider with a default fallback.
 
-3. **Parallel model execution with rate limits?** Currently models run in parallel. With rate limits, should we serialize or use per-model rate limiters?
+3. **Parallel model execution with rate limits?** Serialize within each provider to respect rate limits. Different providers can run in parallel since they have separate rate limits.
 
-4. **State TTL?** Should cached results expire after N days regardless of hash changes?
+4. **State TTL?** No TTL. Content hashes handle invalidation. Stale hashes are pruned on each write.
+
+5. **Stale hash pruning?** Prune immediately on each state file write. Historical data preserved in git history.
+
+6. **Branch conflicts?** Content-hash keys prevent conflicts. PR changes get new hashes automatically.
 
 #### Implementation Phases
 
 **Phase A: Rate Limiting (MVP)**
-- Add `rate_limit` config to suite.yaml
+- Add `rate_limits` config to suite.yaml (per-provider)
 - Implement delay between requests
-- Add `--rate-limit` CLI override
-- Handle 429 responses with backoff
+- Add `--requests-per-minute` / `--rpm` CLI override
+- Handle 429 responses with configurable buffer
 
 **Phase B: Incremental Execution**
-- Add `--batch-size` flag
+- Add `--max-tests` flag
 - Add exit code 5 for "more tests remain"
 - Track pending tests per model
+- Add `--wait` flag for local continuous execution
 
 **Phase C: State Persistence**
 - Add `--state-file` flag
-- Implement state file schema
+- Implement state file schema with content-hash keys
 - Hash calculation for change detection
 - Skip tests with valid cached results
+- Stale hash pruning on write
 
 **Phase D: CI Integration**
 - Document GitHub Actions caching pattern
 - Add example workflow for incremental runs
+- Document recommended strategy for committing state to main
 
 ## Implementation Checklist
 
