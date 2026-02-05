@@ -4,11 +4,30 @@
 # See docs/specs/policy-test-suite.md for full specification.
 #
 # Triggers:
-#   - PR to main when policy files change
-#   - Manual dispatch with configurable options
+#   - PR to main when policy files change (CEL tests only)
+#   - Manual dispatch with configurable options (CEL and/or AI tests)
 #
 # Model matrix is defined in suite.yaml, not hardcoded here.
 # Tests run serially to avoid rate limiting issues.
+#
+# ============================================================================
+# AI TESTS DISABLED FOR AUTOMATED RUNS
+# ============================================================================
+# AI policy tests are currently disabled for PR triggers. To re-enable:
+#
+# 1. Configure repository secrets:
+#    - OPENAI_API_KEY
+#    - ANTHROPIC_API_KEY
+#
+# 2. Uncomment the `schedule` trigger below to enable daily runs (recommended
+#    to avoid rate limiting - run at most once per day)
+#
+# 3. Update the `test-ai` job condition to include PR triggers if desired
+#    (change from `github.event_name == 'workflow_dispatch'` to also allow
+#    `github.event_name == 'pull_request'`)
+#
+# For now, AI tests can only be run via manual workflow_dispatch.
+# ============================================================================
 
 name: Policy Test Suite
 
@@ -18,6 +37,9 @@ on:
     paths:
       - 'internal/config/defaults/**/*.yaml'
       - 'internal/config/defaults/tests/**'
+  # Uncomment to enable scheduled AI tests (once per day to avoid rate limits):
+  # schedule:
+  #   - cron: '0 6 * * *'  # Daily at 6:00 AM UTC
   workflow_dispatch:
     inputs:
       suite_dir:
@@ -113,7 +135,10 @@ jobs:
     name: AI Policy Tests
     runs-on: ubuntu-latest
     needs: validate
-    if: github.event.inputs.engine != 'cel'
+    # AI tests only run on manual dispatch until API keys are configured.
+    # To enable for PRs/schedule, change condition to:
+    #   if: github.event.inputs.engine != 'cel' || github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.engine != 'cel'
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
