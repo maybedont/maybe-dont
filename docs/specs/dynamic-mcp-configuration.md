@@ -46,6 +46,7 @@ Currently, the maybe-dont gateway requires all downstream MCP servers to be pre-
 4. **Header pass-through** - Support passing authorization headers and other necessary headers to downstream MCP servers
 5. **Resource efficiency** - No significant increase in CPU, memory, or connection overhead compared to static configuration
 6. **Maintain security posture** - Continue to support policy evaluation (CEL and AI) on dynamically-routed traffic
+7. **Gateway as "dumb pipe"** - Minimize required gateway configuration for dynamic routing; the client provides all routing information (downstream URL, headers to forward)
 
 ## Constraints
 
@@ -65,6 +66,16 @@ Dynamically configured MCP connections must be session-scoped:
 ### No Arbitrary Code Execution
 
 The gateway must not spawn processes or execute arbitrary commands based on client input.
+
+### Minimal Gateway Configuration
+
+For dynamic routing, the gateway should act as a "dumb pipe" that relies on client-provided signals:
+- The **client** specifies the downstream URL
+- The **client** specifies which headers to forward (and how)
+- The **gateway** only optionally validates URLs against allow/blocklist
+- The **gateway** does not need to know about specific downstream MCP servers or their authentication requirements
+
+This keeps the gateway configuration simple and puts routing control in the hands of developers.
 
 ## Prior Art Research
 
@@ -671,44 +682,116 @@ The gateway must determine:
 - Cons: **Security risk** - may forward sensitive headers unintentionally (cookies, internal headers)
 - Denylist must include: `Host`, `Content-Length`, `Cookie`, `X-Gateway-*`, `X-MCP-*`
 
-### Recommendation
+### Design Goal: Gateway as "Dumb Pipe"
 
-A hybrid approach may work best:
+For dynamic MCP routing, the gateway should know as little as possible. The **client** provides all routing and header information since only the client knows how to call that specific downstream MCP.
 
-1. **Gateway allowlist as baseline** (D) - Admin configures commonly-forwarded headers like `Authorization`, `X-API-Key`
-2. **Prefix convention as escape hatch** (A) - For headers not in the allowlist, client can use `X-Downstream-*` prefix
+**Gateway responsibilities (minimal):**
+- Accept dynamic routing requests
+- Optionally validate downstream URLs against allow/blocklist (security guardrails)
+- Forward headers as instructed by client
+- Apply policy evaluation (CEL/AI rules) - the gateway's core value-add
+- Proxy the traffic
 
-This gives:
-- **Simple case**: Client only changes the URL, `Authorization` header is forwarded automatically (if in allowlist)
-- **Advanced case**: Client can forward arbitrary headers using prefix convention
+**Client responsibilities (everything else):**
+- Specify the downstream URL
+- Specify which headers to forward
+- Specify any header transformations
 
-Example:
-```yaml
-# Gateway config
-dynamic_routing:
-  allowed_forward_headers:
-    - Authorization
-    - X-API-Key
-```
+This design principle eliminates options D and E from consideration:
+- ~~**D. Gateway allowlist**~~ - Requires gateway to "know" common headers
+- ~~**E. Forward all (denylist)**~~ - Requires gateway to "know" sensitive headers
+
+### Recommendation: Client-Driven Header Forwarding
+
+Given the "dumb pipe" design goal, the gateway should rely entirely on client signals.
+
+**Primary approach: Prefix convention (A)**
+
+The client explicitly marks headers for forwarding using the `X-Downstream-` prefix:
 
 ```json
-// Client config - simple case (Authorization in allowlist)
 {
-  "url": "https://gateway.example.com/mcp?downstream=https://api.github.com/mcp",
-  "headers": {
-    "Authorization": "Bearer ghp_xxxx"
-  }
-}
-
-// Client config - advanced case (custom header not in allowlist)
-{
-  "url": "https://gateway.example.com/mcp?downstream=https://api.other.com/mcp",
-  "headers": {
-    "Authorization": "Bearer token",
-    "X-Downstream-Custom-Header": "custom-value"
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://gateway.example.com/mcp?downstream=https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "X-Downstream-Authorization": "Bearer ghp_xxxx"
+      }
+    }
   }
 }
 ```
+
+Gateway behavior:
+1. Receive `X-Downstream-Authorization: Bearer ghp_xxxx`
+2. Strip prefix → `Authorization: Bearer ghp_xxxx`
+3. Add to downstream request
+
+**Why this works:**
+- **Explicit**: No ambiguity about what to forward
+- **Secure**: Gateway only forwards what client explicitly marks
+- **Simple gateway logic**: Just look for `X-Downstream-*` prefix, strip it, forward
+- **No gateway config needed**: Zero header configuration on gateway side
+
+**Trade-off acknowledged:**
+- Client cannot use original header names - must rename `Authorization` to `X-Downstream-Authorization`
+- This is a config change beyond just modifying the URL
+- But it's explicit and secure
+
+**Alternative approach: Explicit forward list (B)**
+
+If renaming headers is too disruptive, client can list headers to forward:
+
+```json
+{
+  "headers": {
+    "X-MCP-Forward-Headers": "Authorization,X-API-Key",
+    "Authorization": "Bearer ghp_xxxx",
+    "X-API-Key": "abc123"
+  }
+}
+```
+
+Gateway behavior:
+1. Parse `X-MCP-Forward-Headers` to get list: `["Authorization", "X-API-Key"]`
+2. Forward only those headers to downstream
+3. Do not forward `X-MCP-Forward-Headers` itself
+
+**Trade-off:**
+- Headers keep original names (less disruptive)
+- Requires extra `X-MCP-Forward-Headers` header
+- Slightly more complex gateway logic (parse list, match headers)
+
+### Gateway URL Validation (Optional)
+
+The only gateway-side configuration for dynamic routing should be optional security guardrails:
+
+```yaml
+dynamic_routing:
+  enabled: true
+
+  # Optional: restrict which downstream URLs are allowed
+  url_validation:
+    mode: open  # open | allowlist | blocklist
+
+    # For allowlist mode
+    allowed_domains:
+      - "api.github.com"
+      - "api.linear.app"
+      - "*.example.com"
+
+    # For blocklist mode
+    blocked_domains:
+      - "internal.corp.example.com"
+      - "localhost"
+      - "127.0.0.1"
+```
+
+Defaults:
+- `mode: open` - any downstream URL allowed
+- Admins can restrict to vetted MCPs if needed
 
 ### Approaches
 
