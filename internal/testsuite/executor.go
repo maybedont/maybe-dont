@@ -493,7 +493,7 @@ func compareResults(expected ExpectedResult, actual ActualResult) []string {
 
 	// Compare overall decision
 	if expected.Decision != actual.Decision {
-		failures = append(failures, fmt.Sprintf("expected decision %q but actual %q", expected.Decision, actual.Decision))
+		failures = append(failures, fmt.Sprintf("expected decision %q, actual %q", expected.Decision, actual.Decision))
 	}
 
 	// Compare redacted content if expected (for redact decision tests)
@@ -512,13 +512,13 @@ func compareResults(expected ExpectedResult, actual ActualResult) []string {
 			if pr.PolicyName == pe.PolicyName {
 				found = true
 				if pr.Decision != pe.Decision {
-					failures = append(failures, fmt.Sprintf("expected policy %q to return %q but actual %q", pe.PolicyName, pe.Decision, pr.Decision))
+					failures = append(failures, fmt.Sprintf("policy %q: expected %q, actual %q", pe.PolicyName, pe.Decision, pr.Decision))
 				}
 				break
 			}
 		}
 		if !found {
-			failures = append(failures, fmt.Sprintf("expected policy %q to execute but it did not", pe.PolicyName))
+			failures = append(failures, fmt.Sprintf("policy %q not executed (check if enabled or conditions match)", pe.PolicyName))
 		}
 	}
 
