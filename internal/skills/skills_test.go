@@ -17,13 +17,16 @@ func TestCLISkillEmbedded(t *testing.T) {
 
 func TestSkills(t *testing.T) {
 	skills := Skills()
-	require.Len(t, skills, 1, "Should have 1 skill")
+	require.Len(t, skills, 4, "Should have 4 skills")
 
-	cli := skills[0]
-	assert.Equal(t, "cli", cli.Name)
-	assert.NotEmpty(t, cli.Description)
-	assert.NotEmpty(t, cli.Formats)
-	assert.Len(t, cli.Formats, 4, "Should have 4 formats")
+	for _, skill := range skills {
+		t.Run(skill.Name, func(t *testing.T) {
+			assert.NotEmpty(t, skill.Name)
+			assert.NotEmpty(t, skill.Description)
+			assert.NotEmpty(t, skill.Formats)
+			assert.Len(t, skill.Formats, 4, "Should have 4 formats")
+		})
+	}
 }
 
 func TestGetSkill(t *testing.T) {
@@ -33,6 +36,9 @@ func TestGetSkill(t *testing.T) {
 		wantNil   bool
 	}{
 		{"cli skill exists", "cli", false},
+		{"cel-policy skill exists", "cel-policy", false},
+		{"ai-policy skill exists", "ai-policy", false},
+		{"test-case skill exists", "test-case", false},
 		{"unknown skill", "unknown", true},
 		{"empty name", "", true},
 	}
@@ -106,31 +112,80 @@ func TestFormatConstants(t *testing.T) {
 }
 
 func TestCursorFormat(t *testing.T) {
-	skill := GetSkill("cli")
-	require.NotNil(t, skill)
+	tests := []struct {
+		name           string
+		skillName      string
+		wantHeader     string
+		wantSection    string
+		wantKeyContent string
+	}{
+		{"cli", "cli", "# Maybe Don't CLI Proxy Rules", "## Rules", "--dry-run"},
+		{"cel-policy", "cel-policy", "# CEL Policy Authoring Rules", "## Rules", "mcp_expression"},
+		{"ai-policy", "ai-policy", "# AI Policy Authoring Rules", "## Rules", "%s"},
+		{"test-case", "test-case", "# Policy Test Case Authoring Rules", "## Rules", "case_id"},
+	}
 
-	content := skill.Formats[FormatCursor]
-	assert.Contains(t, content, "# Maybe Don't CLI Proxy Rules", "Cursor format should have rules header")
-	assert.Contains(t, content, "## Rules", "Cursor format should have Rules section")
-	assert.Contains(t, content, "--dry-run", "Cursor format should mention dry-run")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			skill := GetSkill(tc.skillName)
+			require.NotNil(t, skill)
+			content := skill.Formats[FormatCursor]
+			assert.Contains(t, content, tc.wantHeader, "Cursor format should have rules header")
+			assert.Contains(t, content, tc.wantSection, "Cursor format should have Rules section")
+			assert.Contains(t, content, tc.wantKeyContent, "Cursor format should contain key content")
+		})
+	}
 }
 
 func TestCopilotFormat(t *testing.T) {
-	skill := GetSkill("cli")
-	require.NotNil(t, skill)
+	tests := []struct {
+		name           string
+		skillName      string
+		wantHeader     string
+		wantOverview   bool
+		wantKeyContent string
+	}{
+		{"cli", "cli", "# Maybe Don't CLI Proxy Instructions", true, "## Handling Denials"},
+		{"cel-policy", "cel-policy", "# CEL Policy Authoring Instructions", true, "mcp_expression"},
+		{"ai-policy", "ai-policy", "# AI Policy Authoring Instructions", true, "%s"},
+		{"test-case", "test-case", "# Policy Test Case Authoring Instructions", true, "case_id"},
+	}
 
-	content := skill.Formats[FormatCopilot]
-	assert.Contains(t, content, "# Maybe Don't CLI Proxy Instructions", "Copilot format should have instructions header")
-	assert.Contains(t, content, "## Overview", "Copilot format should have Overview section")
-	assert.Contains(t, content, "## Handling Denials", "Copilot format should have Handling Denials section")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			skill := GetSkill(tc.skillName)
+			require.NotNil(t, skill)
+			content := skill.Formats[FormatCopilot]
+			assert.Contains(t, content, tc.wantHeader, "Copilot format should have instructions header")
+			if tc.wantOverview {
+				assert.Contains(t, content, "## Overview", "Copilot format should have Overview section")
+			}
+			assert.Contains(t, content, tc.wantKeyContent, "Copilot format should contain key content")
+		})
+	}
 }
 
 func TestGenericFormat(t *testing.T) {
-	skill := GetSkill("cli")
-	require.NotNil(t, skill)
+	tests := []struct {
+		name           string
+		skillName      string
+		wantHeader     string
+		wantKeyContent string
+	}{
+		{"cli", "cli", "# CLI Command Validation Instructions", "## Behavior Guidelines"},
+		{"cel-policy", "cel-policy", "# CEL Policy Authoring Instructions", "## Behavior Guidelines"},
+		{"ai-policy", "ai-policy", "# AI Policy Authoring Instructions", "## Behavior Guidelines"},
+		{"test-case", "test-case", "# Policy Test Case Authoring Instructions", "## Behavior Guidelines"},
+	}
 
-	content := skill.Formats[FormatGeneric]
-	assert.Contains(t, content, "# CLI Command Validation Instructions", "Generic format should have clean header")
-	assert.Contains(t, content, "## Purpose", "Generic format should have Purpose section")
-	assert.Contains(t, content, "## Behavior Guidelines", "Generic format should have Behavior Guidelines section")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			skill := GetSkill(tc.skillName)
+			require.NotNil(t, skill)
+			content := skill.Formats[FormatGeneric]
+			assert.Contains(t, content, tc.wantHeader, "Generic format should have clean header")
+			assert.Contains(t, content, "## Purpose", "Generic format should have Purpose section")
+			assert.Contains(t, content, tc.wantKeyContent, "Generic format should contain key content")
+		})
+	}
 }

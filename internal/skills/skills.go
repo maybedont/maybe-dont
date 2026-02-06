@@ -19,6 +19,42 @@ var cliSkillCopilot string
 //go:embed cli.generic.md
 var cliSkillGeneric string
 
+//go:embed cel-policy.md
+var celPolicySkillClaude string
+
+//go:embed cel-policy.cursorrules
+var celPolicySkillCursor string
+
+//go:embed cel-policy.copilot.md
+var celPolicySkillCopilot string
+
+//go:embed cel-policy.generic.md
+var celPolicySkillGeneric string
+
+//go:embed ai-policy.md
+var aiPolicySkillClaude string
+
+//go:embed ai-policy.cursorrules
+var aiPolicySkillCursor string
+
+//go:embed ai-policy.copilot.md
+var aiPolicySkillCopilot string
+
+//go:embed ai-policy.generic.md
+var aiPolicySkillGeneric string
+
+//go:embed test-case.md
+var testCaseSkillClaude string
+
+//go:embed test-case.cursorrules
+var testCaseSkillCursor string
+
+//go:embed test-case.copilot.md
+var testCaseSkillCopilot string
+
+//go:embed test-case.generic.md
+var testCaseSkillGeneric string
+
 // CLISkill is kept for backward compatibility.
 // New code should use GetSkill("cli") with the desired format.
 var CLISkill = cliSkillClaude
@@ -58,6 +94,36 @@ func Skills() []Skill {
 				FormatCursor:  cliSkillCursor,
 				FormatCopilot: cliSkillCopilot,
 				FormatGeneric: cliSkillGeneric,
+			},
+		},
+		{
+			Name:        "cel-policy",
+			Description: "CEL deterministic policy authoring guide",
+			Formats: map[string]string{
+				FormatClaude:  celPolicySkillClaude,
+				FormatCursor:  celPolicySkillCursor,
+				FormatCopilot: celPolicySkillCopilot,
+				FormatGeneric: celPolicySkillGeneric,
+			},
+		},
+		{
+			Name:        "ai-policy",
+			Description: "AI LLM-powered policy authoring guide",
+			Formats: map[string]string{
+				FormatClaude:  aiPolicySkillClaude,
+				FormatCursor:  aiPolicySkillCursor,
+				FormatCopilot: aiPolicySkillCopilot,
+				FormatGeneric: aiPolicySkillGeneric,
+			},
+		},
+		{
+			Name:        "test-case",
+			Description: "Policy test case and suite configuration guide",
+			Formats: map[string]string{
+				FormatClaude:  testCaseSkillClaude,
+				FormatCursor:  testCaseSkillCursor,
+				FormatCopilot: testCaseSkillCopilot,
+				FormatGeneric: testCaseSkillGeneric,
 			},
 		},
 	}

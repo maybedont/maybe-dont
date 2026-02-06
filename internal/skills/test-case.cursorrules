@@ -1,0 +1,104 @@
+# Policy Test Case Authoring Rules
+
+Policy test cases validate CEL and AI rules in the Maybe Don't gateway. Tests are organized in a suite directory with `suite.yaml` and test case files in `cases/`.
+
+## Required Structure
+
+```
+suite-dir/
+  suite.yaml          # Suite configuration
+  cases/
+    *.yaml            # Test case files (single or array format)
+```
+
+## Rules
+
+1. Every test case MUST have a unique `case_id` across the entire suite
+2. Use descriptive kebab-case IDs with engine and phase prefix: `cel-req-001`, `ai-resp-redact-pii`
+3. `request` is required when `phase` includes `request`; `response` is required when `phase` includes `response`
+4. `expectations.decision` is REQUIRED and must be one of: `allow`, `deny`, `redact`
+5. For redact tests, provide `expectations.redacted_content` with the expected output
+6. Tag cases consistently for filtering: `cel`, `ai`, `request`, `response`, `deny`, `allow`, `redact`
+7. Write both allow and deny tests for each policy rule
+
+## Test Case Structure
+
+```yaml
+- case_id: "cel-req-001"
+  title: "Block delete_file"
+  tags: [cel, request, github]
+  notes: ["Tests exact name matching"]
+  phase: request                      # request, response, both
+  engine: cel                         # cel, ai, both
+  request:
+    tool_name: "github__delete_file"
+    arguments: {owner: "org"}
+  response:                           # Required when phase includes response
+    content:
+      - type: text
+        text: "Content here"
+    is_error: false
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "deny-delete-file"
+        decision: deny
+    redacted_content:                 # For redact tests only
+      - type: text
+        text: "[REDACTED]"
+```
+
+## Suite Configuration
+
+```yaml
+version: "v1"
+bundle_id: "my-suite"
+policies:
+  cel_request_rules: "../cel_request_rules.yaml"
+  ai_request_rules: "../ai_request_rules.yaml"
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+acceptance:
+  min_match_rate: 1.0
+  strict_policy_match: true
+engines:
+  cel:
+    enabled: true
+  ai:
+    enabled: true
+    model_matrix:
+      - provider: openai
+        model: gpt-4o-mini
+```
+
+## Running Tests
+
+```bash
+# Run all tests
+maybe-dont test policies --suite-dir ./tests
+
+# CEL only
+maybe-dont test policies --suite-dir ./tests --engine cel
+
+# Single AI model
+maybe-dont test policies --suite-dir ./tests --model openai:gpt-4o-mini
+
+# Filter by tags
+maybe-dont test policies --suite-dir ./tests --tags cel,request
+
+# Incremental (skip unchanged)
+maybe-dont test policies --suite-dir ./tests --incremental
+
+# Retry failures
+maybe-dont test policies --suite-dir ./tests --incremental --retry-failed
+```
+
+## Exit Codes
+
+- `0` — All passed
+- `1` — Test failure
+- `2` — Schema validation error
+- `3` — Policy integrity error
+- `4` — Path resolution error
+- `5` — More tests remain (`--max-tests`)
