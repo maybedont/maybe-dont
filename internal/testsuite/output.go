@@ -356,7 +356,7 @@ func formatJUnitOutput(suite *Suite, results []TestResult, summary *RunResult) (
 			}
 
 			tc.Failure = &JUnitFailure{
-				Message: fmt.Sprintf("Expected decision '%s', actual '%s'", r.Expected.Decision, r.Actual.Decision),
+				Message: fmt.Sprintf("Expected '%s', actual '%s'", r.Expected.Decision, r.Actual.Decision),
 				Type:    "AssertionError",
 				Content: failureContent.String(),
 			}

@@ -43,7 +43,7 @@ func TestCompareResults(t *testing.T) {
 				Decision: "allow",
 			},
 			expectedFailures: 1,
-			wantContains:    []string{"expected decision \"deny\", actual \"allow\""},
+			wantContains:    []string{"expected \"deny\", actual \"allow\""},
 		},
 		{
 			name: "policy decision match",

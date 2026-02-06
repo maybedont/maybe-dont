@@ -1272,8 +1272,12 @@ func formatSingleTestResult(tr TestResult) string {
 			}
 			sb.WriteString("\n")
 		}
-		// Show redacted content on failure for redaction tests
-		if tr.Expected.RedactedContent != "" || tr.Actual.RedactedContent != "" {
+		// Show redacted content on failure only when meaningful:
+		// - actual action was "redact" (so there's actual redacted content)
+		// - OR both expected and actual have content (content mismatch case)
+		showRedacted := tr.Actual.Decision == "redact" ||
+			(tr.Expected.RedactedContent != "" && tr.Actual.RedactedContent != "")
+		if showRedacted {
 			sb.WriteString(fmt.Sprintf("    redacted expected: %q\n", tr.Expected.RedactedContent))
 			sb.WriteString(fmt.Sprintf("    redacted actual:   %q\n", tr.Actual.RedactedContent))
 		}

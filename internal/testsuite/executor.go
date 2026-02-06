@@ -491,9 +491,9 @@ func mapResponseValidationResult(vr gateway.ResponseValidationResults) ActualRes
 func compareResults(expected ExpectedResult, actual ActualResult) []string {
 	var failures []string
 
-	// Compare overall decision
+	// Compare overall action (allow/deny/redact)
 	if expected.Decision != actual.Decision {
-		failures = append(failures, fmt.Sprintf("expected decision %q, actual %q", expected.Decision, actual.Decision))
+		failures = append(failures, fmt.Sprintf("expected %q, actual %q", expected.Decision, actual.Decision))
 	}
 
 	// Compare redacted content if expected (for redact decision tests)
