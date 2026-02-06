@@ -8,7 +8,6 @@ import (
 	"os"
 	"sort"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -150,20 +149,9 @@ func (sm *StateManager) Save() error {
 	return nil
 }
 
-// acquireLock attempts to acquire an exclusive lock on the file.
-func acquireLock(f *os.File, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for lock")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
+// acquireLock is implemented in platform-specific files:
+// - state_unix.go for Unix systems (uses flock)
+// - state_windows.go for Windows (uses LockFileEx)
 
 // ShouldSkip returns true if the test case can be skipped (valid cached result).
 // A test is skippable only if:
