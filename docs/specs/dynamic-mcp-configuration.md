@@ -67,15 +67,21 @@ Dynamically configured MCP connections must be session-scoped:
 
 The gateway must not spawn processes or execute arbitrary commands based on client input.
 
-### Minimal Gateway Configuration
+### Minimal Gateway Configuration ("Dumb Pipe" for Routing)
 
-For dynamic routing, the gateway should act as a "dumb pipe" that relies on client-provided signals:
+For dynamic routing, the gateway should act as a "dumb pipe" for routing that relies on client-provided signals:
 - The **client** specifies the downstream URL
 - The **client** specifies which headers to forward (and how)
 - The **gateway** only optionally validates URLs against allow/blocklist
 - The **gateway** does not need to know about specific downstream MCP servers or their authentication requirements
 
 This keeps the gateway configuration simple and puts routing control in the hands of developers.
+
+**The gateway's value-add in dynamic mode:**
+- **Audit** - All MCP traffic flows through the gateway and is logged for security review
+- **Policy enforcement** - CEL and AI rules evaluate requests/responses regardless of which downstream MCP is being called
+
+The gateway doesn't need to understand the downstream MCP to provide these security capabilities. It inspects the MCP protocol traffic (tool calls, parameters, responses) and applies policy - the downstream URL is just a routing destination.
 
 ## Prior Art Research
 
