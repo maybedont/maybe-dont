@@ -2045,6 +2045,30 @@ sed -i 's/decision: "deny"/decision: "allow"/' ./suite/cases/will-fail.yaml
   - Run test plan from "Testing State Persistence" section
   - Verify all edge cases work correctly
 
+### Phase 9: Complete Test Coverage
+
+- [ ] **9.1** Add `expectations.policies` to AI test cases
+  - AI test cases currently only have `decision` in expectations
+  - Need to add `policies` array with `policy_name` references
+  - This enables coverage tracking for AI policies
+
+- [ ] **9.2** Ensure all enabled policies have test coverage
+  - Current gaps (10 policies without coverage):
+    - `ai_request`: Check mass deletion operations
+    - `ai_request`: Check system directory access
+    - `ai_request`: Check command execution tools
+    - `ai_request`: Check credential file access
+    - `ai_request`: Check executable file creation
+    - `ai_request`: Check large file operations
+    - `cel_response`: block-credential-exposure
+    - `ai_response`: detect-credential-leakage
+    - `ai_response`: redact-internal-paths
+    - `ai_response`: detect-sensitive-business-data
+
+- [ ] **9.3** Verify 100% policy coverage before merge
+  - Run `maybe-dont test policies --validate-only`
+  - Ensure "Policies with test coverage" shows 100%
+
 ## Test Cases Reference
 
 See `policy-test-suite/cases/` for example test cases covering:
