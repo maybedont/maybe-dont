@@ -1539,6 +1539,136 @@ This workflow:
 - Add example workflow for incremental runs
 - Document recommended strategy for committing state to main
 
+#### Implementation Details
+
+**Content hash calculation:**
+- Read the test case YAML file as raw bytes
+- Compute SHA256 of the raw content (no normalization)
+- Rationale: Simple, deterministic, and any change (including whitespace/formatting) invalidates cache
+- Format in state file: `"sha256:abcd1234..."` (hex-encoded, lowercase)
+
+**Policy hash calculation:**
+- For each policy referenced in `expectations.policies[].policy_name`, find that policy in the loaded rules
+- Compute SHA256 of the policy's YAML representation (the single rule, not the entire file)
+- Store as array in `policy_hashes` field
+- If a test case has no `expectations.policies`, use an empty array (the test is validated by decision only)
+
+**Default state file behavior:**
+- If `--state-file` is not specified, no state is persisted (stateless mode)
+- `--max-tests` without `--state-file` works but doesn't remember results between invocations
+- `--wait` requires `--state-file` (error if used without it)
+
+**Partial run handling:**
+- State is written after each test completes (not just at end of run)
+- If the process is interrupted, completed tests are preserved
+- On next run, only incomplete tests are executed
+
+**Edge cases:**
+- Policy deleted: If a test references a policy that no longer exists, validation fails before any tests run (existing Phase 2 behavior)
+- Test case deleted: Stale hash remains in state file until next write, then pruned
+- Model added to matrix: New model has no cached results, runs all tests for that model
+- Model removed from matrix: Cached results remain but are unused; pruned on next write
+
+#### Testing State Persistence
+
+Before shipping, verify these scenarios work correctly:
+
+**Basic state persistence:**
+```bash
+# 1. Run with state file, limiting to 2 tests
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --state-file ./test-state.json --max-tests 2
+
+# 2. Verify state file created with 2 results
+cat ./test-state.json | jq '.results | length'  # Should be 2
+
+# 3. Run again - should skip cached tests and run 2 more
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --state-file ./test-state.json --max-tests 2
+
+# 4. Verify state file now has 4 results
+cat ./test-state.json | jq '.results | length'  # Should be 4
+
+# 5. Verify "skipped (cached)" appears in output for first 2 tests
+```
+
+**Cache invalidation on test change:**
+```bash
+# 1. Run a test and cache result
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --state-file ./test-state.json --case-pattern "req-specific-test"
+
+# 2. Modify the test case YAML (change expected decision or add a note)
+echo "# comment" >> ./suite/cases/req-specific-test.yaml
+
+# 3. Run again - should re-run the test (hash changed)
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --state-file ./test-state.json --case-pattern "req-specific-test"
+
+# 4. Verify test ran (not skipped) in output
+```
+
+**Cache invalidation on policy change:**
+```bash
+# 1. Run a test that references a specific policy
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --state-file ./test-state.json --case-pattern "req-uses-policy-x"
+
+# 2. Modify the referenced policy YAML
+# (edit the policy file to change wording or add a comment)
+
+# 3. Run again - should re-run the test (policy hash changed)
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --state-file ./test-state.json --case-pattern "req-uses-policy-x"
+
+# 4. Verify test ran (not skipped) in output
+```
+
+**Stale hash pruning:**
+```bash
+# 1. Run tests and create state
+./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json
+
+# 2. Delete a test case file
+rm ./suite/cases/some-test.yaml
+
+# 3. Run again
+./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json
+
+# 4. Verify the deleted test's hash is no longer in state file
+cat ./test-state.json | jq '.results | keys'  # Should not contain deleted test's hash
+```
+
+**Force flag:**
+```bash
+# 1. Run tests with state
+./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json
+
+# 2. Run with --force - should re-run all tests
+./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json --force
+
+# 3. Verify no "skipped (cached)" in output
+```
+
+**Exit code 5 (more tests remain):**
+```bash
+# With a suite that has more than 2 tests
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --max-tests 2
+echo "Exit code: $?"  # Should be 5 if more tests remain, 0 if all passed
+```
+
+**Wait flag behavior:**
+```bash
+# Should error without --state-file
+./maybe-dont test policies --suite-dir ./suite --wait
+# Expected: error message about --wait requiring --state-file
+
+# Should run continuously until complete
+./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json --wait --rpm 5
+# Expected: runs all tests, respecting rate limit, exits 0 when done
+```
+
 ## Implementation Checklist
 
 ### Phase 1: CLI Foundation
@@ -1613,6 +1743,60 @@ This workflow:
   - Location: `internal/config/defaults/tests/`
   - How to run the default tests locally
   - Test case coverage for each default policy
+
+### Phase 7: Rate Limiting and Incremental Execution
+
+- [ ] **7.1** Add per-provider rate limit configuration to suite.yaml schema
+  - `rate_limits.<provider>.requests_per_minute`
+  - `rate_limits.default.requests_per_minute` fallback
+  - `delay_between_requests_ms` and `rate_limit_buffer_ms`
+
+- [ ] **7.2** Implement rate limiting in test runner
+  - Track requests per provider per minute
+  - Add configurable delay between requests
+  - Handle 429 responses with buffer wait
+
+- [ ] **7.3** Add `--requests-per-minute` / `--rpm` CLI flag
+  - Overrides all provider rate limits
+
+- [ ] **7.4** Add `--max-tests` CLI flag
+  - Limit tests per model per invocation
+  - Exit code 5 when more tests remain
+
+- [ ] **7.5** Add `--wait` CLI flag
+  - Requires `--state-file` (error otherwise)
+  - Run continuously until all tests complete
+  - Respect rate limits, wait and resume
+
+### Phase 8: State Persistence
+
+- [ ] **8.1** Add `--state-file` CLI flag
+  - Load state from file if exists
+  - Write state after each test completes
+
+- [ ] **8.2** Implement state file schema
+  - `schema_version`, `product_version`, `suite_id`, `last_updated`
+  - `results` keyed by content hash
+
+- [ ] **8.3** Implement content hash calculation
+  - SHA256 of raw test case YAML bytes
+  - SHA256 of each referenced policy
+
+- [ ] **8.4** Implement cache skip logic
+  - Skip test if content hash and all policy hashes match
+  - Report as "skipped (cached)" in output
+
+- [ ] **8.5** Implement stale hash pruning
+  - On state file write, remove hashes not matching current test cases
+  - Remove results for models no longer in matrix
+
+- [ ] **8.6** Add `--force` CLI flag
+  - Ignore state file, re-run all tests
+  - Still write results to state file
+
+- [ ] **8.7** Test state persistence scenarios
+  - Run test plan from "Testing State Persistence" section
+  - Verify all edge cases work correctly
 
 ## Test Cases Reference
 
