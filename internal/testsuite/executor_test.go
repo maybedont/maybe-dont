@@ -1,6 +1,7 @@
 package testsuite
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -156,7 +157,7 @@ func TestCompareResults(t *testing.T) {
 			for _, want := range tt.wantContains {
 				found := false
 				for _, f := range out.failures {
-					if containsSubstring(f, want) {
+					if strings.Contains(f, want) {
 						found = true
 						break
 					}
@@ -332,7 +333,7 @@ func TestCompareResults_StrictPolicyMatch(t *testing.T) {
 			for _, want := range tt.wantContains {
 				found := false
 				for _, msg := range allMessages {
-					if containsSubstring(msg, want) {
+					if strings.Contains(msg, want) {
 						found = true
 						break
 					}
@@ -391,21 +392,6 @@ func TestExtractExpectedRedactedContent(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
-}
-
-// containsSubstring checks if s contains substr
-func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && contains(s, substr)))
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // TestExecuteCELTest_SetsEngineField verifies that CEL test results have the

@@ -67,7 +67,7 @@ engines:
     enabled: true
     model_matrix:
       - provider: openai
-        model: gpt-4o-mini
+        model: gpt-5-mini
 ```
 
 ## Running Tests
@@ -80,7 +80,7 @@ maybe-dont test policies --suite-dir ./tests
 maybe-dont test policies --suite-dir ./tests --engine cel
 
 # Single AI model
-maybe-dont test policies --suite-dir ./tests --model openai:gpt-4o-mini
+maybe-dont test policies --suite-dir ./tests --model openai:gpt-5-mini
 
 # All models in matrix
 maybe-dont test policies --suite-dir ./tests --matrix

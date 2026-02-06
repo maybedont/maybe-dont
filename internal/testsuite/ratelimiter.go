@@ -120,8 +120,9 @@ func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
 
 	// Check if output is a TTY
 	if f, ok := rl.output.(*os.File); ok {
-		stat, _ := f.Stat()
-		rl.isTTY = (stat.Mode() & os.ModeCharDevice) != 0
+		if stat, err := f.Stat(); err == nil {
+			rl.isTTY = (stat.Mode() & os.ModeCharDevice) != 0
+		}
 	}
 
 	// Apply configuration

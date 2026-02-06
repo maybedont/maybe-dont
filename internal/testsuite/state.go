@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -53,7 +54,12 @@ func NewStateManager(filePath string, suiteID string, productVersion string) (*S
 	// Try to load existing state
 	if filePath != "" {
 		if err := sm.load(); err != nil {
-			// File doesn't exist or is invalid - start fresh
+			// Only silently start fresh for file-not-found. Other errors (permission
+			// denied, corrupt JSON, etc.) should be surfaced so users aren't surprised
+			// by silently lost cache state.
+			if !errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("failed to load state file %s: %w", filePath, err)
+			}
 			sm.state = &StateFile{
 				SchemaVersion:  "v1",
 				ProductVersion: productVersion,
@@ -134,15 +140,33 @@ func (sm *StateManager) Save() error {
 		return fmt.Errorf("failed to write state file: %w", err)
 	}
 
+	// Flush to disk before rename to ensure data integrity
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to sync state file: %w", err)
+	}
+
 	if err := file.Close(); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to close state file: %w", err)
 	}
 
-	// Atomic rename
+	// Atomic rename. On Unix this is atomic even when the target exists.
+	// On Windows, os.Rename fails if the target exists, so we remove it first
+	// and retry. This makes the operation non-atomic on Windows, but the
+	// file lock prevents concurrent writers.
 	if err := os.Rename(tmpPath, sm.filePath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("failed to rename state file: %w", err)
+		// Retry after removing target (handles Windows limitation)
+		if removeErr := os.Remove(sm.filePath); removeErr == nil {
+			if err := os.Rename(tmpPath, sm.filePath); err != nil {
+				_ = os.Remove(tmpPath)
+				return fmt.Errorf("failed to rename state file after removing target: %w", err)
+			}
+		} else if !errors.Is(removeErr, os.ErrNotExist) {
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("failed to rename state file: %w", err)
+		}
 	}
 
 	sm.dirty = false

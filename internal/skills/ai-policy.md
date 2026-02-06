@@ -203,7 +203,7 @@ AI policies share the centralized AI configuration:
 validation:
   ai:
     provider: openai
-    model: gpt-4o-mini
+    model: gpt-5-mini
     endpoint: "https://api.openai.com/v1/chat/completions"
     api_key: "${OPENAI_API_KEY}"
 ```

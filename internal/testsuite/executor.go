@@ -365,8 +365,16 @@ func (e *Executor) executeCELTest(ctx context.Context, tc TestCase) TestResult {
 			return result
 		}
 
-		// For response validation, use the response result
-		result.Actual = mapResponseValidationResult(validationResult)
+		responseActual := mapResponseValidationResult(validationResult)
+
+		// For phase "both", merge response results into the request result.
+		// The most restrictive decision wins (deny > redact > allow), and
+		// policy results from both phases are combined.
+		if tc.Phase == "both" {
+			result.Actual = mergeActualResults(result.Actual, responseActual)
+		} else {
+			result.Actual = responseActual
+		}
 	}
 
 	result.ElapsedMs = time.Since(start).Milliseconds()
@@ -493,6 +501,47 @@ func mapResponseValidationResult(vr gateway.ResponseValidationResults) ActualRes
 	}
 
 	return actual
+}
+
+// decisionSeverity returns a numeric severity for decision ordering.
+// Higher severity means more restrictive: deny > redact > allow.
+func decisionSeverity(decision string) int {
+	switch decision {
+	case "deny":
+		return 2
+	case "redact":
+		return 1
+	default: // "allow"
+		return 0
+	}
+}
+
+// mergeActualResults merges request-phase and response-phase results for phase "both".
+// The most restrictive decision wins (deny > redact > allow), and policy results
+// from both phases are combined.
+func mergeActualResults(request, response ActualResult) ActualResult {
+	merged := ActualResult{
+		Confidence:      request.Confidence,
+		PoliciesExecuted: append(request.PoliciesExecuted, response.PoliciesExecuted...),
+	}
+
+	// Most restrictive decision wins
+	if decisionSeverity(response.Decision) > decisionSeverity(request.Decision) {
+		merged.Decision = response.Decision
+		merged.Reasoning = response.Reasoning
+	} else {
+		merged.Decision = request.Decision
+		merged.Reasoning = request.Reasoning
+	}
+
+	// Carry redacted content from whichever phase produced it
+	if response.RedactedContent != "" {
+		merged.RedactedContent = response.RedactedContent
+	} else {
+		merged.RedactedContent = request.RedactedContent
+	}
+
+	return merged
 }
 
 // compareResultsOutput holds both failures and warnings from result comparison.

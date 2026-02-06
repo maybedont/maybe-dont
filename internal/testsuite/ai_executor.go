@@ -213,7 +213,7 @@ func loadAIResponsePoliciesFromDirectory(dir string) ([]config.AIResponsePolicy,
 func (r *AITestRunner) ExecuteTests(ctx context.Context, cases []TestCase, onProgress ProgressCallback) []TestResult {
 	var results []TestResult
 
-	for _, tc := range cases {
+	for i, tc := range cases {
 		// Skip if test case doesn't target AI engine
 		if tc.Engine != "ai" && tc.Engine != "both" {
 			continue
@@ -229,9 +229,9 @@ func (r *AITestRunner) ExecuteTests(ctx context.Context, cases []TestCase, onPro
 
 		// Check if we hit a rate limit - stop testing this model
 		if result.Error != nil && result.Error.Type == "rate_limited" {
-			// Mark remaining cases as rate limited
-			for i := len(results); i < len(cases); i++ {
-				remaining := cases[i]
+			// Mark remaining cases as rate limited (starting from next case in the input slice)
+			for j := i + 1; j < len(cases); j++ {
+				remaining := cases[j]
 				if remaining.Engine != "ai" && remaining.Engine != "both" {
 					continue
 				}

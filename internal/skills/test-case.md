@@ -55,7 +55,7 @@ engines:
     enabled: true                       # Enable AI engine testing
     model_matrix:                       # Models to test against
       - provider: openai                # openai, anthropic, openai_compatible
-        model: gpt-4o-mini
+        model: gpt-5-mini
         enabled: true                   # Default: true
         parameters:                     # Optional provider-specific params
           temperature: 0.7
@@ -136,7 +136,7 @@ maybe-dont test policies --suite-dir <path> [options]
 #### Engine and Model Selection
 ```bash
 --engine {cel|ai|all}         # Override engine from suite.yaml
---model provider:model        # Run single model (e.g., openai:gpt-4o-mini)
+--model provider:model        # Run single model (e.g., openai:gpt-5-mini)
 --matrix                      # Run all enabled models from suite.yaml
 ```
 

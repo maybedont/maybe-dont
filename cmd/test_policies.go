@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -82,7 +83,7 @@ Example usage:
   maybe-dont test policies --suite-dir ./suite --engine cel
 
   # Run AI tests with a specific model
-  maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini
+  maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-5-mini
 
   # Run full model matrix from suite.yaml
   maybe-dont test policies --suite-dir ./suite --matrix
@@ -125,7 +126,7 @@ func init() {
 
 	// Engine and model selection
 	testPoliciesCmd.Flags().StringVar(&engine, "engine", "", "Engine to test: cel, ai, or all (default: from suite.yaml)")
-	testPoliciesCmd.Flags().StringVar(&model, "model", "", "Override model for AI tests: provider:model (e.g., openai:gpt-4o-mini)")
+	testPoliciesCmd.Flags().StringVar(&model, "model", "", "Override model for AI tests: provider:model (e.g., openai:gpt-5-mini)")
 	testPoliciesCmd.Flags().BoolVar(&runMatrix, "matrix", false, "Run full model matrix from suite.yaml")
 
 	// Output options
@@ -145,7 +146,6 @@ func init() {
 
 	// Rate limiting options
 	testPoliciesCmd.Flags().IntVar(&requestsPerMinute, "requests-per-minute", 0, "Override requests per minute for all providers")
-	testPoliciesCmd.Flags().IntVar(&requestsPerMinute, "rpm", 0, "Shorthand for --requests-per-minute")
 
 	// Incremental execution options
 	testPoliciesCmd.Flags().IntVar(&maxTests, "max-tests", 0, "Maximum tests per model per invocation (exit code 5 if more remain)")
@@ -251,15 +251,21 @@ func handleRunnerError(err error) error {
 	}
 
 	// Check for specific error types and exit with appropriate codes
-	switch e := err.(type) {
-	case *testsuite.SchemaValidationError:
-		fmt.Fprintf(os.Stderr, "Schema validation failed: %v\n", e)
+	var schemaErr *testsuite.SchemaValidationError
+	if errors.As(err, &schemaErr) {
+		fmt.Fprintf(os.Stderr, "Schema validation failed: %v\n", schemaErr)
 		os.Exit(ExitSchemaValidation)
-	case *testsuite.PolicyIntegrityError:
-		fmt.Fprintf(os.Stderr, "Policy integrity check failed: %v\n", e)
+	}
+
+	var policyErr *testsuite.PolicyIntegrityError
+	if errors.As(err, &policyErr) {
+		fmt.Fprintf(os.Stderr, "Policy integrity check failed: %v\n", policyErr)
 		os.Exit(ExitPolicyIntegrity)
-	case *testsuite.PathResolutionError:
-		fmt.Fprintf(os.Stderr, "Path resolution failed: %v\n", e)
+	}
+
+	var pathErr *testsuite.PathResolutionError
+	if errors.As(err, &pathErr) {
+		fmt.Fprintf(os.Stderr, "Path resolution failed: %v\n", pathErr)
 		os.Exit(ExitPathResolution)
 	}
 

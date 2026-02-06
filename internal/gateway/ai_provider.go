@@ -28,7 +28,7 @@ type AIProviderClient interface {
 // AIRequest is a vendor-neutral structure for AI completion requests.
 // Adapters translate this to the provider's native request format.
 type AIRequest struct {
-	// Model is the model identifier (e.g., "gpt-4o-mini", "claude-sonnet-4-5-20250929").
+	// Model is the model identifier (e.g., "gpt-5-mini", "claude-sonnet-4-5-20250929").
 	Model string
 
 	// SystemPrompt is the optional system prompt/instructions.

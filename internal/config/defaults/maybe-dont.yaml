@@ -58,7 +58,7 @@ validation:
   # AI configuration (required when AI validation or audit report is enabled)
   ai:
     endpoint: "https://api.openai.com/v1/chat/completions"
-    model: "gpt-4o-mini"
+    model: "gpt-5"
     api_key: "${OPENAI_API_KEY}"  # Set via environment variable
 
 # Request validation configuration

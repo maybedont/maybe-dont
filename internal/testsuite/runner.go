@@ -89,6 +89,11 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 		return nil, err
 	}
 
+	// Phase 3b: Compute policy hashes for cache invalidation
+	if err := r.computePolicyHashes(); err != nil {
+		return nil, err
+	}
+
 	// If validate-only mode, return success
 	if r.opts.ValidateOnly {
 		fmt.Printf("Suite validation passed: %d test cases discovered\n", len(r.testCases))
@@ -589,6 +594,73 @@ func (r *Runner) loadPolicyNames() (*policyNameSets, error) {
 	}
 
 	return names, nil
+}
+
+// computePolicyHashes computes SHA256 hashes of all policy files for cache invalidation.
+// When policies change, cached test results must be invalidated even if test cases
+// haven't changed. Without this, policyHashes is nil and hashesMatch(nil, nil) == true,
+// so policy-only changes would never invalidate the cache.
+func (r *Runner) computePolicyHashes() error {
+	var hashes []string
+
+	for _, path := range []string{
+		r.suite.Policies.CELRequestRules,
+		r.suite.Policies.AIRequestRules,
+		r.suite.Policies.CELResponseRules,
+		r.suite.Policies.AIResponseRules,
+	} {
+		if path == "" {
+			continue
+		}
+
+		resolvedPath := resolvePath(path, r.suiteDir)
+		fileHashes, err := hashPolicyPath(resolvedPath)
+		if err != nil {
+			return fmt.Errorf("failed to hash policy path %s: %w", path, err)
+		}
+		hashes = append(hashes, fileHashes...)
+	}
+
+	sort.Strings(hashes)
+	r.policyHashes = hashes
+	return nil
+}
+
+// hashPolicyPath computes hashes for a policy path (file or directory).
+func hashPolicyPath(path string) ([]string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat %s: %w", path, err)
+	}
+
+	if !info.IsDir() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read %s: %w", path, err)
+		}
+		return []string{ComputePolicyHash(data)}, nil
+	}
+
+	var hashes []string
+	err = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(p) != ".yaml" && filepath.Ext(p) != ".yml" {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return fmt.Errorf("failed to read %s: %w", p, err)
+		}
+		hashes = append(hashes, ComputePolicyHash(data))
+		return nil
+	})
+
+	return hashes, err
 }
 
 // formatPolicyNames formats a set of policy names for display.
@@ -1228,12 +1300,10 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 
 	// Calculate remaining tests (for --max-tests)
 	if r.opts.MaxTests > 0 {
-		// Count how many tests were limited
 		totalFilteredCases := len(r.filterTestCases())
-		testsRun := result.Passed + result.Failed + result.Errored
-		// Subtract cached tests from the calculation
-		testsRun -= result.SkippedCached
-		result.Remaining = totalFilteredCases - testsRun - result.SkippedCached
+		// All outcomes are already categorized in TotalCases (passed + failed + errored + skipped).
+		// Remaining = cases not yet accounted for in any outcome.
+		result.Remaining = totalFilteredCases - result.TotalCases
 		if result.Remaining < 0 {
 			result.Remaining = 0
 		}
@@ -1714,15 +1784,11 @@ func formatSlowestPolicies(results []TestResult) string {
 	}
 
 	// Sort by average time descending
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			avgI := sorted[i].totalMs / int64(sorted[i].count)
-			avgJ := sorted[j].totalMs / int64(sorted[j].count)
-			if avgJ > avgI {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.Slice(sorted, func(i, j int) bool {
+		avgI := sorted[i].totalMs / int64(sorted[i].count)
+		avgJ := sorted[j].totalMs / int64(sorted[j].count)
+		return avgJ < avgI
+	})
 
 	// Take top 5
 	if len(sorted) > 5 {

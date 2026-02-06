@@ -2,6 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Especially when using Opus 4.6
+Do not jump into implementation or change files unless clearly instructed. When the user’s intent is ambiguous, default to providing information, doing research, and providing recommendations rather than taking action.
+
 ## Project Overview
 
 Maybe Don't Gateway is a security middleware service built in Go that acts as a protective gateway between LLM/AI agents and Model Context Protocol (MCP) servers. It intercepts and validates MCP requests using both deterministic rules (CEL-based policies) and AI-powered validation to prevent potentially dangerous operations.
@@ -113,7 +116,7 @@ All AI-powered features share a common configuration under `validation.ai`:
 validation:
   ai:
     endpoint: "https://api.openai.com/v1/chat/completions"
-    model: "gpt-4o-mini"
+    model: "gpt-5"
     api_key: "${OPENAI_API_KEY}"
 ```
 This configuration is used by:

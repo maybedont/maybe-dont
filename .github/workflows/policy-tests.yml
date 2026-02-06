@@ -64,7 +64,7 @@ on:
         options: ['all', 'cel', 'ai']
         default: 'all'
       model:
-        description: 'Specific model (e.g., openai:gpt-4o-mini) - overrides matrix'
+        description: 'Specific model (e.g., openai:gpt-5-mini) - overrides matrix'
         type: string
         required: false
       tags:
