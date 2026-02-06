@@ -1993,55 +1993,55 @@ sed -i 's/decision: "deny"/decision: "allow"/' ./suite/cases/will-fail.yaml
 
 ### Phase 7: Rate Limiting and Incremental Execution
 
-- [ ] **7.1** Add per-provider rate limit configuration to suite.yaml schema
+- [x] **7.1** Add per-provider rate limit configuration to suite.yaml schema
   - `rate_limits.<provider>.requests_per_minute`
   - `rate_limits.default.requests_per_minute` fallback
   - `delay_between_requests_ms` and `rate_limit_buffer_ms`
 
-- [ ] **7.2** Implement rate limiting in test runner
+- [x] **7.2** Implement rate limiting in test runner
   - Track requests per provider per minute
   - Add configurable delay between requests
   - Handle 429 responses with buffer wait
 
-- [ ] **7.3** Add `--requests-per-minute` / `--rpm` CLI flag
+- [x] **7.3** Add `--requests-per-minute` / `--rpm` CLI flag
   - Overrides all provider rate limits
 
-- [ ] **7.4** Add `--max-tests` CLI flag
+- [x] **7.4** Add `--max-tests` CLI flag
   - Limit tests per model per invocation
   - Exit code 5 when more tests remain
 
-- [ ] **7.5** Add `--wait` CLI flag
+- [x] **7.5** Add `--wait` CLI flag
   - Requires `--state-file` (error otherwise)
   - Run continuously until all tests complete
   - Respect rate limits, wait and resume
 
 ### Phase 8: State Persistence
 
-- [ ] **8.1** Add `--state-file` CLI flag
+- [x] **8.1** Add `--state-file` CLI flag
   - Load state from file if exists
   - Write state after each test completes
 
-- [ ] **8.2** Implement state file schema
+- [x] **8.2** Implement state file schema
   - `schema_version`, `product_version`, `suite_id`, `last_updated`
   - `results` keyed by content hash
 
-- [ ] **8.3** Implement content hash calculation
+- [x] **8.3** Implement content hash calculation
   - SHA256 of raw test case YAML bytes
   - SHA256 of each referenced policy
 
-- [ ] **8.4** Implement cache skip logic
+- [x] **8.4** Implement cache skip logic
   - Skip test if content hash and all policy hashes match
   - Report as "skipped (cached)" in output
 
-- [ ] **8.5** Implement stale hash pruning
+- [x] **8.5** Implement stale hash pruning
   - On state file write, remove hashes not matching current test cases
   - Remove results for models no longer in matrix
 
-- [ ] **8.6** Add `--force` CLI flag
+- [x] **8.6** Add `--force` CLI flag
   - Ignore state file, re-run all tests
   - Still write results to state file
 
-- [ ] **8.7** Test state persistence scenarios
+- [x] **8.7** Test state persistence scenarios
   - Run test plan from "Testing State Persistence" section
   - Verify all edge cases work correctly
 
