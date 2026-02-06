@@ -73,6 +73,9 @@ type RunnerOptions struct {
 
 	// Force ignores state file and re-runs all tests
 	Force bool
+
+	// RetryFailed re-runs failed/errored tests even if cached (for checking transient issues)
+	RetryFailed bool
 }
 
 // RunResult contains the overall result of a test suite run.

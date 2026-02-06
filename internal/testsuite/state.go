@@ -154,11 +154,16 @@ func (sm *StateManager) Save() error {
 // - state_windows.go for Windows (uses LockFileEx)
 
 // ShouldSkip returns true if the test case can be skipped (valid cached result).
-// A test is skippable only if:
+// A test is skippable if:
 // 1. The content hash matches
 // 2. All policy hashes match
-// 3. The cached result status is "passed" (failed tests should be re-run)
-func (sm *StateManager) ShouldSkip(contentHash string, policyHashes []string, modelKey string) bool {
+// 3. We have a cached result for this model
+// 4. retryFailed is false, OR the cached status is "passed"
+//
+// By default, all cached results (passed, failed, errored) are skipped since
+// re-running unchanged tests should produce the same result.
+// Use retryFailed=true to re-run failed/errored tests (for checking transient issues).
+func (sm *StateManager) ShouldSkip(contentHash string, policyHashes []string, modelKey string, retryFailed bool) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -178,8 +183,13 @@ func (sm *StateManager) ShouldSkip(contentHash string, policyHashes []string, mo
 		return false
 	}
 
-	// Only skip if the previous run passed
-	return modelResult.Status == "passed"
+	// If retryFailed is set, only skip passed tests
+	if retryFailed {
+		return modelResult.Status == "passed"
+	}
+
+	// Default: skip all cached results (passed, failed, errored)
+	return true
 }
 
 // hashesMatch checks if two hash slices are equal (order-independent).

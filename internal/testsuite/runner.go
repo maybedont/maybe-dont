@@ -888,9 +888,9 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 
 			contentHash := r.testCaseHashes[tc.CaseID]
 
-			// Check if we should skip this test (cached passing result)
+			// Check if we should skip this test (valid cached result)
 			if r.stateManager != nil && !r.opts.Force {
-				if r.stateManager.ShouldSkip(contentHash, r.policyHashes, modelKey) {
+				if r.stateManager.ShouldSkip(contentHash, r.policyHashes, modelKey, r.opts.RetryFailed) {
 					// Report as skipped (cached)
 					result := TestResult{
 						CaseID: tc.CaseID,

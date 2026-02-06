@@ -52,7 +52,7 @@ func TestNewStateManager(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify the result was loaded
-		assert.True(t, sm2.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4"))
+		assert.True(t, sm2.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4", false))
 	})
 }
 
@@ -60,7 +60,7 @@ func TestStateManager_ShouldSkip(t *testing.T) {
 	t.Run("returns false for uncached test", func(t *testing.T) {
 		sm, _ := NewStateManager("", "test-suite", "1.0.0")
 
-		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{}, "openai:gpt-4"))
+		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{}, "openai:gpt-4", false))
 	})
 
 	t.Run("returns true for cached passing test", func(t *testing.T) {
@@ -73,10 +73,10 @@ func TestStateManager_ShouldSkip(t *testing.T) {
 			DurationMs: 100,
 		})
 
-		assert.True(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4"))
+		assert.True(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4", false))
 	})
 
-	t.Run("returns false for cached failing test", func(t *testing.T) {
+	t.Run("returns true for cached failing test by default", func(t *testing.T) {
 		sm, _ := NewStateManager("", "test-suite", "1.0.0")
 
 		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
@@ -86,8 +86,22 @@ func TestStateManager_ShouldSkip(t *testing.T) {
 			DurationMs: 100,
 		})
 
-		// Failed tests should be re-run
-		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4"))
+		// By default, all cached results (including failed) are skipped
+		assert.True(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4", false))
+	})
+
+	t.Run("returns false for cached failing test when retryFailed=true", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "failed",
+			Confidence: 1.0,
+			LastRun:    time.Now(),
+			DurationMs: 100,
+		})
+
+		// With retryFailed=true, failed tests should be re-run
+		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4", true))
 	})
 
 	t.Run("returns false when policy hashes changed", func(t *testing.T) {
@@ -101,7 +115,7 @@ func TestStateManager_ShouldSkip(t *testing.T) {
 		})
 
 		// Different policy hash should not match
-		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol2"}, "openai:gpt-4"))
+		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol2"}, "openai:gpt-4", false))
 	})
 
 	t.Run("returns false for different model", func(t *testing.T) {
@@ -115,7 +129,7 @@ func TestStateManager_ShouldSkip(t *testing.T) {
 		})
 
 		// Different model should not match
-		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "anthropic:claude"))
+		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "anthropic:claude", false))
 	})
 }
 

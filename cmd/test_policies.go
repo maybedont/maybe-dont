@@ -40,6 +40,7 @@ var (
 	stateFile         string
 	incremental       bool
 	full              bool
+	retryFailed       bool
 )
 
 // defaultStateFilePath returns the default path for the policy test state file.
@@ -98,6 +99,9 @@ Example usage:
   # Run incrementally until complete, respecting rate limits
   maybe-dont test policies --suite-dir ./suite --incremental --wait
 
+  # Re-run only failed tests (to check for transient issues)
+  maybe-dont test policies --suite-dir ./suite --incremental --retry-failed
+
   # Stream progress to stdout AND save JSON results to file
   maybe-dont test policies --suite-dir ./suite --output results.json
 
@@ -149,6 +153,7 @@ func init() {
 	testPoliciesCmd.Flags().BoolVar(&incremental, "incremental", false, "Skip unchanged tests, persist results to state file")
 	testPoliciesCmd.Flags().BoolVar(&full, "full", false, "Run all tests, persist results to state file")
 	testPoliciesCmd.Flags().StringVar(&stateFile, "state-file", "", "Override state file location (use with --incremental or --full)")
+	testPoliciesCmd.Flags().BoolVar(&retryFailed, "retry-failed", false, "Re-run failed/errored tests even if cached (for checking transient issues)")
 }
 
 func runTestPolicies(cmd *cobra.Command, args []string) error {
@@ -213,7 +218,8 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 		MaxTests:          maxTests,
 		Wait:              wait,
 		StateFile:         resolvedStateFile,
-		Force:             full, // --full means "force" re-run all tests
+		Force:             full,        // --full means "force" re-run all tests
+		RetryFailed:       retryFailed, // --retry-failed re-runs failed/errored tests
 	}
 
 	// Create and run the test suite runner
