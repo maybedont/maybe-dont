@@ -2518,3 +2518,491 @@ func TestGetLogger_FailFast(t *testing.T) {
 	})
 }
 
+// writeMinimalConfig writes a minimal valid config file to the given directory.
+// This creates a config with all validation disabled and a basic downstream server.
+func writeMinimalConfig(t *testing.T, configDir string) {
+	t.Helper()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+`
+	writeConfigFile(t, configDir, configContent)
+}
+
+// writeConfigFile writes the given config content to maybe-dont.yaml in the config directory.
+func writeConfigFile(t *testing.T, configDir, configContent string) {
+	t.Helper()
+	err := os.WriteFile(configDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+}
+
+func TestCLIRequestValidationConfig_Defaults(t *testing.T) {
+	// Test: CLI request validation should be disabled by default with empty validate_commands
+	viper.Reset()
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.False(t, cfg.CLIRequestValidation.Enabled)
+	require.Empty(t, cfg.CLIRequestValidation.ValidateCommands)
+}
+
+func TestCLIRequestValidationConfig_Enabled(t *testing.T) {
+	// Test: CLI request validation can be enabled with specific commands
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: true
+  validate_commands:
+    - gh
+    - aws
+    - kubectl
+`
+	writeConfigFile(t, configDir, configContent)
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.True(t, cfg.CLIRequestValidation.Enabled)
+	require.Equal(t, []string{"gh", "aws", "kubectl"}, cfg.CLIRequestValidation.ValidateCommands)
+}
+
+func TestCLIRequestValidationConfig_WildcardAll(t *testing.T) {
+	// Test: "*" validates all commands
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: true
+  validate_commands:
+    - "*"
+`
+	writeConfigFile(t, configDir, configContent)
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.True(t, cfg.CLIRequestValidation.Enabled)
+	require.Equal(t, []string{"*"}, cfg.CLIRequestValidation.ValidateCommands)
+}
+
+func TestCLIRequestValidationConfig_ErrorWhenEnabledWithEmptyList(t *testing.T) {
+	// Test: enabled=true with empty validate_commands is a config error.
+	// This catches misconfigurations where CLI validation is enabled but
+	// no commands are specified to validate.
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: true
+  validate_commands: []
+`
+	writeConfigFile(t, configDir, configContent)
+
+	_, err := LoadConfig(configDir, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validate_commands")
+	require.Contains(t, err.Error(), "empty")
+}
+
+func TestCLIRequestValidationConfig_NoErrorWhenDisabled(t *testing.T) {
+	// Test: enabled=false with empty list is OK.
+	// When CLI validation is disabled, an empty validate_commands list is acceptable.
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: false
+  validate_commands: []
+`
+	writeConfigFile(t, configDir, configContent)
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+	require.False(t, cfg.CLIRequestValidation.Enabled)
+}
+
+func TestCLIRequestValidationConfig_ErrorWhenEnabledWithOmittedList(t *testing.T) {
+	// Test: enabled=true with validate_commands omitted entirely (nil slice) is a config error.
+	// This catches the case where someone enables CLI validation but forgets to add commands.
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: true
+`
+	writeConfigFile(t, configDir, configContent)
+
+	_, err := LoadConfig(configDir, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validate_commands")
+	require.Contains(t, err.Error(), "empty")
+}
+
+func TestCLIRequestValidationConfig_EnvVarOverride(t *testing.T) {
+	// Test: Environment variables override config file values for CLI validation settings.
+	// This validates that both enabled (bool) and validate_commands ([]string) can be
+	// set via environment variables, following the MAYBE_DONT_ prefix convention.
+	viper.Reset()
+	configDir := t.TempDir()
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+
+cli_request_validation:
+  enabled: false
+  validate_commands: []
+`
+	writeConfigFile(t, configDir, configContent)
+
+	t.Setenv("MAYBE_DONT_CLI_REQUEST_VALIDATION_ENABLED", "true")
+	t.Setenv("MAYBE_DONT_CLI_REQUEST_VALIDATION_VALIDATE_COMMANDS", "gh,aws,kubectl")
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.True(t, cfg.CLIRequestValidation.Enabled)
+	require.Equal(t, []string{"gh", "aws", "kubectl"}, cfg.CLIRequestValidation.ValidateCommands)
+}
+
+func TestCLIRequestValidationConfig_EnvVarWildcard(t *testing.T) {
+	// Test: "*" works via environment variable for validate_commands.
+	// This validates that the wildcard value can be set via env var to enable
+	// validation of all CLI commands.
+	viper.Reset()
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	t.Setenv("MAYBE_DONT_CLI_REQUEST_VALIDATION_ENABLED", "true")
+	t.Setenv("MAYBE_DONT_CLI_REQUEST_VALIDATION_VALIDATE_COMMANDS", "*")
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.True(t, cfg.CLIRequestValidation.Enabled)
+	require.Equal(t, []string{"*"}, cfg.CLIRequestValidation.ValidateCommands)
+}
+
+// TestPolicyExpressionFields verifies the Policy struct correctly loads:
+// 1. The legacy 'expression' field for backwards compatibility
+// 2. The new 'mcp_expression' field for MCP-specific validation
+// 3. The new 'cli_expression' field for CLI command validation
+// 4. Combinations of all three fields
+func TestPolicyExpressionFields(t *testing.T) {
+	tests := []struct {
+		name                  string
+		yamlContent           string
+		wantExpression        string
+		wantMCPExpression     string
+		wantCLIExpression     string
+		wantName              string
+	}{
+		{
+			name: "legacy expression field only (backwards compatibility)",
+			yamlContent: `
+rules:
+  - name: legacy-rule
+    description: Uses legacy expression field
+    expression: 'request.params.name == "test"'
+    action: deny
+    message: Denied by legacy rule
+`,
+			wantExpression:    `request.params.name == "test"`,
+			wantMCPExpression: "",
+			wantCLIExpression: "",
+			wantName:          "legacy-rule",
+		},
+		{
+			name: "mcp_expression field only",
+			yamlContent: `
+rules:
+  - name: mcp-only-rule
+    description: Uses mcp_expression field
+    mcp_expression: 'request.params.name.startsWith("dangerous")'
+    action: deny
+    message: Denied by MCP rule
+`,
+			wantExpression:    "",
+			wantMCPExpression: `request.params.name.startsWith("dangerous")`,
+			wantCLIExpression: "",
+			wantName:          "mcp-only-rule",
+		},
+		{
+			name: "cli_expression field only",
+			yamlContent: `
+rules:
+  - name: cli-only-rule
+    description: Uses cli_expression field
+    cli_expression: 'cli.command == "rm" && cli.args.exists(a, a == "-rf")'
+    action: deny
+    message: Denied by CLI rule
+`,
+			wantExpression:    "",
+			wantMCPExpression: "",
+			wantCLIExpression: `cli.command == "rm" && cli.args.exists(a, a == "-rf")`,
+			wantName:          "cli-only-rule",
+		},
+		{
+			name: "all three expression fields",
+			yamlContent: `
+rules:
+  - name: dual-rule
+    description: Has expressions for both MCP and CLI
+    expression: 'true'
+    mcp_expression: 'request.params.name == "mcp_tool"'
+    cli_expression: 'cli.command == "dangerous"'
+    action: deny
+    message: Blocked
+`,
+			wantExpression:    "true",
+			wantMCPExpression: `request.params.name == "mcp_tool"`,
+			wantCLIExpression: `cli.command == "dangerous"`,
+			wantName:          "dual-rule",
+		},
+		{
+			name: "mcp_expression and cli_expression without legacy expression",
+			yamlContent: `
+rules:
+  - name: new-style-rule
+    description: Uses new fields without legacy expression
+    mcp_expression: 'request.params.name == "tool"'
+    cli_expression: 'cli.command == "cmd"'
+    action: deny
+    message: Blocked
+`,
+			wantExpression:    "",
+			wantMCPExpression: `request.params.name == "tool"`,
+			wantCLIExpression: `cli.command == "cmd"`,
+			wantName:          "new-style-rule",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create temp file with YAML content
+			tmpFile, err := os.CreateTemp("", "policy-*.yaml")
+			require.NoError(t, err)
+			defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+			_, err = tmpFile.WriteString(tt.yamlContent)
+			require.NoError(t, err)
+			err = tmpFile.Close()
+			require.NoError(t, err)
+
+			// Load policies from file
+			policies, err := LoadPoliciesFromFile(tmpFile.Name())
+			require.NoError(t, err)
+			require.Len(t, policies, 1)
+
+			policy := policies[0]
+			require.Equal(t, tt.wantName, policy.Name)
+			require.Equal(t, tt.wantExpression, policy.Expression, "Expression field mismatch")
+			require.Equal(t, tt.wantMCPExpression, policy.MCPExpression, "MCPExpression field mismatch")
+			require.Equal(t, tt.wantCLIExpression, policy.CLIExpression, "CLIExpression field mismatch")
+		})
+	}
+}
+
+// TestPolicyExpressionFields_MultipleRules verifies that multiple rules
+// with different expression configurations can be loaded from a single file.
+func TestPolicyExpressionFields_MultipleRules(t *testing.T) {
+	yamlContent := `
+rules:
+  - name: legacy-rule
+    expression: 'true'
+    action: deny
+    message: Legacy
+  - name: mcp-rule
+    mcp_expression: 'request.params.name == "mcp"'
+    action: deny
+    message: MCP only
+  - name: cli-rule
+    cli_expression: 'cli.command == "rm"'
+    action: deny
+    message: CLI only
+  - name: dual-rule
+    mcp_expression: 'request.method == "tools/call"'
+    cli_expression: 'cli.command != ""'
+    action: allow
+    message: Dual expressions
+`
+
+	tmpFile, err := os.CreateTemp("", "policy-multi-*.yaml")
+	require.NoError(t, err)
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+
+	_, err = tmpFile.WriteString(yamlContent)
+	require.NoError(t, err)
+	err = tmpFile.Close()
+	require.NoError(t, err)
+
+	policies, err := LoadPoliciesFromFile(tmpFile.Name())
+	require.NoError(t, err)
+	require.Len(t, policies, 4)
+
+	// Verify each rule loaded correctly
+	require.Equal(t, "legacy-rule", policies[0].Name)
+	require.Equal(t, "true", policies[0].Expression)
+	require.Empty(t, policies[0].MCPExpression)
+	require.Empty(t, policies[0].CLIExpression)
+
+	require.Equal(t, "mcp-rule", policies[1].Name)
+	require.Empty(t, policies[1].Expression)
+	require.Equal(t, `request.params.name == "mcp"`, policies[1].MCPExpression)
+	require.Empty(t, policies[1].CLIExpression)
+
+	require.Equal(t, "cli-rule", policies[2].Name)
+	require.Empty(t, policies[2].Expression)
+	require.Empty(t, policies[2].MCPExpression)
+	require.Equal(t, `cli.command == "rm"`, policies[2].CLIExpression)
+
+	require.Equal(t, "dual-rule", policies[3].Name)
+	require.Empty(t, policies[3].Expression)
+	require.Equal(t, `request.method == "tools/call"`, policies[3].MCPExpression)
+	require.Equal(t, `cli.command != ""`, policies[3].CLIExpression)
+}
+
