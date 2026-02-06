@@ -765,7 +765,7 @@ func (r *Runner) executeTests(ctx context.Context) (*RunResult, error) {
 	// Execute CEL tests
 	if runCEL && r.suite.Engines.CEL.Enabled {
 		celCases := filterCasesForEngine(cases, "cel")
-		celResults := executor.ExecuteCELTests(ctx, celCases, onProgress)
+		celResults := r.executeCELTestsWithCaching(ctx, executor, celCases, onProgress)
 		allResults = append(allResults, celResults...)
 	}
 
@@ -814,6 +814,84 @@ func (r *Runner) shouldRunEngine(engine string) bool {
 		return true
 	}
 	return r.opts.Engine == engine
+}
+
+// executeCELTestsWithCaching runs CEL tests with state caching support.
+// CEL tests use "cel" as the model key since they don't use an AI model.
+func (r *Runner) executeCELTestsWithCaching(ctx context.Context, executor *Executor, cases []TestCase, onProgress ProgressCallback) []TestResult {
+	const celModelKey = "cel"
+
+	var allResults []TestResult
+
+	// Filter cases based on state (skip cached tests unless --force)
+	var casesToRun []TestCase
+	var skippedCached []TestResult
+
+	for _, tc := range cases {
+		// Skip if test case doesn't target CEL engine
+		if tc.Engine != "cel" && tc.Engine != "both" {
+			continue
+		}
+
+		contentHash := r.testCaseHashes[tc.CaseID]
+
+		// Check if we should skip this test (valid cached result)
+		if r.stateManager != nil && !r.opts.Force {
+			if r.stateManager.ShouldSkip(contentHash, r.policyHashes, celModelKey, r.opts.RetryFailed) {
+				// Report as skipped (cached)
+				result := TestResult{
+					CaseID: tc.CaseID,
+					Title:  tc.Title,
+					Status: "skipped",
+					Error: &TestError{
+						Type:    "cached",
+						Message: "Skipped due to valid cached result",
+					},
+				}
+				skippedCached = append(skippedCached, result)
+				if onProgress != nil {
+					onProgress(result)
+				}
+				continue
+			}
+		}
+
+		casesToRun = append(casesToRun, tc)
+	}
+
+	allResults = append(allResults, skippedCached...)
+
+	// Wrap progress callback to record results to state
+	wrappedProgress := func(result TestResult) {
+		// Record to state manager
+		if r.stateManager != nil {
+			contentHash := r.testCaseHashes[result.CaseID]
+			cachedResult := &CachedResult{
+				Status:     result.Status,
+				Confidence: result.Actual.Confidence,
+				LastRun:    time.Now(),
+				DurationMs: result.ElapsedMs,
+			}
+			r.stateManager.RecordResult(contentHash, result.CaseID, r.policyHashes, celModelKey, cachedResult)
+
+			// Save state after each test (incremental)
+			if err := r.stateManager.Save(); err != nil {
+				// Log but don't fail - state persistence is best-effort
+				fmt.Printf("Warning: failed to save state: %v\n", err)
+			}
+		}
+
+		// Call original progress callback
+		if onProgress != nil {
+			onProgress(result)
+		}
+	}
+
+	// Execute tests
+	celResults := executor.ExecuteCELTests(ctx, casesToRun, wrappedProgress)
+	allResults = append(allResults, celResults...)
+
+	return allResults
 }
 
 // executeAITests runs AI tests against configured models.
