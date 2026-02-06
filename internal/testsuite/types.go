@@ -116,14 +116,57 @@ type RunResult struct {
 
 // Suite represents a parsed suite.yaml configuration.
 type Suite struct {
-	Version     string            `yaml:"version"`
-	BundleID    string            `yaml:"bundle_id"`
-	Description string            `yaml:"description"`
-	Policies    PoliciesConfig    `yaml:"policies"`
-	Acceptance  AcceptanceConfig  `yaml:"acceptance"`
-	Execution   ExecutionConfig   `yaml:"execution"`
-	Engines     EnginesConfig     `yaml:"engines"`
-	Filters     FiltersConfig     `yaml:"filters"`
+	Version     string                    `yaml:"version"`
+	BundleID    string                    `yaml:"bundle_id"`
+	Description string                    `yaml:"description"`
+	Providers   map[string]ProviderConfig `yaml:"providers,omitempty"`
+	Policies    PoliciesConfig            `yaml:"policies"`
+	Acceptance  AcceptanceConfig          `yaml:"acceptance"`
+	Execution   ExecutionConfig           `yaml:"execution"`
+	Engines     EnginesConfig             `yaml:"engines"`
+	Filters     FiltersConfig             `yaml:"filters"`
+}
+
+// ProviderConfig defines provider-level settings shared across all models for that provider.
+type ProviderConfig struct {
+	APIKey   string `yaml:"api_key"`
+	Endpoint string `yaml:"endpoint,omitempty"`
+}
+
+// ResolveAPIKey returns the API key for a model using deterministic lookup:
+// 1. Per-model api_key (override)
+// 2. Provider-level api_key from providers section
+// Returns empty string if neither is configured.
+func (s *Suite) ResolveAPIKey(m ModelConfig) string {
+	// Per-model override takes precedence
+	if m.APIKey != "" {
+		return m.APIKey
+	}
+	// Fall back to provider-level config
+	if s.Providers != nil {
+		if pc, ok := s.Providers[m.Provider]; ok {
+			return pc.APIKey
+		}
+	}
+	return ""
+}
+
+// ResolveEndpoint returns the endpoint for a model using deterministic lookup:
+// 1. Per-model endpoint (override)
+// 2. Provider-level endpoint from providers section
+// Returns empty string if neither is configured (caller should use provider defaults).
+func (s *Suite) ResolveEndpoint(m ModelConfig) string {
+	// Per-model override takes precedence
+	if m.Endpoint != "" {
+		return m.Endpoint
+	}
+	// Fall back to provider-level config
+	if s.Providers != nil {
+		if pc, ok := s.Providers[m.Provider]; ok {
+			return pc.Endpoint
+		}
+	}
+	return ""
 }
 
 // PoliciesConfig specifies the paths to policy files or directories.
@@ -182,7 +225,16 @@ type ModelConfig struct {
 	Parameters  map[string]any `yaml:"parameters,omitempty"`
 	QueryParams map[string]any `yaml:"query_params,omitempty"`
 	Headers     map[string]any `yaml:"headers,omitempty"`
-	Tier        string         `yaml:"tier,omitempty"`
+	Enabled     *bool          `yaml:"enabled,omitempty"` // Defaults to true if not specified
+}
+
+// IsEnabled returns true if this model should be included in test runs.
+// Models are enabled by default if the field is not specified.
+func (m ModelConfig) IsEnabled() bool {
+	if m.Enabled == nil {
+		return true
+	}
+	return *m.Enabled
 }
 
 // FiltersConfig defines default test case filters.

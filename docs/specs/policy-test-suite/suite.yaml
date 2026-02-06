@@ -2,6 +2,14 @@ version: "v1"
 bundle_id: "default-2026-02-03"
 description: "Policy regression test suite for Maybe Don't Gateway"
 
+# Provider-level API keys - shared across all models for each provider
+# API keys use ${VAR} syntax for environment variable substitution
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+
 # Policy sources - files or directories (recursive YAML discovery)
 policies:
   cel_request_rules: "internal/config/defaults/cel_request_rules.yaml"
@@ -72,77 +80,67 @@ engines:
     # 3. Validate policy robustness across model capabilities
     # 4. Compare generations (4o vs 4.1) and providers (OpenAI vs Anthropic)
     #
-    # NOTE: Each model entry requires an api_key field for AI tests to work.
-    # Use environment variable syntax: api_key: "${OPENAI_API_KEY}"
+    # API keys are inherited from the 'providers' section above.
+    # Use 'enabled: false' to disable a model without removing it from the matrix.
     model_matrix:
       # OpenAI 4o series (previous generation)
       - provider: "openai"
-        model: "gpt-4o"
-        api_key: "${OPENAI_API_KEY}"  # Required for AI tests
-        tier: "high-4o"
+        model: "gpt-4o"  # High-intelligence flagship
         parameters:
           temperature: 0.0
 
       - provider: "openai"
-        model: "gpt-4o-mini"
-        api_key: "${OPENAI_API_KEY}"  # Required for AI tests
-        tier: "mid-4o"
+        model: "gpt-4o-mini"  # Cost-effective option
         parameters:
           temperature: 0.0
 
-      # OpenAI 5.2 series (current generation)
+      # OpenAI 4.1 series (current generation)
       - provider: "openai"
-        model: "chatgpt-4o-latest"
-        api_key: "${OPENAI_API_KEY}"
-        tier: "high-5.2"
+        model: "chatgpt-4o-latest"  # Latest 4o with updates
         parameters:
           temperature: 0.0
 
       - provider: "openai"
-        model: "gpt-4.1-mini"
-        api_key: "${OPENAI_API_KEY}"
-        tier: "mid-5.2"
+        model: "gpt-4.1-mini"  # Balanced speed/intelligence
         parameters:
           temperature: 0.0
 
       - provider: "openai"
-        model: "gpt-4.1-nano"
-        api_key: "${OPENAI_API_KEY}"
-        tier: "low-5.2"
+        model: "gpt-4.1-nano"  # Cost-optimized, fastest
         parameters:
           temperature: 0.0
 
-      # Anthropic models - high to low tier
+      # Anthropic models - high to low capability
+      # Using dated versions for reproducible test results
       - provider: "anthropic"
-        model: "claude-opus-4-20250514"
-        api_key: "${ANTHROPIC_API_KEY}"
-        tier: "high"
+        model: "claude-opus-4-6"  # Latest flagship, highest quality
         parameters:
           max_tokens: 256  # Policy validation responses are small JSON
           temperature: 0.0
 
       - provider: "anthropic"
-        model: "claude-sonnet-4-20250514"
-        api_key: "${ANTHROPIC_API_KEY}"
-        tier: "mid"
+        model: "claude-opus-4-5-20251101"  # High quality
         parameters:
           max_tokens: 256  # Policy validation responses are small JSON
           temperature: 0.0
 
       - provider: "anthropic"
-        model: "claude-haiku-4-5-20251001"
-        api_key: "${ANTHROPIC_API_KEY}"
-        tier: "low"
+        model: "claude-sonnet-4-5-20250929"  # Balanced performance and quality
+        parameters:
+          max_tokens: 256  # Policy validation responses are small JSON
+          temperature: 0.0
+
+      - provider: "anthropic"
+        model: "claude-haiku-4-5-20251001"  # Fast and cost-effective
         parameters:
           max_tokens: 256  # Policy validation responses are small JSON
           temperature: 0.0
 
       # Example: Azure OpenAI (commented out - uncomment to test Azure endpoint)
+      # Add openai_compatible to providers section with api_key: "${AZURE_OPENAI_API_KEY}"
       # - provider: "openai_compatible"
       #   endpoint: "https://myorg.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions"
       #   model: "gpt-4o-mini"
-      #   tier: "mid"
-      #   api_key: "${AZURE_OPENAI_API_KEY}"
       #   query_params:
       #     api-version: "2024-02-15-preview"
       #   parameters:
@@ -152,7 +150,7 @@ engines:
       # - provider: "openai_compatible"
       #   endpoint: "http://localhost:11434/v1/chat/completions"
       #   model: "llama3"
-      #   tier: "local"
+      #   api_key: ""  # Override to empty for local
       #   parameters:
       #     temperature: 0.0
 

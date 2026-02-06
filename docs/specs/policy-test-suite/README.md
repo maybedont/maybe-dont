@@ -71,40 +71,50 @@ engines:
 
 The `model_matrix` under the AI engine aligns with the gateway's `validation.ai` configuration, enabling customers to test policies across different providers, endpoints, and parameters.
 
+API keys are configured at the provider level in the `providers` section, with optional per-model overrides:
+
 ```yaml
+# Provider-level API keys - shared across all models for each provider
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+  openai_compatible:
+    api_key: "${AZURE_OPENAI_API_KEY}"
+
 engines:
   - name: "ai"
     enabled: true
     model_matrix:
-      # OpenAI direct
+      # OpenAI direct - api_key inherited from providers.openai
       - provider: "openai"
         model: "gpt-4o-mini"
-        # api_key: defaults to $OPENAI_API_KEY
         parameters:
           temperature: 0.0
 
-      # Azure OpenAI (same model family, different endpoint)
+      # Azure OpenAI - api_key inherited from providers.openai_compatible
       - provider: "openai_compatible"
         endpoint: "https://myorg.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions"
         model: "gpt-4o-mini"
-        api_key: "${AZURE_OPENAI_API_KEY}"
         query_params:
           api-version: "2024-02-15-preview"
         parameters:
           temperature: 0.0
 
-      # Anthropic
+      # Anthropic - api_key inherited from providers.anthropic
+      # Using dated version for reproducible test results
       - provider: "anthropic"
-        model: "claude-sonnet-4-20250514"
-        # api_key: defaults to $ANTHROPIC_API_KEY
+        model: "claude-sonnet-4-5-20250929"
         parameters:
           max_tokens: 4096
           temperature: 0.0
 
-      # Local Ollama (for dev testing)
+      # Local Ollama (for dev testing) - no api_key needed
       - provider: "openai_compatible"
         endpoint: "http://localhost:11434/v1/chat/completions"
         model: "llama3"
+        api_key: ""  # Override to empty for local
         parameters:
           temperature: 0.0
 ```
@@ -116,10 +126,11 @@ engines:
 | `provider` | Yes | `openai`, `openai_compatible`, or `anthropic` |
 | `endpoint` | For openai_compatible | Full URL to chat completions API |
 | `model` | Yes | Model identifier |
-| `api_key` | No | API key or env var reference (defaults vary by provider) |
+| `api_key` | No | Per-model API key override (inherits from `providers` section if not set) |
 | `parameters` | No | Provider-specific parameters (temperature, max_tokens, etc.) |
 | `query_params` | No | URL query parameters (e.g., Azure api-version) |
 | `headers` | No | Custom HTTP headers |
+| `enabled` | No | Set to `false` to disable this model (default: `true`) |
 
 ## Test Case Schema
 

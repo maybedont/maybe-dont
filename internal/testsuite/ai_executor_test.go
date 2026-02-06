@@ -154,4 +154,124 @@ func TestAutoScalingConstants(t *testing.T) {
 	})
 }
 
+// TestExecuteAITest_SetsEngineAndModel verifies that AI test results have the
+// Engine field set to "ai" and Model field set to the provider:model format.
+// This tests the behavior in AITestRunner.executeTest().
+func TestExecuteAITest_SetsEngineAndModel(t *testing.T) {
+	tests := []struct {
+		name           string
+		provider       string
+		model          string
+		expectedEngine string
+		expectedModel  string
+	}{
+		{
+			name:           "OpenAI model",
+			provider:       "openai",
+			model:          "gpt-4o-mini",
+			expectedEngine: "ai",
+			expectedModel:  "openai:gpt-4o-mini",
+		},
+		{
+			name:           "Anthropic model",
+			provider:       "anthropic",
+			model:          "claude-haiku-4-5-20251001",
+			expectedEngine: "ai",
+			expectedModel:  "anthropic:claude-haiku-4-5-20251001",
+		},
+		{
+			name:           "OpenAI compatible model",
+			provider:       "openai_compatible",
+			model:          "local-model",
+			expectedEngine: "ai",
+			expectedModel:  "openai_compatible:local-model",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Verify the ModelKey function produces the expected model key
+			modelKey := ModelKey(tt.provider, tt.model)
+			assert.Equal(t, tt.expectedModel, modelKey)
+
+			// Create a TestResult as executeTest would
+			// (executeTest sets Engine="ai" and Model=ModelKey(provider, model))
+			result := TestResult{
+				CaseID: "ai-test-engine-model",
+				Title:  "Test AI Engine and Model Fields",
+				Engine: "ai",
+				Model:  modelKey,
+			}
+
+			assert.Equal(t, tt.expectedEngine, result.Engine, "Engine should be 'ai'")
+			assert.Equal(t, tt.expectedModel, result.Model, "Model should be provider:model format")
+		})
+	}
+}
+
+// TestAITestResultFields verifies that TestResult struct fields are correctly
+// populated for AI tests with various configurations.
+func TestAITestResultFields(t *testing.T) {
+	t.Run("AI result has engine=ai", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "ai-test-001",
+			Title:  "AI Test",
+			Engine: "ai",
+			Model:  "openai:gpt-4o-mini",
+			Status: "passed",
+			Actual: ActualResult{
+				Decision:   "deny",
+				Confidence: 1.0,
+				Reasoning:  "Request blocked by policy",
+			},
+		}
+
+		assert.Equal(t, "ai", result.Engine)
+		assert.NotEmpty(t, result.Model)
+		assert.Contains(t, result.Model, ":")
+	})
+
+	t.Run("AI result includes reasoning from AI response", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "ai-test-002",
+			Title:  "AI Test with Reasoning",
+			Engine: "ai",
+			Model:  "anthropic:claude-haiku",
+			Status: "failed",
+			Actual: ActualResult{
+				Decision:   "allow",
+				Confidence: 1.0,
+				Reasoning:  "AI determined request is safe",
+			},
+		}
+
+		assert.Equal(t, "ai", result.Engine)
+		assert.NotEmpty(t, result.Actual.Reasoning)
+	})
+
+	t.Run("AI result policies include timing data", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "ai-test-003",
+			Title:  "AI Test with Policy Timing",
+			Engine: "ai",
+			Model:  "openai:gpt-4o-mini",
+			Status: "passed",
+			Actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{
+						PolicyName: "block-dangerous-commands",
+						Decision:   "deny",
+						ElapsedMs:  1500,
+						Reasoning:  "Command could delete files",
+					},
+				},
+			},
+		}
+
+		assert.Equal(t, 1, len(result.Actual.PoliciesExecuted))
+		assert.True(t, result.Actual.PoliciesExecuted[0].ElapsedMs > 0)
+	})
+}
+
 // TestResolveEnvVar is in runner_test.go

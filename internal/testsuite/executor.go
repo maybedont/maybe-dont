@@ -17,6 +17,8 @@ import (
 type TestResult struct {
 	CaseID      string
 	Title       string
+	Engine      string // "cel" or "ai"
+	Model       string // Model key for AI tests (e.g., "anthropic:claude-haiku"), empty for CEL
 	Status      string // passed, failed, errored, skipped
 	ElapsedMs   int64
 	Expected    ExpectedResult
@@ -293,6 +295,7 @@ func (e *Executor) executeCELTest(ctx context.Context, tc TestCase) TestResult {
 	result := TestResult{
 		CaseID: tc.CaseID,
 		Title:  tc.Title,
+		Engine: "cel",
 		Expected: ExpectedResult{
 			Decision:        tc.Expectations.Decision,
 			Policies:        tc.Expectations.Policies,

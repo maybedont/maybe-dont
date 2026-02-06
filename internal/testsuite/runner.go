@@ -136,7 +136,8 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 
 		// Build list of current model keys
 		var currentModels []string
-		for _, model := range r.getModelsToTest() {
+		models, _ := r.getModelsToTest() // Ignore error here - pruning is best-effort
+		for _, model := range models {
 			currentModels = append(currentModels, ModelKey(model.Provider, model.Model))
 		}
 
@@ -762,10 +763,10 @@ func (r *Runner) executeTests(ctx context.Context) (*RunResult, error) {
 
 	var allResults []TestResult
 
-	// Execute CEL tests
+	// Execute CEL tests - always run them since they're fast and deterministic
 	if runCEL && r.suite.Engines.CEL.Enabled {
 		celCases := filterCasesForEngine(cases, "cel")
-		celResults := r.executeCELTestsWithCaching(ctx, executor, celCases, onProgress)
+		celResults := executor.ExecuteCELTests(ctx, celCases, onProgress)
 		allResults = append(allResults, celResults...)
 	}
 
@@ -816,88 +817,13 @@ func (r *Runner) shouldRunEngine(engine string) bool {
 	return r.opts.Engine == engine
 }
 
-// executeCELTestsWithCaching runs CEL tests with state caching support.
-// CEL tests use "cel" as the model key since they don't use an AI model.
-func (r *Runner) executeCELTestsWithCaching(ctx context.Context, executor *Executor, cases []TestCase, onProgress ProgressCallback) []TestResult {
-	const celModelKey = "cel"
-
-	var allResults []TestResult
-
-	// Filter cases based on state (skip cached tests unless --force)
-	var casesToRun []TestCase
-	var skippedCached []TestResult
-
-	for _, tc := range cases {
-		// Skip if test case doesn't target CEL engine
-		if tc.Engine != "cel" && tc.Engine != "both" {
-			continue
-		}
-
-		contentHash := r.testCaseHashes[tc.CaseID]
-
-		// Check if we should skip this test (valid cached result)
-		if r.stateManager != nil && !r.opts.Force {
-			if r.stateManager.ShouldSkip(contentHash, r.policyHashes, celModelKey, r.opts.RetryFailed) {
-				// Report as skipped (cached)
-				result := TestResult{
-					CaseID: tc.CaseID,
-					Title:  tc.Title,
-					Status: "skipped",
-					Error: &TestError{
-						Type:    "cached",
-						Message: "Skipped due to valid cached result",
-					},
-				}
-				skippedCached = append(skippedCached, result)
-				if onProgress != nil {
-					onProgress(result)
-				}
-				continue
-			}
-		}
-
-		casesToRun = append(casesToRun, tc)
-	}
-
-	allResults = append(allResults, skippedCached...)
-
-	// Wrap progress callback to record results to state
-	wrappedProgress := func(result TestResult) {
-		// Record to state manager
-		if r.stateManager != nil {
-			contentHash := r.testCaseHashes[result.CaseID]
-			cachedResult := &CachedResult{
-				Status:     result.Status,
-				Confidence: result.Actual.Confidence,
-				LastRun:    time.Now(),
-				DurationMs: result.ElapsedMs,
-			}
-			r.stateManager.RecordResult(contentHash, result.CaseID, r.policyHashes, celModelKey, cachedResult)
-
-			// Save state after each test (incremental)
-			if err := r.stateManager.Save(); err != nil {
-				// Log but don't fail - state persistence is best-effort
-				fmt.Printf("Warning: failed to save state: %v\n", err)
-			}
-		}
-
-		// Call original progress callback
-		if onProgress != nil {
-			onProgress(result)
-		}
-	}
-
-	// Execute tests
-	celResults := executor.ExecuteCELTests(ctx, casesToRun, wrappedProgress)
-	allResults = append(allResults, celResults...)
-
-	return allResults
-}
-
 // executeAITests runs AI tests against configured models.
 func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgress ProgressCallback) ([]TestResult, error) {
 	// Determine which models to test against
-	models := r.getModelsToTest()
+	models, err := r.getModelsToTest()
+	if err != nil {
+		return nil, err
+	}
 
 	if len(models) == 0 {
 		// No models configured, skip all AI tests
@@ -926,11 +852,7 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 	for _, model := range models {
 		modelKey := ModelKey(model.Provider, model.Model)
 
-		if model.Tier != "" {
-			fmt.Printf("\nTesting with model: %s/%s (tier: %s)\n", model.Provider, model.Model, model.Tier)
-		} else {
-			fmt.Printf("\nTesting with model: %s/%s\n", model.Provider, model.Model)
-		}
+		fmt.Printf("\nTesting with model: %s/%s\n", model.Provider, model.Model)
 
 		// Create AI runner for this model
 		runner, err := NewAITestRunner(model, r.suite, r.suiteDir, r.logger, r.rateLimiter)
@@ -973,6 +895,8 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 					result := TestResult{
 						CaseID: tc.CaseID,
 						Title:  tc.Title,
+						Engine: "ai",
+						Model:  modelKey,
 						Status: "skipped",
 						Error: &TestError{
 							Type:    "cached",
@@ -1036,32 +960,82 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 }
 
 // getModelsToTest returns the models to test against based on CLI options.
-func (r *Runner) getModelsToTest() []ModelConfig {
+// All returned models have their API keys and endpoints resolved from the
+// provider config (if not set at the model level).
+// Returns an error if --model flag specifies a provider not configured.
+func (r *Runner) getModelsToTest() ([]ModelConfig, error) {
 	// If --model flag is set, parse it and use only that model
 	if r.opts.Model != "" {
 		model := parseModelFlag(r.opts.Model, r.suite.Engines.AI.ModelMatrix)
-		if model != nil {
-			return []ModelConfig{*model}
+		if model == nil {
+			// Parse the provider from the flag for the error message
+			parts := strings.SplitN(r.opts.Model, ":", 2)
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid --model format %q: expected provider:model", r.opts.Model)
+			}
+			provider := parts[0]
+			// Check if provider exists in providers section
+			if r.suite.Providers != nil {
+				if _, ok := r.suite.Providers[provider]; ok {
+					// Provider exists but model not in matrix - create config from provider
+					model = &ModelConfig{
+						Provider: provider,
+						Model:    parts[1],
+					}
+				}
+			}
+			if model == nil {
+				return nil, fmt.Errorf("provider %q not found in providers or model_matrix; add it to suite.yaml", provider)
+			}
 		}
-		// Invalid model format, fall back to matrix
+		resolved := r.resolveModelConfig(*model)
+		return []ModelConfig{resolved}, nil
 	}
 
-	// If --matrix flag is set, use all models
+	// Filter to only enabled models and resolve their configs
+	var enabledModels []ModelConfig
+	for _, m := range r.suite.Engines.AI.ModelMatrix {
+		if m.IsEnabled() {
+			enabledModels = append(enabledModels, r.resolveModelConfig(m))
+		}
+	}
+
+	// If --matrix flag is set, use all enabled models
 	if r.opts.RunMatrix {
-		return r.suite.Engines.AI.ModelMatrix
+		return enabledModels, nil
 	}
 
-	// Default: use the first model in the matrix
-	if len(r.suite.Engines.AI.ModelMatrix) > 0 {
-		return []ModelConfig{r.suite.Engines.AI.ModelMatrix[0]}
+	// Default: use the first enabled model in the matrix
+	if len(enabledModels) > 0 {
+		return []ModelConfig{enabledModels[0]}, nil
 	}
 
-	return nil
+	return nil, nil
+}
+
+// resolveModelConfig returns a copy of the model with API key and endpoint
+// resolved from the provider config if not set at the model level.
+func (r *Runner) resolveModelConfig(m ModelConfig) ModelConfig {
+	resolved := m
+	// Resolve API key: model-level takes precedence over provider-level
+	if resolved.APIKey == "" {
+		resolved.APIKey = r.suite.ResolveAPIKey(m)
+	}
+	// Resolve endpoint: model-level takes precedence over provider-level
+	if resolved.Endpoint == "" {
+		resolved.Endpoint = r.suite.ResolveEndpoint(m)
+	}
+	return resolved
 }
 
 // parseModelFlag parses a model flag in the format "provider:model".
-// It looks up API key and other settings from the model matrix if a matching provider exists,
-// or falls back to default environment variables based on provider.
+// It looks up settings from the model matrix:
+//  1. First, look for an exact match (provider + model) - use that config entirely
+//  2. If no exact match, look for any provider match to get endpoint, parameters, etc.
+//  3. If no provider match, return nil (caller will check providers section)
+//
+// Note: API key resolution happens separately in resolveModelConfig using the
+// providers section as fallback.
 func parseModelFlag(flag string, modelMatrix []ModelConfig) *ModelConfig {
 	parts := strings.SplitN(flag, ":", 2)
 	if len(parts) != 2 {
@@ -1071,7 +1045,25 @@ func parseModelFlag(flag string, modelMatrix []ModelConfig) *ModelConfig {
 	provider := parts[0]
 	model := parts[1]
 
-	// Look for a matching provider in the model matrix to get API key and other settings
+	// First pass: look for exact match (provider + model)
+	for _, m := range modelMatrix {
+		if m.Provider == provider && m.Model == model {
+			// Return a copy with enabled forced to true (CLI override means use it)
+			enabled := true
+			return &ModelConfig{
+				Provider:    m.Provider,
+				Model:       m.Model,
+				Endpoint:    m.Endpoint,
+				APIKey:      m.APIKey,
+				Parameters:  m.Parameters,
+				QueryParams: m.QueryParams,
+				Headers:     m.Headers,
+				Enabled:     &enabled,
+			}
+		}
+	}
+
+	// Second pass: look for any provider match to get API key and settings
 	for _, m := range modelMatrix {
 		if m.Provider == provider {
 			return &ModelConfig{
@@ -1086,23 +1078,8 @@ func parseModelFlag(flag string, modelMatrix []ModelConfig) *ModelConfig {
 		}
 	}
 
-	// Fall back to default environment variable based on provider
-	var apiKeyEnvVar string
-	switch provider {
-	case "openai":
-		apiKeyEnvVar = "${OPENAI_API_KEY}"
-	case "anthropic":
-		apiKeyEnvVar = "${ANTHROPIC_API_KEY}"
-	default:
-		// For unknown providers, try a generic pattern
-		apiKeyEnvVar = fmt.Sprintf("${%s_API_KEY}", strings.ToUpper(provider))
-	}
-
-	return &ModelConfig{
-		Provider: provider,
-		Model:    model,
-		APIKey:   apiKeyEnvVar,
-	}
+	// No matching provider found - return nil so caller can error
+	return nil
 }
 
 // filterTestCases filters test cases based on CLI options.
@@ -1312,13 +1289,28 @@ func (r *Runner) outputResults(results []TestResult, summary *RunResult, already
 	return nil
 }
 
+// formatEngineInfo returns a formatted string showing engine and model info.
+// Returns empty string if engine is not set.
+func formatEngineInfo(engine, model string) string {
+	if engine == "" {
+		return ""
+	}
+	if model != "" {
+		return fmt.Sprintf(" [%s:%s]", engine, model)
+	}
+	return fmt.Sprintf(" [%s]", engine)
+}
+
 // formatSingleTestResult formats a single test result for streaming output.
 func formatSingleTestResult(tr TestResult) string {
 	var sb strings.Builder
 
+	// Build engine/model suffix for display
+	engineInfo := formatEngineInfo(tr.Engine, tr.Model)
+
 	switch tr.Status {
 	case "passed":
-		sb.WriteString(fmt.Sprintf("✓ %s (%dms)\n", tr.CaseID, tr.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("✓ %s%s (%dms)\n", tr.CaseID, engineInfo, tr.ElapsedMs))
 		sb.WriteString(fmt.Sprintf("    expected: %s, actual: %s (confidence: %.1f)\n",
 			tr.Expected.Decision, tr.Actual.Decision, tr.Actual.Confidence))
 		if len(tr.Actual.PoliciesExecuted) > 0 {
@@ -1337,7 +1329,7 @@ func formatSingleTestResult(tr TestResult) string {
 			sb.WriteString(fmt.Sprintf("    redacted actual:   %q\n", tr.Actual.RedactedContent))
 		}
 	case "failed":
-		sb.WriteString(fmt.Sprintf("✗ %s (%dms)\n", tr.CaseID, tr.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("✗ %s%s (%dms)\n", tr.CaseID, engineInfo, tr.ElapsedMs))
 		sb.WriteString(fmt.Sprintf("    expected: %s, actual: %s (confidence: %.1f)\n",
 			tr.Expected.Decision, tr.Actual.Decision, tr.Actual.Confidence))
 		if len(tr.Actual.PoliciesExecuted) > 0 {
@@ -1366,7 +1358,7 @@ func formatSingleTestResult(tr TestResult) string {
 			sb.WriteString(fmt.Sprintf("    FAILED: %s\n", f))
 		}
 	case "errored":
-		sb.WriteString(fmt.Sprintf("⚠ %s (%dms)\n", tr.CaseID, tr.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("⚠ %s%s (%dms)\n", tr.CaseID, engineInfo, tr.ElapsedMs))
 		if tr.Error != nil {
 			sb.WriteString(fmt.Sprintf("    ERROR: %s - %s\n", tr.Error.Type, tr.Error.Message))
 			if tr.Error.Details != "" {
@@ -1374,7 +1366,7 @@ func formatSingleTestResult(tr TestResult) string {
 			}
 		}
 	case "skipped":
-		sb.WriteString(fmt.Sprintf("○ %s (skipped)\n", tr.CaseID))
+		sb.WriteString(fmt.Sprintf("○ %s%s (skipped)\n", tr.CaseID, engineInfo))
 		if tr.Error != nil {
 			sb.WriteString(fmt.Sprintf("    reason: %s\n", tr.Error.Message))
 		}

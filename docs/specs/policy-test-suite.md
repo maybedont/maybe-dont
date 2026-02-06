@@ -324,20 +324,37 @@ rules/ai_request/
 
 Suite configuration does **not** support general environment variable substitution or overrides. Unlike runtime gateway configuration, test suites are typically run from known locations with explicit configuration.
 
-**Exception: API keys.** The `api_key` field in model matrix entries supports `${VAR}` syntax for referencing environment variables. API keys should never be committed to suite files:
+**Exception: API keys.** The `api_key` field supports `${VAR}` syntax for referencing environment variables. API keys should never be committed to suite files. API keys can be configured at the provider level (recommended) or per-model (for overrides):
 
 ```yaml
-model_matrix:
-  - provider: "openai"
-    model: "gpt-4o-mini"
-    api_key: "${OPENAI_API_KEY}"      # Resolved at runtime
+# Provider-level API keys (recommended)
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+  openai_compatible:
+    api_key: "${AZURE_OPENAI_API_KEY}"
 
-  - provider: "openai_compatible"
-    endpoint: "https://myorg.openai.azure.com/..."
-    api_key: "${AZURE_OPENAI_API_KEY}" # Resolved at runtime
+engines:
+  ai:
+    model_matrix:
+      - provider: "openai"
+        model: "gpt-4o-mini"
+        # api_key inherited from providers.openai
+
+      - provider: "openai_compatible"
+        endpoint: "https://myorg.openai.azure.com/..."
+        model: "gpt-4o-mini"
+        # api_key inherited from providers.openai_compatible
 ```
 
-The test harness reuses the gateway's existing `${VAR}` substitution logic for this field only. Other fields (paths, endpoints, parameters) are used as-is without substitution.
+The test harness reuses the gateway's existing `${VAR}` substitution logic for API key fields. Other fields (paths, endpoints, parameters) are used as-is without substitution.
+
+**API Key Resolution Order:**
+1. Per-model `api_key` (if specified) - takes precedence
+2. Provider-level `api_key` from `providers` section
+3. Error if neither is configured
 
 ### Engines Configuration
 
@@ -354,44 +371,50 @@ Each engine can be enabled/disabled independently. A CEL-only suite omits the `a
 
 ### Model Matrix Configuration
 
-The `model_matrix` aligns with the gateway's `validation.ai` configuration from the provider-agnostic spec:
+The `model_matrix` aligns with the gateway's `validation.ai` configuration from the provider-agnostic spec. API keys are configured at the provider level in the `providers` section:
 
 ```yaml
+# Provider-level API keys - shared across all models for each provider
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+  openai_compatible:
+    api_key: "${AZURE_OPENAI_API_KEY}"
+
 engines:
   ai:
     enabled: true
     model_matrix:
-      # OpenAI direct
+      # OpenAI direct - api_key inherited from providers.openai
       - provider: "openai"
         model: "gpt-4o-mini"
-        tier: "mid"
         parameters:
           temperature: 0.0
 
-      # Azure OpenAI
+      # Azure OpenAI - api_key inherited from providers.openai_compatible
       - provider: "openai_compatible"
         endpoint: "https://myorg.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions"
         model: "gpt-4o-mini"
-        tier: "mid"
-        api_key: "${AZURE_OPENAI_API_KEY}"
         query_params:
           api-version: "2024-02-15-preview"
         parameters:
           temperature: 0.0
 
-      # Anthropic
+      # Anthropic - api_key inherited from providers.anthropic
+      # Using dated version for reproducible test results
       - provider: "anthropic"
-        model: "claude-sonnet-4-20250514"
-        tier: "mid"
+        model: "claude-sonnet-4-5-20250929"
         parameters:
           max_tokens: 4096
           temperature: 0.0
 
-      # Local Ollama (for dev testing)
+      # Local Ollama (for dev testing) - no api_key needed
       - provider: "openai_compatible"
         endpoint: "http://localhost:11434/v1/chat/completions"
         model: "llama3"
-        tier: "local"
+        api_key: ""  # Override to empty for local
         parameters:
           temperature: 0.0
 ```
@@ -403,11 +426,11 @@ engines:
 | `provider` | Yes | `openai`, `openai_compatible`, or `anthropic` |
 | `endpoint` | For openai_compatible | Full URL to chat completions API |
 | `model` | Yes | Model identifier |
-| `api_key` | No | API key or env var reference (defaults vary by provider) |
+| `api_key` | No | Per-model API key override (inherits from `providers` section if not set) |
 | `parameters` | No | Provider-specific parameters (temperature, max_tokens, etc.) |
 | `query_params` | No | URL query parameters (e.g., Azure api-version) |
 | `headers` | No | Custom HTTP headers |
-| `tier` | No | Model tier classification for reporting (e.g., high, mid, low, local) |
+| `enabled` | No | Set to `false` to disable this model (default: `true`) |
 
 ### Test Case Filtering
 
@@ -2016,40 +2039,42 @@ sed -i 's/decision: "deny"/decision: "allow"/' ./suite/cases/will-fail.yaml
 
 ### Phase 1: CLI Foundation
 
-- [ ] **1.1** Add `test` command to CLI with `policies` subcommand
-- [ ] **1.2** Implement suite loading and validation (schema, policy integrity, path resolution)
-- [ ] **1.3** Implement test case discovery and recursive YAML parsing
-- [ ] **1.4** Add CLI flags: `--suite-dir`, `--engine`, `--format`, `--output`, `--validate-only`
-- [ ] **1.5** Add execution config flags: `--timeout`, `--include-disabled`
+- [x] **1.1** Add `test` command to CLI with `policies` subcommand
+- [x] **1.2** Implement suite loading and validation (schema, policy integrity, path resolution)
+- [x] **1.3** Implement test case discovery and recursive YAML parsing
+- [x] **1.4** Add CLI flags: `--suite-dir`, `--engine`, `--format`, `--output`, `--validate-only`
+- [x] **1.5** Add execution config flags: `--timeout`, `--include-disabled`
 
 ### Phase 2: CEL Engine Testing
 
-- [ ] **2.1** Implement CEL test runner that evaluates cases against loaded CEL rules
-- [ ] **2.2** Map test case schema to CEL engine input structures
-- [ ] **2.3** Implement text and JUnit output formatters
-- [ ] **2.4** Add threshold validation (min_match_rate)
+- [x] **2.1** Implement CEL test runner that evaluates cases against loaded CEL rules
+- [x] **2.2** Map test case schema to CEL engine input structures
+- [x] **2.3** Implement text and JUnit output formatters
+- [x] **2.4** Add threshold validation (min_match_rate)
 
 ### Phase 3: AI Engine Testing
 
-- [ ] **3.1** Implement AI test runner using provider-agnostic client (`AIProviderClient`)
-- [ ] **3.2** Add `--model` flag for single-model override
-- [ ] **3.3** Implement model matrix execution with `--matrix` flag (serial execution)
-- [ ] **3.4** Capture AI reasoning from `AIResponse.Message` in output
-- [ ] **3.5** Implement retry logic for transient errors (network failures, 5xx, timeouts)
-- [ ] **3.6** Implement rate limit handling (429 stops model, marks remaining as `rate_limited`)
-- [ ] **3.7** Add timeout handling per test case
+- [x] **3.1** Implement AI test runner using provider-agnostic client (`AIProviderClient`)
+- [x] **3.2** Add `--model` flag for single-model override
+- [x] **3.3** Implement model matrix execution with `--matrix` flag (serial execution)
+- [x] **3.4** Capture AI reasoning from `AIResponse.Message` in output
+- [x] **3.5** Implement retry logic for transient errors (network failures, 5xx, timeouts)
+- [x] **3.6** Implement rate limit handling (429 stops model, marks remaining as `rate_limited`)
+- [x] **3.7** Add timeout handling per test case
 
 ### Phase 4: Output and Reporting
 
-- [ ] **4.1** Implement JSON output format with reasoning, timing, and error details
-- [ ] **4.2** Implement error vs failure distinction in all output formats
-- [ ] **4.3** Add coverage reporting (policies without test cases, disabled policies skipped)
+- [x] **4.1** Implement JSON output format with reasoning, timing, and error details
+- [x] **4.2** Implement error vs failure distinction in all output formats
+- [x] **4.3** Add coverage reporting (policies without test cases, disabled policies skipped)
 
 ### Phase 5: CI Integration
 
 - [x] **5.1** Create `.github/workflows/policy-tests.yml` (complete - reads matrix from suite.yaml)
 
-### Phase 6: Documentation
+### Phase 6: Documentation (deferred to follow-up PR)
+
+> **Note**: Documentation will be completed in a separate PR. The items below capture the full scope of work needed.
 
 - [ ] **6.1** Add CLI help text and examples
   - Document `maybe-dont test policies` command in user docs
@@ -2143,27 +2168,18 @@ sed -i 's/decision: "deny"/decision: "allow"/' ./suite/cases/will-fail.yaml
 
 ### Phase 9: Complete Test Coverage
 
-- [ ] **9.1** Add `expectations.policies` to AI test cases
-  - AI test cases currently only have `decision` in expectations
-  - Need to add `policies` array with `policy_name` references
-  - This enables coverage tracking for AI policies
+- [x] **9.1** Add `expectations.policies` to AI test cases
+  - All 54 test cases in `internal/config/defaults/tests/cases/` include `expectations.policies` sections
 
-- [ ] **9.2** Ensure all enabled policies have test coverage
-  - Current gaps (10 policies without coverage):
-    - `ai_request`: Check mass deletion operations
-    - `ai_request`: Check system directory access
-    - `ai_request`: Check command execution tools
-    - `ai_request`: Check credential file access
-    - `ai_request`: Check executable file creation
-    - `ai_request`: Check large file operations
-    - `cel_response`: block-credential-exposure
-    - `ai_response`: detect-credential-leakage
-    - `ai_response`: redact-internal-paths
-    - `ai_response`: detect-sensitive-business-data
+- [x] **9.2** Ensure all enabled policies have test coverage
+  - 13/13 enabled policies now have dedicated test files (54 total test cases):
+    - `ai_request` (6 policies): mass deletion, system directory, command execution, credential file, executable creation, large file
+    - `ai_response` (3 policies): detect-credential-leakage, redact-internal-paths, detect-sensitive-business-data
+    - `cel_request` (2 policies): deny-github-delete-file, deny-github-delete-workflow-run-logs
+    - `cel_response` (2 policies): redact-passwd-content, block-credential-exposure
 
-- [ ] **9.3** Verify 100% policy coverage before merge
-  - Run `maybe-dont test policies --validate-only`
-  - Ensure "Policies with test coverage" shows 100%
+- [x] **9.3** Verify 100% policy coverage
+  - All enabled policies (13/13) have test coverage across 13 test case files
 
 ## Test Cases Reference
 
@@ -2665,28 +2681,28 @@ engines:
 
 #### Phase 10: Dynamic Rate Limiting
 
-- [ ] **10.1** Add `RateLimitInfo` struct to `internal/gateway/ai_provider.go`
-- [ ] **10.2** Add `StopReason` and `WasTruncated` to `AICompletionResult`
-- [ ] **10.3** Implement header parsing in `anthropicProvider`
+- [x] **10.1** Add `RateLimitInfo` struct to `internal/gateway/ai_provider.go`
+- [x] **10.2** Add `StopReason` and `WasTruncated` to `AICompletionResult`
+- [x] **10.3** Implement header parsing in `anthropicProvider`
   - Parse `anthropic-ratelimit-*` headers
   - Parse `retry-after` header
   - Parse `stop_reason` from response body
-- [ ] **10.4** Implement header parsing in `openaiProvider`
+- [x] **10.4** Implement header parsing in `openaiProvider`
   - Parse `x-ratelimit-*` headers
   - Parse `finish_reason` from response body
-- [ ] **10.5** Implement header parsing in `openaiCompatibleProvider`
+- [x] **10.5** Implement header parsing in `openaiCompatibleProvider`
   - Same as OpenAI (may not be present for all compatible providers)
-- [ ] **10.6** Extend `RateLimiter` with dynamic learning
+- [x] **10.6** Extend `RateLimiter` with dynamic learning
   - Add `LearnedLimits` per provider
   - Implement `UpdateFromResponse()`
   - Implement `ShouldSlowDown()`
-- [ ] **10.7** Update `Handle429` to use `retry-after` header
-- [ ] **10.8** Update CLI output to show rate limit details
+- [x] **10.7** Update `Handle429` to use `retry-after` header
+- [x] **10.8** Update CLI output to show rate limit details
   - TTY: Show limits, remaining, wait time from headers
   - Non-TTY: Include same info in timestamped log format
   - Summary: Show learned limits and total pause time
-- [ ] **10.9** Add truncation warning logging
-- [ ] **10.10** Update tests
+- [x] **10.9** Add truncation warning logging
+- [x] **10.10** Update tests
   - Mock response headers in provider tests
   - Test dynamic limit learning
   - Test proactive slowdown
@@ -2695,17 +2711,17 @@ engines:
 
 #### Phase 10.A: Auto-Scaling max_tokens (Anthropic Optimization)
 
-- [ ] **10.A.1** Add `StopReason` and `WasTruncated` parsing to all providers
-- [ ] **10.A.2** Implement auto-scaling retry logic in `AITestRunner`
+- [x] **10.A.1** Add `StopReason` and `WasTruncated` parsing to all providers
+- [x] **10.A.2** Implement auto-scaling retry logic in `AITestRunner`
   - Start at 64 tokens
   - Scale by 2x on truncation
   - Cap at 1024 tokens
   - Max 4 retry attempts
-- [ ] **10.A.3** Track max_tokens attempts in `TestResult`
-- [ ] **10.A.4** Add CLI output showing scaling behavior
+- [x] **10.A.3** Track max_tokens attempts in `TestResult`
+- [x] **10.A.4** Add CLI output showing scaling behavior
   - Per-test: show scaling path (e.g., "64→128")
   - Summary: distribution of final max_tokens values
-- [ ] **10.A.5** Add config option to disable auto-scaling (for users who want fixed values)
+- [x] **10.A.5** Add config option to disable auto-scaling (for users who want fixed values)
   ```yaml
   engines:
     ai:
@@ -2713,7 +2729,7 @@ engines:
       initial_max_tokens: 64       # default
       max_max_tokens: 1024         # cap
   ```
-- [ ] **10.A.6** Tests for auto-scaling behavior
+- [x] **10.A.6** Tests for auto-scaling behavior
   - Test truncation detection triggers retry
   - Test scaling stops at cap
   - Test successful response doesn't retry

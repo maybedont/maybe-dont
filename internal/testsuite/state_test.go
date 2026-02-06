@@ -104,6 +104,53 @@ func TestStateManager_ShouldSkip(t *testing.T) {
 		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4", true))
 	})
 
+	t.Run("returns true for cached passing test when retryFailed=true", func(t *testing.T) {
+		// Passed tests should still be skipped even when retryFailed=true
+		// because retryFailed only re-runs failed/errored tests
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "passed",
+			Confidence: 1.0,
+			LastRun:    time.Now(),
+			DurationMs: 100,
+		})
+
+		// With retryFailed=true, passed tests should still be skipped
+		assert.True(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4", true))
+	})
+
+	t.Run("returns false for cached errored test when retryFailed=true", func(t *testing.T) {
+		// Errored tests (timeouts, API errors) should be re-run when retryFailed=true
+		// since they may have failed due to transient issues
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "errored",
+			Confidence: 0,
+			LastRun:    time.Now(),
+			DurationMs: 30000,
+		})
+
+		// With retryFailed=true, errored tests should be re-run
+		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4", true))
+	})
+
+	t.Run("returns true for cached errored test when retryFailed=false", func(t *testing.T) {
+		// By default, all cached results (including errored) are skipped
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "errored",
+			Confidence: 0,
+			LastRun:    time.Now(),
+			DurationMs: 30000,
+		})
+
+		// By default, errored tests are skipped (same behavior as failed)
+		assert.True(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4", false))
+	})
+
 	t.Run("returns false when policy hashes changed", func(t *testing.T) {
 		sm, _ := NewStateManager("", "test-suite", "1.0.0")
 

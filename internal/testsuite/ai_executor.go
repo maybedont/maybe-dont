@@ -261,6 +261,8 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 	result := TestResult{
 		CaseID: tc.CaseID,
 		Title:  tc.Title,
+		Engine: "ai",
+		Model:  ModelKey(r.model.Provider, r.model.Model),
 		Expected: ExpectedResult{
 			Decision:        tc.Expectations.Decision,
 			Policies:        tc.Expectations.Policies,

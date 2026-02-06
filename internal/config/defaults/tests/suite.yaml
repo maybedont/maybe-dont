@@ -4,6 +4,13 @@ version: "v1"
 bundle_id: default-policies
 description: "Test suite for shipped default policies"
 
+# Provider-level API keys - shared across all models for each provider
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+
 policies:
   cel_request_rules: "../cel_request_rules.yaml"
   ai_request_rules: "../ai_request_rules.yaml"
@@ -24,14 +31,29 @@ engines:
   ai:
     enabled: true
     model_matrix:
+      # OpenAI models - fast to slow, cheap to expensive
       - provider: openai
-        model: gpt-4o-mini
-        api_key: "${OPENAI_API_KEY}"
-        tier: economy
+        model: gpt-4o-mini  # Fast and cost-effective
+      - provider: openai
+        model: gpt-4o  # Balanced performance and quality
+        enabled: false
+      - provider: openai
+        model: gpt-4-turbo  # High quality, higher latency and cost
+        enabled: false
+
+      # Anthropic models - fast to slow, cheap to expensive
+      # Using dated versions for reproducible test results
       - provider: anthropic
-        model: claude-haiku-4-5-20251001
-        api_key: "${ANTHROPIC_API_KEY}"
-        tier: economy
+        model: claude-haiku-4-5-20251001  # Fast and cost-effective
+      - provider: anthropic
+        model: claude-sonnet-4-5-20250929  # Balanced performance and quality
+        enabled: false
+      - provider: anthropic
+        model: claude-opus-4-5-20251101  # High quality
+        enabled: false
+      - provider: anthropic
+        model: claude-opus-4-6  # Latest flagship, highest quality
+        enabled: false
 
 filters:
   tags: []
