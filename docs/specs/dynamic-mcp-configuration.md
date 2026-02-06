@@ -578,6 +578,138 @@ If both use `Authorization`, how does the client provide both? How does the gate
 
 **Recommendation:** Use a dedicated gateway auth header (`X-Gateway-Auth` or `X-MaybeDont-Auth`) so the standard `Authorization` header is always available for downstream forwarding. This avoids collision entirely.
 
+### Core Problem: Header Forwarding Signal
+
+Even with gateway auth collision solved, a fundamental question remains:
+
+> **How does the gateway know which incoming headers to forward to the downstream MCP server?**
+
+Consider an incoming request with these headers:
+```
+Authorization: Bearer ghp_xxxx          # Intended for GitHub
+X-API-Key: abc123                       # Maybe for something else?
+Content-Type: application/json          # Standard HTTP header
+User-Agent: Claude-Code/1.0             # Client identifier
+X-Request-ID: uuid-here                 # Tracing header
+Cookie: session=xyz                     # Sensitive, should NOT forward
+X-Gateway-Auth: gateway-token           # For gateway, should NOT forward
+```
+
+The gateway must determine:
+1. Which headers are **intended for the downstream** (forward them)
+2. Which headers are **internal/sensitive** (do not forward)
+3. Which headers to **transform** before forwarding
+
+**This is the hardest problem in dynamic MCP routing.** With static configuration, the admin explicitly defines header mappings. With dynamic routing, we need a signal from the client.
+
+### Header Forwarding Approaches
+
+| Approach | Signal Mechanism | Example |
+|----------|------------------|---------|
+| **A. Prefix convention** | Forward headers starting with `X-Downstream-`, stripping the prefix | `X-Downstream-Authorization` → `Authorization` |
+| **B. Explicit forward list** | Header lists which other headers to forward | `X-MCP-Forward-Headers: Authorization, X-API-Key` |
+| **C. Query parameter list** | URL specifies headers to forward | `?downstream=...&forward=Authorization` |
+| **D. Gateway allowlist** | Admin configures globally allowed headers | Config: `forward_headers: [Authorization, X-API-Key]` |
+| **E. Forward all (denylist)** | Forward everything except known-bad headers | Deny: `Host, Cookie, X-Gateway-*` |
+
+#### Analysis
+
+**A. Prefix convention (`X-Downstream-*`)**
+- Client config change: Rename headers (e.g., `Authorization` → `X-Downstream-Authorization`)
+- Pros: Explicit, secure, no ambiguity
+- Cons: **Breaks existing configs** - client must rename headers, not just change URL
+- Example:
+  ```json
+  {
+    "headers": {
+      "X-MCP-Downstream": "https://api.github.com/mcp",
+      "X-Downstream-Authorization": "Bearer ghp_xxxx"
+    }
+  }
+  ```
+
+**B. Explicit forward list**
+- Client config change: Add a header listing what to forward
+- Pros: Clear intent, existing headers keep their names
+- Cons: Extra header required, client must know downstream's header requirements
+- Example:
+  ```json
+  {
+    "headers": {
+      "X-MCP-Downstream": "https://api.github.com/mcp",
+      "X-MCP-Forward-Headers": "Authorization",
+      "Authorization": "Bearer ghp_xxxx"
+    }
+  }
+  ```
+
+**C. Query parameter list**
+- Client config change: Add forward list to URL
+- Pros: Works even if client doesn't support custom headers well
+- Cons: URL becomes complex
+- Example:
+  ```
+  ?downstream=https://api.github.com/mcp&forward=Authorization
+  ```
+
+**D. Gateway allowlist (admin-configured)**
+- Client config change: None for allowed headers
+- Pros: Simplest client config, centralized control
+- Cons: Admin must anticipate all downstream header requirements; less flexible for truly dynamic routing
+- Example config:
+  ```yaml
+  dynamic_routing:
+    allowed_forward_headers:
+      - Authorization
+      - X-API-Key
+      - X-Token
+  ```
+
+**E. Forward all except denylist**
+- Client config change: None
+- Pros: Maximum flexibility, minimal config
+- Cons: **Security risk** - may forward sensitive headers unintentionally (cookies, internal headers)
+- Denylist must include: `Host`, `Content-Length`, `Cookie`, `X-Gateway-*`, `X-MCP-*`
+
+### Recommendation
+
+A hybrid approach may work best:
+
+1. **Gateway allowlist as baseline** (D) - Admin configures commonly-forwarded headers like `Authorization`, `X-API-Key`
+2. **Prefix convention as escape hatch** (A) - For headers not in the allowlist, client can use `X-Downstream-*` prefix
+
+This gives:
+- **Simple case**: Client only changes the URL, `Authorization` header is forwarded automatically (if in allowlist)
+- **Advanced case**: Client can forward arbitrary headers using prefix convention
+
+Example:
+```yaml
+# Gateway config
+dynamic_routing:
+  allowed_forward_headers:
+    - Authorization
+    - X-API-Key
+```
+
+```json
+// Client config - simple case (Authorization in allowlist)
+{
+  "url": "https://gateway.example.com/mcp?downstream=https://api.github.com/mcp",
+  "headers": {
+    "Authorization": "Bearer ghp_xxxx"
+  }
+}
+
+// Client config - advanced case (custom header not in allowlist)
+{
+  "url": "https://gateway.example.com/mcp?downstream=https://api.other.com/mcp",
+  "headers": {
+    "Authorization": "Bearer token",
+    "X-Downstream-Custom-Header": "custom-value"
+  }
+}
+```
+
 ### Approaches
 
 #### A. Explicit Header Mapping
