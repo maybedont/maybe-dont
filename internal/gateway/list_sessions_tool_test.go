@@ -13,8 +13,9 @@ import (
 
 // mockSessionProvider implements SessionProvider for testing
 type mockSessionProvider struct {
-	sessions    []SessionInfo
-	clientTools map[string][]SessionClientTools // sessionID -> client tools
+	sessions      []SessionInfo
+	clientTools   map[string][]SessionClientTools // sessionID -> client tools
+	validSessions map[string]bool                 // sessions that exist in SessionManager
 }
 
 func (m *mockSessionProvider) GetActiveSessions() []SessionInfo {
@@ -26,6 +27,19 @@ func (m *mockSessionProvider) GetSessionClientTools(sessionID string) []SessionC
 		return nil
 	}
 	return m.clientTools[sessionID]
+}
+
+func (m *mockSessionProvider) HasSession(sessionID string) bool {
+	if m.validSessions == nil {
+		// Default: derive from sessions list
+		for _, s := range m.sessions {
+			if s.SessionID == sessionID {
+				return true
+			}
+		}
+		return false
+	}
+	return m.validSessions[sessionID]
 }
 
 func TestListSessions_BasicResponse(t *testing.T) {
