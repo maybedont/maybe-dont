@@ -462,38 +462,78 @@ dynamic_routing:
 
 ---
 
-### Option 7: mcp-remote Compatibility Mode
+### Option 7: mcp-remote Inspired Approach
 
-Support the same URL patterns that mcp-remote uses, enabling compatibility with existing configurations.
+> **Reference:** [mcp-remote on GitHub](https://github.com/geelen/mcp-remote) - A stdio wrapper that bridges local MCP clients to remote MCP servers.
 
-**Client Configuration:**
+This option draws inspiration from mcp-remote's approach but adapts it for HTTP-based gateway usage.
+
+**How mcp-remote actually works (stdio-based):**
 ```json
 {
   "mcpServers": {
     "github": {
-      "type": "http",
-      "url": "https://gateway.example.com/mcp?url=https://api.github.com/mcp&header=Authorization:Bearer%20token"
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://api.github.com/mcp",
+        "--header",
+        "Authorization: Bearer ${AUTH_TOKEN}"
+      ],
+      "env": {
+        "AUTH_TOKEN": "ghp_xxxx"
+      }
     }
   }
 }
 ```
 
-**Gateway Behavior:**
-1. Parse query parameters matching mcp-remote conventions
-2. `url` parameter specifies downstream server
-3. `header` parameters specify pass-through headers
-4. Proxy with extracted configuration
+mcp-remote uses CLI arguments (`--header`) to pass credentials, with environment variable substitution to keep secrets out of config files. This works because it's a local process with access to the shell environment.
+
+**The challenge for HTTP-based gateway:**
+
+Unlike mcp-remote (which spawns a local process), our gateway receives HTTP requests. We cannot use CLI arguments. The options for passing the downstream URL and headers are:
+
+1. **Query string (SECURITY CONCERN):**
+   ```
+   ?url=https://api.github.com/mcp&header=Authorization:Bearer%20token
+   ```
+
+   ⚠️ **This is a security anti-pattern.** While TLS encrypts query strings in transit, credentials in URLs can leak via:
+   - Server access logs
+   - Proxy logs
+   - Browser history
+   - Referrer headers
+   - Error reporting tools
+
+   **We should NOT implement this approach.**
+
+2. **HTTP headers (preferred):**
+   ```json
+   {
+     "headers": {
+       "X-MCP-Downstream": "https://api.github.com/mcp",
+       "X-Downstream-Authorization": "Bearer ghp_xxxx"
+     }
+   }
+   ```
+
+   This keeps credentials in HTTP headers where they belong.
+
+**Conclusion:**
+
+True "mcp-remote compatibility" isn't directly applicable since mcp-remote is stdio-based and uses CLI arguments. However, we can adopt its *philosophy* of explicit header specification—just using HTTP headers instead of CLI args.
+
+**Recommendation:** If this option is pursued, it should use the header-based approach (Option 2 + prefix convention) rather than query strings. The "mcp-remote compatibility" framing is misleading and should be reconsidered.
 
 **Pros:**
-- Compatible with existing mcp-remote configurations
-- Familiar to users of mcp-remote
-- Self-contained - headers and URL in single config line
+- Familiar mental model for mcp-remote users
+- Explicit header specification
 
 **Cons:**
-- Complex URL encoding required
-- URL can become very long with multiple headers
-- Mixing concerns (URL + auth) in query string
-- Still has the "URL in URL" awkwardness
+- Not actually compatible with mcp-remote configs (different transport)
+- Query string approach would be insecure
+- Header approach is essentially Options 2 + B combined
 
 ---
 
@@ -660,16 +700,18 @@ Gateway passes all headers except a denylist (e.g., `Host`, `Content-Length`, ga
 
 ## Comparison Matrix
 
-| Criteria | Query Param | Header | Path-Based | Session Init | Registration | Subdomain | mcp-remote |
-|----------|-------------|--------|------------|--------------|--------------|-----------|------------|
-| Client compatibility | High | Medium | High | Medium | High | High | Medium |
-| Implementation complexity | Low | Low | Medium | Medium | High | High | Medium |
-| URL cleanliness | Low | High | Medium | High | High | High | Low |
-| Handles complex URLs | Medium | High | Low | High | High | Low | Medium |
-| Self-contained config | Yes | Yes | Yes | Yes | No | Partial | Yes |
-| Works today (no client fixes) | Yes | Partial | Yes | Partial | Yes | Yes | Yes |
-| Drop-in replacement | Yes | Yes | Yes | Yes | **No** | Partial | Partial |
-| Non-developer friendly | Yes | Yes | Yes | Yes | **No** | Yes | No |
+| Criteria | Query Param | Header | Path-Based | Session Init | Registration | Subdomain | mcp-remote* |
+|----------|-------------|--------|------------|--------------|--------------|-----------|-------------|
+| Client compatibility | High | Medium | High | Medium | High | High | N/A |
+| Implementation complexity | Low | Low | Medium | Medium | High | High | N/A |
+| URL cleanliness | Low | High | Medium | High | High | High | N/A |
+| Handles complex URLs | Medium | High | Low | High | High | Low | N/A |
+| Self-contained config | Yes | Yes | Yes | Yes | No | Partial | N/A |
+| Works today (no client fixes) | Yes | Partial | Yes | Partial | Yes | Yes | N/A |
+| Drop-in replacement | Yes | Yes | Yes | Yes | **No** | Partial | N/A |
+| Non-developer friendly | Yes | Yes | Yes | Yes | **No** | Yes | N/A |
+
+*\*Option 7 (mcp-remote) has been reconsidered. It's not directly applicable since mcp-remote uses stdio/CLI args, not HTTP. A secure HTTP adaptation would essentially be Options 2+B combined.*
 
 ---
 
