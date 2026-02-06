@@ -61,6 +61,8 @@ type SessionProvider interface {
 	GetActiveSessions() []SessionInfo
 	// GetSessionClientTools returns the tools discovered for each client in a session
 	GetSessionClientTools(sessionID string) []SessionClientTools
+	// HasSession checks if a session exists in the SessionManager
+	HasSession(sessionID string) bool
 }
 
 // DiscoveryResult contains the result of pass-through tool discovery
@@ -170,6 +172,13 @@ func (h *NativeToolsHandler) GetTools() []mcp.Tool {
 func (h *NativeToolsHandler) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	h.logger.Debug(ctx, "Handling native tool call", zap.String("tool", req.Params.Name))
 
+	// Validate session for all native tools except discover_tools (which is the recovery mechanism)
+	if req.Params.Name != ToolDiscoverTools {
+		if err := h.validateSession(ctx, req.Params.Name); err != nil {
+			return nil, err
+		}
+	}
+
 	switch req.Params.Name {
 	case ToolGetAuditLog:
 		return h.handleGetAuditLog(ctx, req)
@@ -184,6 +193,39 @@ func (h *NativeToolsHandler) HandleToolCall(ctx context.Context, req mcp.CallToo
 	default:
 		return nil, fmt.Errorf("unknown native tool: %s", req.Params.Name)
 	}
+}
+
+// validateSession checks if the session exists in the SessionManager.
+// Returns a SessionExpiredError with recovery instructions if the session is not found.
+func (h *NativeToolsHandler) validateSession(ctx context.Context, toolName string) error {
+	// Get session ID from context
+	sessionID, hasSession := GetSessionIDFromContext(ctx)
+	if !hasSession {
+		return &SessionExpiredError{
+			SessionID: "",
+			Reason:    fmt.Sprintf("no session established for native tool '%s'", toolName),
+		}
+	}
+
+	// Check if the session exists in the SessionManager
+	if h.sessionProvider == nil {
+		// No session provider configured - can't validate, allow through
+		h.logger.Debug(ctx, "Session provider not configured, skipping session validation",
+			zap.String("tool", toolName))
+		return nil
+	}
+
+	if !h.sessionProvider.HasSession(sessionID) {
+		h.logger.Debug(ctx, "Session not found in SessionManager for native tool",
+			zap.String("session_id", sessionID),
+			zap.String("tool", toolName))
+		return &SessionExpiredError{
+			SessionID: sessionID,
+			Reason:    fmt.Sprintf("session not found for native tool '%s'", toolName),
+		}
+	}
+
+	return nil
 }
 
 // getAuditLogToolDefinition returns the MCP tool definition for get_audit_log
