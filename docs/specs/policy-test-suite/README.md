@@ -569,7 +569,7 @@ The CI matrix should include models with varying accuracy/cost trade-offs to und
 | OpenAI | `gpt-4.1-nano` | Low (5.2) | Current generation cost-optimized |
 | Anthropic | `claude-opus-4-20250514` | High | Highest accuracy baseline |
 | Anthropic | `claude-sonnet-4-20250514` | Mid | Balance of accuracy and cost |
-| Anthropic | `claude-3-5-haiku-20241022` | Low | Cost-optimized, detect accuracy floor |
+| Anthropic | `claude-haiku-4-5-20251001` | Low | Cost-optimized, detect accuracy floor |
 
 **Why such a wide range of models?**
 
@@ -726,7 +726,7 @@ jobs:
             model: claude-sonnet-4-20250514
             tier: mid
           - provider: anthropic
-            model: claude-3-5-haiku-20241022
+            model: claude-haiku-4-5-20251001
             tier: low
     steps:
       - uses: actions/checkout@v4
@@ -886,7 +886,7 @@ Each test run should record:
     },
     {
       "provider": "anthropic",
-      "model": "claude-3-5-haiku-20241022",
+      "model": "claude-haiku-4-5-20251001",
       "tier": "low",
       "summary": {
         "total_cases": 17,

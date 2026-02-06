@@ -1410,7 +1410,7 @@ The state file tracks test execution history, keyed by content hashes for change
       "case_id": "ai_request_command_execution",
       "policy_hashes": ["sha256:def456..."],
       "models": {
-        "anthropic:claude-3-5-haiku-20241022": {
+        "anthropic:claude-haiku-4-5-20251001": {
           "status": "passed",
           "confidence": 1.0,
           "last_run": "2026-02-05T12:00:00Z",

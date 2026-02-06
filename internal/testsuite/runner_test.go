@@ -228,7 +228,7 @@ func TestParseModelFlag(t *testing.T) {
 	// Create a model matrix with API keys for lookup
 	modelMatrix := []ModelConfig{
 		{Provider: "openai", Model: "gpt-4o-mini", APIKey: "${OPENAI_API_KEY}"},
-		{Provider: "anthropic", Model: "claude-3-haiku", APIKey: "${ANTHROPIC_API_KEY}"},
+		{Provider: "anthropic", Model: "claude-haiku-4-5-20251001", APIKey: "${ANTHROPIC_API_KEY}"},
 	}
 
 	tests := []struct {
@@ -247,10 +247,10 @@ func TestParseModelFlag(t *testing.T) {
 		},
 		{
 			name:           "valid anthropic model",
-			modelFlag:      "anthropic:claude-3-haiku-20240307",
+			modelFlag:      "anthropic:claude-haiku-4-5-20251001",
 			expectNil:      false,
 			expectProvider: "anthropic",
-			expectModel:    "claude-3-haiku-20240307",
+			expectModel:    "claude-haiku-4-5-20251001",
 		},
 		{
 			name:      "missing colon returns nil",
