@@ -16,18 +16,19 @@ import (
 
 // AITestRunner handles AI policy test execution for a specific model.
 type AITestRunner struct {
-	model          ModelConfig
-	providerClient gateway.AIProviderClient
-	policies       []config.AIPolicy
+	model            ModelConfig
+	providerClient   gateway.AIProviderClient
+	policies         []config.AIPolicy
 	responsePolicies []config.AIResponsePolicy
-	logger         *config.SessionLogger
-	timeoutMs      int
-	retries        int
-	retryDelayMs   int
+	logger           *config.SessionLogger
+	timeoutMs        int
+	retries          int
+	retryDelayMs     int
+	rateLimiter      *RateLimiter
 }
 
 // NewAITestRunner creates a runner for AI policy tests against a specific model.
-func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *config.SessionLogger) (*AITestRunner, error) {
+func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *config.SessionLogger, rateLimiter *RateLimiter) (*AITestRunner, error) {
 	// Create provider client from model config
 	client, err := createProviderClient(model)
 	if err != nil {
@@ -41,6 +42,7 @@ func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *c
 		timeoutMs:      suite.Execution.TimeoutMs,
 		retries:        suite.Execution.Retries,
 		retryDelayMs:   suite.Execution.RetryDelayMs,
+		rateLimiter:    rateLimiter,
 	}
 
 	// Set defaults
@@ -550,6 +552,17 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 
 // evaluatePolicy calls the AI provider with a policy prompt and request context.
 func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContext string) (*gateway.AIResponse, error) {
+	// Apply rate limiting before making the API call
+	if r.rateLimiter != nil {
+		if err := r.rateLimiter.WaitBeforeRequest(ctx, r.model.Provider); err != nil {
+			return nil, &gateway.AIProviderError{
+				Category:  "rate_limited",
+				Message:   err.Error(),
+				Retryable: false,
+			}
+		}
+	}
+
 	// Build the full prompt
 	systemPrompt := "You are a security policy evaluator. Analyze the request and determine if it should be allowed or denied based on the policy. Respond with JSON: {\"allowed\": true/false, \"message\": \"explanation\"}"
 
@@ -565,6 +578,11 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 
 	// Call provider
 	result, err := r.providerClient.Generate(ctx, aiReq)
+
+	// Record the request for rate limiting
+	if r.rateLimiter != nil {
+		r.rateLimiter.RecordRequest(r.model.Provider)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -15,23 +15,29 @@ const (
 	ExitSchemaValidation    = 2
 	ExitPolicyIntegrity     = 3
 	ExitPathResolution      = 4
+	ExitMoreTestsRemain     = 5
 )
 
 // CLI flags for test policies command
 var (
-	suiteDir        string
-	engine          string
-	model           string
-	runMatrix       bool
-	outputFormat    string
-	outputFile      string
-	quiet           bool
-	tags            string
-	excludeTags     string
-	casePattern     string
-	validateOnly    bool
-	includeDisabled bool
-	timeout         int
+	suiteDir          string
+	engine            string
+	model             string
+	runMatrix         bool
+	outputFormat      string
+	outputFile        string
+	quiet             bool
+	tags              string
+	excludeTags       string
+	casePattern       string
+	validateOnly      bool
+	includeDisabled   bool
+	timeout           int
+	requestsPerMinute int
+	maxTests          int
+	wait              bool
+	stateFile         string
+	force             bool
 )
 
 // testPoliciesCmd represents the policies subcommand under test
@@ -97,24 +103,44 @@ func init() {
 	testPoliciesCmd.Flags().BoolVar(&validateOnly, "validate-only", false, "Run suite validation without executing tests")
 	testPoliciesCmd.Flags().BoolVar(&includeDisabled, "include-disabled", false, "Include policies with enabled: false in test execution")
 	testPoliciesCmd.Flags().IntVar(&timeout, "timeout", 0, "Timeout per test case in milliseconds (default: from suite.yaml)")
+
+	// Rate limiting options
+	testPoliciesCmd.Flags().IntVar(&requestsPerMinute, "requests-per-minute", 0, "Override requests per minute for all providers")
+	testPoliciesCmd.Flags().IntVar(&requestsPerMinute, "rpm", 0, "Shorthand for --requests-per-minute")
+
+	// Incremental execution options
+	testPoliciesCmd.Flags().IntVar(&maxTests, "max-tests", 0, "Maximum tests per model per invocation (exit code 5 if more remain)")
+	testPoliciesCmd.Flags().BoolVar(&wait, "wait", false, "Run continuously until all tests complete (requires --state-file)")
+	testPoliciesCmd.Flags().StringVar(&stateFile, "state-file", "", "Path to state file for incremental execution")
+	testPoliciesCmd.Flags().BoolVar(&force, "force", false, "Ignore state file and re-run all tests")
 }
 
 func runTestPolicies(cmd *cobra.Command, args []string) error {
+	// Validate flag combinations
+	if wait && stateFile == "" {
+		return fmt.Errorf("--wait requires --state-file to be specified")
+	}
+
 	// Build runner options from CLI flags
 	opts := testsuite.RunnerOptions{
-		SuiteDir:        suiteDir,
-		Engine:          engine,
-		Model:           model,
-		RunMatrix:       runMatrix,
-		OutputFormat:    outputFormat,
-		OutputFile:      outputFile,
-		Quiet:           quiet,
-		Tags:            tags,
-		ExcludeTags:     excludeTags,
-		CasePattern:     casePattern,
-		ValidateOnly:    validateOnly,
-		IncludeDisabled: includeDisabled,
-		TimeoutMs:       timeout,
+		SuiteDir:          suiteDir,
+		Engine:            engine,
+		Model:             model,
+		RunMatrix:         runMatrix,
+		OutputFormat:      outputFormat,
+		OutputFile:        outputFile,
+		Quiet:             quiet,
+		Tags:              tags,
+		ExcludeTags:       excludeTags,
+		CasePattern:       casePattern,
+		ValidateOnly:      validateOnly,
+		IncludeDisabled:   includeDisabled,
+		TimeoutMs:         timeout,
+		RequestsPerMinute: requestsPerMinute,
+		MaxTests:          maxTests,
+		Wait:              wait,
+		StateFile:         stateFile,
+		Force:             force,
 	}
 
 	// Create and run the test suite runner
@@ -129,6 +155,9 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 	}
 
 	// Exit with appropriate code based on result
+	if result.MoreTestsRemain {
+		os.Exit(ExitMoreTestsRemain)
+	}
 	if !result.ThresholdsMet {
 		os.Exit(ExitTestsFailed)
 	}

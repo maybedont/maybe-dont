@@ -1,0 +1,239 @@
+package testsuite
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestNewStateManager(t *testing.T) {
+	t.Run("creates new state without file", func(t *testing.T) {
+		sm, err := NewStateManager("", "test-suite", "1.0.0")
+		require.NoError(t, err)
+		assert.NotNil(t, sm.state)
+		assert.Equal(t, "v1", sm.state.SchemaVersion)
+		assert.Equal(t, "1.0.0", sm.state.ProductVersion)
+		assert.Equal(t, "test-suite", sm.state.SuiteID)
+	})
+
+	t.Run("creates new state when file doesn't exist", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		statePath := filepath.Join(tmpDir, "state.json")
+
+		sm, err := NewStateManager(statePath, "test-suite", "1.0.0")
+		require.NoError(t, err)
+		assert.NotNil(t, sm.state)
+		assert.Equal(t, "v1", sm.state.SchemaVersion)
+	})
+
+	t.Run("loads existing state file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		statePath := filepath.Join(tmpDir, "state.json")
+
+		// Create initial state
+		sm1, err := NewStateManager(statePath, "test-suite", "1.0.0")
+		require.NoError(t, err)
+
+		// Record a result
+		sm1.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "passed",
+			Confidence: 1.0,
+			LastRun:    time.Now(),
+			DurationMs: 100,
+		})
+		require.NoError(t, sm1.Save())
+
+		// Load the state in a new manager
+		sm2, err := NewStateManager(statePath, "test-suite", "1.0.0")
+		require.NoError(t, err)
+
+		// Verify the result was loaded
+		assert.True(t, sm2.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4"))
+	})
+}
+
+func TestStateManager_ShouldSkip(t *testing.T) {
+	t.Run("returns false for uncached test", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{}, "openai:gpt-4"))
+	})
+
+	t.Run("returns true for cached passing test", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "passed",
+			Confidence: 1.0,
+			LastRun:    time.Now(),
+			DurationMs: 100,
+		})
+
+		assert.True(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4"))
+	})
+
+	t.Run("returns false for cached failing test", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "failed",
+			Confidence: 1.0,
+			LastRun:    time.Now(),
+			DurationMs: 100,
+		})
+
+		// Failed tests should be re-run
+		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "openai:gpt-4"))
+	})
+
+	t.Run("returns false when policy hashes changed", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "passed",
+			Confidence: 1.0,
+			LastRun:    time.Now(),
+			DurationMs: 100,
+		})
+
+		// Different policy hash should not match
+		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol2"}, "openai:gpt-4"))
+	})
+
+	t.Run("returns false for different model", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "passed",
+			Confidence: 1.0,
+			LastRun:    time.Now(),
+			DurationMs: 100,
+		})
+
+		// Different model should not match
+		assert.False(t, sm.ShouldSkip("sha256:abc123", []string{"sha256:pol1"}, "anthropic:claude"))
+	})
+}
+
+func TestStateManager_RecordResult(t *testing.T) {
+	sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+	sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+		Status:     "passed",
+		Confidence: 1.0,
+		LastRun:    time.Now(),
+		DurationMs: 100,
+	})
+
+	// Verify it's recorded
+	cached := sm.state.Results["sha256:abc123"]
+	require.NotNil(t, cached)
+	assert.Equal(t, "test-1", cached.CaseID)
+	assert.Equal(t, []string{"sha256:pol1"}, cached.PolicyHashes)
+	assert.Equal(t, "passed", cached.Models["openai:gpt-4"].Status)
+}
+
+func TestStateManager_PruneStaleHashes(t *testing.T) {
+	t.Run("removes stale test hashes", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		// Record results for two tests
+		sm.RecordResult("sha256:abc123", "test-1", []string{}, "openai:gpt-4", &CachedResult{Status: "passed"})
+		sm.RecordResult("sha256:def456", "test-2", []string{}, "openai:gpt-4", &CachedResult{Status: "passed"})
+
+		// Prune with only one test remaining
+		currentHashes := map[string]bool{"sha256:abc123": true}
+		currentModels := []string{"openai:gpt-4"}
+		sm.PruneStaleHashes(currentHashes, currentModels)
+
+		// test-1 should remain, test-2 should be removed
+		assert.Contains(t, sm.state.Results, "sha256:abc123")
+		assert.NotContains(t, sm.state.Results, "sha256:def456")
+	})
+
+	t.Run("removes stale model results", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		// Record results for two models
+		sm.RecordResult("sha256:abc123", "test-1", []string{}, "openai:gpt-4", &CachedResult{Status: "passed"})
+		sm.RecordResult("sha256:abc123", "test-1", []string{}, "anthropic:claude", &CachedResult{Status: "passed"})
+
+		// Prune with only one model remaining
+		currentHashes := map[string]bool{"sha256:abc123": true}
+		currentModels := []string{"openai:gpt-4"}
+		sm.PruneStaleHashes(currentHashes, currentModels)
+
+		// openai model should remain, anthropic should be removed
+		cached := sm.state.Results["sha256:abc123"]
+		require.NotNil(t, cached)
+		assert.Contains(t, cached.Models, "openai:gpt-4")
+		assert.NotContains(t, cached.Models, "anthropic:claude")
+	})
+}
+
+func TestStateManager_Save(t *testing.T) {
+	t.Run("saves state to file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		statePath := filepath.Join(tmpDir, "state.json")
+
+		sm, err := NewStateManager(statePath, "test-suite", "1.0.0")
+		require.NoError(t, err)
+
+		sm.RecordResult("sha256:abc123", "test-1", []string{}, "openai:gpt-4", &CachedResult{Status: "passed"})
+
+		err = sm.Save()
+		require.NoError(t, err)
+
+		// Verify file exists
+		_, err = os.Stat(statePath)
+		assert.NoError(t, err)
+	})
+
+	t.Run("does nothing without file path", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+		sm.RecordResult("sha256:abc123", "test-1", []string{}, "openai:gpt-4", &CachedResult{Status: "passed"})
+
+		err := sm.Save()
+		assert.NoError(t, err)
+	})
+
+	t.Run("does nothing when not dirty", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		statePath := filepath.Join(tmpDir, "state.json")
+
+		sm, _ := NewStateManager(statePath, "test-suite", "1.0.0")
+
+		// Don't record anything - state is not dirty
+		err := sm.Save()
+		assert.NoError(t, err)
+
+		// File should not exist
+		_, err = os.Stat(statePath)
+		assert.True(t, os.IsNotExist(err))
+	})
+}
+
+func TestComputeContentHash(t *testing.T) {
+	// Test that same content produces same hash
+	content1 := []byte("test content")
+	content2 := []byte("test content")
+	content3 := []byte("different content")
+
+	hash1 := ComputeContentHash(content1)
+	hash2 := ComputeContentHash(content2)
+	hash3 := ComputeContentHash(content3)
+
+	assert.Equal(t, hash1, hash2)
+	assert.NotEqual(t, hash1, hash3)
+	assert.True(t, len(hash1) > 10) // Should be a proper hash
+	assert.Contains(t, hash1, "sha256:")
+}
+
+func TestModelKey(t *testing.T) {
+	key := ModelKey("openai", "gpt-4")
+	assert.Equal(t, "openai:gpt-4", key)
+}

@@ -1,5 +1,12 @@
 package testsuite
 
+// Default rate limiting values
+const (
+	DefaultRequestsPerMinute     = 30   // Default requests per minute for unlisted providers
+	DefaultDelayBetweenRequestsMs = 100  // Minimum delay between consecutive requests
+	DefaultRateLimitBufferMs     = 5000 // Extra buffer when hitting rate limit window
+)
+
 // RunnerOptions configures the test suite runner from CLI flags.
 type RunnerOptions struct {
 	// SuiteDir is the directory containing suite.yaml and cases/
@@ -41,6 +48,21 @@ type RunnerOptions struct {
 
 	// TimeoutMs overrides the per-test-case timeout in milliseconds
 	TimeoutMs int
+
+	// RequestsPerMinute overrides all provider rate limits (CLI flag: --rpm)
+	RequestsPerMinute int
+
+	// MaxTests limits tests per model per invocation (exit code 5 if more remain)
+	MaxTests int
+
+	// Wait runs continuously until all tests complete, respecting rate limits
+	Wait bool
+
+	// StateFile path for incremental execution state persistence
+	StateFile string
+
+	// Force ignores state file and re-runs all tests
+	Force bool
 }
 
 // RunResult contains the overall result of a test suite run.
@@ -63,8 +85,20 @@ type RunResult struct {
 	// Skipped is the count of skipped test cases
 	Skipped int
 
+	// SkippedCached is the count of tests skipped due to valid cached results
+	SkippedCached int
+
+	// RateLimited is the count of tests skipped due to rate limiting
+	RateLimited int
+
+	// Remaining is the count of tests not yet run (for incremental execution)
+	Remaining int
+
 	// MatchRate is the percentage of tests that passed (0.0-1.0)
 	MatchRate float64
+
+	// MoreTestsRemain indicates --max-tests was used and more tests remain
+	MoreTestsRemain bool
 }
 
 // Suite represents a parsed suite.yaml configuration.
@@ -97,6 +131,16 @@ type ExecutionConfig struct {
 	TimeoutMs    int `yaml:"timeout_ms"`
 	Retries      int `yaml:"retries"`
 	RetryDelayMs int `yaml:"retry_delay_ms"`
+
+	// Rate limiting configuration
+	RateLimits              map[string]ProviderRateLimit `yaml:"rate_limits,omitempty"`
+	DelayBetweenRequestsMs  int                          `yaml:"delay_between_requests_ms,omitempty"`
+	RateLimitBufferMs       int                          `yaml:"rate_limit_buffer_ms,omitempty"`
+}
+
+// ProviderRateLimit defines rate limiting for a specific provider.
+type ProviderRateLimit struct {
+	RequestsPerMinute int `yaml:"requests_per_minute"`
 }
 
 // EnginesConfig configures which engines to test.

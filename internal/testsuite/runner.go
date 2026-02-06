@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
@@ -21,11 +22,16 @@ func createTestLogger() *config.SessionLogger {
 
 // Runner executes a test suite against policies.
 type Runner struct {
-	opts      RunnerOptions
-	suite     *Suite
-	testCases []TestCase
-	suiteDir  string
-	logger    *config.SessionLogger
+	opts            RunnerOptions
+	suite           *Suite
+	testCases       []TestCase
+	testCaseHashes  map[string]string // case_id -> content hash
+	testCaseFiles   map[string]string // case_id -> file path
+	policyHashes    []string          // SHA256 hashes of all loaded policies
+	suiteDir        string
+	logger          *config.SessionLogger
+	rateLimiter     *RateLimiter
+	stateManager    *StateManager
 }
 
 // NewRunner creates a new test suite runner with the given options.
@@ -90,10 +96,52 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 		}, nil
 	}
 
+	// Initialize rate limiter with suite config and CLI overrides
+	r.rateLimiter = NewRateLimiter(RateLimiterConfig{
+		ProviderLimits:         r.suite.Execution.RateLimits,
+		DefaultLimit:           DefaultRequestsPerMinute,
+		DelayBetweenRequestsMs: r.suite.Execution.DelayBetweenRequestsMs,
+		RateLimitBufferMs:      r.suite.Execution.RateLimitBufferMs,
+		OverrideRPM:            r.opts.RequestsPerMinute,
+		WaitOnLimit:            r.opts.Wait,
+	})
+
+	// Initialize state manager for incremental execution
+	if r.opts.StateFile != "" {
+		var err error
+		r.stateManager, err = NewStateManager(r.opts.StateFile, r.suite.BundleID, "dev")
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize state manager: %w", err)
+		}
+		defer func() {
+			if err := r.stateManager.Close(); err != nil {
+				fmt.Printf("Warning: failed to close state file: %v\n", err)
+			}
+		}()
+	}
+
 	// Phase 4: Execute tests
 	result, err := r.executeTests(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// Prune stale hashes and save final state
+	if r.stateManager != nil {
+		// Build set of current content hashes
+		currentHashes := make(map[string]bool)
+		for _, hash := range r.testCaseHashes {
+			currentHashes[hash] = true
+		}
+
+		// Build list of current model keys
+		var currentModels []string
+		for _, model := range r.getModelsToTest() {
+			currentModels = append(currentModels, ModelKey(model.Provider, model.Model))
+		}
+
+		// Prune stale entries
+		r.stateManager.PruneStaleHashes(currentHashes, currentModels)
 	}
 
 	return result, nil
@@ -226,9 +274,21 @@ func (r *Runner) discoverTestCases() error {
 
 	// Parse each test case file
 	seenIDs := make(map[string]string) // case_id -> file path
+	testCaseHashes := make(map[string]string) // case_id -> content hash
+	testCaseFiles := make(map[string]string)  // case_id -> file path
 	var testCases []TestCase
 
 	for _, path := range caseFiles {
+		// Read raw file content for hashing
+		rawContent, err := os.ReadFile(path)
+		if err != nil {
+			return &PathResolutionError{
+				Path:    path,
+				Message: fmt.Sprintf("failed to read file for hashing: %v", err),
+			}
+		}
+		contentHash := ComputeContentHash(rawContent)
+
 		cases, err := r.parseTestCases(path)
 		if err != nil {
 			return err
@@ -246,11 +306,15 @@ func (r *Runner) discoverTestCases() error {
 				}
 			}
 			seenIDs[tc.CaseID] = path
+			testCaseHashes[tc.CaseID] = contentHash
+			testCaseFiles[tc.CaseID] = path
 			testCases = append(testCases, tc)
 		}
 	}
 
 	r.testCases = testCases
+	r.testCaseHashes = testCaseHashes
+	r.testCaseFiles = testCaseFiles
 	return nil
 }
 
@@ -782,6 +846,8 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 
 	// Run tests against each model (or just the selected one)
 	for _, model := range models {
+		modelKey := ModelKey(model.Provider, model.Model)
+
 		if model.Tier != "" {
 			fmt.Printf("\nTesting with model: %s/%s (tier: %s)\n", model.Provider, model.Model, model.Tier)
 		} else {
@@ -789,7 +855,7 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 		}
 
 		// Create AI runner for this model
-		runner, err := NewAITestRunner(model, r.suite, r.suiteDir, r.logger)
+		runner, err := NewAITestRunner(model, r.suite, r.suiteDir, r.logger, r.rateLimiter)
 		if err != nil {
 			// If we can't create the runner, mark all cases as errored for this model
 			for _, tc := range cases {
@@ -810,8 +876,81 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 			continue
 		}
 
+		// Filter cases based on state (skip cached passing tests unless --force)
+		var casesToRun []TestCase
+		var skippedCached []TestResult
+
+		for _, tc := range cases {
+			// Skip if test case doesn't target AI engine
+			if tc.Engine != "ai" && tc.Engine != "both" {
+				continue
+			}
+
+			contentHash := r.testCaseHashes[tc.CaseID]
+
+			// Check if we should skip this test (cached passing result)
+			if r.stateManager != nil && !r.opts.Force {
+				if r.stateManager.ShouldSkip(contentHash, r.policyHashes, modelKey) {
+					// Report as skipped (cached)
+					result := TestResult{
+						CaseID: tc.CaseID,
+						Title:  tc.Title,
+						Status: "skipped",
+						Error: &TestError{
+							Type:    "cached",
+							Message: "Skipped due to valid cached result",
+						},
+					}
+					skippedCached = append(skippedCached, result)
+					if onProgress != nil {
+						onProgress(result)
+					}
+					continue
+				}
+			}
+
+			casesToRun = append(casesToRun, tc)
+		}
+
+		allResults = append(allResults, skippedCached...)
+
+		// Apply max tests limit
+		testsToRun := len(casesToRun)
+		if r.opts.MaxTests > 0 && testsToRun > r.opts.MaxTests {
+			testsToRun = r.opts.MaxTests
+		}
+
+		// Execute limited number of tests
+		casesToRun = casesToRun[:testsToRun]
+
+		// Wrap progress callback to record results to state
+		wrappedProgress := func(result TestResult) {
+			// Record to state manager
+			if r.stateManager != nil {
+				contentHash := r.testCaseHashes[result.CaseID]
+				cachedResult := &CachedResult{
+					Status:     result.Status,
+					Confidence: result.Actual.Confidence,
+					LastRun:    time.Now(),
+					DurationMs: result.ElapsedMs,
+				}
+				r.stateManager.RecordResult(contentHash, result.CaseID, r.policyHashes, modelKey, cachedResult)
+
+				// Save state after each test (incremental)
+				if err := r.stateManager.Save(); err != nil {
+					// Log but don't fail - state persistence is best-effort
+					fmt.Printf("Warning: failed to save state: %v\n", err)
+				}
+			}
+
+			// Call original progress callback
+			if onProgress != nil {
+				onProgress(result)
+			}
+		}
+
 		// Execute tests with this model
-		modelResults := runner.ExecuteTests(ctx, cases, onProgress)
+		modelResults := runner.ExecuteTests(ctx, casesToRun, wrappedProgress)
 		allResults = append(allResults, modelResults...)
 	}
 
@@ -1001,6 +1140,15 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 			result.Errored++
 		case "skipped":
 			result.Skipped++
+			// Check if this was cached or rate limited
+			if tr.Error != nil {
+				switch tr.Error.Type {
+				case "cached":
+					result.SkippedCached++
+				case "rate_limited":
+					result.RateLimited++
+				}
+			}
 		}
 	}
 
@@ -1016,6 +1164,20 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 		minMatchRate = 1.0 // Default to strict matching
 	}
 	result.ThresholdsMet = result.MatchRate >= minMatchRate
+
+	// Calculate remaining tests (for --max-tests)
+	if r.opts.MaxTests > 0 {
+		// Count how many tests were limited
+		totalFilteredCases := len(r.filterTestCases())
+		testsRun := result.Passed + result.Failed + result.Errored
+		// Subtract cached tests from the calculation
+		testsRun -= result.SkippedCached
+		result.Remaining = totalFilteredCases - testsRun - result.SkippedCached
+		if result.Remaining < 0 {
+			result.Remaining = 0
+		}
+		result.MoreTestsRemain = result.Remaining > 0
+	}
 
 	return result
 }
