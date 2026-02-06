@@ -444,9 +444,14 @@ func (rl *RateLimiter) Handle429WithInfo(ctx context.Context, provider string, i
 
 		// After waking, if provider is now in sequential mode, we can proceed
 		// (the other waiter did the actual wait, we just waited for them)
+		// Return a retryable error so the caller knows to retry the request.
 		if rl.providerSequential[provider] {
 			rl.mu.Unlock()
-			return nil
+			return &gateway.AIProviderError{
+				Category:  gateway.ErrCategoryRateLimited,
+				Message:   "rate limit window passed, retry request",
+				Retryable: true,
+			}
 		}
 	}
 
@@ -485,7 +490,16 @@ func (rl *RateLimiter) Handle429WithInfo(ctx context.Context, provider string, i
 	rl.mu.Unlock()
 	rl.cond.Broadcast() // Wake all waiters
 
-	return err
+	// Always return an error from Handle429WithInfo - even after successful wait.
+	// The original request still failed with 429, caller needs to retry.
+	if err != nil {
+		return err
+	}
+	return &gateway.AIProviderError{
+		Category:  gateway.ErrCategoryRateLimited,
+		Message:   "rate limit window passed, retry request",
+		Retryable: true,
+	}
 }
 
 // waitWithProgress waits for the given duration, showing progress if output is TTY.
