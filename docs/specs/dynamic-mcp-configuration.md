@@ -365,6 +365,8 @@ The client sends the downstream URL only during the MCP `initialize` handshake. 
 
 The client first calls a registration endpoint to establish the downstream server, then uses a returned session token for MCP traffic.
 
+> **Note:** This is a more technical option suited for developers. It is **not a drop-in replacement** for existing MCP configurations and requires manual setup steps.
+
 **Workflow:**
 ```
 1. Client: POST /register
@@ -393,6 +395,7 @@ The client first calls a registration endpoint to establish the downstream serve
 - Session URL is clean with no encoding issues
 - Could support additional registration-time options (allowed tools, policy overrides)
 - Works with any client that supports URLs
+- Registrations can be session-scoped (keyed by session ID), providing per-client isolation
 
 **Cons:**
 - Two-step process - registration before MCP usage
@@ -400,6 +403,15 @@ The client first calls a registration endpoint to establish the downstream serve
 - Session tokens could expire, requiring re-registration
 - More complex developer workflow
 - Not self-contained in agent configuration
+- **Not a drop-in replacement** - cannot simply modify existing MCP URLs
+- **Requires manual intervention** - AI agents cannot easily be instructed to perform registration; the developer/user must handle this step
+- **Ephemeral without persistent state** - registrations are tied to sessions and lost on gateway restart unless we add persistent storage
+- **Developer-oriented** - non-technical users may find the two-step process confusing
+
+**Potential Enhancements:**
+- CLI tool: `maybe-dont register --downstream https://api.github.com/mcp` that outputs the session URL
+- Web UI for registration management
+- Persistent registration storage (adds operational complexity)
 
 ---
 
@@ -656,6 +668,8 @@ Gateway passes all headers except a denylist (e.g., `Host`, `Content-Length`, ga
 | Handles complex URLs | Medium | High | Low | High | High | Low | Medium |
 | Self-contained config | Yes | Yes | Yes | Yes | No | Partial | Yes |
 | Works today (no client fixes) | Yes | Partial | Yes | Partial | Yes | Yes | Yes |
+| Drop-in replacement | Yes | Yes | Yes | Yes | **No** | Partial | Partial |
+| Non-developer friendly | Yes | Yes | Yes | Yes | **No** | Yes | No |
 
 ---
 
