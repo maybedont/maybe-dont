@@ -1727,6 +1727,31 @@ jobs:
 4. Future PRs read state from main, only run changed tests
 5. Content hashes ensure modified test cases always re-run
 
+#### Post-Merge Checklist
+
+After merging the policy test suite feature to main, complete the following:
+
+- [ ] **Run initial AI tests on main** - Trigger the workflow manually to populate the state file with baseline results
+- [ ] **Re-enable AI tests for PRs** - Update `.github/workflows/policy-tests.yml` line 160 to include PR triggers:
+  ```yaml
+  # Change from:
+  if: >
+    (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'workflow_dispatch' && github.event.inputs.engine != 'cel')
+  # To:
+  if: >
+    (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'pull_request') ||
+    (github.event_name == 'workflow_dispatch' && github.event.inputs.engine != 'cel')
+  ```
+- [ ] **Review the model matrix** - Evaluate `suite.yaml` model matrix configuration:
+  - Verify all desired providers/models are included
+  - Confirm tier classifications are accurate
+  - Consider adding/removing models based on cost vs coverage tradeoffs
+  - Document any models that consistently fail or have issues
+- [ ] **Configure repository secrets** - Ensure `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` secrets are configured in GitHub repository settings
+- [ ] **Verify state file commits** - After first push to main with policy changes, confirm the state file is committed back automatically
+
 #### Resolved Decisions
 
 1. **State file in repo?** Recommended: commit to main branch for visibility. PRs don't commit state changes; they use main's state as a starting point.
