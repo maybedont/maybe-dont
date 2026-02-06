@@ -156,6 +156,12 @@ This would provide clearer separation of concerns and room for growth. The `test
 | `--validate-only` | Run suite validation without executing tests | `false` |
 | `--include-disabled` | Include policies with `enabled: false` in test execution | `false` |
 | `--timeout` | Timeout per test case in milliseconds | From suite.yaml (default: 30000) |
+| `--incremental` | Skip unchanged tests, persist results to state file | `false` |
+| `--full` | Run all tests, persist results to state file | `false` |
+| `--state-file` | Override state file location (use with `--incremental` or `--full`) | `$XDG_STATE_HOME/maybe-dont/policy-test-state.json` |
+| `--wait` | Run continuously until all tests complete (requires `--incremental` or `--full`) | `false` |
+| `--rpm` | Override requests per minute for all providers | From suite.yaml |
+| `--max-tests` | Maximum tests per model per invocation (exit code 5 if more remain) | unlimited |
 
 ### Examples
 
@@ -193,6 +199,18 @@ maybe-dont test policies --suite-dir ./suite --validate-only
 
 # Test against internal defaults (common internal workflow)
 maybe-dont test policies --suite-dir docs/specs/policy-test-suite
+
+# Incremental mode: skip unchanged tests, persist results
+maybe-dont test policies --suite-dir ./suite --incremental
+
+# Full mode: run all tests, persist results (refresh cache)
+maybe-dont test policies --suite-dir ./suite --full
+
+# Run incrementally until complete, respecting rate limits
+maybe-dont test policies --suite-dir ./suite --incremental --wait
+
+# Use custom state file location
+maybe-dont test policies --suite-dir ./suite --incremental --state-file ./my-state.json
 ```
 
 ### Flag Interactions

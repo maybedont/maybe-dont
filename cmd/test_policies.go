@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/maybedont/maybe-dont/internal/testsuite"
 	"github.com/spf13/cobra"
@@ -37,8 +38,30 @@ var (
 	maxTests          int
 	wait              bool
 	stateFile         string
-	force             bool
+	incremental       bool
+	full              bool
 )
+
+// defaultStateFilePath returns the default path for the policy test state file.
+// Uses XDG_STATE_HOME/maybe-dont/policy-test-state.json or falls back to
+// ~/.local/state/maybe-dont/policy-test-state.json
+func defaultStateFilePath() (string, error) {
+	var stateDir string
+
+	// Try XDG_STATE_HOME first
+	if xdgState := os.Getenv("XDG_STATE_HOME"); xdgState != "" {
+		stateDir = filepath.Join(xdgState, "maybe-dont")
+	} else {
+		// Fall back to XDG default
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot determine home directory: %w", err)
+		}
+		stateDir = filepath.Join(homeDir, ".local", "state", "maybe-dont")
+	}
+
+	return filepath.Join(stateDir, "policy-test-state.json"), nil
+}
 
 // testPoliciesCmd represents the policies subcommand under test
 var testPoliciesCmd = &cobra.Command{
@@ -51,7 +74,7 @@ The test suite is defined in a directory containing:
   - cases/: Directory containing test case YAML files (auto-discovered recursively)
 
 Example usage:
-  # Run with defaults from suite.yaml
+  # Run with defaults from suite.yaml (no state persistence)
   maybe-dont test policies --suite-dir ./suite
 
   # Run only CEL engine tests
@@ -62,6 +85,18 @@ Example usage:
 
   # Run full model matrix from suite.yaml
   maybe-dont test policies --suite-dir ./suite --matrix
+
+  # Incremental mode: skip unchanged tests, persist results to state file
+  maybe-dont test policies --suite-dir ./suite --incremental
+
+  # Full mode: run all tests, persist results to state file
+  maybe-dont test policies --suite-dir ./suite --full
+
+  # Use custom state file location
+  maybe-dont test policies --suite-dir ./suite --incremental --state-file ./my-state.json
+
+  # Run incrementally until complete, respecting rate limits
+  maybe-dont test policies --suite-dir ./suite --incremental --wait
 
   # Stream progress to stdout AND save JSON results to file
   maybe-dont test policies --suite-dir ./suite --output results.json
@@ -110,15 +145,53 @@ func init() {
 
 	// Incremental execution options
 	testPoliciesCmd.Flags().IntVar(&maxTests, "max-tests", 0, "Maximum tests per model per invocation (exit code 5 if more remain)")
-	testPoliciesCmd.Flags().BoolVar(&wait, "wait", false, "Run continuously until all tests complete (requires --state-file)")
-	testPoliciesCmd.Flags().StringVar(&stateFile, "state-file", "", "Path to state file for incremental execution")
-	testPoliciesCmd.Flags().BoolVar(&force, "force", false, "Ignore state file and re-run all tests")
+	testPoliciesCmd.Flags().BoolVar(&wait, "wait", false, "Run continuously until all tests complete (requires --incremental or --full)")
+	testPoliciesCmd.Flags().BoolVar(&incremental, "incremental", false, "Skip unchanged tests, persist results to state file")
+	testPoliciesCmd.Flags().BoolVar(&full, "full", false, "Run all tests, persist results to state file")
+	testPoliciesCmd.Flags().StringVar(&stateFile, "state-file", "", "Override state file location (use with --incremental or --full)")
 }
 
 func runTestPolicies(cmd *cobra.Command, args []string) error {
 	// Validate flag combinations
-	if wait && stateFile == "" {
-		return fmt.Errorf("--wait requires --state-file to be specified")
+	if incremental && full {
+		return fmt.Errorf("cannot use both --incremental and --full")
+	}
+
+	useState := incremental || full
+
+	if stateFile != "" && !useState {
+		return fmt.Errorf("--state-file requires --incremental or --full")
+	}
+
+	if wait && !useState {
+		return fmt.Errorf("--wait requires --incremental or --full")
+	}
+
+	// Resolve state file path
+	resolvedStateFile := stateFile
+	if useState && resolvedStateFile == "" {
+		defaultPath, err := defaultStateFilePath()
+		if err != nil {
+			return fmt.Errorf("failed to determine default state file path: %w", err)
+		}
+		resolvedStateFile = defaultPath
+	}
+
+	// Create state file directory if it doesn't exist
+	if resolvedStateFile != "" {
+		stateDir := filepath.Dir(resolvedStateFile)
+		if err := os.MkdirAll(stateDir, 0700); err != nil {
+			return fmt.Errorf("failed to create state directory %s: %w", stateDir, err)
+		}
+	}
+
+	// Print state file messaging
+	if useState && !quiet {
+		if incremental {
+			fmt.Printf("Using state file: %s (incremental mode - skipping unchanged tests)\n", resolvedStateFile)
+		} else {
+			fmt.Printf("Using state file: %s (full mode - running all tests)\n", resolvedStateFile)
+		}
 	}
 
 	// Build runner options from CLI flags
@@ -139,8 +212,8 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 		RequestsPerMinute: requestsPerMinute,
 		MaxTests:          maxTests,
 		Wait:              wait,
-		StateFile:         stateFile,
-		Force:             force,
+		StateFile:         resolvedStateFile,
+		Force:             full, // --full means "force" re-run all tests
 	}
 
 	// Create and run the test suite runner
