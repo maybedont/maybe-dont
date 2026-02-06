@@ -924,7 +924,7 @@ func TestFormatTextSummary(t *testing.T) {
 			ThresholdsMet: false,
 		}
 
-		output := formatTextSummary(suite, summary, nil, nil)
+		output := formatTextSummary(suite, summary, nil, nil, nil)
 		assert.Contains(t, output, "--retry-failed")
 		assert.Contains(t, output, "7 passed, 2 failed, 1 errored")
 	})
@@ -937,7 +937,7 @@ func TestFormatTextSummary(t *testing.T) {
 			ThresholdsMet: true,
 		}
 
-		output := formatTextSummary(suite, summary, nil, nil)
+		output := formatTextSummary(suite, summary, nil, nil, nil)
 		assert.NotContains(t, output, "--retry-failed")
 	})
 
@@ -967,7 +967,7 @@ func TestFormatTextSummary(t *testing.T) {
 			ThresholdsMet: false,
 		}
 
-		output := formatTextSummary(suite, summary, results, nil)
+		output := formatTextSummary(suite, summary, results, nil, nil)
 		assert.Contains(t, output, "Cached:  10 skipped (8 passed, 2 failed in last run)")
 		assert.Contains(t, output, "--retry-failed")
 	})
@@ -997,9 +997,64 @@ func TestFormatTextSummary(t *testing.T) {
 			ThresholdsMet: true,
 		}
 
-		output := formatTextSummary(suite, summary, results, nil)
+		output := formatTextSummary(suite, summary, results, nil, nil)
 		assert.Contains(t, output, "Cached:  7 skipped (5 passed, 2 failed in last run)")
 		assert.Contains(t, output, "retry previously failed tests: --retry-failed")
+	})
+}
+
+// TestFormatModelComparison verifies the cross-model comparison table rendering.
+func TestFormatModelComparison(t *testing.T) {
+	// Disable color for deterministic test output
+	origColor := colorEnabled
+	colorEnabled = false
+	defer func() { colorEnabled = origColor }()
+
+	t.Run("returns empty for nil entries", func(t *testing.T) {
+		assert.Empty(t, formatModelComparison(nil))
+	})
+
+	t.Run("returns empty for empty entries", func(t *testing.T) {
+		assert.Empty(t, formatModelComparison([]ModelComparisonEntry{}))
+	})
+
+	t.Run("renders table with multiple models", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "cel", Passed: 10, Failed: 0, Errored: 0, MatchRate: 1.0, AvgMs: 2, TotalMs: 20},
+			{Model: "openai:gpt-5", Passed: 8, Failed: 2, Errored: 0, MatchRate: 0.8, AvgMs: 1200, TotalMs: 12000},
+			{Model: "anthropic:claude", Passed: 7, Failed: 2, Errored: 1, MatchRate: 0.7, AvgMs: 900, TotalMs: 9000, FromCache: true},
+		}
+
+		output := formatModelComparison(entries)
+
+		// Verify structure
+		assert.Contains(t, output, "Model Comparison")
+		assert.Contains(t, output, "Model")
+		assert.Contains(t, output, "Pass")
+		assert.Contains(t, output, "Fail")
+		assert.Contains(t, output, "Match%")
+		assert.Contains(t, output, "Total")
+
+		// Verify data rows
+		assert.Contains(t, output, "cel")
+		assert.Contains(t, output, "openai:gpt-5")
+		assert.Contains(t, output, "anthropic:claude")
+		assert.Contains(t, output, "100.0%")
+		assert.Contains(t, output, "80.0%")
+		assert.Contains(t, output, "70.0%")
+
+		// Verify cached footnote
+		assert.Contains(t, output, "previous run")
+	})
+
+	t.Run("no cached footnote when all tested in current run", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "cel", Passed: 5, MatchRate: 1.0},
+			{Model: "openai:gpt-5", Passed: 4, Failed: 1, MatchRate: 0.8},
+		}
+
+		output := formatModelComparison(entries)
+		assert.NotContains(t, output, "previous run")
 	})
 }
 

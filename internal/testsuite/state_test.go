@@ -298,3 +298,67 @@ func TestModelKey(t *testing.T) {
 	key := ModelKey("openai", "gpt-4")
 	assert.Equal(t, "openai:gpt-4", key)
 }
+
+// TestGetModelSummaries verifies that GetModelSummaries aggregates per-model
+// results from cached state, filtering by policy hash match.
+func TestGetModelSummaries(t *testing.T) {
+	t.Run("aggregates results by model with matching policy hashes", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+		policyHashes := []string{"sha256:policy1"}
+
+		sm.RecordResult("sha256:test1", "case-1", policyHashes, "openai:gpt-5", &CachedResult{
+			Status: "passed", DurationMs: 100,
+		})
+		sm.RecordResult("sha256:test2", "case-2", policyHashes, "openai:gpt-5", &CachedResult{
+			Status: "failed", DurationMs: 200,
+		})
+		sm.RecordResult("sha256:test1", "case-1", policyHashes, "anthropic:claude", &CachedResult{
+			Status: "passed", DurationMs: 50,
+		})
+
+		summaries := sm.GetModelSummaries(policyHashes)
+
+		require.Len(t, summaries, 2)
+
+		openai := summaries["openai:gpt-5"]
+		require.NotNil(t, openai)
+		assert.Equal(t, 1, openai.Passed)
+		assert.Equal(t, 1, openai.Failed)
+		assert.Equal(t, 0, openai.Errored)
+		assert.Equal(t, int64(300), openai.TotalMs)
+		assert.Equal(t, 2, openai.TestCount)
+
+		anthropic := summaries["anthropic:claude"]
+		require.NotNil(t, anthropic)
+		assert.Equal(t, 1, anthropic.Passed)
+		assert.Equal(t, int64(50), anthropic.TotalMs)
+	})
+
+	t.Run("excludes results with mismatched policy hashes", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:test1", "case-1", []string{"sha256:old"}, "openai:gpt-5", &CachedResult{
+			Status: "passed", DurationMs: 100,
+		})
+		sm.RecordResult("sha256:test2", "case-2", []string{"sha256:current"}, "openai:gpt-5", &CachedResult{
+			Status: "passed", DurationMs: 200,
+		})
+
+		summaries := sm.GetModelSummaries([]string{"sha256:current"})
+
+		require.Len(t, summaries, 1)
+		assert.Equal(t, 1, summaries["openai:gpt-5"].TestCount)
+		assert.Equal(t, int64(200), summaries["openai:gpt-5"].TotalMs)
+	})
+
+	t.Run("returns empty map when no results match", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		sm.RecordResult("sha256:test1", "case-1", []string{"sha256:old"}, "openai:gpt-5", &CachedResult{
+			Status: "passed",
+		})
+
+		summaries := sm.GetModelSummaries([]string{"sha256:different"})
+		assert.Empty(t, summaries)
+	})
+}

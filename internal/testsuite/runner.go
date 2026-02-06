@@ -1324,14 +1324,17 @@ func (r *Runner) outputResults(results []TestResult, summary *RunResult, already
 		coverage = nil
 	}
 
+	// Build cross-model comparison table from results and cached state
+	comparison := r.buildModelComparison(results)
+
 	// Write to stdout (unless --quiet)
 	if !r.opts.Quiet {
 		var stdoutOutput string
 		if alreadyStreamed {
 			// Only print summary - header and results were already streamed
-			stdoutOutput = formatTextSummary(r.suite, summary, results, coverage)
+			stdoutOutput = formatTextSummary(r.suite, summary, results, coverage, comparison)
 		} else {
-			stdoutOutput = formatTextOutput(r.suite, results, summary, coverage)
+			stdoutOutput = formatTextOutput(r.suite, results, summary, coverage, comparison)
 		}
 		fmt.Print(stdoutOutput)
 	}
@@ -1671,7 +1674,7 @@ func formatSingleTestResult(tr TestResult) string {
 
 // formatTextSummary formats the summary section for text output.
 // Includes results, thresholds, coverage, and slowest policies in one cohesive block.
-func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, coverage *CoverageReport) string {
+func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, coverage *CoverageReport, comparison []ModelComparisonEntry) string {
 	var sb strings.Builder
 
 	sb.WriteString(formatSectionHeader("Summary"))
@@ -1738,6 +1741,9 @@ func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, c
 
 	// Slowest policies section
 	sb.WriteString(formatSlowestPolicies(results))
+
+	// Model comparison table (shown when 2+ models have results)
+	sb.WriteString(formatModelComparison(comparison))
 
 	return sb.String()
 }
@@ -1814,7 +1820,7 @@ func formatSlowestPolicies(results []TestResult) string {
 }
 
 // formatTextOutput formats results as human-readable text.
-func formatTextOutput(suite *Suite, results []TestResult, summary *RunResult, coverage *CoverageReport) string {
+func formatTextOutput(suite *Suite, results []TestResult, summary *RunResult, coverage *CoverageReport, comparison []ModelComparisonEntry) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("Policy Test Suite: %s\n", suite.BundleID))
@@ -1824,7 +1830,218 @@ func formatTextOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		sb.WriteString(formatSingleTestResult(tr))
 	}
 
-	sb.WriteString(formatTextSummary(suite, summary, results, coverage))
+	sb.WriteString(formatTextSummary(suite, summary, results, coverage, comparison))
 
 	return sb.String()
+}
+
+// buildModelComparison builds per-model comparison entries from current results
+// and cached state. When a state manager is available, AI model data comes from
+// the state file (which includes both current and previous run results). CEL data
+// always comes from the current run since CEL results are not cached.
+// Returns nil if fewer than 2 models have data (nothing to compare).
+func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEntry {
+	// Track which models were tested in this run
+	modelsInRun := make(map[string]bool)
+	for _, tr := range results {
+		if tr.Model != "" {
+			modelsInRun[tr.Model] = true
+		}
+	}
+
+	var entries []ModelComparisonEntry
+
+	// CEL entry from current run results (CEL results are not cached in state)
+	var celPassed, celFailed, celErrored int
+	var celTotalMs int64
+	hasCEL := false
+
+	for _, tr := range results {
+		if tr.Engine != "cel" {
+			continue
+		}
+		hasCEL = true
+		switch tr.Status {
+		case "passed":
+			celPassed++
+		case "failed":
+			celFailed++
+		case "errored":
+			celErrored++
+		}
+		celTotalMs += tr.ElapsedMs
+	}
+
+	if hasCEL {
+		evaluated := celPassed + celFailed + celErrored
+		entry := ModelComparisonEntry{
+			Model:   "cel",
+			Passed:  celPassed,
+			Failed:  celFailed,
+			Errored: celErrored,
+			TotalMs: celTotalMs,
+		}
+		if evaluated > 0 {
+			entry.MatchRate = float64(celPassed) / float64(evaluated)
+			entry.AvgMs = celTotalMs / int64(evaluated)
+		}
+		entries = append(entries, entry)
+	}
+
+	// AI model entries: prefer state file (cumulative across runs) over current results
+	if r.stateManager != nil {
+		cachedSummaries := r.stateManager.GetModelSummaries(r.policyHashes)
+		for modelKey, summary := range cachedSummaries {
+			evaluated := summary.Passed + summary.Failed + summary.Errored
+			entry := ModelComparisonEntry{
+				Model:     modelKey,
+				Passed:    summary.Passed,
+				Failed:    summary.Failed,
+				Errored:   summary.Errored,
+				TotalMs:   summary.TotalMs,
+				FromCache: !modelsInRun[modelKey],
+			}
+			if evaluated > 0 {
+				entry.MatchRate = float64(summary.Passed) / float64(evaluated)
+				entry.AvgMs = summary.TotalMs / int64(evaluated)
+			}
+			entries = append(entries, entry)
+		}
+	} else {
+		// No state file — derive AI model data from current run results
+		aiStats := make(map[string]*ModelComparisonEntry)
+		for _, tr := range results {
+			if tr.Engine != "ai" || tr.Model == "" {
+				continue
+			}
+
+			entry, ok := aiStats[tr.Model]
+			if !ok {
+				entry = &ModelComparisonEntry{Model: tr.Model}
+				aiStats[tr.Model] = entry
+			}
+
+			// For cached-skipped tests, count by their original status
+			status := tr.Status
+			if status == "skipped" && tr.Error != nil && tr.Error.Type == "cached" {
+				status = strings.TrimPrefix(tr.Error.Message, "cached ")
+			}
+
+			switch status {
+			case "passed":
+				entry.Passed++
+			case "failed":
+				entry.Failed++
+			case "errored":
+				entry.Errored++
+			}
+			entry.TotalMs += tr.ElapsedMs
+		}
+
+		for _, entry := range aiStats {
+			evaluated := entry.Passed + entry.Failed + entry.Errored
+			if evaluated > 0 {
+				entry.MatchRate = float64(entry.Passed) / float64(evaluated)
+				entry.AvgMs = entry.TotalMs / int64(evaluated)
+			}
+			entries = append(entries, *entry)
+		}
+	}
+
+	// Only show comparison when there are 2+ models to compare
+	if len(entries) < 2 {
+		return nil
+	}
+
+	// Sort: CEL first (baseline), then by match rate descending, then by name
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Model == "cel" {
+			return true
+		}
+		if entries[j].Model == "cel" {
+			return false
+		}
+		if entries[i].MatchRate != entries[j].MatchRate {
+			return entries[i].MatchRate > entries[j].MatchRate
+		}
+		return entries[i].Model < entries[j].Model
+	})
+
+	return entries
+}
+
+// formatModelComparison renders the cross-model comparison table.
+// Returns empty string if comparison is nil or empty.
+func formatModelComparison(entries []ModelComparisonEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+
+	// Calculate max model name width for column alignment
+	maxModelLen := len("Model")
+	for _, e := range entries {
+		if len(e.Model) > maxModelLen {
+			maxModelLen = len(e.Model)
+		}
+	}
+
+	// Fixed column widths: "  Pass  Fail  Err  Match%   Avg ms    Total"
+	// Build header to measure total width
+	header := fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %7s  %6s",
+		maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total")
+	tableWidth := len(header)
+
+	var sb strings.Builder
+
+	// Top separator with label
+	label := "Model Comparison"
+	prefix := "\n── " + label + " "
+	remaining := tableWidth - utf8.RuneCountInString(prefix) + 1 // +1 for leading \n
+	if remaining < 2 {
+		remaining = 2
+	}
+	sb.WriteString(prefix + strings.Repeat("─", remaining) + "\n")
+
+	// Header row
+	sb.WriteString(header + "\n")
+
+	// Data rows
+	hasFromCache := false
+	for _, e := range entries {
+		avgStr := formatDurationMs(e.AvgMs)
+		totalStr := formatDurationSec(e.TotalMs)
+
+		row := fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %7s  %6s",
+			maxModelLen, e.Model,
+			e.Passed, e.Failed, e.Errored,
+			e.MatchRate*100,
+			avgStr, totalStr)
+
+		if e.FromCache {
+			hasFromCache = true
+			sb.WriteString(colorize(ansiDim, row) + "\n")
+		} else {
+			sb.WriteString(row + "\n")
+		}
+	}
+
+	// Bottom separator (full width)
+	sb.WriteString(strings.Repeat("─", tableWidth) + "\n")
+
+	// Footnote for cached entries
+	if hasFromCache {
+		sb.WriteString(colorize(ansiDim, "  (dimmed rows from previous run)") + "\n")
+	}
+
+	return sb.String()
+}
+
+// formatDurationMs formats milliseconds for the Avg ms column.
+func formatDurationMs(ms int64) string {
+	return fmt.Sprintf("%dms", ms)
+}
+
+// formatDurationSec formats milliseconds as seconds for the Total column.
+func formatDurationSec(ms int64) string {
+	return fmt.Sprintf("%.1fs", float64(ms)/1000.0)
 }

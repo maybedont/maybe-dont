@@ -142,17 +142,41 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		},
 	}
 
-	// Group results by model (for now, single model)
-	modelResults := JSONModelResults{
-		Model: JSONModelInfo{
-			Provider: "cel", // Default for CEL-only runs
-			Model:    "deterministic",
-		},
-		Results: make([]JSONTestResult, 0, len(results)),
+	// Group results by model key (Engine:Model or "cel" for deterministic)
+	type modelBucket struct {
+		info    JSONModelInfo
+		results []JSONTestResult
+		passed  int
+		failed  int
+		errored int
+		skipped int
+		totalMs int64
 	}
 
-	var totalElapsed int64
+	buckets := make(map[string]*modelBucket)
+	bucketOrder := []string{} // preserve insertion order
+
 	for _, r := range results {
+		// Determine model key for grouping
+		key := "cel"
+		info := JSONModelInfo{Provider: "cel", Model: "deterministic"}
+		if r.Engine == "ai" && r.Model != "" {
+			key = r.Model
+			parts := strings.SplitN(r.Model, ":", 2)
+			if len(parts) == 2 {
+				info = JSONModelInfo{Provider: parts[0], Model: parts[1]}
+			} else {
+				info = JSONModelInfo{Provider: r.Model, Model: r.Model}
+			}
+		}
+
+		b, ok := buckets[key]
+		if !ok {
+			b = &modelBucket{info: info}
+			buckets[key] = b
+			bucketOrder = append(bucketOrder, key)
+		}
+
 		jr := JSONTestResult{
 			CaseID:    r.CaseID,
 			Title:     r.Title,
@@ -194,21 +218,49 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 			}
 		}
 
-		modelResults.Results = append(modelResults.Results, jr)
-		totalElapsed += r.ElapsedMs
+		b.results = append(b.results, jr)
+		b.totalMs += r.ElapsedMs
+
+		switch r.Status {
+		case "passed":
+			b.passed++
+		case "failed":
+			b.failed++
+		case "errored":
+			b.errored++
+		case "skipped":
+			b.skipped++
+		}
 	}
 
-	modelResults.Summary = JSONModelSummary{
-		TotalCases:     summary.TotalCases,
-		Passed:         summary.Passed,
-		Failed:         summary.Failed,
-		Errored:        summary.Errored,
-		Skipped:        summary.Skipped,
-		MatchRate:      summary.MatchRate,
-		TotalElapsedMs: totalElapsed,
-	}
+	// Build ResultsByModel in insertion order
+	worstMatchRate := 1.0
+	for _, key := range bucketOrder {
+		b := buckets[key]
+		total := b.passed + b.failed + b.errored + b.skipped
+		evaluated := total - b.skipped
+		matchRate := 0.0
+		if evaluated > 0 {
+			matchRate = float64(b.passed) / float64(evaluated)
+		}
+		if matchRate < worstMatchRate {
+			worstMatchRate = matchRate
+		}
 
-	output.ResultsByModel = []JSONModelResults{modelResults}
+		output.ResultsByModel = append(output.ResultsByModel, JSONModelResults{
+			Model:   b.info,
+			Results: b.results,
+			Summary: JSONModelSummary{
+				TotalCases:     total,
+				Passed:         b.passed,
+				Failed:         b.failed,
+				Errored:        b.errored,
+				Skipped:        b.skipped,
+				MatchRate:      matchRate,
+				TotalElapsedMs: b.totalMs,
+			},
+		})
+	}
 
 	minMatchRate := suite.Acceptance.MinMatchRate
 	if minMatchRate == 0 {
@@ -216,10 +268,10 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 	}
 
 	output.OverallSummary = JSONOverallSummary{
-		ModelsTested:         1,
+		ModelsTested:         len(bucketOrder),
 		ThresholdsMet:        summary.ThresholdsMet,
 		MinMatchRateRequired: minMatchRate,
-		WorstMatchRate:       summary.MatchRate,
+		WorstMatchRate:       worstMatchRate,
 	}
 
 	// Add coverage if available

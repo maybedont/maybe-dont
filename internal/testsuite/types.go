@@ -123,6 +123,33 @@ type RunResult struct {
 	MoreTestsRemain bool
 }
 
+// ModelComparisonEntry holds per-model summary stats for the cross-model comparison table.
+type ModelComparisonEntry struct {
+	// Model is the model key (e.g., "openai:gpt-5", "cel")
+	Model string
+
+	// Passed is the number of tests that passed for this model
+	Passed int
+
+	// Failed is the number of tests that failed for this model
+	Failed int
+
+	// Errored is the number of tests that errored for this model
+	Errored int
+
+	// MatchRate is the pass rate (0.0-1.0) for this model
+	MatchRate float64
+
+	// AvgMs is the average test duration in milliseconds
+	AvgMs int64
+
+	// TotalMs is the total test duration in milliseconds
+	TotalMs int64
+
+	// FromCache is true if data is entirely from cached state (not tested in current run)
+	FromCache bool
+}
+
 // Suite represents a parsed suite.yaml configuration.
 type Suite struct {
 	Version     string                    `yaml:"version"`

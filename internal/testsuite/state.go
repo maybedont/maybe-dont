@@ -328,3 +328,50 @@ func ComputePolicyHash(policyYAML []byte) string {
 func ModelKey(provider, model string) string {
 	return provider + ":" + model
 }
+
+// CachedModelSummary aggregates test results for a single model from cached state.
+type CachedModelSummary struct {
+	Passed    int
+	Failed    int
+	Errored   int
+	TotalMs   int64
+	TestCount int
+}
+
+// GetModelSummaries aggregates test results per model from cached state.
+// Only includes entries whose policy hashes match the provided hashes,
+// ensuring results reflect the current policy versions.
+func (sm *StateManager) GetModelSummaries(policyHashes []string) map[string]*CachedModelSummary {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	summaries := make(map[string]*CachedModelSummary)
+
+	for _, cached := range sm.state.Results {
+		if !hashesMatch(cached.PolicyHashes, policyHashes) {
+			continue
+		}
+
+		for modelKey, result := range cached.Models {
+			s, ok := summaries[modelKey]
+			if !ok {
+				s = &CachedModelSummary{}
+				summaries[modelKey] = s
+			}
+
+			s.TestCount++
+			s.TotalMs += result.DurationMs
+
+			switch result.Status {
+			case "passed":
+				s.Passed++
+			case "failed":
+				s.Failed++
+			case "errored":
+				s.Errored++
+			}
+		}
+	}
+
+	return summaries
+}
