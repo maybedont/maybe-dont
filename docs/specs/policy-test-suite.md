@@ -1296,9 +1296,11 @@ CLI override:
 ```
 
 **Rate limit handling:**
-- When a 429 is received, the harness pauses until the rate limit window resets
-- The `rate_limit_buffer_ms` adds extra padding after a 429 to avoid immediately hitting the limit again (default: 5 seconds)
-- If `requests_per_minute` is set to N, the harness spaces requests to stay under that limit proactively
+- The harness proactively spaces requests to stay under `requests_per_minute` limit
+- When a 429 is received, behavior depends on `--wait` flag:
+  - **Without `--wait`**: Stop testing that model, mark remaining tests as `rate_limited`, continue with other providers. This is fail-fast for CI.
+  - **With `--wait`**: Pause until the rate limit window resets (typically 60 seconds), add `rate_limit_buffer_ms` padding, then resume. This is for local development.
+- The `rate_limit_buffer_ms` (default: 5 seconds) adds extra padding after rate limit window to avoid immediately hitting the limit again
 
 ##### 2. Incremental Execution Mode
 
@@ -1372,7 +1374,7 @@ The state file tracks test execution history, keyed by content hashes for change
   - PR branches with modified test cases get fresh results without polluting main branch cache
 
 - **Hash calculation:**
-  - Content hash: SHA256 of the normalized test case YAML content
+  - Content hash: SHA256 of the raw test case YAML file bytes (see Implementation Details)
   - `policy_hashes`: Array of SHA256 hashes of each referenced policy's content
   - If any policy hash changes, the cached result is invalidated
 
@@ -1499,6 +1501,139 @@ This workflow:
 4. Completes full suite over multiple runs
 5. Final run exits with 0, indicating all tests passed
 
+##### 8. Concrete Workflow for maybedont/maybe-dont
+
+This is the recommended workflow for our repository:
+
+```yaml
+# .github/workflows/policy-tests.yml
+name: Policy Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'internal/config/defaults/**'
+      - 'docs/specs/policy-test-suite/**'
+  pull_request:
+    paths:
+      - 'internal/config/defaults/**'
+      - 'docs/specs/policy-test-suite/**'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force re-run all tests (ignore cache)'
+        type: boolean
+        default: false
+      engine:
+        description: 'Engine to test'
+        type: choice
+        options: [all, cel, ai]
+        default: all
+
+jobs:
+  # Fast CEL tests - no API calls, no rate limits
+  test-cel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make build
+
+      - name: Run CEL tests
+        run: |
+          ./maybe-dont test policies \
+            --suite-dir docs/specs/policy-test-suite \
+            --engine cel \
+            --format junit \
+            --output cel-results.xml
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cel-results
+          path: cel-results.xml
+
+  # AI tests - uses state file for incremental execution
+  test-ai:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.engine != 'cel'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make build
+
+      # Restore state from main branch (PRs) or previous run (main)
+      - name: Restore test state
+        uses: actions/cache/restore@v4
+        with:
+          path: .policy-test-state.json
+          key: policy-test-state-${{ github.sha }}
+          restore-keys: |
+            policy-test-state-
+
+      - name: Run AI tests
+        id: ai-tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          FORCE_FLAG=""
+          if [ "${{ github.event.inputs.force }}" == "true" ]; then
+            FORCE_FLAG="--force"
+          fi
+
+          ./maybe-dont test policies \
+            --suite-dir docs/specs/policy-test-suite \
+            --engine ai \
+            --matrix \
+            --state-file .policy-test-state.json \
+            --rpm 20 \
+            --format junit \
+            --output ai-results.xml \
+            $FORCE_FLAG
+
+      # Save state for future runs
+      - name: Save test state
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .policy-test-state.json
+          key: policy-test-state-${{ github.sha }}
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-results
+          path: ai-results.xml
+
+  # Summary job for PR status
+  summary:
+    needs: [test-cel, test-ai]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          if [ "${{ needs.test-cel.result }}" == "failure" ] || [ "${{ needs.test-ai.result }}" == "failure" ]; then
+            echo "Tests failed"
+            exit 1
+          fi
+          echo "All tests passed"
+```
+
+**Key design decisions for our workflow:**
+- CEL tests run independently (fast, no API keys needed)
+- AI tests use `--matrix` to run against all models in suite.yaml
+- State is cached per commit SHA for incremental runs
+- `--rpm 20` provides conservative rate limiting (below most provider limits)
+- Manual dispatch allows `--force` to bypass cache when needed
+- Both jobs upload JUnit XML for GitHub's test reporting
+
 #### Resolved Decisions
 
 1. **State file in repo?** Recommended: commit to main branch for visibility. PRs don't commit state changes; they use main's state as a starting point.
@@ -1552,7 +1687,10 @@ This workflow:
 - For each policy referenced in `expectations.policies[].policy_name`, find that policy in the loaded rules
 - Compute SHA256 of the policy's YAML representation (the single rule, not the entire file)
 - Store as array in `policy_hashes` field
-- If a test case has no `expectations.policies`, use an empty array (the test is validated by decision only)
+- If a test case has no `expectations.policies`:
+  - For CEL tests: hash ALL enabled CEL policies (any policy change could affect results)
+  - For AI tests: hash ALL enabled AI policies for that phase
+  - This ensures policy changes invalidate cache even for tests that only assert on final decision
 
 **Default state file behavior:**
 - If `--state-file` is not specified, no state is persisted (stateless mode)
@@ -1563,6 +1701,33 @@ This workflow:
 - State is written after each test completes (not just at end of run)
 - If the process is interrupted, completed tests are preserved
 - On next run, only incomplete tests are executed
+
+**Failed test caching:**
+- Failed tests ARE cached in the state file with `status: "failed"`
+- On subsequent runs, failed tests are re-run (not skipped) - we want to detect if a policy fix resolves the failure
+- Only `status: "passed"` results are skipped on subsequent runs
+- Rationale: A test failure might be due to AI non-determinism; re-running gives it another chance
+
+**Force flag behavior:**
+- `--force` ignores all cached results and re-runs every test
+- Results are still written to the state file (replacing previous results)
+- Use case: "I changed something the hash doesn't capture (e.g., AI provider behavior), re-run everything"
+
+**State file locking:**
+- Use filesystem-level advisory locking (flock on Unix) when writing
+- If lock cannot be acquired within 5 seconds, fail with clear error
+- This prevents corruption from concurrent CI jobs or local processes
+
+**Suite ID source:**
+- `suite_id` in the state file comes from `bundle_id` in suite.yaml
+- If `bundle_id` changes, the state file is still valid (results keyed by content hash, not suite ID)
+- Suite ID is informational for debugging, not part of cache key
+
+**Model configuration hashing:**
+- Model identity is `provider:model_name` (e.g., `openai:gpt-4o-mini`)
+- Model parameters (temperature, max_tokens) are NOT part of the cache key
+- Rationale: Parameter changes are rare and typically intentional; if you change temperature, use `--force`
+- Future consideration: Include parameter hash if this proves problematic
 
 **Edge cases:**
 - Policy deleted: If a test references a policy that no longer exists, validation fails before any tests run (existing Phase 2 behavior)
@@ -1668,6 +1833,44 @@ echo "Exit code: $?"  # Should be 5 if more tests remain, 0 if all passed
 # Should run continuously until complete
 ./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json --wait --rpm 5
 # Expected: runs all tests, respecting rate limit, exits 0 when done
+```
+
+**Failed test re-run behavior:**
+```bash
+# 1. Create a test case that will fail (wrong expected decision)
+cat > ./suite/cases/will-fail.yaml << 'EOF'
+case_id: "will-fail"
+title: "Test that will fail"
+phase: "request"
+engine: "ai"
+request:
+  tool_name: "safe_tool"
+  arguments: {}
+expectations:
+  decision: "deny"  # Wrong - this should allow
+EOF
+
+# 2. Run and observe failure
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --state-file ./test-state.json --case-pattern "will-fail"
+# Expected: test fails, exit code 1
+
+# 3. Check state file shows failed status
+cat ./test-state.json | jq '.results[].models["openai:gpt-4o-mini"].status'
+# Expected: "failed"
+
+# 4. Run again - failed test should re-run (not skipped)
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --state-file ./test-state.json --case-pattern "will-fail"
+# Expected: test runs again (not "skipped (cached)"), still fails
+
+# 5. Fix the test case
+sed -i 's/decision: "deny"/decision: "allow"/' ./suite/cases/will-fail.yaml
+
+# 6. Run again - should pass now (new hash due to file change)
+./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
+  --state-file ./test-state.json --case-pattern "will-fail"
+# Expected: test passes, exit code 0
 ```
 
 ## Implementation Checklist
