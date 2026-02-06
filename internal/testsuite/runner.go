@@ -1003,8 +1003,28 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 		// Execute limited number of tests
 		casesToRun = casesToRun[:testsToRun]
 
-		// Wrap progress callback to record results to state
+		// Create progress indicator for this model's tests (TTY-only animation)
+		progressIndicator := NewTestProgressIndicator(os.Stdout, colorEnabled)
+
+		// onStart fires before each test — starts the progress bar animation
+		onStart := func(tc TestCase) {
+			if onProgress == nil {
+				return // no streaming output, skip animation
+			}
+			engineInfo := formatEngineInfo("ai", modelKey)
+			var estimatedMs int64
+			if r.stateManager != nil {
+				contentHash := r.testCaseHashes[tc.CaseID]
+				estimatedMs = r.stateManager.GetCachedDuration(contentHash, r.policyHashes, modelKey)
+			}
+			progressIndicator.Start(tc.CaseID, engineInfo, estimatedMs)
+		}
+
+		// Wrap progress callback to stop animation, record state, then print result
 		wrappedProgress := func(result TestResult) {
+			// Stop progress animation before printing result
+			progressIndicator.Stop()
+
 			// Record to state manager
 			if r.stateManager != nil {
 				contentHash := r.testCaseHashes[result.CaseID]
@@ -1030,7 +1050,7 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 		}
 
 		// Execute tests with this model
-		modelResults := runner.ExecuteTests(ctx, casesToRun, wrappedProgress)
+		modelResults := runner.ExecuteTests(ctx, casesToRun, onStart, wrappedProgress)
 		allResults = append(allResults, modelResults...)
 	}
 
@@ -1596,10 +1616,11 @@ func formatSingleTestResult(tr TestResult) string {
 	switch tr.Status {
 	case "passed":
 		icon := colorize(ansiBoldGreen, "✓")
-		sb.WriteString(fmt.Sprintf("%s %s%s %dms\n", icon, tr.CaseID, engineInfo, tr.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("%s %s%s\n", icon, tr.CaseID, engineInfo))
 		if tr.Title != "" {
 			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
+		sb.WriteString(fmt.Sprintf("    elapsed: %dms\n", tr.ElapsedMs))
 		sb.WriteString(formatPhaseLine())
 		sb.WriteString(formatDecisionLine())
 		sb.WriteString(formatPolicies(tr.Actual.PoliciesExecuted, tr.Actual.Decision, expectedNames))
@@ -1611,10 +1632,11 @@ func formatSingleTestResult(tr TestResult) string {
 		}
 	case "failed":
 		icon := colorize(ansiBoldRed, "✗")
-		sb.WriteString(fmt.Sprintf("%s %s%s %dms\n", icon, tr.CaseID, engineInfo, tr.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("%s %s%s\n", icon, tr.CaseID, engineInfo))
 		if tr.Title != "" {
 			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
+		sb.WriteString(fmt.Sprintf("    elapsed: %dms\n", tr.ElapsedMs))
 		sb.WriteString(formatPhaseLine())
 		sb.WriteString(formatDecisionLine())
 		sb.WriteString(formatPolicies(tr.Actual.PoliciesExecuted, tr.Actual.Decision, expectedNames))
@@ -1635,10 +1657,11 @@ func formatSingleTestResult(tr TestResult) string {
 		}
 	case "errored":
 		icon := colorize(ansiBoldYellow, "⚠")
-		sb.WriteString(fmt.Sprintf("%s %s%s %dms\n", icon, tr.CaseID, engineInfo, tr.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("%s %s%s\n", icon, tr.CaseID, engineInfo))
 		if tr.Title != "" {
 			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
+		sb.WriteString(fmt.Sprintf("    elapsed: %dms\n", tr.ElapsedMs))
 		if tr.Error != nil {
 			if strings.Contains(tr.Error.Message, "\n") {
 				// Multi-line message: show type on its own line, then the best-formatted

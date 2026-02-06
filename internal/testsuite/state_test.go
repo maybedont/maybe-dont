@@ -299,6 +299,37 @@ func TestModelKey(t *testing.T) {
 	assert.Equal(t, "openai:gpt-4", key)
 }
 
+// TestGetCachedDuration verifies that GetCachedDuration returns the cached
+// duration for a test case, or 0 when no matching cache entry exists.
+func TestGetCachedDuration(t *testing.T) {
+	sm, _ := NewStateManager("", "test-suite", "1.0.0")
+	policyHashes := []string{"sha256:policy1"}
+
+	sm.RecordResult("sha256:test1", "case-1", policyHashes, "openai:gpt-5", &CachedResult{
+		Status: "passed", DurationMs: 12345,
+	})
+
+	t.Run("returns cached duration", func(t *testing.T) {
+		d := sm.GetCachedDuration("sha256:test1", policyHashes, "openai:gpt-5")
+		assert.Equal(t, int64(12345), d)
+	})
+
+	t.Run("returns 0 for unknown content hash", func(t *testing.T) {
+		d := sm.GetCachedDuration("sha256:unknown", policyHashes, "openai:gpt-5")
+		assert.Equal(t, int64(0), d)
+	})
+
+	t.Run("returns 0 for mismatched policy hashes", func(t *testing.T) {
+		d := sm.GetCachedDuration("sha256:test1", []string{"sha256:other"}, "openai:gpt-5")
+		assert.Equal(t, int64(0), d)
+	})
+
+	t.Run("returns 0 for unknown model", func(t *testing.T) {
+		d := sm.GetCachedDuration("sha256:test1", policyHashes, "anthropic:claude")
+		assert.Equal(t, int64(0), d)
+	})
+}
+
 // TestGetModelSummaries verifies that GetModelSummaries aggregates per-model
 // results from cached state, filtering by policy hash match.
 func TestGetModelSummaries(t *testing.T) {

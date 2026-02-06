@@ -209,14 +209,19 @@ func loadAIResponsePoliciesFromDirectory(dir string) ([]config.AIResponsePolicy,
 }
 
 // ExecuteTests runs test cases against AI policies.
+// If onStart is provided, it's called before each test begins (for progress indicators).
 // If onProgress is provided, it's called after each test completes for streaming output.
-func (r *AITestRunner) ExecuteTests(ctx context.Context, cases []TestCase, onProgress ProgressCallback) []TestResult {
+func (r *AITestRunner) ExecuteTests(ctx context.Context, cases []TestCase, onStart func(TestCase), onProgress ProgressCallback) []TestResult {
 	var results []TestResult
 
 	for i, tc := range cases {
 		// Skip if test case doesn't target AI engine
 		if tc.Engine != "ai" && tc.Engine != "both" {
 			continue
+		}
+
+		if onStart != nil {
+			onStart(tc)
 		}
 
 		result := r.executeTest(ctx, tc)

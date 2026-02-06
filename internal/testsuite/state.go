@@ -329,6 +329,27 @@ func ModelKey(provider, model string) string {
 	return provider + ":" + model
 }
 
+// GetCachedDuration returns the cached duration in milliseconds for a test case/model
+// combination. Returns 0 if no cached result exists or policy hashes don't match.
+// Used by the progress indicator to estimate how long a test will take.
+func (sm *StateManager) GetCachedDuration(contentHash string, policyHashes []string, modelKey string) int64 {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	cached, ok := sm.state.Results[contentHash]
+	if !ok {
+		return 0
+	}
+	if !hashesMatch(cached.PolicyHashes, policyHashes) {
+		return 0
+	}
+	modelResult, ok := cached.Models[modelKey]
+	if !ok {
+		return 0
+	}
+	return modelResult.DurationMs
+}
+
 // CachedModelSummary aggregates test results for a single model from cached state.
 type CachedModelSummary struct {
 	Passed    int
