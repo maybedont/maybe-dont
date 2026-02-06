@@ -1347,13 +1347,13 @@ The state file tracks test execution history, keyed by content hashes for change
       "models": {
         "anthropic:claude-3-5-haiku-20241022": {
           "status": "passed",
-          "confidence": null,
+          "confidence": 1.0,
           "last_run": "2026-02-05T12:00:00Z",
           "duration_ms": 1500
         },
         "openai:gpt-4o-mini": {
           "status": "passed",
-          "confidence": null,
+          "confidence": 1.0,
           "last_run": "2026-02-05T11:55:00Z",
           "duration_ms": 1200
         }
@@ -1376,7 +1376,7 @@ The state file tracks test execution history, keyed by content hashes for change
   - `policy_hashes`: Array of SHA256 hashes of each referenced policy's content
   - If any policy hash changes, the cached result is invalidated
 
-- **Confidence field**: Currently `null` (policies return binary decisions). Reserved for future confidence scoring support.
+- **Confidence field**: Currently `1.0` as a placeholder (policies return binary decisions). Reserved for future confidence scoring support.
 
 - **Product version**: Tracks which version of maybe-dont generated the results. When the product version changes, consider whether to invalidate cached results (TBD based on backward compatibility guarantees).
 
