@@ -827,7 +827,7 @@ func (r *Runner) executeTests(ctx context.Context) (*RunResult, error) {
 		if r.opts.CasePattern != "" && r.opts.CasePattern != "*" {
 			fmt.Printf("%d test case(s) matched pattern %q\n", len(cases), r.opts.CasePattern)
 		}
-		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+		fmt.Printf("──────────────────────────────────────────────────\n\n")
 
 		// Set up callback to print each result as it completes
 		onProgress = func(result TestResult) {
@@ -1824,7 +1824,7 @@ func formatTextOutput(suite *Suite, results []TestResult, summary *RunResult, co
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("Policy Test Suite: %s\n", suite.BundleID))
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+	sb.WriteString("──────────────────────────────────────────────────\n\n")
 
 	for _, tr := range results {
 		sb.WriteString(formatSingleTestResult(tr))
