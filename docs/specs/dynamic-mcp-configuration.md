@@ -84,7 +84,7 @@ The gateway must not spawn processes or execute arbitrary commands based on clie
 |------|----------|
 | [mcp-remote](https://github.com/geelen/mcp-remote) | stdio wrapper that bridges to remote servers via CLI args |
 | mcp-proxy | Rust bidirectional proxy with OAuth support |
-| [Envoy Dynamic Forward Proxy](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/dynamic_forward_proxy_filter) | Host header rewriting for dynamic upstream |
+| [Envoy Dynamic Forward Proxy](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/dynamic_forward_proxy_filter) | Host header rewriting for dynamic routing |
 
 ### MCP Client Header Support
 
@@ -94,7 +94,7 @@ The gateway must not spawn processes or execute arbitrary commands based on clie
 | Claude Desktop | Remote servers via Connectors | [No direct config](https://github.com/jlowin/fastmcp/issues/1789) |
 | mcp-remote | `--header` CLI args | Works via stdio wrapper |
 
-## Options for Upstream Specification
+## Options for Downstream Server Specification
 
 This section outlines approaches for how clients tell the gateway which downstream MCP server to connect to.
 
@@ -110,16 +110,16 @@ The client encodes the target MCP server URL as a query parameter.
   "mcpServers": {
     "github": {
       "type": "http",
-      "url": "https://gateway.example.com/mcp?upstream=https://api.githubcopilot.com/mcp/"
+      "url": "https://gateway.example.com/mcp?downstream=https://api.githubcopilot.com/mcp/"
     }
   }
 }
 ```
 
 **Gateway Behavior:**
-1. Extract `upstream` query parameter from incoming request URL
+1. Extract `downstream` query parameter from incoming request URL
 2. Validate URL (allowlist, blocklist, or open)
-3. Create session-scoped connection to upstream
+3. Create session-scoped connection to downstream server
 4. Proxy MCP traffic with policy evaluation
 
 **Pros:**
@@ -130,18 +130,71 @@ The client encodes the target MCP server URL as a query parameter.
 
 **Cons:**
 - Feels "hacky" - URLs containing URLs
-- Requires URL encoding for complex upstream URLs
-- Upstream URLs with query strings become complicated: `?upstream=https://example.com/mcp?token=abc` requires encoding
+- Requires URL encoding for complex downstream URLs
+- Downstream URLs with query strings become complicated: `?downstream=https://example.com/mcp?token=abc` requires encoding
 - URL length limits could be a concern for complex configurations
 
 **Encoding Example:**
 ```
 # Simple case
-?upstream=https://api.github.com/mcp
+?downstream=https://api.github.com/mcp
 
 # With query string (encoded)
-?upstream=https%3A%2F%2Fexample.com%2Fmcp%3Ftoken%3Dabc
+?downstream=https%3A%2F%2Fexample.com%2Fmcp%3Ftoken%3Dabc
 ```
+
+#### Header Forwarding Challenge
+
+With the query parameter approach, a key challenge arises: **how does the gateway know which headers to forward to the downstream server?**
+
+Consider a typical existing MCP configuration:
+```json
+{
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ghp_xxxx"
+      }
+    }
+  }
+}
+```
+
+When modified to use the gateway:
+```json
+{
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://gateway.example.com/mcp?downstream=https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ghp_xxxx"
+      }
+    }
+  }
+}
+```
+
+The `Authorization` header is now sent to the **gateway**, not directly to GitHub. The gateway must decide what to do with it.
+
+**Problems:**
+1. **Ambiguity**: The gateway receives headers but doesn't know which are meant for the downstream vs. for itself
+2. **Security risk**: Blindly forwarding all headers could leak internal/sensitive headers
+3. **Future collision**: If we add gateway authentication (e.g., `Authorization: Bearer gateway-token`), how do we differentiate it from the downstream auth header?
+
+**Potential Solutions:**
+
+| Approach | Description | Trade-off |
+|----------|-------------|-----------|
+| **Prefix convention** | Headers prefixed with `X-Downstream-` are forwarded (stripped of prefix) | Requires modifying existing header names in config |
+| **Query parameter for headers** | `?downstream=...&forward=Authorization` specifies which headers to pass | More URL complexity, but explicit |
+| **Separate gateway auth header** | Gateway uses `X-Gateway-Auth` instead of `Authorization` | Avoids collision, but non-standard for gateway auth |
+| **All-except-denylist** | Forward all headers except `Host`, `Content-Length`, and gateway-specific headers | Simple but risky; could leak unintended headers |
+| **Explicit in query** | Encode headers in URL: `?downstream=...&header=Authorization:Bearer%20xxx` | Self-contained but very long URLs |
+
+**Recommendation:** The prefix convention (`X-Downstream-*`) combined with a dedicated gateway auth header (`X-Gateway-Auth`) provides the clearest separation of concerns, though it requires users to modify their header names.
 
 ---
 
@@ -157,7 +210,7 @@ The client sends the target MCP server URL in a custom HTTP header.
       "type": "http",
       "url": "https://gateway.example.com/mcp",
       "headers": {
-        "X-MCP-Upstream": "https://api.githubcopilot.com/mcp/"
+        "X-MCP-Downstream": "https://api.githubcopilot.com/mcp/"
       }
     }
   }
@@ -165,9 +218,9 @@ The client sends the target MCP server URL in a custom HTTP header.
 ```
 
 **Gateway Behavior:**
-1. Extract `X-MCP-Upstream` header from incoming request
+1. Extract `X-MCP-Downstream` header from incoming request
 2. Validate URL
-3. Create session-scoped connection to upstream
+3. Create session-scoped connection to downstream server
 4. Proxy MCP traffic with policy evaluation
 
 **Pros:**
@@ -202,8 +255,8 @@ The target MCP server is encoded in the URL path.
 
 **Gateway Behavior:**
 1. Extract path after `/proxy/` prefix
-2. Reconstruct upstream URL (assumes HTTPS by default)
-3. Create session-scoped connection to upstream
+2. Reconstruct downstream URL (assumes HTTPS by default)
+3. Create session-scoped connection to downstream server
 4. Proxy MCP traffic with policy evaluation
 
 **Pros:**
@@ -211,6 +264,45 @@ The target MCP server is encoded in the URL path.
 - Easy to read and understand
 - No query string encoding issues for simple URLs
 - Familiar pattern (similar to CORS proxies)
+
+#### CORS Proxy Pattern Reference
+
+The path-based approach mirrors a well-established pattern used by CORS proxy services. These services allow browser-based JavaScript to fetch resources from APIs that don't include CORS headers, by routing requests through a proxy that adds the necessary headers.
+
+**Examples of CORS proxy URL patterns:**
+
+| Service | Pattern | Example |
+|---------|---------|---------|
+| [cors-anywhere](https://github.com/Rob--W/cors-anywhere) | `https://proxy/{target_url}` | `https://cors-anywhere.herokuapp.com/https://api.github.com/users` |
+| [allorigins](https://allorigins.win/) | `https://proxy/get?url={encoded_url}` | Query param variant |
+| [corsproxy.io](https://corsproxy.io/) | `https://proxy/?{target_url}` | `https://corsproxy.io/?https://api.github.com/users` |
+
+The `cors-anywhere` pattern is most similar to what we're considering:
+```
+https://cors-anywhere.herokuapp.com/https://api.github.com/users/octocat
+                                    └── Full target URL in path ──┘
+```
+
+**How it handles the URL parsing:**
+- Everything after the proxy hostname is treated as the target URL
+- The first path segment that looks like a hostname (contains a dot) begins the target
+- Subsequent path segments are appended to the target path
+
+**Limitations inherited from this pattern:**
+- Target URLs with query strings require careful handling
+- The proxy must parse the path to extract `scheme://host/path`
+- Some implementations require the scheme (`https://`) in the path, others assume it
+
+**Relevance to our design:**
+If we adopt path-based routing, we could follow the `cors-anywhere` convention where the full downstream URL (including scheme) appears in the path:
+```
+https://gateway.example.com/proxy/https://api.githubcopilot.com/mcp/
+```
+
+Or use a simplified version that assumes HTTPS:
+```
+https://gateway.example.com/proxy/api.githubcopilot.com/mcp/
+```
 
 **Cons:**
 - Assumes schema (HTTPS) - need escape hatch for HTTP
@@ -232,7 +324,7 @@ The target MCP server is encoded in the URL path.
 
 ### Option 4: Session Initialization Header
 
-The client sends the upstream URL only during the MCP `initialize` handshake. The gateway caches this for the session.
+The client sends the downstream URL only during the MCP `initialize` handshake. The gateway caches this for the session.
 
 **Client Configuration:**
 ```json
@@ -242,7 +334,7 @@ The client sends the upstream URL only during the MCP `initialize` handshake. Th
       "type": "http",
       "url": "https://gateway.example.com/mcp",
       "headers": {
-        "X-MCP-Upstream": "https://api.githubcopilot.com/mcp/"
+        "X-MCP-Downstream": "https://api.githubcopilot.com/mcp/"
       }
     }
   }
@@ -250,9 +342,9 @@ The client sends the upstream URL only during the MCP `initialize` handshake. Th
 ```
 
 **Gateway Behavior:**
-1. On `initialize` request, extract `X-MCP-Upstream` header
-2. Store upstream URL in session state
-3. All subsequent requests in session use cached upstream
+1. On `initialize` request, extract `X-MCP-Downstream` header
+2. Store downstream URL in session state
+3. All subsequent requests in session use cached downstream
 4. Session expiration cleans up connection
 
 **Pros:**
@@ -265,18 +357,18 @@ The client sends the upstream URL only during the MCP `initialize` handshake. Th
 - Same header support limitations as Option 2
 - More complex state management
 - What if header is missing on initialize? Error or fallback?
-- Mid-session upstream changes require new session
+- Mid-session downstream changes require new session
 
 ---
 
 ### Option 5: Dedicated Registration Endpoint
 
-The client first calls a registration endpoint to establish the upstream, then uses a returned session token for MCP traffic.
+The client first calls a registration endpoint to establish the downstream server, then uses a returned session token for MCP traffic.
 
 **Workflow:**
 ```
 1. Client: POST /register
-   Body: { "upstream": "https://api.github.com/mcp" }
+   Body: { "downstream": "https://api.github.com/mcp" }
 
 2. Gateway: Returns session token
    Response: { "session_id": "abc123", "mcp_url": "/mcp/abc123" }
@@ -329,7 +421,7 @@ The target MCP server is encoded as a subdomain of the gateway.
 
 **Gateway Behavior:**
 1. Extract subdomain from Host header (e.g., `github`)
-2. Map subdomain to upstream URL via pattern or lookup
+2. Map subdomain to downstream URL via pattern or lookup
 3. Proxy MCP traffic
 
 **Mapping Options:**
@@ -376,7 +468,7 @@ Support the same URL patterns that mcp-remote uses, enabling compatibility with 
 
 **Gateway Behavior:**
 1. Parse query parameters matching mcp-remote conventions
-2. `url` parameter specifies upstream
+2. `url` parameter specifies downstream server
 3. `header` parameters specify pass-through headers
 4. Proxy with extracted configuration
 
@@ -395,7 +487,7 @@ Support the same URL patterns that mcp-remote uses, enabling compatibility with 
 
 ## Authentication Pass-Through
 
-Regardless of which upstream specification option is chosen, we need a mechanism for passing authentication headers to the upstream MCP server.
+Regardless of which downstream specification option is chosen, we need a mechanism for passing authentication headers to the downstream MCP server.
 
 ### Challenge
 
@@ -403,6 +495,36 @@ For dynamic MCP configuration, authentication requirements are unknown ahead of 
 - GitHub uses `Authorization: Bearer <token>`
 - Other servers may use `X-API-Key`, `X-Token`, or custom headers
 - Some servers require multiple headers
+
+### Header Collision Problem
+
+A critical issue arises when considering future gateway authentication:
+
+**Current state:** The gateway does not require authentication from clients.
+
+**Future state:** We may want to add client-to-gateway authentication to:
+- Verify users are authorized to use the gateway
+- Identify the caller for audit logging
+- Apply per-user rate limits or policies
+
+**The collision:** Both the gateway and downstream servers commonly use the `Authorization` header:
+```
+Client → Gateway: Authorization: Bearer <gateway-token>
+Gateway → Downstream: Authorization: Bearer <github-token>
+```
+
+If both use `Authorization`, how does the client provide both? How does the gateway differentiate?
+
+**Possible resolutions:**
+
+| Approach | Client Config | Gateway Behavior |
+|----------|---------------|------------------|
+| **Separate header names** | `X-Gateway-Auth` for gateway, `Authorization` for downstream | Gateway consumes `X-Gateway-Auth`, forwards `Authorization` |
+| **Prefixed headers** | `X-Downstream-Authorization` for downstream | Gateway strips prefix before forwarding |
+| **Token in query/path** | Gateway token in URL, downstream auth in headers | Separates concerns by transport mechanism |
+| **Nested headers** | `Authorization` for gateway, `X-Downstream-Authorization` for downstream | Gateway translates prefixed headers |
+
+**Recommendation:** Use a dedicated gateway auth header (`X-Gateway-Auth` or `X-MaybeDont-Auth`) so the standard `Authorization` header is always available for downstream forwarding. This avoids collision entirely.
 
 ### Approaches
 
@@ -413,7 +535,7 @@ Client explicitly specifies which headers to pass through.
 ```json
 {
   "headers": {
-    "X-MCP-Upstream": "https://api.github.com/mcp",
+    "X-MCP-Downstream": "https://api.github.com/mcp",
     "X-MCP-Pass-Header": "Authorization",
     "Authorization": "Bearer ghp_xxxx"
   }
@@ -432,13 +554,13 @@ Headers with a specific prefix are automatically forwarded.
 ```json
 {
   "headers": {
-    "X-MCP-Upstream": "https://api.github.com/mcp",
-    "X-MCP-Forward-Authorization": "Bearer ghp_xxxx"
+    "X-MCP-Downstream": "https://api.github.com/mcp",
+    "X-Downstream-Authorization": "Bearer ghp_xxxx"
   }
 }
 ```
 
-Gateway strips `X-MCP-Forward-` prefix and forwards as `Authorization`.
+Gateway strips `X-Downstream-` prefix and forwards as `Authorization`.
 
 **Pros:** Clear convention, flexible
 **Cons:** Requires header renaming in client config
@@ -469,7 +591,7 @@ Gateway passes all headers except a denylist (e.g., `Host`, `Content-Length`, ga
 
 ## Open Questions for Review
 
-### Upstream Specification
+### Downstream Server Specification
 
 1. **Which option(s) should we implement?**
    - Single approach for simplicity?
@@ -503,7 +625,7 @@ Gateway passes all headers except a denylist (e.g., `Host`, `Content-Length`, ga
 7. **Tool prefixing for dynamic connections?**
    - Current pattern: `{client_name}__tool_name`
    - What's the client name for dynamic connections?
-   - Derive from upstream URL? (e.g., `github-com__tool_name`)
+   - Derive from downstream URL? (e.g., `github-com__tool_name`)
    - Client-specified name?
 
 ### Security
@@ -513,13 +635,13 @@ Gateway passes all headers except a denylist (e.g., `Host`, `Content-Length`, ga
    - Per-upstream-domain limits?
 
 9. **Audit logging for dynamic routing?**
-   - Log upstream URL in audit entries?
+   - Log downstream URL in audit entries?
    - Redact sensitive parts of URLs (tokens in query strings)?
 
 ### Resource Management
 
-10. **Connection pooling for dynamic upstreams?**
-    - Reuse connections across sessions to same upstream?
+10. **Connection pooling for dynamic downstreams?**
+    - Reuse connections across sessions to same downstream?
     - Or fully isolated per-session connections?
 
 ---
