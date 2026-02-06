@@ -651,6 +651,26 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		http.Error(w, "Not Found: HTTP transport not enabled. Server configured for SSE transport.", http.StatusNotFound)
 	})
 
+	// Register CLI validation endpoint
+	cliHandler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:             g.config.CLIRequestValidation.Enabled,
+		ValidateCommands:    g.config.CLIRequestValidation.ValidateCommands,
+		Logger:              g.logger,
+		Version:             g.version,
+		AuditWriter:         g.auditWriter,
+		CELEngine:           g.policyEngine,
+		AIEngine:            g.aiPolicyEngine,
+		MaxBlockingMs:       g.config.Validation.MaxBlockingMs,
+		MaxRuleEvaluationMs: g.config.Validation.MaxRuleEvaluationMs,
+		IncludeArgumentValues: g.config.CLIRequestValidation.ShouldIncludeArgumentValues(),
+	})
+	mux.Handle("/api/v1/cli/validate", cliHandler)
+	if g.config.CLIRequestValidation.Enabled {
+		g.logger.Info(ctx, "CLI validation endpoint enabled",
+			zap.Int("validate_commands_count", len(g.config.CLIRequestValidation.ValidateCommands)),
+		)
+	}
+
 	// Wrap with auth middleware
 	handler := AuthMiddleware(g.callerAuthConfig, mux)
 
@@ -732,6 +752,26 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 	mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Not Found: SSE transport not enabled. Server configured for HTTP transport.", http.StatusNotFound)
 	})
+
+	// Register CLI validation endpoint
+	cliHandler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:             g.config.CLIRequestValidation.Enabled,
+		ValidateCommands:    g.config.CLIRequestValidation.ValidateCommands,
+		Logger:              g.logger,
+		Version:             g.version,
+		AuditWriter:         g.auditWriter,
+		CELEngine:           g.policyEngine,
+		AIEngine:            g.aiPolicyEngine,
+		MaxBlockingMs:       g.config.Validation.MaxBlockingMs,
+		MaxRuleEvaluationMs: g.config.Validation.MaxRuleEvaluationMs,
+		IncludeArgumentValues: g.config.CLIRequestValidation.ShouldIncludeArgumentValues(),
+	})
+	mux.Handle("/api/v1/cli/validate", cliHandler)
+	if g.config.CLIRequestValidation.Enabled {
+		g.logger.Info(ctx, "CLI validation endpoint enabled",
+			zap.Int("validate_commands_count", len(g.config.CLIRequestValidation.ValidateCommands)),
+		)
+	}
 
 	// Wrap with auth middleware
 	handler := AuthMiddleware(g.callerAuthConfig, mux)

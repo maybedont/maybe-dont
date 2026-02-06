@@ -1,7 +1,7 @@
 # CLI Proxy for AI Agent Tool Validation
 
 ## Status
-**Draft** - Pending Review
+**Implemented** - Ready for merge
 
 ## Overview
 
@@ -82,6 +82,16 @@ Extend the Maybe Don't CLI to act as a proxy for CLI commands executed by AI age
 | Fail mode | Fail-open (V1) | Allow command if gateway unreachable; configurable later |
 | Validation scope | Request only | Response validation not possible with `syscall.Exec` |
 
+**Implementation Note - Validation Abstraction:**
+
+The existing validation engines (`CELPolicyEngine`, `AIPolicyEngine`) are currently coupled to `mcp.CallToolRequest`. To support CLI validation, consider one of these approaches:
+
+1. **Adapter Pattern (recommended)**: Create a `ValidationRequest` interface that both MCP tool calls and CLI commands can implement, allowing the engines to accept either type.
+2. **Separate Methods**: Add `EvaluateCLICommand()` methods alongside existing `EvaluateToolCall()` methods.
+3. **Unified Request Struct**: Create a common struct with a `Type` field ("mcp_tool" or "cli") that wraps either request type.
+
+The choice is an implementation detail; all approaches achieve the same external behavior.
+
 ## CLI Interface
 
 ### Invocation Syntax
@@ -155,9 +165,11 @@ Configure cli_request_validation.enabled: true to enable this feature
 
 | Flag | Short | Type | Default | Description |
 |------|-------|------|---------|-------------|
-| `--server` | `-s` | string | `http://localhost:8080` | Gateway endpoint URL |
+| `--server` | `-s` | string | `http://localhost:8080` | Gateway base URL |
 | `--timeout` | | duration | `30s` | Validation request timeout |
 | `--dry-run` | | bool | `false` | Validate only, don't execute |
+
+**Note:** The `--server` flag specifies the gateway base URL only. The CLI appends `/api/v1/cli/validate` at runtime. For example, `--server https://gateway.internal:8443` results in requests to `https://gateway.internal:8443/api/v1/cli/validate`.
 
 ### Future Flags (not in V1)
 
@@ -165,7 +177,7 @@ Configure cli_request_validation.enabled: true to enable this feature
 |------|-------------|
 | `--fail-closed` | Deny command if gateway unreachable |
 | `--output-format` | `text` or `json` for error output |
-| `--correlation-id` | Correlation ID for audit log linking |
+| `--client-id` | Client ID for audit attribution (overrides env var) |
 
 ## REST API Design
 
@@ -177,13 +189,28 @@ The gateway exposes a REST endpoint for CLI validation. This is separate from th
 POST /api/v1/cli/validate
 ```
 
+### Endpoint Availability
+
+The CLI validation endpoint is available on **both HTTP and SSE transport types**. It is registered on the same `http.ServeMux` that serves MCP traffic, requiring minimal additional code (one `mux.HandleFunc` call per transport).
+
+**Independence from MCP:** The CLI endpoint is controlled by `cli_request_validation.enabled`, independent of downstream MCP server configuration. A gateway can be deployed with:
+- Only CLI validation (no downstream MCP servers)
+- Only MCP proxying (CLI validation disabled)
+- Both features enabled
+
+**STDIO transport:** The CLI REST endpoint is not available when the gateway runs in STDIO mode, as STDIO does not expose an HTTP server.
+
 ### Request Headers
 
 | Header | Required | Description |
 |--------|----------|-------------|
 | `Content-Type` | Yes | Must be `application/json` |
-| `X-Correlation-ID` | No | Optional ID for correlating with MCP sessions or other requests |
-| `X-Request-ID` | No | Optional request tracing ID (generated if not provided) |
+| `X-Maybe-Dont-Client-ID` | No | Identifies the caller for audit attribution (e.g., user email, service account). See [Client ID](#client-id-for-audit-attribution). |
+| `X-Request-ID` | No | Per-request tracing ID. If not provided, the server generates a 32-character hex string (consistent with MCP request ID generation). |
+
+**Request ID vs Client ID:**
+- **Request ID**: Unique identifier for a single HTTP request, used for tracing/debugging a specific request through logs
+- **Client ID**: Identifies the caller across multiple requests (e.g., all commands from one user or AI agent), used for audit attribution
 
 ### Request Body
 
@@ -213,7 +240,7 @@ POST /api/v1/cli/validate
 | `client_info.hostname` | string | No | Client machine hostname |
 | `client_info.username` | string | No | Current user (from `$USER` or equivalent) |
 | `client_info.os` | string | No | Operating system (e.g., `darwin`, `linux`, `windows`) |
-| `client_info.os_version` | string | No | OS version string |
+| `client_info.os_version` | string | No | OS version string (best-effort in V1; requires platform-specific code) |
 | `client_info.arch` | string | No | CPU architecture (e.g., `amd64`, `arm64`) |
 | `client_info.shell` | string | No | User's shell (e.g., `/bin/zsh`) |
 | `client_info.cli_version` | string | No | Version of the `maybe-dont` CLI |
@@ -275,7 +302,41 @@ POST /api/v1/cli/validate
 }
 ```
 
+### Version Fields
+
+The response includes `server_version` and `client_version` fields:
+
+- **`server_version`**: Gateway version (from build info)
+- **`client_version`**: Echoed from `client_info.cli_version` in the request (if provided)
+
+**V1 Behavior:** These fields are informational only. No compatibility checks are performed. Future versions may add:
+- Minimum supported client version enforcement
+- Deprecation warnings for outdated clients
+- Feature capability negotiation
+
 ### Error Responses
+
+All error responses follow the same structure:
+
+```json
+{
+  "error": "<error_code>",
+  "message": "<human-readable description>"
+}
+```
+
+**Error Code Taxonomy:**
+
+| Code | HTTP Status | Description |
+|------|-------------|-------------|
+| `cli_validation_disabled` | 400 | CLI validation feature not enabled on gateway |
+| `invalid_request` | 400 | Malformed request body (missing fields, invalid JSON) |
+| `missing_command` | 400 | Required `command` field is empty or missing |
+| `invalid_content_type` | 400 | Content-Type header is not `application/json` |
+| `policy_evaluation_error` | 500 | CEL or AI engine failed to evaluate policies |
+| `internal_error` | 500 | Unexpected server error |
+
+**Examples:**
 
 **400 Bad Request - CLI validation disabled:**
 
@@ -286,36 +347,69 @@ POST /api/v1/cli/validate
 }
 ```
 
+**400 Bad Request - Missing command:**
+
+```json
+{
+  "error": "missing_command",
+  "message": "Required field 'command' is empty"
+}
+```
+
 **400 Bad Request - Invalid request:**
 
 ```json
 {
   "error": "invalid_request",
-  "message": "Missing required field: command"
+  "message": "Failed to parse request body: unexpected EOF"
 }
 ```
 
-**500 Internal Server Error:**
+**500 Internal Server Error - Policy evaluation:**
+
+```json
+{
+  "error": "policy_evaluation_error",
+  "message": "CEL engine failed: expression compilation error"
+}
+```
+
+**500 Internal Server Error - Unexpected:**
 
 ```json
 {
   "error": "internal_error",
-  "message": "Failed to evaluate policies"
+  "message": "An unexpected error occurred"
 }
 ```
 
-### Correlation ID for Audit Linking
+### Client ID for Audit Attribution
 
-To correlate CLI validation requests with MCP sessions or other contexts, the AI agent skill can instruct the agent to set an environment variable:
+Client IDs identify the caller across multiple CLI validation requests for audit attribution (e.g., all commands from one user or AI agent).
+
+**Sources (in priority order):**
+1. `MAYBE_DONT_CLIENT_ID` environment variable (user configuration)
+2. `X-Maybe-Dont-Client-ID` request header (AI agent/skill instruction)
+
+**Rationale:** The environment variable is set by the human user (intentional, persistent configuration). The header is set by the AI agent following skill instructions. User's explicit configuration takes precedence.
+
+**Example values:**
+- Email: `developer@company.com`
+- User ID: `user-12345`
+- Service account: `ci-bot-prod`
+- Session identifier: `session-abc123`
+
+**Example:**
 
 ```bash
-export MAYBEDONT_CORRELATION_ID="session-abc123"
+# User sets client ID in their environment
+export MAYBE_DONT_CLIENT_ID="developer@company.com"
 maybe-dont cli -- gh pr comment 123 --body "LGTM"
 ```
 
-The CLI wrapper reads this environment variable and sends it as the `X-Correlation-ID` header. The audit log entry includes this correlation ID, enabling later analysis to link CLI calls with MCP tool calls from the same agent session.
+The CLI wrapper reads the environment variable and sends it as the `X-Maybe-Dont-Client-ID` header. The audit log entry includes this client ID, enabling later analysis to link CLI calls with MCP tool calls from the same caller.
 
-**Note:** This is optional and requires the AI agent skill to instruct correlation ID usage. Without it, audit logs still capture hostname, username, working directory, and timestamp for attribution.
+**Note:** This is optional. Without it, audit logs still capture hostname, username, working directory, and timestamp for attribution.
 
 ## Server-Side Configuration
 
@@ -373,7 +467,9 @@ CEL and AI rules support both MCP tool calls and CLI commands in a single rule d
 
 ### CEL Rules
 
-Use `expression` for MCP tool calls and `cli_expression` for CLI commands. At least one must be defined.
+Use `mcp_expression` for MCP tool calls and `cli_expression` for CLI commands. At least one must be defined.
+
+**Backwards Compatibility:** The legacy `expression` field is supported as a fallback for `mcp_expression`. If both `expression` and `mcp_expression` are present, `mcp_expression` takes precedence. This fallback is resolved at policy load time, so at runtime only `mcp_expression` and `cli_expression` exist.
 
 ```yaml
 # cel_request_rules.yaml
@@ -384,7 +480,7 @@ rules:
     description: "Block destructive GitHub operations"
 
     # MCP tool expression
-    expression: |
+    mcp_expression: |
       tool.name == "github__delete_repo" ||
       (tool.name == "github__update_repo" && tool.arguments.delete == true)
 
@@ -398,9 +494,9 @@ rules:
     action: deny
     message: "Destructive GitHub operations are not permitted"
 
-  # MCP only (no CLI equivalent)
+  # MCP only (no CLI equivalent) - using legacy `expression` field
   - name: no-bulk-email
-    expression: |
+    expression: |  # Treated as mcp_expression for backwards compat
       tool.name == "email__send_bulk"
     action: deny
     message: "Bulk email not permitted"
@@ -413,18 +509,27 @@ rules:
     message: "sudo not permitted for AI agents"
 ```
 
-**Evaluation Logic:**
+**Field Resolution (at policy load time):**
 
-| `expression` | `cli_expression` | MCP Tool Call | CLI Command |
-|--------------|------------------|---------------|-------------|
-| ✓ | ✓ | Evaluate `expression` | Evaluate `cli_expression` |
-| ✓ | ✗ | Evaluate `expression` | Skip rule |
+| `mcp_expression` | `expression` | Result |
+|------------------|--------------|--------|
+| present | present | Use `mcp_expression` (ignore `expression`) |
+| present | absent | Use `mcp_expression` |
+| absent | present | Use `expression` as `mcp_expression` |
+| absent | absent | No MCP expression (rule skipped for MCP calls) |
+
+**Evaluation Logic (at runtime):**
+
+| `mcp_expression` | `cli_expression` | MCP Tool Call | CLI Command |
+|------------------|------------------|---------------|-------------|
+| ✓ | ✓ | Evaluate `mcp_expression` | Evaluate `cli_expression` |
+| ✓ | ✗ | Evaluate `mcp_expression` | Skip rule |
 | ✗ | ✓ | Skip rule | Evaluate `cli_expression` |
 | ✗ | ✗ | Invalid (config error) | Invalid (config error) |
 
 **Config Validation:**
 
-- Error at load time if both `expression` and `cli_expression` are empty/missing
+- Error at load time if all of `mcp_expression`, `expression`, and `cli_expression` are empty/missing
 - Warning at load time if `cli_expression` exists but `cli_request_validation.enabled: false`
 
 ### AI Rules
@@ -489,15 +594,29 @@ The CEL engine receives a `cli` object for CLI commands:
 | `cli.client_info.shell` | string | User's shell |
 | `cli.client_info.cli_version` | string | CLI wrapper version |
 
+**Implementation Note - Client Info Collection:**
+
+The CLI wrapper should collect client info using Go's cross-platform standard library:
+
+| Field | Go Approach | Notes |
+|-------|-------------|-------|
+| `hostname` | `os.Hostname()` | Works cross-platform; in Docker returns container ID unless `--hostname` set |
+| `username` | `user.Current().Username` | From `os/user` package; works in containers |
+| `os` | `runtime.GOOS` | Built-in: "darwin", "linux", "windows" |
+| `arch` | `runtime.GOARCH` | Built-in: "amd64", "arm64", etc. |
+| `os_version` | Platform-specific | Optional in V1; requires `sw_vers` (macOS), `/etc/os-release` (Linux), registry (Windows) |
+| `shell` | `os.Getenv("SHELL")` / `os.Getenv("COMSPEC")` | Unix vs Windows; may be empty in containers |
+| `cli_version` | Build-time constant | Embedded via `-ldflags` |
+
 ### CEL Policy Loading
 
-Both expressions are compiled and stored at load time:
+Both expressions are compiled and stored at load time. The `expression` → `mcp_expression` fallback is resolved during loading, so runtime code only deals with `MCPExpression` and `CLIExpression`:
 
 ```go
 type CELPolicy struct {
     Name           string
     Description    string
-    MCPExpression  *cel.Program  // compiled from `expression`
+    MCPExpression  *cel.Program  // compiled from `mcp_expression` (or `expression` fallback)
     CLIExpression  *cel.Program  // compiled from `cli_expression`
     Action         config.PolicyAction
     Message        string
@@ -505,9 +624,105 @@ type CELPolicy struct {
 }
 ```
 
-At validation time:
+**Load-time resolution:**
+```go
+// Pseudocode for field resolution
+if config.MCPExpression != "" {
+    policy.MCPExpression = compile(config.MCPExpression)
+} else if config.Expression != "" {
+    policy.MCPExpression = compile(config.Expression)  // fallback
+}
+if config.CLIExpression != "" {
+    policy.CLIExpression = compile(config.CLIExpression)
+}
+```
+
+**Runtime evaluation:**
 - MCP tool call → use `MCPExpression` (skip rule if nil)
-- CLI call → use `CLIExpression` (skip rule if nil)
+- CLI command → use `CLIExpression` (skip rule if nil)
+
+## Audit Logging
+
+CLI validations are logged to the same audit log as MCP tool calls, using a compatible but distinct entry structure.
+
+### Audit Entry Structure
+
+For CLI validations, the `AuditEntry` uses a new `CLI` field instead of `Tool`:
+
+```go
+type AuditEntry struct {
+    // ... existing fields ...
+
+    // Tool is populated for MCP tool calls (nil for CLI)
+    Tool *AuditToolInfo `json:"tool,omitempty"`
+
+    // CLI is populated for CLI command validations (nil for MCP)
+    CLI *AuditCLIInfo `json:"cli,omitempty"`
+
+    // ... validation results, timing, etc. ...
+}
+
+type AuditCLIInfo struct {
+    Command          string            `json:"command"`           // e.g., "gh"
+    Arguments        []string          `json:"arguments"`         // e.g., ["pr", "comment", "123"]
+    WorkingDirectory string            `json:"working_directory,omitempty"`
+    ClientInfo       *CLIClientInfo    `json:"client_info,omitempty"`
+}
+
+type CLIClientInfo struct {
+    Hostname   string `json:"hostname,omitempty"`
+    Username   string `json:"username,omitempty"`
+    OS         string `json:"os,omitempty"`
+    OSVersion  string `json:"os_version,omitempty"`
+    Arch       string `json:"arch,omitempty"`
+    Shell      string `json:"shell,omitempty"`
+    CLIVersion string `json:"cli_version,omitempty"`
+}
+```
+
+**Example CLI Audit Entry:**
+
+```json
+{
+  "validation_started": "2024-01-15T10:30:00.123456789Z",
+  "created_at": "2024-01-15T10:30:00.234567890Z",
+  "cli": {
+    "command": "gh",
+    "arguments": ["pr", "comment", "123", "--body", "LGTM"],
+    "working_directory": "/home/user/project",
+    "client_info": {
+      "hostname": "dev-workstation-1",
+      "username": "developer",
+      "os": "darwin",
+      "cli_version": "1.2.0"
+    }
+  },
+  "upstream_request": {
+    "id": "a1b2c3d4e5f6...",
+    "client_id": "developer@company.com",
+    "client_ip": "192.168.1.100"
+  },
+  "request_validation": {
+    "cel": {
+      "action": "allow",
+      "results": [...]
+    }
+  },
+  "recommended_action": "allow",
+  "action": "allow",
+  "duration_ms": 45
+}
+```
+
+**Key Differences from MCP Audit Entries:**
+
+| Field | MCP Tool Call | CLI Command |
+|-------|---------------|-------------|
+| `tool` | Populated | `null` |
+| `cli` | `null` | Populated |
+| `tool.client` | MCP client name (e.g., "github") | N/A |
+| `cli.command` | N/A | CLI executable name |
+| Response validation | Supported | Not supported (always `null`) |
 
 ## Response Validation Limitation
 
@@ -657,16 +872,16 @@ Server provides full allowlist via `Last-Modified` header pattern.
 
 **Deferred:** More complex, implement only if V2 caching is insufficient.
 
-### Correlation ID Enhancement (V2/V3)
+### Client ID Cache Scoping (V2/V3)
 
-If AI agent provides correlation ID, scope cache by correlation:
+If client ID is provided, scope cache by client:
 
 ```bash
-export MAYBEDONT_CORRELATION_ID="session-abc123"
+export MAYBE_DONT_CLIENT_ID="developer@company.com"
 maybe-dont cli -- gh pr comment 123
 ```
 
-Cache key becomes `{command}:{correlation_id}` - new session invalidates cache.
+Cache key becomes `{command}:{client_id}` - different clients have isolated caches.
 
 ## Skill Management Subcommand
 
@@ -690,21 +905,22 @@ Available skills:
 Use 'maybe-dont skill view <name>' to output a skill definition.
 ```
 
-**`maybe-dont skill view <name> [--format <format>]`**
+**`maybe-dont skill view <name> --format <format>`**
 
-Outputs the specified skill definition to stdout.
+Outputs the specified skill definition to stdout. The `--format` flag is required.
 
 ```bash
-# Default (Claude Code format)
-$ maybe-dont skill view cli
-# <outputs markdown skill definition>
+# Claude Code format
+$ maybe-dont skill view cli --format claude > .claude/skills/maybe-dont-cli.md
 
-# Deploy to project
-$ maybe-dont skill view cli > .claude/skills/maybe-dont-cli.md
-
-# Future: other formats
+# Cursor format
 $ maybe-dont skill view cli --format cursor > .cursorrules
+
+# GitHub Copilot format
 $ maybe-dont skill view cli --format copilot > .github/copilot-instructions.md
+
+# Generic format (for any AI system prompt)
+$ maybe-dont skill view cli --format generic > instructions.md
 ```
 
 ### V1 Scope
@@ -712,21 +928,27 @@ $ maybe-dont skill view cli --format copilot > .github/copilot-instructions.md
 | Feature | V1 | Future |
 |---------|-----|--------|
 | `skill list` | ✓ | |
-| `skill view cli` | ✓ | |
-| `--format claude` (default) | ✓ | |
-| `--format cursor` | | ✓ |
-| `--format copilot` | | ✓ |
+| `skill view cli --format <format>` | ✓ | |
+| `--format claude` | ✓ | |
+| `--format cursor` | ✓ | |
+| `--format copilot` | ✓ | |
+| `--format generic` | ✓ | |
 | Additional skills | | ✓ |
 
 ### Implementation
 
 ```go
-//go:embed skills/cli.md
+//go:embed cli.md
 var cliSkillClaude string
 
-// Future: embed multiple formats
-//go:embed skills/cli.cursorrules
+//go:embed cli.cursorrules
 var cliSkillCursor string
+
+//go:embed cli.copilot.md
+var cliSkillCopilot string
+
+//go:embed cli.generic.md
+var cliSkillGeneric string
 ```
 
 ## AI Agent Integration
@@ -747,11 +969,11 @@ All shell/CLI commands must be executed through the Maybe Don't CLI proxy:
 maybe-dont cli -- <command> [args...]
 \`\`\`
 
-### Session Correlation (Optional)
+### Client Identification (Optional)
 
-To correlate CLI validation with your session for audit analysis, set:
+To identify yourself in audit logs for attribution, set:
 \`\`\`bash
-export MAYBEDONT_CORRELATION_ID="your-session-id"
+export MAYBE_DONT_CLIENT_ID="your-email@company.com"
 \`\`\`
 
 ### Examples
@@ -888,12 +1110,16 @@ The following are explicitly not addressed:
 ### Phase 2: REST API Endpoint
 
 - [ ] Add REST endpoint handler at `/api/v1/cli/validate`
+- [ ] Register endpoint on both HTTP and SSE transport muxes
 - [ ] Define request/response JSON schemas
+- [ ] Implement error code taxonomy (see Error Responses section)
 - [ ] Extract validation logic into shared function (reusable by MCP native tool)
 - [ ] Return 400 with JSON error if CLI validation disabled
-- [ ] Support `X-Correlation-ID` header for audit linking
-- [ ] Support `X-Request-ID` header (generate if not provided)
-- [ ] Add audit logging for CLI validations
+- [ ] Support `X-Maybe-Dont-Client-ID` header for audit attribution
+- [ ] Support `MAYBE_DONT_CLIENT_ID` env var (takes precedence over header)
+- [ ] Support `X-Request-ID` header (generate 32-char hex string if not provided)
+- [ ] Add `AuditCLIInfo` and `CLIClientInfo` structs
+- [ ] Add audit logging for CLI validations (populate `CLI` field, not `Tool`)
 - [ ] Add unit tests for endpoint
 - [ ] Add integration tests for validation flow
 
@@ -901,11 +1127,13 @@ The following are explicitly not addressed:
 
 - [ ] Create `internal/cliproxy/` package
 - [ ] Implement HTTP client for gateway REST API
-- [ ] Read `MAYBEDONT_CORRELATION_ID` env var, send as header
+- [ ] Append `/api/v1/cli/validate` to `--server` base URL
+- [ ] Read `MAYBE_DONT_CLIENT_ID` env var, send as `X-Maybe-Dont-Client-ID` header
+- [ ] Collect client info (hostname, username, os, arch, shell, cli_version)
 - [ ] Implement `syscall.Exec` execution (Unix)
 - [ ] Implement `exec.Command` fallback (Windows)
 - [ ] Add `cmd/cli.go` subcommand with Cobra
-- [ ] Support `--server` / `-s` flag
+- [ ] Support `--server` / `-s` flag (base URL only)
 - [ ] Support `--timeout` flag
 - [ ] Support `--dry-run` flag
 - [ ] Implement `--` separator parsing
@@ -913,19 +1141,22 @@ The following are explicitly not addressed:
 - [ ] Implement fail-open behavior when gateway unreachable (warning to stderr)
 - [ ] Add unit tests for argument parsing
 - [ ] Add unit tests for HTTP client
+- [ ] Add unit tests for URL construction (base URL + path)
 - [ ] Add integration tests for end-to-end flow
 
 ### Phase 4: Unified Policy Rules
 
-- [ ] Add `cli_expression` field to CEL rule schema
-- [ ] Update CEL engine to compile and store both expressions
+- [ ] Add `mcp_expression` and `cli_expression` fields to CEL rule schema
+- [ ] Implement `expression` → `mcp_expression` fallback at policy load time
+- [ ] Update CEL engine to compile and store both expressions (`MCPExpression`, `CLIExpression`)
 - [ ] Update CEL engine to evaluate `cli_expression` for CLI context
 - [ ] Skip rules without applicable expression for context type
 - [ ] Normalize MCP tool calls and CLI commands for AI rules (`operation` structure)
 - [ ] Add `operation.type` ("mcp_tool" or "cli") to AI rule context
-- [ ] Update config validation (require at least one of `expression` or `cli_expression`)
+- [ ] Update config validation (require at least one of `mcp_expression`, `expression`, or `cli_expression`)
 - [ ] Warn at load if `cli_expression` exists but CLI validation disabled
 - [ ] Add unit tests for mixed rules
+- [ ] Add unit tests for `expression` → `mcp_expression` fallback
 - [ ] Add example rules to `config/` directory
 - [ ] Review default AI policies for CLI compatibility
 - [ ] Update documentation
@@ -936,7 +1167,7 @@ The following are explicitly not addressed:
 - [ ] Implement `skill list` command
 - [ ] Implement `skill view <name>` command
 - [ ] Embed `skills/cli.md` in binary using `//go:embed`
-- [ ] Add `--format` flag (default: `claude`, others deferred)
+- [ ] Add `--format` flag (required)
 - [ ] Add help text and examples
 - [ ] Add unit tests for skill commands
 
@@ -951,11 +1182,11 @@ The following are explicitly not addressed:
 ### Future Enhancements (Not in V1)
 
 - [ ] V2: TTL-based response caching
-- [ ] V2: Correlation ID support for cache scoping
+- [ ] V2: Client ID support for cache scoping
 - [ ] V3: Server-managed allowlist with `Last-Modified`
 - [ ] Configurable fail mode (`fail_mode: open | closed`)
 - [ ] `--output-format json` flag
 - [ ] Slim binary build target (`maybe-dont-cli`)
 - [ ] Authentication between CLI and gateway
-- [ ] Additional skill formats (Cursor, Copilot, etc.)
+- [ ] Additional skills beyond `cli` (e.g., MCP-specific skills)
 - [ ] MCP native tool wrapper (for users who prefer MCP interface)

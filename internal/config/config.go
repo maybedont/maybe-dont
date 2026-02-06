@@ -136,6 +136,9 @@ type Config struct {
 	// Response validation configuration (CEL and AI)
 	ResponseValidation ResponseValidationConfig `mapstructure:"response_validation"`
 
+	// CLIRequestValidation configures validation of CLI commands via REST API.
+	CLIRequestValidation CLIRequestValidationConfig `mapstructure:"cli_request_validation"`
+
 	// Downstream MCP servers configuration
 	DownstreamMCPServers map[string]ClientConfig `mapstructure:"downstream_mcp_servers"`
 
@@ -227,13 +230,22 @@ type CredentialMapping struct {
 
 // Policy represents a single deterministic policy rule (uses CEL expressions internally)
 type Policy struct {
-	Name        string       `mapstructure:"name"`
-	Description string       `mapstructure:"description"`
-	Expression  string       `mapstructure:"expression"`
-	Action      PolicyAction `mapstructure:"action"`  // allow or deny
-	Message     string       `mapstructure:"message"`
-	Enabled     *bool        `mapstructure:"enabled"` // Whether this rule runs (default: true)
-	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or empty (default: follows top-level)
+	Name        string `mapstructure:"name" yaml:"name"`
+	Description string `mapstructure:"description" yaml:"description"`
+	// Expression is the legacy CEL expression field, kept for backwards compatibility.
+	// New configs should use MCPExpression and/or CLIExpression instead.
+	// At load time, if MCPExpression is empty, Expression is used as a fallback for MCP validation.
+	Expression string `mapstructure:"expression" yaml:"expression"`
+	// MCPExpression is the CEL expression used for MCP tool call validation.
+	// If empty and Expression is set, Expression is used as fallback.
+	MCPExpression string `mapstructure:"mcp_expression" yaml:"mcp_expression"`
+	// CLIExpression is the CEL expression used for CLI command validation.
+	// This expression has access to different context variables than MCPExpression.
+	CLIExpression string       `mapstructure:"cli_expression" yaml:"cli_expression"`
+	Action        PolicyAction `mapstructure:"action" yaml:"action"`   // allow or deny
+	Message       string       `mapstructure:"message" yaml:"message"`
+	Enabled       *bool        `mapstructure:"enabled" yaml:"enabled"` // Whether this rule runs (default: true)
+	Mode          PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only" or empty (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -345,6 +357,33 @@ type AIResponseValidationConfig struct {
 	Mode      PolicyMode         `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
 	RulesFile string             `mapstructure:"rules_file"`
 	Rules     []AIResponsePolicy `mapstructure:"rules"`
+}
+
+// CLIRequestValidationConfig configures CLI command validation via REST API.
+type CLIRequestValidationConfig struct {
+	// Enabled controls whether the CLI validation endpoint is active.
+	// When false, the /api/v1/cli/validate endpoint returns 400.
+	Enabled bool `mapstructure:"enabled"`
+
+	// ValidateCommands lists CLI executables that require validation.
+	// Use "*" to validate all commands.
+	// Empty list when enabled=true is a configuration error.
+	ValidateCommands []string `mapstructure:"validate_commands"`
+
+	// IncludeArgumentValues controls whether full argument values are included in audit entries.
+	// When true (default), full argument values are included for forensic analysis.
+	// When false, only argument flags/names are included to protect sensitive data
+	// like tokens and passwords that may appear in command arguments.
+	IncludeArgumentValues *bool `mapstructure:"include_argument_values"`
+}
+
+// ShouldIncludeArgumentValues returns whether full argument values should be included in audit.
+// Defaults to true if not explicitly configured.
+func (c *CLIRequestValidationConfig) ShouldIncludeArgumentValues() bool {
+	if c.IncludeArgumentValues == nil {
+		return true // Default to including full values for forensic analysis
+	}
+	return *c.IncludeArgumentValues
 }
 
 // LoadPoliciesFromFile loads deterministic policies from a file
@@ -1491,6 +1530,12 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		if err := ValidateRelativePath(cfg.Audit.Path); err != nil {
 			errors = append(errors, fmt.Sprintf("audit.path: %s", err.Error()))
 		}
+	}
+
+	// Validate CLI request validation config
+	if cfg.CLIRequestValidation.Enabled && len(cfg.CLIRequestValidation.ValidateCommands) == 0 {
+		errors = append(errors, configError("cli_request_validation.validate_commands",
+			"cannot be empty when enabled=true; use [\"*\"] to validate all commands"))
 	}
 
 	// Return collected errors with contextual guidance
