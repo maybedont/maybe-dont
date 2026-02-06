@@ -519,7 +519,7 @@ func (rl *RateLimiter) waitWithProgressAndInfo(ctx context.Context, provider str
 
 	// Print initial message with rate limit details
 	if rl.isTTY {
-		_, _ = fmt.Fprintf(rl.output, "\n⏳ Rate limit reached for %s\n", provider)
+		_, _ = fmt.Fprintf(rl.output, "⏳ Rate limit reached for %s\n", provider)
 		if info != nil {
 			if info.RequestsLimit > 0 {
 				_, _ = fmt.Fprintf(rl.output, "   Requests: %d/%d remaining\n", info.RequestsRemaining, info.RequestsLimit)

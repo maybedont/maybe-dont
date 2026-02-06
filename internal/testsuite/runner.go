@@ -1478,7 +1478,7 @@ func formatPolicies(policies []PolicyResult, actualDecision string, expectedPoli
 			return sorted[i].PolicyName < sorted[j].PolicyName
 		})
 		for _, p := range sorted {
-			sb.WriteString(fmt.Sprintf("        %-*s  %-5s  %dms\n", maxNameLen, p.PolicyName, p.Decision, p.ElapsedMs))
+			sb.WriteString(fmt.Sprintf("        %-*s  %-5s  %s\n", maxNameLen, p.PolicyName, p.Decision, formatMs(p.ElapsedMs)))
 		}
 		return sb.String()
 	}
@@ -1511,11 +1511,11 @@ func formatPolicies(policies []PolicyResult, actualDecision string, expectedPoli
 				marker = colorize(ansiBoldYellow, "►")
 			}
 		}
-		sb.WriteString(fmt.Sprintf("      %s %-*s  %-5s  %dms\n", marker, maxNameLen, p.PolicyName, p.Decision, p.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("      %s %-*s  %-5s  %s\n", marker, maxNameLen, p.PolicyName, p.Decision, formatMs(p.ElapsedMs)))
 	}
 	// Write remaining policies
 	for _, p := range other {
-		sb.WriteString(fmt.Sprintf("        %-*s  %-5s  %dms\n", maxNameLen, p.PolicyName, p.Decision, p.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("        %-*s  %-5s  %s\n", maxNameLen, p.PolicyName, p.Decision, formatMs(p.ElapsedMs)))
 	}
 
 	return sb.String()
@@ -1620,7 +1620,7 @@ func formatSingleTestResult(tr TestResult) string {
 		if tr.Title != "" {
 			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
-		sb.WriteString(fmt.Sprintf("    elapsed: %dms\n", tr.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("    elapsed: %s\n", formatMs(tr.ElapsedMs)))
 		sb.WriteString(formatPhaseLine())
 		sb.WriteString(formatDecisionLine())
 		sb.WriteString(formatPolicies(tr.Actual.PoliciesExecuted, tr.Actual.Decision, expectedNames))
@@ -1636,7 +1636,7 @@ func formatSingleTestResult(tr TestResult) string {
 		if tr.Title != "" {
 			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
-		sb.WriteString(fmt.Sprintf("    elapsed: %dms\n", tr.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("    elapsed: %s\n", formatMs(tr.ElapsedMs)))
 		sb.WriteString(formatPhaseLine())
 		sb.WriteString(formatDecisionLine())
 		sb.WriteString(formatPolicies(tr.Actual.PoliciesExecuted, tr.Actual.Decision, expectedNames))
@@ -1661,7 +1661,7 @@ func formatSingleTestResult(tr TestResult) string {
 		if tr.Title != "" {
 			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
-		sb.WriteString(fmt.Sprintf("    elapsed: %dms\n", tr.ElapsedMs))
+		sb.WriteString(fmt.Sprintf("    elapsed: %s\n", formatMs(tr.ElapsedMs)))
 		if tr.Error != nil {
 			if strings.Contains(tr.Error.Message, "\n") {
 				// Multi-line message: show type on its own line, then the best-formatted
@@ -1835,8 +1835,8 @@ func formatSlowestPolicies(results []TestResult) string {
 		if avgMs > slowThresholdMs {
 			slowMarker = " ⚠"
 		}
-		sb.WriteString(fmt.Sprintf("  - %s: avg %dms, max %dms (%d runs)%s\n",
-			t.name, avgMs, t.maxMs, t.count, slowMarker))
+		sb.WriteString(fmt.Sprintf("  - %s: avg %s, max %s (%d runs)%s\n",
+			t.name, formatMs(avgMs), formatMs(t.maxMs), t.count, slowMarker))
 	}
 
 	return sb.String()
@@ -2059,7 +2059,16 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 	return sb.String()
 }
 
-// formatDurationMs formats milliseconds for the Avg ms column.
+// formatMs formats a millisecond duration for human-readable output.
+// Under 1s: "342 ms". Over 1s: "24278 ms (24.3s)".
+func formatMs(ms int64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%d ms", ms)
+	}
+	return fmt.Sprintf("%d ms (%.1fs)", ms, float64(ms)/1000.0)
+}
+
+// formatDurationMs formats milliseconds for the Avg ms column in the comparison table.
 func formatDurationMs(ms int64) string {
 	return fmt.Sprintf("%dms", ms)
 }

@@ -667,7 +667,7 @@ func TestFormatPolicies(t *testing.T) {
 			actualDecision: "deny",
 			wantContains: []string{
 				"deny",
-				"1872ms",
+				"1872 ms (1.9s)",
 			},
 		},
 	}
