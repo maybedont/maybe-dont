@@ -196,6 +196,13 @@ func (p *openAIProvider) buildRequestBody(req AIRequest) ([]byte, error) {
 		body[k] = v
 	}
 
+	// OpenAI deprecated max_tokens in favor of max_completion_tokens for newer
+	// models. Translate so callers can use the canonical max_tokens name.
+	if v, ok := body["max_tokens"]; ok {
+		body["max_completion_tokens"] = v
+		delete(body, "max_tokens")
+	}
+
 	return json.Marshal(body)
 }
 
@@ -230,6 +237,14 @@ func (p *openAIProvider) parseResponse(respBody []byte) (AICompletionResult, int
 
 	choice := resp.Choices[0]
 	content := choice.Message.Content
+
+	if content == "" {
+		return AICompletionResult{}, 0, &AIProviderError{
+			Category:  ErrCategoryNoResponse,
+			Message:   "OpenAI returned empty response content",
+			Retryable: false,
+		}
+	}
 
 	return AICompletionResult{
 		RawText:           content,
@@ -292,7 +307,7 @@ func (p *openAIProvider) normalizeError(err error, statusCode int) *AIProviderEr
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &AIProviderError{
 			Category:  ErrCategoryTimeout,
-			Message:   "request timed out",
+			Message:   "request to OpenAI timed out",
 			Retryable: false,
 			Cause:     err,
 		}

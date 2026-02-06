@@ -3,7 +3,9 @@ package testsuite
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -409,17 +411,20 @@ func TestFormatEngineInfo(t *testing.T) {
 }
 
 // TestFormatSingleTestResult_EngineInfo verifies that test result output includes
-// the engine/model metadata suffix in the formatted output.
+// the engine/model metadata suffix, title, confidence suppression for CEL, and
+// multi-line policy formatting.
 func TestFormatSingleTestResult_EngineInfo(t *testing.T) {
 	tests := []struct {
-		name         string
-		result       TestResult
-		wantContains []string
+		name            string
+		result          TestResult
+		wantContains    []string
+		wantNotContains []string
 	}{
 		{
-			name: "CEL test shows [cel] suffix",
+			name: "CEL test shows [cel] suffix and suppresses confidence",
 			result: TestResult{
 				CaseID: "test-1",
+				Title:  "Allow safe read operation",
 				Engine: "cel",
 				Status: "passed",
 				Expected: ExpectedResult{
@@ -430,12 +435,14 @@ func TestFormatSingleTestResult_EngineInfo(t *testing.T) {
 					Confidence: 1.0,
 				},
 			},
-			wantContains: []string{"test-1", "[cel]"},
+			wantContains:    []string{"test-1", "[cel]", "Allow safe read operation", "decision: expected: allow, actual: allow\n"},
+			wantNotContains: []string{"confidence"},
 		},
 		{
-			name: "AI test shows [ai:model] suffix",
+			name: "AI test shows [ai:model] suffix and includes confidence",
 			result: TestResult{
 				CaseID: "test-2",
+				Title:  "Deny command execution",
 				Engine: "ai",
 				Model:  "anthropic:claude-haiku",
 				Status: "passed",
@@ -444,13 +451,13 @@ func TestFormatSingleTestResult_EngineInfo(t *testing.T) {
 				},
 				Actual: ActualResult{
 					Decision:   "deny",
-					Confidence: 1.0,
+					Confidence: 0.9,
 				},
 			},
-			wantContains: []string{"test-2", "[ai:anthropic:claude-haiku]"},
+			wantContains: []string{"test-2", "[ai:anthropic:claude-haiku]", "Deny command execution", "confidence: 0.9"},
 		},
 		{
-			name: "failed test with engine info",
+			name: "failed test with engine info and reasoning",
 			result: TestResult{
 				CaseID: "test-3",
 				Engine: "ai",
@@ -462,10 +469,13 @@ func TestFormatSingleTestResult_EngineInfo(t *testing.T) {
 				Actual: ActualResult{
 					Decision:   "allow",
 					Confidence: 0.8,
+					Reasoning:  "AI determined request is safe",
 				},
 				Failures: []string{"expected deny, got allow"},
 			},
-			wantContains: []string{"test-3", "[ai:openai:gpt-4o-mini]", "✗"},
+			// Reasoning should be plain text, not %q quoted
+			wantContains:    []string{"test-3", "[ai:openai:gpt-4o-mini]", "✗", "reasoning: AI determined request is safe"},
+			wantNotContains: []string{`reasoning: "AI`},
 		},
 		{
 			name: "skipped test with engine info",
@@ -476,15 +486,16 @@ func TestFormatSingleTestResult_EngineInfo(t *testing.T) {
 				Status: "skipped",
 				Error: &TestError{
 					Type:    "cached",
-					Message: "Skipped due to valid cached result",
+					Message: "cached passed",
 				},
 			},
-			wantContains: []string{"test-4", "[ai:openai:gpt-4]", "○", "skipped"},
+			wantContains: []string{"test-4", "[ai:openai:gpt-4]", "○", "skipped", "cached passed"},
 		},
 		{
-			name: "errored test with engine info",
+			name: "errored test with engine info and title",
 			result: TestResult{
 				CaseID: "test-5",
+				Title:  "Test timeout scenario",
 				Engine: "ai",
 				Model:  "anthropic:claude",
 				Status: "errored",
@@ -493,7 +504,7 @@ func TestFormatSingleTestResult_EngineInfo(t *testing.T) {
 					Message: "Test case timed out",
 				},
 			},
-			wantContains: []string{"test-5", "[ai:anthropic:claude]", "⚠", "timeout"},
+			wantContains: []string{"test-5", "[ai:anthropic:claude]", "⚠", "timeout", "Test timeout scenario"},
 		},
 		{
 			name: "no engine shows no suffix",
@@ -511,6 +522,52 @@ func TestFormatSingleTestResult_EngineInfo(t *testing.T) {
 			},
 			wantContains: []string{"test-6", "✓"},
 		},
+		{
+			name: "empty title is not shown",
+			result: TestResult{
+				CaseID: "test-7",
+				Title:  "",
+				Engine: "cel",
+				Status: "passed",
+				Expected: ExpectedResult{
+					Decision: "allow",
+				},
+				Actual: ActualResult{
+					Decision:   "allow",
+					Confidence: 1.0,
+				},
+			},
+			// The line after header should be "decision:", not an empty title line
+			wantContains: []string{"✓ test-7", "decision: expected: allow"},
+		},
+		{
+			name: "multi-line policies with triggering marker",
+			result: TestResult{
+				CaseID: "test-8",
+				Engine: "cel",
+				Status: "passed",
+				Expected: ExpectedResult{
+					Decision: "deny",
+				},
+				Actual: ActualResult{
+					Decision:   "deny",
+					Confidence: 1.0,
+					PoliciesExecuted: []PolicyResult{
+						{PolicyName: "Check file access", Decision: "allow", ElapsedMs: 100},
+						{PolicyName: "Check command exec", Decision: "deny", ElapsedMs: 200},
+						{PolicyName: "Check network", Decision: "allow", ElapsedMs: 150},
+					},
+				},
+			},
+			wantContains: []string{
+				"policies:\n",
+				"► Check command exec",
+				"  Check file access",
+				"  Check network",
+			},
+			// Old single-line format should not appear
+			wantNotContains: []string{"policies: Check"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -519,8 +576,431 @@ func TestFormatSingleTestResult_EngineInfo(t *testing.T) {
 			for _, want := range tt.wantContains {
 				assert.Contains(t, output, want, "output should contain %q", want)
 			}
+			for _, notWant := range tt.wantNotContains {
+				assert.NotContains(t, output, notWant, "output should NOT contain %q", notWant)
+			}
 		})
 	}
+}
+
+// TestFormatSectionHeader verifies the visual separator generation.
+func TestFormatSectionHeader(t *testing.T) {
+	tests := []struct {
+		name     string
+		label    string
+		contains string
+	}{
+		{
+			name:     "CEL header",
+			label:    "cel",
+			contains: "── cel ",
+		},
+		{
+			name:     "model header with colon",
+			label:    "anthropic:claude-opus-4-6",
+			contains: "── anthropic:claude-opus-4-6 ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatSectionHeader(tt.label)
+			assert.Contains(t, result, tt.contains)
+			// Should end with dashes and newline
+			assert.True(t, strings.HasSuffix(result, "─\n"), "should end with dashes and newline")
+			// Total rune width should be sectionHeaderWidth + newline
+			runeCount := utf8.RuneCountInString(result)
+			assert.Equal(t, sectionHeaderWidth+1, runeCount, "header should be exactly %d runes + newline", sectionHeaderWidth)
+		})
+	}
+}
+
+// TestFormatPolicies verifies multi-line policy formatting with triggering sort,
+// column alignment, and colored markers for expected/unexpected policies.
+func TestFormatPolicies(t *testing.T) {
+	tests := []struct {
+		name             string
+		policies         []PolicyResult
+		actualDecision   string
+		expectedPolicies map[string]bool
+		wantContains     []string
+		wantNotContains  []string
+		wantEmpty        bool
+	}{
+		{
+			name:      "empty policies returns empty string",
+			policies:  nil,
+			wantEmpty: true,
+		},
+		{
+			name: "triggering policy sorted first with marker",
+			policies: []PolicyResult{
+				{PolicyName: "Beta policy", Decision: "allow", ElapsedMs: 100},
+				{PolicyName: "Alpha policy", Decision: "deny", ElapsedMs: 200},
+			},
+			actualDecision: "deny",
+			wantContains: []string{
+				"policies:\n",
+				"► Alpha policy",
+				"  Beta policy",
+			},
+		},
+		{
+			name: "multiple triggering sorted alphabetically",
+			policies: []PolicyResult{
+				{PolicyName: "Zebra", Decision: "deny", ElapsedMs: 300},
+				{PolicyName: "Alpha", Decision: "deny", ElapsedMs: 100},
+				{PolicyName: "Middle", Decision: "allow", ElapsedMs: 200},
+			},
+			actualDecision: "deny",
+			wantContains: []string{
+				"► Alpha",
+				"► Zebra",
+				"  Middle",
+			},
+		},
+		{
+			name: "columns include decision and elapsed",
+			policies: []PolicyResult{
+				{PolicyName: "Check exec", Decision: "deny", ElapsedMs: 1872},
+			},
+			actualDecision: "deny",
+			wantContains: []string{
+				"deny",
+				"1872ms",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatPolicies(tt.policies, tt.actualDecision, tt.expectedPolicies)
+			if tt.wantEmpty {
+				assert.Empty(t, result)
+				return
+			}
+			for _, want := range tt.wantContains {
+				assert.Contains(t, result, want, "output should contain %q", want)
+			}
+			for _, notWant := range tt.wantNotContains {
+				assert.NotContains(t, result, notWant, "output should NOT contain %q", notWant)
+			}
+		})
+	}
+}
+
+// TestFormatReasoning verifies plain-text reasoning formatting with truncation.
+func TestFormatReasoning(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty reasoning returns empty",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "single line reasoning",
+			input:    "AI determined request is safe",
+			expected: "    reasoning: AI determined request is safe\n",
+		},
+		{
+			name:     "multi-line truncated at first newline",
+			input:    "First line\nSecond line\nThird line",
+			expected: "    reasoning: First line...\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatReasoning(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestFormatRedacted verifies inline and multi-line redacted content formatting.
+func TestFormatRedacted(t *testing.T) {
+	tests := []struct {
+		name     string
+		label    string
+		content  string
+		contains []string
+	}{
+		{
+			name:     "empty content shows empty inline",
+			label:    "redacted expected",
+			content:  "",
+			contains: []string{"redacted expected: \n"},
+		},
+		{
+			name:     "single line content stays inline",
+			label:    "redacted expected",
+			content:  "sanitized output",
+			contains: []string{"redacted expected: sanitized output\n"},
+		},
+		{
+			name:    "multi-line content is indented",
+			label:   "redacted expected",
+			content: "line1\nline2\nline3",
+			contains: []string{
+				"redacted expected:\n",
+				"      line1\n",
+				"      line2\n",
+				"      line3\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatRedacted(tt.label, tt.content)
+			for _, want := range tt.contains {
+				assert.Contains(t, result, want, "output should contain %q", want)
+			}
+		})
+	}
+}
+
+// TestAcceptanceConfig_IsStrictPolicyMatch verifies strict policy match default and override.
+func TestAcceptanceConfig_IsStrictPolicyMatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   AcceptanceConfig
+		expected bool
+	}{
+		{
+			name:     "nil defaults to true",
+			config:   AcceptanceConfig{},
+			expected: true,
+		},
+		{
+			name:     "explicit true",
+			config:   AcceptanceConfig{StrictPolicyMatch: boolPtr(true)},
+			expected: true,
+		},
+		{
+			name:     "explicit false",
+			config:   AcceptanceConfig{StrictPolicyMatch: boolPtr(false)},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.config.IsStrictPolicyMatch())
+		})
+	}
+}
+
+// TestFormatSingleTestResult_Warnings verifies that warnings are displayed in test output.
+func TestFormatSingleTestResult_Warnings(t *testing.T) {
+	t.Run("passed with warnings shows WARNING lines", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "test-warn-1",
+			Engine: "ai",
+			Model:  "openai:gpt-4o-mini",
+			Status: "passed",
+			Expected: ExpectedResult{
+				Decision: "deny",
+			},
+			Actual: ActualResult{
+				Decision:   "deny",
+				Confidence: 1.0,
+			},
+			Warnings: []string{
+				`unexpected policy "block-network" triggered with "deny"`,
+			},
+		}
+
+		output := formatSingleTestResult(result)
+		assert.Contains(t, output, "WARNING:")
+		assert.Contains(t, output, `unexpected policy "block-network"`)
+	})
+
+	t.Run("passed without warnings has no WARNING lines", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "test-clean",
+			Engine: "cel",
+			Status: "passed",
+			Expected: ExpectedResult{
+				Decision: "allow",
+			},
+			Actual: ActualResult{
+				Decision:   "allow",
+				Confidence: 1.0,
+			},
+		}
+
+		output := formatSingleTestResult(result)
+		assert.NotContains(t, output, "WARNING:")
+	})
+}
+
+// TestFormatSingleTestResult_PhaseDisplay verifies that the phase line appears
+// when set and is omitted when empty.
+func TestFormatSingleTestResult_PhaseDisplay(t *testing.T) {
+	t.Run("phase shown on its own line when set", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "test-phase-1",
+			Engine: "ai",
+			Model:  "openai:gpt-4o-mini",
+			Status: "passed",
+			Phase:  "request",
+			Expected: ExpectedResult{
+				Decision: "deny",
+			},
+			Actual: ActualResult{
+				Decision:   "deny",
+				Confidence: 1.0,
+			},
+		}
+
+		output := formatSingleTestResult(result)
+		assert.Contains(t, output, "    phase: request\n")
+		assert.Contains(t, output, "    decision: expected: deny, actual: deny")
+	})
+
+	t.Run("phase omitted when empty", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "test-phase-2",
+			Engine: "cel",
+			Status: "passed",
+			Expected: ExpectedResult{
+				Decision: "allow",
+			},
+			Actual: ActualResult{
+				Decision: "allow",
+			},
+		}
+
+		output := formatSingleTestResult(result)
+		assert.NotContains(t, output, "phase:")
+	})
+
+	t.Run("decision line uses decision label consistently", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "test-decision-label",
+			Engine: "ai",
+			Model:  "openai:gpt-4o-mini",
+			Status: "failed",
+			Phase:  "response",
+			Expected: ExpectedResult{
+				Decision: "deny",
+			},
+			Actual: ActualResult{
+				Decision:   "allow",
+				Confidence: 0.8,
+			},
+			Failures: []string{"expected deny, got allow"},
+		}
+
+		output := formatSingleTestResult(result)
+		assert.Contains(t, output, "    phase: response\n")
+		assert.Contains(t, output, "    decision: expected: deny, actual: allow")
+		assert.Contains(t, output, "confidence: 0.8")
+	})
+}
+
+// TestFormatTextSummary verifies the summary section formatting including
+// retry hints and cached test status breakdown.
+func TestFormatTextSummary(t *testing.T) {
+	suite := &Suite{
+		BundleID: "test-suite",
+		Acceptance: AcceptanceConfig{
+			MinMatchRate: 0.8,
+		},
+	}
+
+	t.Run("retry hint shown when there are failures", func(t *testing.T) {
+		summary := &RunResult{
+			TotalCases:    10,
+			Passed:        7,
+			Failed:        2,
+			Errored:       1,
+			MatchRate:     0.7,
+			ThresholdsMet: false,
+		}
+
+		output := formatTextSummary(suite, summary, nil, nil)
+		assert.Contains(t, output, "--retry-failed")
+		assert.Contains(t, output, "7 passed, 2 failed, 1 errored")
+	})
+
+	t.Run("no retry hint when all pass", func(t *testing.T) {
+		summary := &RunResult{
+			TotalCases:    5,
+			Passed:        5,
+			MatchRate:     1.0,
+			ThresholdsMet: true,
+		}
+
+		output := formatTextSummary(suite, summary, nil, nil)
+		assert.NotContains(t, output, "--retry-failed")
+	})
+
+	t.Run("cached breakdown shown when cached tests exist", func(t *testing.T) {
+		// Build results with 8 cached-passed and 2 cached-failed
+		var results []TestResult
+		for i := 0; i < 8; i++ {
+			results = append(results, TestResult{
+				Status: "skipped",
+				Error:  &TestError{Type: "cached", Message: "cached passed"},
+			})
+		}
+		for i := 0; i < 2; i++ {
+			results = append(results, TestResult{
+				Status: "skipped",
+				Error:  &TestError{Type: "cached", Message: "cached failed"},
+			})
+		}
+
+		summary := &RunResult{
+			TotalCases:    15,
+			Passed:        3,
+			Failed:        1,
+			Skipped:       10,
+			SkippedCached: 10,
+			MatchRate:     0.75,
+			ThresholdsMet: false,
+		}
+
+		output := formatTextSummary(suite, summary, results, nil)
+		assert.Contains(t, output, "Cached:  10 skipped (8 passed, 2 failed in last run)")
+		assert.Contains(t, output, "--retry-failed")
+	})
+
+	t.Run("retry hint for cached failures only", func(t *testing.T) {
+		// Build results with 5 cached-passed and 2 cached-failed
+		var results []TestResult
+		for i := 0; i < 5; i++ {
+			results = append(results, TestResult{
+				Status: "skipped",
+				Error:  &TestError{Type: "cached", Message: "cached passed"},
+			})
+		}
+		for i := 0; i < 2; i++ {
+			results = append(results, TestResult{
+				Status: "skipped",
+				Error:  &TestError{Type: "cached", Message: "cached failed"},
+			})
+		}
+
+		summary := &RunResult{
+			TotalCases:    10,
+			Passed:        3,
+			Skipped:       7,
+			SkippedCached: 7,
+			MatchRate:     1.0,
+			ThresholdsMet: true,
+		}
+
+		output := formatTextSummary(suite, summary, results, nil)
+		assert.Contains(t, output, "Cached:  7 skipped (5 passed, 2 failed in last run)")
+		assert.Contains(t, output, "retry previously failed tests: --retry-failed")
+	})
 }
 
 // TestSuite_ResolveAPIKey verifies the deterministic API key lookup:

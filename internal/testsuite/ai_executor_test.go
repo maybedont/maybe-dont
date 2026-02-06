@@ -1,8 +1,11 @@
 package testsuite
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
+	"github.com/maybedont/maybe-dont/internal/gateway"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -115,9 +118,13 @@ func TestStripMarkdownCodeFence(t *testing.T) {
 }
 
 func TestAutoScalingConstants(t *testing.T) {
-	// Verify the constants are set to expected values for Anthropic optimization
-	t.Run("initial max tokens is small", func(t *testing.T) {
-		assert.Equal(t, 64, InitialMaxTokens)
+	// Verify the constants are set to expected values
+	t.Run("anthropic initial max tokens balances budget vs retry cost", func(t *testing.T) {
+		assert.Equal(t, 128, AnthropicInitialMaxTokens)
+	})
+
+	t.Run("default initial max tokens is generous for providers that count actual output", func(t *testing.T) {
+		assert.Equal(t, 1024, DefaultInitialMaxTokens)
 	})
 
 	t.Run("max max tokens provides reasonable cap", func(t *testing.T) {
@@ -133,15 +140,14 @@ func TestAutoScalingConstants(t *testing.T) {
 		// With 4 attempts and 2x scaling: 64 -> 128 -> 256 -> 512 (max reached at 1024)
 	})
 
-	t.Run("scaling sequence reaches max", func(t *testing.T) {
-		// Verify the scaling sequence: 64 -> 128 -> 256 -> 512 -> 1024 (capped at max)
-		// Starting at 64, with 4 attempts and 2x scaling:
-		//   Attempt 0: 64 (initial)
-		//   Attempt 1: 128
-		//   Attempt 2: 256
-		//   Attempt 3: 512
-		//   Attempt 4: would be 1024, which equals MaxMaxTokens (capped)
-		current := InitialMaxTokens
+	t.Run("anthropic scaling sequence reaches max", func(t *testing.T) {
+		// Verify the scaling sequence: 128 -> 256 -> 512 -> 1024 (capped at max)
+		// Starting at 128, with 4 attempts and 2x scaling:
+		//   Attempt 0: 128 (initial)
+		//   Attempt 1: 256
+		//   Attempt 2: 512
+		//   Attempt 3: 1024 (equals MaxMaxTokens, capped)
+		current := AnthropicInitialMaxTokens
 		for i := 0; i < MaxScalingAttempts; i++ {
 			next := int(float64(current) * MaxTokensScaleFactor)
 			if next > MaxMaxTokens {
@@ -149,7 +155,6 @@ func TestAutoScalingConstants(t *testing.T) {
 			}
 			current = next
 		}
-		// After 4 scaling attempts: 64 -> 128 -> 256 -> 512 -> 1024
 		assert.Equal(t, MaxMaxTokens, current)
 	})
 }
@@ -272,6 +277,93 @@ func TestAITestResultFields(t *testing.T) {
 		assert.Equal(t, 1, len(result.Actual.PoliciesExecuted))
 		assert.True(t, result.Actual.PoliciesExecuted[0].ElapsedMs > 0)
 	})
+}
+
+// TestClassifyError verifies that errors are converted to user-friendly TestErrors
+// with actionable messages and appropriate categorization.
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name            string
+		err             error
+		timeoutMs       int
+		expectedType    string
+		expectedMessage string
+		expectedDetails string
+		detailsAbsent   string // assert details do NOT contain this
+	}{
+		{
+			name: "provider timeout includes configured timeout and actionable hint",
+			err: &gateway.AIProviderError{
+				Category: gateway.ErrCategoryTimeout,
+				Message:  "request to OpenAI timed out",
+				Cause:    fmt.Errorf(`Post "https://api.openai.com/v1/chat/completions": context deadline exceeded`),
+			},
+			timeoutMs:       30000,
+			expectedType:    "timeout",
+			expectedMessage: "request to OpenAI timed out (timeout_ms: 30000)",
+			expectedDetails: "increase execution.timeout_ms",
+			detailsAbsent:   "api.openai.com", // raw URL should NOT leak into details
+		},
+		{
+			name: "provider no_response from empty content",
+			err: &gateway.AIProviderError{
+				Category: gateway.ErrCategoryNoResponse,
+				Message:  "OpenAI returned empty response content",
+			},
+			timeoutMs:       30000,
+			expectedType:    "no_response",
+			expectedMessage: "OpenAI returned empty response content",
+		},
+		{
+			name: "provider API error preserves cause in details",
+			err: &gateway.AIProviderError{
+				Category: gateway.ErrCategoryAPIError,
+				Message:  "server error: HTTP 500",
+				Cause:    fmt.Errorf("HTTP 500: internal server error"),
+			},
+			timeoutMs:       30000,
+			expectedType:    "api_error",
+			expectedMessage: "server error: HTTP 500",
+			expectedDetails: "HTTP 500: internal server error",
+		},
+		{
+			name:            "context.DeadlineExceeded without provider wrapping",
+			err:             context.DeadlineExceeded,
+			timeoutMs:       45000,
+			expectedType:    "timeout",
+			expectedMessage: "test case timed out (timeout_ms: 45000)",
+			expectedDetails: "increase execution.timeout_ms",
+		},
+		{
+			name:            "context.Canceled",
+			err:             context.Canceled,
+			timeoutMs:       30000,
+			expectedType:    "canceled",
+			expectedMessage: "test case was canceled",
+		},
+		{
+			name:            "unknown error uses error message as-is",
+			err:             fmt.Errorf("something unexpected happened"),
+			timeoutMs:       30000,
+			expectedType:    "unknown",
+			expectedMessage: "something unexpected happened",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := classifyError(tt.err, tt.timeoutMs)
+
+			assert.Equal(t, tt.expectedType, result.Type)
+			assert.Equal(t, tt.expectedMessage, result.Message)
+			if tt.expectedDetails != "" {
+				assert.Contains(t, result.Details, tt.expectedDetails)
+			}
+			if tt.detailsAbsent != "" {
+				assert.NotContains(t, result.Details, tt.detailsAbsent)
+			}
+		})
+	}
 }
 
 // TestResolveEnvVar is in runner_test.go

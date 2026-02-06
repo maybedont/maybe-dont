@@ -415,38 +415,3 @@ type PolicyCoverageItem struct {
 	Engine string
 }
 
-// formatCoverageText formats coverage report as text.
-func formatCoverageText(coverage *CoverageReport) string {
-	if coverage == nil {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("\nCoverage Report\n")
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
-
-	if len(coverage.PoliciesWithoutTests) > 0 {
-		sb.WriteString(fmt.Sprintf("Policies without test coverage (%d):\n", len(coverage.PoliciesWithoutTests)))
-		for _, p := range coverage.PoliciesWithoutTests {
-			sb.WriteString(fmt.Sprintf("  - %s: %s\n", p.Engine, p.Name))
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(coverage.DisabledSkipped) > 0 {
-		sb.WriteString(fmt.Sprintf("Disabled policies (skipped): %d\n", len(coverage.DisabledSkipped)))
-		for _, p := range coverage.DisabledSkipped {
-			sb.WriteString(fmt.Sprintf("  - %s: %s (enabled: false)\n", p.Engine, p.Name))
-		}
-		sb.WriteString("\nUse --include-disabled to test these policies.\n")
-	}
-
-	coveragePercent := 0.0
-	if coverage.TotalPolicies > 0 {
-		coveragePercent = float64(coverage.PoliciesWithTests) / float64(coverage.TotalPolicies) * 100
-	}
-	sb.WriteString(fmt.Sprintf("\nPolicies with test coverage: %d/%d (%.0f%%)\n",
-		coverage.PoliciesWithTests, coverage.TotalPolicies, coveragePercent))
-
-	return sb.String()
-}

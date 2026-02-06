@@ -16,15 +16,16 @@ import (
 
 // AITestRunner handles AI policy test execution for a specific model.
 type AITestRunner struct {
-	model            ModelConfig
-	providerClient   gateway.AIProviderClient
-	policies         []config.AIPolicy
-	responsePolicies []config.AIResponsePolicy
-	logger           *config.SessionLogger
-	timeoutMs        int
-	retries          int
-	retryDelayMs     int
-	rateLimiter      *RateLimiter
+	model              ModelConfig
+	providerClient     gateway.AIProviderClient
+	policies           []config.AIPolicy
+	responsePolicies   []config.AIResponsePolicy
+	logger             *config.SessionLogger
+	timeoutMs          int
+	retries            int
+	retryDelayMs       int
+	rateLimiter        *RateLimiter
+	strictPolicyMatch  bool
 }
 
 // NewAITestRunner creates a runner for AI policy tests against a specific model.
@@ -36,13 +37,14 @@ func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *c
 	}
 
 	runner := &AITestRunner{
-		model:          model,
-		providerClient: client,
-		logger:         logger,
-		timeoutMs:      suite.Execution.TimeoutMs,
-		retries:        suite.Execution.Retries,
-		retryDelayMs:   suite.Execution.RetryDelayMs,
-		rateLimiter:    rateLimiter,
+		model:             model,
+		providerClient:    client,
+		logger:            logger,
+		timeoutMs:         suite.Execution.TimeoutMs,
+		retries:           suite.Execution.Retries,
+		retryDelayMs:      suite.Execution.RetryDelayMs,
+		rateLimiter:       rateLimiter,
+		strictPolicyMatch: suite.Acceptance.IsStrictPolicyMatch(),
 	}
 
 	// Set defaults
@@ -261,6 +263,7 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 	result := TestResult{
 		CaseID: tc.CaseID,
 		Title:  tc.Title,
+		Phase:  tc.Phase,
 		Engine: "ai",
 		Model:  ModelKey(r.model.Provider, r.model.Model),
 		Expected: ExpectedResult{
@@ -299,7 +302,7 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 
 	if err != nil {
 		result.Status = "errored"
-		result.Error = classifyError(err)
+		result.Error = classifyError(err, r.timeoutMs)
 		return result
 	}
 
@@ -320,7 +323,10 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 	}
 
 	// Compare expected vs actual
-	result.Failures = compareResults(result.Expected, result.Actual)
+	// Note: AITestRunner doesn't have direct suite access, so we need it from NewAITestRunner.
+	cmp := compareResults(result.Expected, result.Actual, r.strictPolicyMatch)
+	result.Failures = cmp.failures
+	result.Warnings = cmp.warnings
 	if len(result.Failures) == 0 {
 		result.Status = "passed"
 	} else {
@@ -579,11 +585,16 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 
 	userPrompt := fmt.Sprintf("Policy:\n%s\n\nRequest to evaluate:\n%s", prompt, requestContext)
 
-	// Determine initial max_tokens
-	// If explicitly set in config, use that (no auto-scaling)
-	// Otherwise, use auto-scaling starting at InitialMaxTokens
-	maxTokens := InitialMaxTokens
-	autoScale := true
+	// Determine initial max_tokens based on provider.
+	// Anthropic counts reserved max_tokens against rate limits, so start small and scale up.
+	// OpenAI and compatible providers count actual output tokens, so start generous.
+	// If explicitly set in config, use that (no auto-scaling).
+	maxTokens := DefaultInitialMaxTokens
+	autoScale := false
+	if r.model.Provider == "anthropic" {
+		maxTokens = AnthropicInitialMaxTokens
+		autoScale = true
+	}
 	if v, ok := r.model.Parameters["max_tokens"]; ok {
 		if mt, err := toInt(v); err == nil {
 			maxTokens = mt
@@ -753,27 +764,42 @@ func isRetryableError(err error) bool {
 	return false
 }
 
-// classifyError converts an error to a TestError.
-func classifyError(err error) *TestError {
+// classifyError converts an error to a TestError with actionable messages.
+// timeoutMs is the configured per-request timeout, included in timeout messages
+// to help the user understand which setting to adjust.
+func classifyError(err error, timeoutMs int) *TestError {
 	var providerErr *gateway.AIProviderError
 	if errors.As(err, &providerErr) {
-		return &TestError{
+		te := &TestError{
 			Type:    providerErr.Category,
 			Message: providerErr.Message,
 		}
+		// For timeout errors, replace the raw Go context error (which exposes
+		// internal URLs) with an actionable hint about what to adjust.
+		if providerErr.Category == gateway.ErrCategoryTimeout {
+			te.Message = fmt.Sprintf("%s (timeout_ms: %d)", providerErr.Message, timeoutMs)
+			te.Details = "increase execution.timeout_ms in suite config if this persists"
+			return te
+		}
+		// Skip raw cause for canceled errors — not actionable.
+		if providerErr.Cause != nil && providerErr.Category != gateway.ErrCategoryCanceled {
+			te.Details = providerErr.Cause.Error()
+		}
+		return te
 	}
 
-	// Check for context errors
+	// Check for context errors (not wrapped in AIProviderError)
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &TestError{
 			Type:    "timeout",
-			Message: "Test case timed out",
+			Message: fmt.Sprintf("test case timed out (timeout_ms: %d)", timeoutMs),
+			Details: "increase execution.timeout_ms in suite config if this persists",
 		}
 	}
 	if errors.Is(err, context.Canceled) {
 		return &TestError{
 			Type:    "canceled",
-			Message: "Test case was canceled",
+			Message: "test case was canceled",
 		}
 	}
 

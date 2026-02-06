@@ -33,12 +33,12 @@ engines:
     model_matrix:
       # OpenAI models - fast to slow, cheap to expensive
       - provider: openai
-        model: gpt-4o-mini  # Fast and cost-effective
+        model: gpt-5-mini  # Fast and cost-effective
       - provider: openai
-        model: gpt-4o  # Balanced performance and quality
+        model: gpt-5  # Balanced performance and quality
         enabled: false
       - provider: openai
-        model: gpt-4-turbo  # High quality, higher latency and cost
+        model: gpt-5.2  # Flagship reasoning model, highest quality
         enabled: false
 
       # Anthropic models - fast to slow, cheap to expensive

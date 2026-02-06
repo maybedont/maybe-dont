@@ -304,7 +304,7 @@ func (p *anthropicProvider) normalizeError(err error, statusCode int) *AIProvide
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &AIProviderError{
 			Category:  ErrCategoryTimeout,
-			Message:   "request timed out",
+			Message:   "request to Anthropic timed out",
 			Retryable: false,
 			Cause:     err,
 		}

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
@@ -766,6 +768,9 @@ func (r *Runner) executeTests(ctx context.Context) (*RunResult, error) {
 	// Execute CEL tests - always run them since they're fast and deterministic
 	if runCEL && r.suite.Engines.CEL.Enabled {
 		celCases := filterCasesForEngine(cases, "cel")
+		if isStreaming && len(celCases) > 0 {
+			fmt.Print(formatSectionHeader("cel"))
+		}
 		celResults := executor.ExecuteCELTests(ctx, celCases, onProgress)
 		allResults = append(allResults, celResults...)
 	}
@@ -852,7 +857,7 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 	for _, model := range models {
 		modelKey := ModelKey(model.Provider, model.Model)
 
-		fmt.Printf("\nTesting with model: %s/%s\n", model.Provider, model.Model)
+		fmt.Printf("\n%s", formatSectionHeader(modelKey))
 
 		// Create AI runner for this model
 		runner, err := NewAITestRunner(model, r.suite, r.suiteDir, r.logger, r.rateLimiter)
@@ -891,7 +896,8 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 			// Check if we should skip this test (valid cached result)
 			if r.stateManager != nil && !r.opts.Force {
 				if r.stateManager.ShouldSkip(contentHash, r.policyHashes, modelKey, r.opts.RetryFailed) {
-					// Report as skipped (cached)
+					// Report as skipped (cached), including the previous status
+					cachedStatus := r.stateManager.GetCachedStatus(contentHash, r.policyHashes, modelKey)
 					result := TestResult{
 						CaseID: tc.CaseID,
 						Title:  tc.Title,
@@ -900,7 +906,7 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 						Status: "skipped",
 						Error: &TestError{
 							Type:    "cached",
-							Message: "Skipped due to valid cached result",
+							Message: fmt.Sprintf("cached %s", cachedStatus),
 						},
 					}
 					skippedCached = append(skippedCached, result)
@@ -1253,12 +1259,9 @@ func (r *Runner) outputResults(results []TestResult, summary *RunResult, already
 		var stdoutOutput string
 		if alreadyStreamed {
 			// Only print summary - header and results were already streamed
-			stdoutOutput = formatTextSummary(r.suite, summary, results)
+			stdoutOutput = formatTextSummary(r.suite, summary, results, coverage)
 		} else {
-			stdoutOutput = formatTextOutput(r.suite, results, summary)
-		}
-		if coverage != nil {
-			stdoutOutput += formatCoverageText(coverage)
+			stdoutOutput = formatTextOutput(r.suite, results, summary, coverage)
 		}
 		fmt.Print(stdoutOutput)
 	}
@@ -1301,72 +1304,292 @@ func formatEngineInfo(engine, model string) string {
 	return fmt.Sprintf(" [%s]", engine)
 }
 
+// ANSI color/style codes for terminal output.
+const (
+	ansiReset     = "\033[0m"
+	ansiBoldRed   = "\033[1;31m"
+	ansiBoldGreen = "\033[1;32m"
+	ansiBoldYellow = "\033[1;33m"
+	ansiDim       = "\033[2m"
+)
+
+// colorEnabled controls whether ANSI color codes are emitted in text output.
+// Automatically set based on whether stdout is a terminal and NO_COLOR is not set.
+var colorEnabled = detectTerminal()
+
+// detectTerminal returns true if stdout is an interactive terminal and color
+// has not been disabled via the NO_COLOR environment variable.
+func detectTerminal() bool {
+	// Respect NO_COLOR convention (https://no-color.org/)
+	if _, ok := os.LookupEnv("NO_COLOR"); ok {
+		return false
+	}
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+// colorize wraps text with an ANSI color code, returning plain text when
+// color output is disabled.
+func colorize(code, text string) string {
+	if !colorEnabled {
+		return text
+	}
+	return code + text + ansiReset
+}
+
+// sectionHeaderWidth is the total character width for section header lines.
+const sectionHeaderWidth = 50
+
+// formatSectionHeader creates a visual separator like "── label ──────────────".
+func formatSectionHeader(label string) string {
+	// "── " + label + " " + remaining dashes + "\n"
+	prefix := "── " + label + " "
+	remaining := sectionHeaderWidth - utf8.RuneCountInString(prefix)
+	if remaining < 2 {
+		remaining = 2
+	}
+	return prefix + strings.Repeat("─", remaining) + "\n"
+}
+
+// formatPolicies formats policy results as a multi-line, column-aligned block.
+// Triggering policies (whose decision matches the overall actual decision) are
+// sorted first and marked with ►. The marker is green for expected triggering
+// policies and yellow for unexpected ones. expectedPolicies is the set of policy
+// names listed in the test case expectations (may be nil/empty).
+func formatPolicies(policies []PolicyResult, actualDecision string, expectedPolicies map[string]bool) string {
+	if len(policies) == 0 {
+		return ""
+	}
+
+	// Determine max name length for column padding
+	maxNameLen := 0
+	for _, p := range policies {
+		if len(p.PolicyName) > maxNameLen {
+			maxNameLen = len(p.PolicyName)
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("    policies:\n")
+
+	// For "allow" decisions, triggering markers are not meaningful — every policy
+	// returns "allow" by default (it's the absence of deny, not an active action).
+	// Just list all policies uniformly sorted alphabetically.
+	if actualDecision == "allow" {
+		sorted := make([]PolicyResult, len(policies))
+		copy(sorted, policies)
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].PolicyName < sorted[j].PolicyName
+		})
+		for _, p := range sorted {
+			sb.WriteString(fmt.Sprintf("        %-*s  %-5s  %dms\n", maxNameLen, p.PolicyName, p.Decision, p.ElapsedMs))
+		}
+		return sb.String()
+	}
+
+	// For deny/redact: separate into triggering and non-triggering.
+	// Triggering policies (whose decision matches actual) are sorted first with ► marker.
+	var triggering, other []PolicyResult
+	for _, p := range policies {
+		if p.Decision == actualDecision {
+			triggering = append(triggering, p)
+		} else {
+			other = append(other, p)
+		}
+	}
+
+	sort.Slice(triggering, func(i, j int) bool {
+		return triggering[i].PolicyName < triggering[j].PolicyName
+	})
+	sort.Slice(other, func(i, j int) bool {
+		return other[i].PolicyName < other[j].PolicyName
+	})
+
+	// Write triggering policies first with colored ► marker
+	for _, p := range triggering {
+		marker := "►"
+		if len(expectedPolicies) > 0 {
+			if expectedPolicies[p.PolicyName] {
+				marker = colorize(ansiBoldGreen, "►")
+			} else {
+				marker = colorize(ansiBoldYellow, "►")
+			}
+		}
+		sb.WriteString(fmt.Sprintf("      %s %-*s  %-5s  %dms\n", marker, maxNameLen, p.PolicyName, p.Decision, p.ElapsedMs))
+	}
+	// Write remaining policies
+	for _, p := range other {
+		sb.WriteString(fmt.Sprintf("        %-*s  %-5s  %dms\n", maxNameLen, p.PolicyName, p.Decision, p.ElapsedMs))
+	}
+
+	return sb.String()
+}
+
+// formatReasoning formats a reasoning string for human output.
+// Single-line reasoning is printed inline. Multi-line reasoning is truncated
+// at the first newline with a "..." indicator.
+func formatReasoning(reasoning string) string {
+	if reasoning == "" {
+		return ""
+	}
+	if idx := strings.IndexByte(reasoning, '\n'); idx >= 0 {
+		return fmt.Sprintf("    reasoning: %s...\n", reasoning[:idx])
+	}
+	return fmt.Sprintf("    reasoning: %s\n", reasoning)
+}
+
+// formatRedacted formats redacted content for human output.
+// Single-line content is printed inline. Multi-line content is indented below.
+func formatRedacted(label, content string) string {
+	if content == "" {
+		return fmt.Sprintf("    %s: \n", label)
+	}
+	if !strings.Contains(content, "\n") {
+		return fmt.Sprintf("    %s: %s\n", label, content)
+	}
+	// Multi-line: indent each line
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("    %s:\n", label))
+	for _, line := range strings.Split(content, "\n") {
+		sb.WriteString(fmt.Sprintf("      %s\n", line))
+	}
+	return sb.String()
+}
+
+// formatIndented formats a labeled block for human output.
+// Single-line content is printed inline. Multi-line content has each line
+// indented to align under the label.
+func formatIndented(label, content string) string {
+	if !strings.Contains(content, "\n") {
+		return fmt.Sprintf("    %s: %s\n", label, content)
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("    %s:\n", label))
+	for _, line := range strings.Split(content, "\n") {
+		sb.WriteString(fmt.Sprintf("      %s\n", line))
+	}
+	return sb.String()
+}
+
+// expectedPolicyNames builds a set of policy names from the test's expectations.
+func expectedPolicyNames(expected ExpectedResult) map[string]bool {
+	if len(expected.Policies) == 0 {
+		return nil
+	}
+	names := make(map[string]bool, len(expected.Policies))
+	for _, pe := range expected.Policies {
+		names[pe.PolicyName] = true
+	}
+	return names
+}
+
 // formatSingleTestResult formats a single test result for streaming output.
 func formatSingleTestResult(tr TestResult) string {
 	var sb strings.Builder
 
 	// Build engine/model suffix for display
 	engineInfo := formatEngineInfo(tr.Engine, tr.Model)
+	isCEL := tr.Engine == "cel"
+	expectedNames := expectedPolicyNames(tr.Expected)
+
+	// Helper: format the phase line (empty string if no phase set)
+	formatPhaseLine := func() string {
+		if tr.Phase == "" {
+			return ""
+		}
+		return fmt.Sprintf("    phase: %s\n", tr.Phase)
+	}
+
+	// Helper: format the decision line, suppressing confidence for CEL
+	formatDecisionLine := func() string {
+		if isCEL {
+			return fmt.Sprintf("    decision: expected: %s, actual: %s\n",
+				tr.Expected.Decision, tr.Actual.Decision)
+		}
+		return fmt.Sprintf("    decision: expected: %s, actual: %s, confidence: %.1f\n",
+			tr.Expected.Decision, tr.Actual.Decision, tr.Actual.Confidence)
+	}
+
+	// Helper: format warnings
+	formatWarnings := func() {
+		for _, w := range tr.Warnings {
+			sb.WriteString(fmt.Sprintf("    %s %s\n", colorize(ansiBoldYellow, "WARNING:"), w))
+		}
+	}
 
 	switch tr.Status {
 	case "passed":
-		sb.WriteString(fmt.Sprintf("✓ %s%s (%dms)\n", tr.CaseID, engineInfo, tr.ElapsedMs))
-		sb.WriteString(fmt.Sprintf("    expected: %s, actual: %s (confidence: %.1f)\n",
-			tr.Expected.Decision, tr.Actual.Decision, tr.Actual.Confidence))
-		if len(tr.Actual.PoliciesExecuted) > 0 {
-			sb.WriteString("    policies: ")
-			for i, p := range tr.Actual.PoliciesExecuted {
-				if i > 0 {
-					sb.WriteString(", ")
-				}
-				sb.WriteString(fmt.Sprintf("%s (%s, %dms)", p.PolicyName, p.Decision, p.ElapsedMs))
-			}
-			sb.WriteString("\n")
+		icon := colorize(ansiBoldGreen, "✓")
+		sb.WriteString(fmt.Sprintf("%s %s%s %dms\n", icon, tr.CaseID, engineInfo, tr.ElapsedMs))
+		if tr.Title != "" {
+			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
+		sb.WriteString(formatPhaseLine())
+		sb.WriteString(formatDecisionLine())
+		sb.WriteString(formatPolicies(tr.Actual.PoliciesExecuted, tr.Actual.Decision, expectedNames))
+		formatWarnings()
 		// Show redacted content on success for redaction tests
 		if tr.Expected.RedactedContent != "" || tr.Actual.RedactedContent != "" {
-			sb.WriteString(fmt.Sprintf("    redacted expected: %q\n", tr.Expected.RedactedContent))
-			sb.WriteString(fmt.Sprintf("    redacted actual:   %q\n", tr.Actual.RedactedContent))
+			sb.WriteString(formatRedacted("redacted expected", tr.Expected.RedactedContent))
+			sb.WriteString(formatRedacted("redacted actual  ", tr.Actual.RedactedContent))
 		}
 	case "failed":
-		sb.WriteString(fmt.Sprintf("✗ %s%s (%dms)\n", tr.CaseID, engineInfo, tr.ElapsedMs))
-		sb.WriteString(fmt.Sprintf("    expected: %s, actual: %s (confidence: %.1f)\n",
-			tr.Expected.Decision, tr.Actual.Decision, tr.Actual.Confidence))
-		if len(tr.Actual.PoliciesExecuted) > 0 {
-			sb.WriteString("    policies: ")
-			for i, p := range tr.Actual.PoliciesExecuted {
-				if i > 0 {
-					sb.WriteString(", ")
-				}
-				sb.WriteString(fmt.Sprintf("%s (%s, %dms)", p.PolicyName, p.Decision, p.ElapsedMs))
-			}
-			sb.WriteString("\n")
+		icon := colorize(ansiBoldRed, "✗")
+		sb.WriteString(fmt.Sprintf("%s %s%s %dms\n", icon, tr.CaseID, engineInfo, tr.ElapsedMs))
+		if tr.Title != "" {
+			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
+		sb.WriteString(formatPhaseLine())
+		sb.WriteString(formatDecisionLine())
+		sb.WriteString(formatPolicies(tr.Actual.PoliciesExecuted, tr.Actual.Decision, expectedNames))
 		// Show redacted content on failure only when meaningful:
 		// - actual action was "redact" (so there's actual redacted content)
 		// - OR both expected and actual have content (content mismatch case)
 		showRedacted := tr.Actual.Decision == "redact" ||
 			(tr.Expected.RedactedContent != "" && tr.Actual.RedactedContent != "")
 		if showRedacted {
-			sb.WriteString(fmt.Sprintf("    redacted expected: %q\n", tr.Expected.RedactedContent))
-			sb.WriteString(fmt.Sprintf("    redacted actual:   %q\n", tr.Actual.RedactedContent))
+			sb.WriteString(formatRedacted("redacted expected", tr.Expected.RedactedContent))
+			sb.WriteString(formatRedacted("redacted actual  ", tr.Actual.RedactedContent))
 		}
-		if tr.Actual.Reasoning != "" {
-			sb.WriteString(fmt.Sprintf("    reasoning: %q\n", tr.Actual.Reasoning))
-		}
+		sb.WriteString(formatReasoning(tr.Actual.Reasoning))
 		for _, f := range tr.Failures {
-			sb.WriteString(fmt.Sprintf("    FAILED: %s\n", f))
+			// Colorize ► in failure messages to match the yellow policy markers above
+			display := strings.ReplaceAll(f, "►", colorize(ansiBoldYellow, "►"))
+			sb.WriteString(fmt.Sprintf("    FAILED: %s\n", display))
 		}
 	case "errored":
-		sb.WriteString(fmt.Sprintf("⚠ %s%s (%dms)\n", tr.CaseID, engineInfo, tr.ElapsedMs))
+		icon := colorize(ansiBoldYellow, "⚠")
+		sb.WriteString(fmt.Sprintf("%s %s%s %dms\n", icon, tr.CaseID, engineInfo, tr.ElapsedMs))
+		if tr.Title != "" {
+			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
+		}
 		if tr.Error != nil {
-			sb.WriteString(fmt.Sprintf("    ERROR: %s - %s\n", tr.Error.Type, tr.Error.Message))
-			if tr.Error.Details != "" {
-				sb.WriteString(fmt.Sprintf("    details: %s\n", tr.Error.Details))
+			if strings.Contains(tr.Error.Message, "\n") {
+				// Multi-line message: show type on its own line, then the best-formatted
+				// body content. Details (from the underlying cause) typically has proper
+				// JSON indentation; the message often doesn't.
+				sb.WriteString(fmt.Sprintf("    ERROR: %s\n", tr.Error.Type))
+				body := tr.Error.Message
+				if tr.Error.Details != "" {
+					body = tr.Error.Details
+				}
+				for _, line := range strings.Split(body, "\n") {
+					sb.WriteString(fmt.Sprintf("      %s\n", line))
+				}
+			} else {
+				sb.WriteString(fmt.Sprintf("    ERROR: %s - %s\n", tr.Error.Type, tr.Error.Message))
+				// Show details only when they add info beyond what the message already contains
+				if tr.Error.Details != "" && !strings.Contains(tr.Error.Message, tr.Error.Details) {
+					sb.WriteString(formatIndented("details", tr.Error.Details))
+				}
 			}
 		}
 	case "skipped":
-		sb.WriteString(fmt.Sprintf("○ %s%s (skipped)\n", tr.CaseID, engineInfo))
+		icon := colorize(ansiDim, "○")
+		sb.WriteString(fmt.Sprintf("%s %s%s (skipped)\n", icon, tr.CaseID, engineInfo))
 		if tr.Error != nil {
 			sb.WriteString(fmt.Sprintf("    reason: %s\n", tr.Error.Message))
 		}
@@ -1376,13 +1599,32 @@ func formatSingleTestResult(tr TestResult) string {
 	return sb.String()
 }
 
-// formatTextSummary formats only the summary section for text output (when results were streamed).
-func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult) string {
+// formatTextSummary formats the summary section for text output.
+// Includes results, thresholds, coverage, and slowest policies in one cohesive block.
+func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, coverage *CoverageReport) string {
 	var sb strings.Builder
 
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	sb.WriteString(formatSectionHeader("Summary"))
 	sb.WriteString(fmt.Sprintf("Results: %d passed, %d failed, %d errored, %d skipped (%d total)\n",
 		summary.Passed, summary.Failed, summary.Errored, summary.Skipped, summary.TotalCases))
+
+	// Count cached pass/fail from individual results (derived at render time,
+	// not stored in RunResult, to avoid denormalization that could drift).
+	var cachedPassed, cachedFailed int
+	if summary.SkippedCached > 0 {
+		for _, tr := range results {
+			if tr.Status == "skipped" && tr.Error != nil && tr.Error.Type == "cached" {
+				if tr.Error.Message == "cached passed" {
+					cachedPassed++
+				} else {
+					cachedFailed++
+				}
+			}
+		}
+		sb.WriteString(fmt.Sprintf("Cached:  %d skipped (%d passed, %d failed in last run)\n",
+			summary.SkippedCached, cachedPassed, cachedFailed))
+	}
+
 	sb.WriteString(fmt.Sprintf("Match rate: %.1f%%\n", summary.MatchRate*100))
 
 	if summary.ThresholdsMet {
@@ -1392,7 +1634,39 @@ func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult) s
 			suite.Acceptance.MinMatchRate*100, summary.MatchRate*100))
 	}
 
-	// Add slowest policies section
+	// Retry hint when there are failures or cached failures
+	if summary.Failed > 0 || summary.Errored > 0 {
+		sb.WriteString("\nTo retry failed/errored tests: --retry-failed\n")
+	} else if cachedFailed > 0 {
+		sb.WriteString("\nTo retry previously failed tests: --retry-failed\n")
+	}
+
+	// Policy coverage section
+	if coverage != nil {
+		coveragePercent := 0.0
+		if coverage.TotalPolicies > 0 {
+			coveragePercent = float64(coverage.PoliciesWithTests) / float64(coverage.TotalPolicies) * 100
+		}
+		sb.WriteString(fmt.Sprintf("\nPolicy coverage: %d/%d (%.0f%%)\n",
+			coverage.PoliciesWithTests, coverage.TotalPolicies, coveragePercent))
+
+		if len(coverage.PoliciesWithoutTests) > 0 {
+			sb.WriteString(fmt.Sprintf("  Missing tests (%d):\n", len(coverage.PoliciesWithoutTests)))
+			for _, p := range coverage.PoliciesWithoutTests {
+				sb.WriteString(fmt.Sprintf("    - %s: %s\n", p.Engine, p.Name))
+			}
+		}
+
+		if len(coverage.DisabledSkipped) > 0 {
+			sb.WriteString(fmt.Sprintf("  Disabled (not tested): %d — use --include-disabled to include\n",
+				len(coverage.DisabledSkipped)))
+			for _, p := range coverage.DisabledSkipped {
+				sb.WriteString(fmt.Sprintf("    - %s: %s\n", p.Engine, p.Name))
+			}
+		}
+	}
+
+	// Slowest policies section
 	sb.WriteString(formatSlowestPolicies(results))
 
 	return sb.String()
@@ -1474,7 +1748,7 @@ func formatSlowestPolicies(results []TestResult) string {
 }
 
 // formatTextOutput formats results as human-readable text.
-func formatTextOutput(suite *Suite, results []TestResult, summary *RunResult) string {
+func formatTextOutput(suite *Suite, results []TestResult, summary *RunResult, coverage *CoverageReport) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("Policy Test Suite: %s\n", suite.BundleID))
@@ -1484,7 +1758,7 @@ func formatTextOutput(suite *Suite, results []TestResult, summary *RunResult) st
 		sb.WriteString(formatSingleTestResult(tr))
 	}
 
-	sb.WriteString(formatTextSummary(suite, summary, results))
+	sb.WriteString(formatTextSummary(suite, summary, results, coverage))
 
 	return sb.String()
 }

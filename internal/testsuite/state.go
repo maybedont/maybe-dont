@@ -192,6 +192,26 @@ func (sm *StateManager) ShouldSkip(contentHash string, policyHashes []string, mo
 	return true
 }
 
+// GetCachedStatus returns the cached status for a test case/model combination.
+// Returns empty string if no cached result exists.
+func (sm *StateManager) GetCachedStatus(contentHash string, policyHashes []string, modelKey string) string {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	cached, ok := sm.state.Results[contentHash]
+	if !ok {
+		return ""
+	}
+	if !hashesMatch(cached.PolicyHashes, policyHashes) {
+		return ""
+	}
+	modelResult, ok := cached.Models[modelKey]
+	if !ok {
+		return ""
+	}
+	return modelResult.Status
+}
+
 // hashesMatch checks if two hash slices are equal (order-independent).
 func hashesMatch(a, b []string) bool {
 	if len(a) != len(b) {

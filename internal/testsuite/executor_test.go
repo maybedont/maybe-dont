@@ -149,18 +149,195 @@ func TestCompareResults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			failures := compareResults(tt.expected, tt.actual)
-			assert.Len(t, failures, tt.expectedFailures)
+			// Use non-strict mode for backward-compatible tests (no unexpected policy scenarios)
+			out := compareResults(tt.expected, tt.actual, false)
+			assert.Len(t, out.failures, tt.expectedFailures)
 
 			for _, want := range tt.wantContains {
 				found := false
-				for _, f := range failures {
+				for _, f := range out.failures {
 					if containsSubstring(f, want) {
 						found = true
 						break
 					}
 				}
-				assert.True(t, found, "expected failure message containing %q, got %v", want, failures)
+				assert.True(t, found, "expected failure message containing %q, got %v", want, out.failures)
+			}
+		})
+	}
+}
+
+// TestCompareResults_StrictPolicyMatch verifies that unexpected triggering policies
+// are flagged as failures in strict mode and as warnings in non-strict mode.
+// The check only applies to active decisions (deny/redact) — for "allow" tests,
+// every policy returns "allow" by default and that's not a meaningful trigger.
+func TestCompareResults_StrictPolicyMatch(t *testing.T) {
+	tests := []struct {
+		name             string
+		expected         ExpectedResult
+		actual           ActualResult
+		strict           bool
+		wantFailures     int
+		wantWarnings     int
+		wantContains     []string // substrings expected in failures or warnings
+	}{
+		{
+			name: "strict mode: unexpected triggering policy is a failure",
+			expected: ExpectedResult{
+				Decision: "deny",
+				Policies: []PolicyExpectation{
+					{PolicyName: "block-exec", Decision: "deny"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+					{PolicyName: "block-network", Decision: "deny"}, // unexpected trigger
+					{PolicyName: "check-args", Decision: "allow"},   // non-triggering, OK
+				},
+			},
+			strict:       true,
+			wantFailures: 1,
+			wantWarnings: 0,
+			wantContains: []string{"unexpected policy match"},
+		},
+		{
+			name: "non-strict mode: unexpected triggering policy is a warning",
+			expected: ExpectedResult{
+				Decision: "deny",
+				Policies: []PolicyExpectation{
+					{PolicyName: "block-exec", Decision: "deny"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+					{PolicyName: "block-network", Decision: "deny"}, // unexpected trigger
+				},
+			},
+			strict:       false,
+			wantFailures: 0,
+			wantWarnings: 1,
+			wantContains: []string{"unexpected policy match"},
+		},
+		{
+			name: "strict mode: no unexpected triggers passes cleanly",
+			expected: ExpectedResult{
+				Decision: "deny",
+				Policies: []PolicyExpectation{
+					{PolicyName: "block-exec", Decision: "deny"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+					{PolicyName: "check-args", Decision: "allow"}, // non-triggering
+				},
+			},
+			strict:       true,
+			wantFailures: 0,
+			wantWarnings: 0,
+		},
+		{
+			name: "strict mode: multiple unexpected triggers reported as single failure",
+			expected: ExpectedResult{
+				Decision: "deny",
+				Policies: []PolicyExpectation{
+					{PolicyName: "block-exec", Decision: "deny"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+					{PolicyName: "block-network", Decision: "deny"},
+					{PolicyName: "block-files", Decision: "deny"},
+				},
+			},
+			strict:       true,
+			wantFailures: 1, // single consolidated message
+			wantWarnings: 0,
+			wantContains: []string{"2 unexpected policy match"},
+		},
+		{
+			name: "no policy expectations: skip unexpected check entirely",
+			expected: ExpectedResult{
+				Decision: "deny",
+				// No policies specified
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+					{PolicyName: "block-network", Decision: "deny"},
+				},
+			},
+			strict:       true,
+			wantFailures: 0, // No expectations = no strict check
+			wantWarnings: 0,
+		},
+		{
+			name: "allow decision: skip unexpected check (allow is passive default)",
+			expected: ExpectedResult{
+				Decision: "allow",
+				Policies: []PolicyExpectation{
+					{PolicyName: "check-access", Decision: "allow"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "allow",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "check-access", Decision: "allow"},
+					{PolicyName: "check-network", Decision: "allow"},
+					{PolicyName: "check-files", Decision: "allow"},
+				},
+			},
+			strict:       true,
+			wantFailures: 0, // All policies returning "allow" is the normal case
+			wantWarnings: 0,
+		},
+		{
+			name: "redact decision: unexpected triggers are flagged",
+			expected: ExpectedResult{
+				Decision: "redact",
+				Policies: []PolicyExpectation{
+					{PolicyName: "redact-ssn", Decision: "redact"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "redact",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "redact-ssn", Decision: "redact"},
+					{PolicyName: "redact-email", Decision: "redact"}, // unexpected
+				},
+			},
+			strict:       true,
+			wantFailures: 1,
+			wantWarnings: 0,
+			wantContains: []string{"1 unexpected policy match"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := compareResults(tt.expected, tt.actual, tt.strict)
+			assert.Len(t, out.failures, tt.wantFailures, "failures count")
+			assert.Len(t, out.warnings, tt.wantWarnings, "warnings count")
+
+			// Check expected substrings in both failures and warnings combined
+			allMessages := append(out.failures, out.warnings...)
+			for _, want := range tt.wantContains {
+				found := false
+				for _, msg := range allMessages {
+					if containsSubstring(msg, want) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected message containing %q in %v", want, allMessages)
 			}
 		})
 	}

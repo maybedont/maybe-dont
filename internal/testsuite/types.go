@@ -7,14 +7,23 @@ const (
 	DefaultRateLimitBufferMs      = 5000 // Extra buffer when hitting rate limit window
 )
 
-// Auto-scaling max_tokens constants for Anthropic optimization.
+// Auto-scaling max_tokens constants.
 // Anthropic counts max_tokens (reserved capacity) against rate limits, not actual output.
-// Starting small and scaling up on truncation maximizes requests before hitting token limits.
+// Starting small and scaling up on truncation minimizes wasted rate limit budget, but each
+// truncation+retry costs more budget than a single larger request would. 128 balances these:
+// most responses fit (no retry cost), while not over-reserving when they're short.
+// OpenAI and compatible providers only count actual output tokens, so they start higher
+// to avoid unnecessary retries.
+//
+// REVISIT: If Anthropic changes to count only actual output tokens (like OpenAI does),
+// AnthropicInitialMaxTokens can be raised to DefaultInitialMaxTokens and auto-scaling
+// can be disabled for all providers.
 const (
-	InitialMaxTokens = 64   // Start small for Anthropic rate limit efficiency
-	MaxMaxTokens     = 1024 // Cap to prevent runaway in case of unexpected responses
-	MaxTokensScaleFactor = 2.0 // Double on truncation
-	MaxScalingAttempts = 4  // Max retries: 64 -> 128 -> 256 -> 512
+	AnthropicInitialMaxTokens = 128  // Balances rate limit budget vs retry cost for Anthropic
+	DefaultInitialMaxTokens   = 1024 // Generous default for providers that count actual output
+	MaxMaxTokens              = 1024 // Cap to prevent runaway in case of unexpected responses
+	MaxTokensScaleFactor      = 2.0  // Double on truncation
+	MaxScalingAttempts        = 4    // Max retries: 128 -> 256 -> 512 -> 1024
 )
 
 // RunnerOptions configures the test suite runner from CLI flags.
@@ -179,7 +188,18 @@ type PoliciesConfig struct {
 
 // AcceptanceConfig defines pass/fail thresholds.
 type AcceptanceConfig struct {
-	MinMatchRate float64 `yaml:"min_match_rate"`
+	MinMatchRate     float64 `yaml:"min_match_rate"`
+	StrictPolicyMatch *bool  `yaml:"strict_policy_match,omitempty"` // Defaults to true if not specified
+}
+
+// IsStrictPolicyMatch returns true if unexpected triggering policies should cause test failure.
+// Defaults to true when not explicitly set, enforcing focused test cases that only trigger
+// the expected policies.
+func (a AcceptanceConfig) IsStrictPolicyMatch() bool {
+	if a.StrictPolicyMatch == nil {
+		return true
+	}
+	return *a.StrictPolicyMatch
 }
 
 // ExecutionConfig defines test execution parameters.

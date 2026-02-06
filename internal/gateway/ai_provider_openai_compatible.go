@@ -231,6 +231,14 @@ func (p *openAICompatibleProvider) parseResponse(respBody []byte) (AICompletionR
 	choice := resp.Choices[0]
 	content := choice.Message.Content
 
+	if content == "" {
+		return AICompletionResult{}, 0, &AIProviderError{
+			Category:  ErrCategoryNoResponse,
+			Message:   "provider returned empty response content",
+			Retryable: false,
+		}
+	}
+
 	return AICompletionResult{
 		RawText:           content,
 		ParsedJSON:        json.RawMessage(content),
@@ -292,7 +300,7 @@ func (p *openAICompatibleProvider) normalizeError(err error, statusCode int) *AI
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &AIProviderError{
 			Category:  ErrCategoryTimeout,
-			Message:   "request timed out",
+			Message:   "request to provider timed out",
 			Retryable: false,
 			Cause:     err,
 		}

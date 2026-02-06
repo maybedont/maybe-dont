@@ -17,6 +17,7 @@ import (
 type TestResult struct {
 	CaseID      string
 	Title       string
+	Phase       string // "request", "response", or "both"
 	Engine      string // "cel" or "ai"
 	Model       string // Model key for AI tests (e.g., "anthropic:claude-haiku"), empty for CEL
 	Status      string // passed, failed, errored, skipped
@@ -24,6 +25,7 @@ type TestResult struct {
 	Expected    ExpectedResult
 	Actual      ActualResult
 	Failures    []string
+	Warnings    []string // Non-fatal issues (e.g., unexpected triggering policies in non-strict mode)
 	Error       *TestError
 }
 
@@ -295,6 +297,7 @@ func (e *Executor) executeCELTest(ctx context.Context, tc TestCase) TestResult {
 	result := TestResult{
 		CaseID: tc.CaseID,
 		Title:  tc.Title,
+		Phase:  tc.Phase,
 		Engine: "cel",
 		Expected: ExpectedResult{
 			Decision:        tc.Expectations.Decision,
@@ -369,7 +372,9 @@ func (e *Executor) executeCELTest(ctx context.Context, tc TestCase) TestResult {
 	result.ElapsedMs = time.Since(start).Milliseconds()
 
 	// Compare expected vs actual
-	result.Failures = compareResults(result.Expected, result.Actual)
+	cmp := compareResults(result.Expected, result.Actual, e.suite.Acceptance.IsStrictPolicyMatch())
+	result.Failures = cmp.failures
+	result.Warnings = cmp.warnings
 	if len(result.Failures) == 0 {
 		result.Status = "passed"
 	} else {
@@ -490,40 +495,79 @@ func mapResponseValidationResult(vr gateway.ResponseValidationResults) ActualRes
 	return actual
 }
 
-// compareResults compares expected vs actual and returns a list of failures.
-func compareResults(expected ExpectedResult, actual ActualResult) []string {
-	var failures []string
+// compareResultsOutput holds both failures and warnings from result comparison.
+type compareResultsOutput struct {
+	failures []string
+	warnings []string
+}
+
+// compareResults compares expected vs actual and returns failures and warnings.
+// When strictPolicyMatch is true and policies are specified in expectations,
+// any policy that triggers (matches the actual decision) but is NOT in the
+// expected list causes a failure. When false, such cases produce warnings instead.
+func compareResults(expected ExpectedResult, actual ActualResult, strictPolicyMatch bool) compareResultsOutput {
+	var out compareResultsOutput
 
 	// Compare overall action (allow/deny/redact)
 	if expected.Decision != actual.Decision {
-		failures = append(failures, fmt.Sprintf("expected %q, actual %q", expected.Decision, actual.Decision))
+		out.failures = append(out.failures, fmt.Sprintf("expected %q, actual %q", expected.Decision, actual.Decision))
 	}
 
 	// Compare redacted content if expected (for redact decision tests)
 	if expected.RedactedContent != "" {
 		if actual.RedactedContent == "" {
-			failures = append(failures, "expected redacted content but none was returned")
+			out.failures = append(out.failures, "expected redacted content but none was returned")
 		} else if expected.RedactedContent != actual.RedactedContent {
-			failures = append(failures, fmt.Sprintf("redacted content mismatch:\n  expected: %q\n  actual:   %q", expected.RedactedContent, actual.RedactedContent))
+			out.failures = append(out.failures, fmt.Sprintf("redacted content mismatch:\n  expected: %q\n  actual:   %q", expected.RedactedContent, actual.RedactedContent))
 		}
 	}
 
 	// Compare per-policy expectations if specified
+	expectedPolicies := make(map[string]string) // name -> expected decision
 	for _, pe := range expected.Policies {
+		expectedPolicies[pe.PolicyName] = pe.Decision
+
 		found := false
 		for _, pr := range actual.PoliciesExecuted {
 			if pr.PolicyName == pe.PolicyName {
 				found = true
 				if pr.Decision != pe.Decision {
-					failures = append(failures, fmt.Sprintf("policy %q: expected %q, actual %q", pe.PolicyName, pe.Decision, pr.Decision))
+					out.failures = append(out.failures, fmt.Sprintf("policy %q: expected %q, actual %q", pe.PolicyName, pe.Decision, pr.Decision))
 				}
 				break
 			}
 		}
 		if !found {
-			failures = append(failures, fmt.Sprintf("policy %q not executed (check if enabled or conditions match)", pe.PolicyName))
+			out.failures = append(out.failures, fmt.Sprintf("policy %q not executed (check if enabled or conditions match)", pe.PolicyName))
 		}
 	}
 
-	return failures
+	// Check for unexpected triggering policies.
+	// Only meaningful for active actions (deny/redact) where specific policies drove the
+	// decision. For "allow" tests, every policy returns "allow" by default — that's the
+	// absence of any block, not a meaningful trigger.
+	if len(expected.Policies) > 0 && actual.Decision != "allow" {
+		var unexpected []string
+		for _, pr := range actual.PoliciesExecuted {
+			// A policy "triggers" if its decision matches the overall actual decision
+			if pr.Decision != actual.Decision {
+				continue // Non-triggering policies are fine
+			}
+			if _, expected := expectedPolicies[pr.PolicyName]; expected {
+				continue // Expected policy
+			}
+			unexpected = append(unexpected, pr.PolicyName)
+		}
+
+		if len(unexpected) > 0 {
+			msg := fmt.Sprintf("%d unexpected policy match(es) — see highlighted ► above", len(unexpected))
+			if strictPolicyMatch {
+				out.failures = append(out.failures, msg)
+			} else {
+				out.warnings = append(out.warnings, msg)
+			}
+		}
+	}
+
+	return out
 }
