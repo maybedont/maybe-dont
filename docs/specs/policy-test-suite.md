@@ -1384,7 +1384,7 @@ New CLI flags:
 | `--incremental` | Skip unchanged tests, persist results to state file. Use for incremental execution. |
 | `--full` | Run all tests regardless of cache, persist results to state file. Use to refresh cache. |
 | `--max-tests N` | Run at most N tests per model per invocation. If more tests remain, exit with code 5. Without `--wait`, the process exits after the batch. Requires `--incremental` or `--full`. |
-| `--wait` | Keep running until all tests complete. When rate limited, waits and resumes. Useful for local development when you want to run the full suite without manual intervention. Requires `--incremental` or `--full`. |
+| `--wait` | Keep running until all tests complete. When rate limited, waits and resumes. Works for both local development and CI. With `--incremental` and dynamic rate limiting, waits are typically short. |
 | `--state-file` | Override state file location. Requires `--incremental` or `--full`. |
 
 Exit codes:
@@ -1548,8 +1548,7 @@ jobs:
             --suite-dir ./internal/config/defaults/tests \
             --incremental \
             --state-file .ai-test-state.json \
-            --max-tests 5 \
-            --rpm 10
+            --wait
         continue-on-error: true
 
       - name: Commit state file
@@ -1662,7 +1661,7 @@ jobs:
             --matrix \
             $MODE_FLAG \
             --state-file .policy-test-state.json \
-            --rpm 20 \
+            --wait \
             --format junit \
             --output ai-results.xml
 
@@ -1709,6 +1708,24 @@ jobs:
 - Concurrency group serializes runs to prevent race conditions
 - Manual dispatch allows `--full` to bypass cache when needed
 - Both jobs upload JUnit XML for GitHub's test reporting
+
+**Dynamic rate limiting in CI (`--wait`):**
+
+With dynamic rate limiting, we use `--wait` instead of static `--rpm`:
+
+| Old Approach | New Approach |
+|--------------|--------------|
+| Static `--rpm 20` (guessed) | Dynamic from response headers (learned) |
+| Fixed 60s wait assumption | Precise wait from `retry-after` header |
+| High `max_tokens` (burns quota) | Auto-scale from 64 (more requests before limits) |
+
+**Why this works well with `--incremental`:**
+1. Most CI runs only have a few changed tests to run
+2. Auto-scaling `max_tokens` (starting at 64) means many more requests before hitting token limits
+3. When rate limited, precise `retry-after` header avoids guessing
+4. Typical waits are short; long waits are rare with incremental mode
+
+If CI costs become an issue (unlikely with incremental mode), we can revisit with batching or wait limits.
 
 **Workflow behavior by trigger:**
 
@@ -2160,3 +2177,587 @@ See `policy-test-suite/cases/` for example test cases covering:
 - `resp-redact-*` - Sensitive data redaction policies
 - `resp-block-*` - Response blocking policies
 - `resp-detect-*` - Data classification policies
+
+## Dynamic Rate Limiting from Response Headers
+
+### Overview
+
+This section extends the rate limiting approach defined in [Rate Limiting and Incremental Execution](#rate-limiting-and-incremental-execution) with **dynamic adjustment based on provider response headers**. Instead of relying solely on static configuration, the system learns actual rate limits from API responses and adjusts behavior automatically.
+
+### Problem Statement
+
+The current rate limiting approach has limitations:
+
+1. **Static configuration requires guessing** - Users must configure `requests_per_minute` without knowing their actual API tier limits
+2. **Token limits not tracked** - Anthropic rate limits include both requests AND tokens; we only track requests
+3. **max_tokens contributes to rate limits** - Anthropic counts the `max_tokens` parameter (not actual output) against token rate limits, meaning a high `max_tokens` value quickly exhausts quota even with small responses
+4. **Fixed 60-second wait on 429** - We assume a 1-minute rate limit window, but providers return exact wait times via headers
+5. **No visibility** - Users hit rate limits without understanding why or what their actual limits are
+
+### Provider Rate Limit Headers
+
+Both major providers return rate limit information in response headers:
+
+#### Anthropic Headers
+
+| Header | Description |
+|--------|-------------|
+| `anthropic-ratelimit-requests-limit` | Maximum requests allowed in window |
+| `anthropic-ratelimit-requests-remaining` | Requests remaining in current window |
+| `anthropic-ratelimit-requests-reset` | ISO 8601 timestamp when window resets |
+| `anthropic-ratelimit-tokens-limit` | Maximum tokens allowed in window |
+| `anthropic-ratelimit-tokens-remaining` | Tokens remaining in current window |
+| `anthropic-ratelimit-tokens-reset` | ISO 8601 timestamp when tokens reset |
+| `retry-after` | Seconds to wait (on 429 responses) |
+
+#### OpenAI Headers
+
+| Header | Description |
+|--------|-------------|
+| `x-ratelimit-limit-requests` | Maximum requests allowed in window |
+| `x-ratelimit-remaining-requests` | Requests remaining in current window |
+| `x-ratelimit-reset-requests` | Time until request limit resets (e.g., "1m30s") |
+| `x-ratelimit-limit-tokens` | Maximum tokens allowed in window |
+| `x-ratelimit-remaining-tokens` | Tokens remaining in current window |
+| `x-ratelimit-reset-tokens` | Time until token limit resets |
+
+### Solution: Dynamic Rate Limit Tracking
+
+#### 1. Rate Limit Info Struct
+
+Capture rate limit information from each API response:
+
+```go
+// RateLimitInfo captures rate limit state from provider response headers.
+type RateLimitInfo struct {
+    Provider           string        // "anthropic", "openai", etc.
+
+    // Request limits
+    RequestsLimit      int           // Max requests in window (0 = unknown)
+    RequestsRemaining  int           // Requests left in window
+    RequestsReset      time.Time     // When request limit resets
+
+    // Token limits
+    TokensLimit        int           // Max tokens in window (0 = unknown)
+    TokensRemaining    int           // Tokens left in window
+    TokensReset        time.Time     // When token limit resets
+
+    // 429-specific
+    RetryAfter         time.Duration // From retry-after header (0 = not rate limited)
+}
+```
+
+#### 2. AICompletionResult Extension
+
+Add rate limit info to the response type returned by providers:
+
+```go
+type AICompletionResult struct {
+    RawText           string
+    ParsedJSON        json.RawMessage
+    ProviderRequestID string
+    RateLimitInfo     *RateLimitInfo  // NEW: Captured from response headers
+    StopReason        string          // NEW: "end_turn", "max_tokens", "stop", "length"
+}
+```
+
+#### 3. Provider Implementation
+
+Each provider parses its headers after receiving a response:
+
+```go
+// In anthropicProvider.doGenerate():
+func (p *anthropicProvider) parseRateLimitHeaders(resp *http.Response) *RateLimitInfo {
+    info := &RateLimitInfo{Provider: "anthropic"}
+
+    // Parse request limits
+    if v := resp.Header.Get("anthropic-ratelimit-requests-limit"); v != "" {
+        info.RequestsLimit, _ = strconv.Atoi(v)
+    }
+    if v := resp.Header.Get("anthropic-ratelimit-requests-remaining"); v != "" {
+        info.RequestsRemaining, _ = strconv.Atoi(v)
+    }
+    if v := resp.Header.Get("anthropic-ratelimit-requests-reset"); v != "" {
+        info.RequestsReset, _ = time.Parse(time.RFC3339, v)
+    }
+
+    // Parse token limits
+    if v := resp.Header.Get("anthropic-ratelimit-tokens-limit"); v != "" {
+        info.TokensLimit, _ = strconv.Atoi(v)
+    }
+    if v := resp.Header.Get("anthropic-ratelimit-tokens-remaining"); v != "" {
+        info.TokensRemaining, _ = strconv.Atoi(v)
+    }
+    if v := resp.Header.Get("anthropic-ratelimit-tokens-reset"); v != "" {
+        info.TokensReset, _ = time.Parse(time.RFC3339, v)
+    }
+
+    // Parse retry-after on 429
+    if v := resp.Header.Get("retry-after"); v != "" {
+        if secs, err := strconv.Atoi(v); err == nil {
+            info.RetryAfter = time.Duration(secs) * time.Second
+        }
+    }
+
+    return info
+}
+```
+
+#### 4. Dynamic RateLimiter
+
+The RateLimiter evolves to accept dynamic info:
+
+```go
+type RateLimiter struct {
+    // Existing fields...
+
+    // NEW: Learned limits from response headers (per-provider)
+    learnedLimits map[string]*LearnedLimits
+}
+
+type LearnedLimits struct {
+    RequestsPerMinute  int           // Learned from headers
+    TokensPerMinute    int           // Learned from headers
+    RequestsRemaining  int           // Last known remaining
+    TokensRemaining    int           // Last known remaining
+    NextReset          time.Time     // When limits reset
+    LastUpdated        time.Time
+}
+
+// UpdateFromResponse updates rate limit tracking from API response.
+func (rl *RateLimiter) UpdateFromResponse(info *RateLimitInfo) {
+    if info == nil {
+        return
+    }
+
+    rl.mu.Lock()
+    defer rl.mu.Unlock()
+
+    learned := rl.learnedLimits[info.Provider]
+    if learned == nil {
+        learned = &LearnedLimits{}
+        rl.learnedLimits[info.Provider] = learned
+    }
+
+    // Update with learned values
+    if info.RequestsLimit > 0 {
+        learned.RequestsPerMinute = info.RequestsLimit
+    }
+    if info.TokensLimit > 0 {
+        learned.TokensPerMinute = info.TokensLimit
+    }
+    learned.RequestsRemaining = info.RequestsRemaining
+    learned.TokensRemaining = info.TokensRemaining
+
+    // Track reset time
+    if !info.RequestsReset.IsZero() {
+        learned.NextReset = info.RequestsReset
+    }
+    if !info.TokensReset.IsZero() && info.TokensReset.After(learned.NextReset) {
+        learned.NextReset = info.TokensReset
+    }
+
+    learned.LastUpdated = time.Now()
+}
+```
+
+#### 5. Proactive Slowdown
+
+When remaining quota drops below a threshold, increase delays proactively:
+
+```go
+// ShouldSlowDown checks if we should increase delay to avoid hitting limits.
+func (rl *RateLimiter) ShouldSlowDown(provider string) (bool, time.Duration) {
+    rl.mu.Lock()
+    defer rl.mu.Unlock()
+
+    learned := rl.learnedLimits[provider]
+    if learned == nil {
+        return false, 0
+    }
+
+    // Check if either limit is getting low (< 10% remaining)
+    requestsLow := learned.RequestsPerMinute > 0 &&
+                   float64(learned.RequestsRemaining) < float64(learned.RequestsPerMinute)*0.1
+    tokensLow := learned.TokensPerMinute > 0 &&
+                 float64(learned.TokensRemaining) < float64(learned.TokensPerMinute)*0.1
+
+    if !requestsLow && !tokensLow {
+        return false, 0
+    }
+
+    // Calculate wait time until reset
+    if !learned.NextReset.IsZero() && learned.NextReset.After(time.Now()) {
+        return true, time.Until(learned.NextReset)
+    }
+
+    // Fallback: wait a conservative amount
+    return true, 10 * time.Second
+}
+```
+
+#### 6. Precise 429 Wait Time
+
+Use `retry-after` header instead of guessing:
+
+```go
+// Handle429 handles a 429 response, using retry-after header when available.
+func (rl *RateLimiter) Handle429(ctx context.Context, provider string, info *RateLimitInfo) error {
+    var waitDuration time.Duration
+
+    if info != nil && info.RetryAfter > 0 {
+        // Use precise retry-after from provider
+        waitDuration = info.RetryAfter + time.Duration(rl.rateLimitBufferMs)*time.Millisecond
+    } else if info != nil && !info.RequestsReset.IsZero() {
+        // Calculate from reset timestamp
+        waitDuration = time.Until(info.RequestsReset) + time.Duration(rl.rateLimitBufferMs)*time.Millisecond
+    } else {
+        // Fallback to configured wait (60s + buffer)
+        waitDuration = time.Minute + time.Duration(rl.rateLimitBufferMs)*time.Millisecond
+    }
+
+    return rl.waitWithProgress(ctx, provider, waitDuration, info)
+}
+```
+
+### CLI Output Enhancement
+
+When rate limits are hit, show detailed information:
+
+#### TTY Output (Interactive)
+
+```
+⏳ Rate limit reached for anthropic
+   Requests: 0/50 remaining
+   Tokens: 1,234/40,000 remaining
+   Waiting 47s (from retry-after header)...
+   [=================>            ] 23s remaining
+
+✓ Resuming after rate limit pause
+```
+
+#### Non-TTY Output (CI/Pipes)
+
+```
+[12:34:58] Rate limit reached for anthropic
+           Requests: 0/50 remaining | Tokens: 1,234/40,000 remaining
+           Waiting 47s based on retry-after header...
+[12:35:45] Resuming after rate limit pause
+```
+
+#### Rate Limit Summary at End
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Summary: 45/50 passed, 3 failed, 2 skipped
+
+Rate Limit Info:
+  anthropic: 50 req/min, 40,000 tokens/min (learned from headers)
+             Paused 2 times, total wait: 1m 34s
+  openai:    500 req/min, 90,000 tokens/min (learned from headers)
+             No rate limit pauses
+
+Elapsed: 4m 32s
+```
+
+### max_tokens Truncation Detection
+
+#### Problem
+
+The `max_tokens` parameter affects rate limits (Anthropic counts it against token quota) and response completeness. Setting it too low truncates responses; setting it too high wastes rate limit capacity.
+
+#### Stop Reason Detection
+
+Both providers indicate truncation in their response:
+
+| Provider | Field | Normal | Truncated |
+|----------|-------|--------|-----------|
+| Anthropic | `stop_reason` | `"end_turn"` | `"max_tokens"` |
+| OpenAI | `finish_reason` | `"stop"` | `"length"` |
+
+#### Response Struct Addition
+
+```go
+type AICompletionResult struct {
+    // ... existing fields ...
+    StopReason string // "end_turn", "max_tokens", "stop", "length"
+    WasTruncated bool // Convenience: true if stopped due to max_tokens
+}
+```
+
+#### Provider Parsing
+
+```go
+// Anthropic
+var resp struct {
+    StopReason string `json:"stop_reason"`
+    // ...
+}
+result.StopReason = resp.StopReason
+result.WasTruncated = resp.StopReason == "max_tokens"
+
+// OpenAI
+result.StopReason = resp.Choices[0].FinishReason
+result.WasTruncated = resp.Choices[0].FinishReason == "length"
+```
+
+#### Provider Differences for max_tokens
+
+| Aspect | Anthropic | OpenAI |
+|--------|-----------|--------|
+| Required? | **Yes** (API rejects without it) | No (defaults to model max) |
+| Rate limit impact | Counts `max_tokens` against token quota | Counts **actual** tokens only |
+| Low value benefit | **Significant** - more requests before hitting limits | Minimal - only prevents cost overruns |
+
+**Key insight:** For Anthropic, setting `max_tokens: 4096` means each request "reserves" 4096 tokens from your quota, even if the response is only 100 tokens. With a 40,000 tokens/minute limit, that's only ~10 requests before hitting the limit. With `max_tokens: 64`, you could make ~625 requests.
+
+#### Auto-Scaling max_tokens Strategy
+
+Start with a small `max_tokens` value and automatically increase on truncation:
+
+```go
+const (
+    initialMaxTokens = 64    // Start small for Anthropic rate limit efficiency
+    maxMaxTokens     = 1024  // Cap to prevent runaway in case of unexpected responses
+    scaleFactor      = 2.0   // Double on truncation
+)
+
+func (r *AITestRunner) evaluatePolicyWithAutoScale(ctx context.Context, ...) (*AICompletionResult, error) {
+    maxTokens := initialMaxTokens
+
+    for attempt := 0; attempt < 4; attempt++ { // Max 4 attempts: 64 -> 128 -> 256 -> 512
+        req.Parameters["max_tokens"] = maxTokens
+
+        result, err := r.providerClient.Generate(ctx, req)
+        if err != nil {
+            return nil, err
+        }
+
+        if !result.WasTruncated {
+            return result, nil // Success - response fit
+        }
+
+        // Truncated - increase and retry
+        nextMaxTokens := int(float64(maxTokens) * scaleFactor)
+        if nextMaxTokens > maxMaxTokens {
+            // Hit cap - return with warning, don't retry
+            log.Warnf("Response truncated at max_tokens=%d (cap reached)", maxTokens)
+            return result, nil
+        }
+
+        log.Debugf("Response truncated at max_tokens=%d, retrying with %d", maxTokens, nextMaxTokens)
+        maxTokens = nextMaxTokens
+    }
+
+    return result, nil
+}
+```
+
+**Behavior:**
+1. First request: `max_tokens=64`
+2. If truncated: retry with `max_tokens=128`
+3. If truncated: retry with `max_tokens=256`
+4. If truncated: retry with `max_tokens=512`
+5. If still truncated at cap: return result with warning
+
+**Benefits:**
+- Anthropic: Maximizes requests before hitting token rate limits
+- OpenAI: Saves costs (billed per actual token, but max_tokens prevents overruns)
+- Self-tuning: Learns the right size without manual configuration
+
+#### Handling Truncation
+
+When truncation is detected:
+
+1. **Auto-retry with increased limit** (default behavior):
+   - Increase `max_tokens` by scale factor (default: 2x)
+   - Retry the same request
+   - Log at debug level: "Response truncated at max_tokens=64, retrying with 128"
+
+2. **Log warning if cap reached**:
+   ```
+   WARNING: Response truncated at max_tokens=512 (cap reached).
+            Policy: ai-req-001, Model: anthropic/claude-haiku-4-5
+            This may indicate the policy prompt is producing unexpectedly long responses.
+   ```
+
+3. **Track in test results** for analysis:
+   ```json
+   {
+     "case_id": "ai-req-001",
+     "status": "passed",
+     "max_tokens_attempts": [64, 128],
+     "final_max_tokens": 128,
+     "truncation_warning": false
+   }
+   ```
+
+#### CLI Output for Auto-Scaling
+
+Show max_tokens scaling in verbose/debug mode:
+
+```
+✓ ai-req-001 (234ms, max_tokens: 64→128)
+✓ ai-req-002 (189ms, max_tokens: 64)
+✓ ai-req-003 (312ms, max_tokens: 64→128→256)
+⚠ ai-req-004 (456ms, max_tokens: 512, TRUNCATED)
+```
+
+Summary at end:
+```
+max_tokens scaling:
+  64 tokens: 45 tests (sufficient)
+  128 tokens: 12 tests (scaled up once)
+  256 tokens: 3 tests (scaled up twice)
+  512+ tokens: 1 test (hit cap, truncated)
+```
+
+### Configuration Changes
+
+#### Simplified suite.yaml
+
+With dynamic learning, static configuration becomes optional:
+
+```yaml
+execution:
+  timeout_ms: 30000
+  retries: 2
+  retry_delay_ms: 1000
+
+  # Rate limiting - all optional with dynamic learning
+  rate_limits:
+    # Only needed for providers that don't return headers
+    custom_provider:
+      requests_per_minute: 30
+
+    # Fallback for unknown providers (optional)
+    default:
+      requests_per_minute: 30
+
+  # These still apply as minimums/buffers
+  delay_between_requests_ms: 100    # Minimum delay (even if headers say more is available)
+  rate_limit_buffer_ms: 5000        # Extra padding after rate limit wait
+```
+
+#### Model-Level max_tokens
+
+Keep `max_tokens` in model config, but with sensible defaults:
+
+```yaml
+engines:
+  ai:
+    model_matrix:
+      - provider: "anthropic"
+        model: "claude-haiku-4-5-20251001"
+        api_key: "${ANTHROPIC_API_KEY}"
+        parameters:
+          max_tokens: 256    # Low default for policy validation
+          temperature: 0.0
+```
+
+**Rationale for low default:**
+- Policy validation responses are small JSON (~100-200 tokens)
+- Anthropic counts `max_tokens` against token rate limits
+- Lower `max_tokens` = more requests before hitting token limits
+- If truncation occurs, we'll detect it and warn
+
+### Implementation Phases
+
+#### Phase 10: Dynamic Rate Limiting
+
+- [ ] **10.1** Add `RateLimitInfo` struct to `internal/gateway/ai_provider.go`
+- [ ] **10.2** Add `StopReason` and `WasTruncated` to `AICompletionResult`
+- [ ] **10.3** Implement header parsing in `anthropicProvider`
+  - Parse `anthropic-ratelimit-*` headers
+  - Parse `retry-after` header
+  - Parse `stop_reason` from response body
+- [ ] **10.4** Implement header parsing in `openaiProvider`
+  - Parse `x-ratelimit-*` headers
+  - Parse `finish_reason` from response body
+- [ ] **10.5** Implement header parsing in `openaiCompatibleProvider`
+  - Same as OpenAI (may not be present for all compatible providers)
+- [ ] **10.6** Extend `RateLimiter` with dynamic learning
+  - Add `LearnedLimits` per provider
+  - Implement `UpdateFromResponse()`
+  - Implement `ShouldSlowDown()`
+- [ ] **10.7** Update `Handle429` to use `retry-after` header
+- [ ] **10.8** Update CLI output to show rate limit details
+  - TTY: Show limits, remaining, wait time from headers
+  - Non-TTY: Include same info in timestamped log format
+  - Summary: Show learned limits and total pause time
+- [ ] **10.9** Add truncation warning logging
+- [ ] **10.10** Update tests
+  - Mock response headers in provider tests
+  - Test dynamic limit learning
+  - Test proactive slowdown
+  - Test retry-after usage
+  - Test truncation detection
+
+#### Phase 10.A: Auto-Scaling max_tokens (Anthropic Optimization)
+
+- [ ] **10.A.1** Add `StopReason` and `WasTruncated` parsing to all providers
+- [ ] **10.A.2** Implement auto-scaling retry logic in `AITestRunner`
+  - Start at 64 tokens
+  - Scale by 2x on truncation
+  - Cap at 1024 tokens
+  - Max 4 retry attempts
+- [ ] **10.A.3** Track max_tokens attempts in `TestResult`
+- [ ] **10.A.4** Add CLI output showing scaling behavior
+  - Per-test: show scaling path (e.g., "64→128")
+  - Summary: distribution of final max_tokens values
+- [ ] **10.A.5** Add config option to disable auto-scaling (for users who want fixed values)
+  ```yaml
+  engines:
+    ai:
+      auto_scale_max_tokens: true  # default
+      initial_max_tokens: 64       # default
+      max_max_tokens: 1024         # cap
+  ```
+- [ ] **10.A.6** Tests for auto-scaling behavior
+  - Test truncation detection triggers retry
+  - Test scaling stops at cap
+  - Test successful response doesn't retry
+
+#### Phase 10 Testing Scenarios
+
+```bash
+# 1. Verify headers are captured
+# Run a single test and check debug output shows learned limits
+MAYBE_DONT_LOGGER_LEVEL=debug ./maybe-dont test policies --suite-dir ./suite --model anthropic:claude-haiku-4-5
+# Expected: Debug log shows "Learned rate limits for anthropic: 50 req/min, 40000 tokens/min"
+
+# 2. Verify retry-after is used
+# Run tests until 429, check wait time matches retry-after
+./maybe-dont test policies --suite-dir ./suite --wait --rpm 100
+# Expected: Wait time shown matches provider's retry-after header, not hardcoded 60s
+
+# 3. Verify proactive slowdown
+# Run with very high RPM to trigger proactive slowdown
+./maybe-dont test policies --suite-dir ./suite --wait --rpm 1000
+# Expected: "Slowing down - only 5 requests remaining" before hitting 429
+
+# 4. Verify truncation detection and auto-scaling
+# Run with auto-scaling enabled (default)
+./maybe-dont test policies --suite-dir ./suite --model anthropic:claude-haiku-4-5 -v
+# Expected: Some tests show "64→128" scaling in output
+# Expected: Summary shows max_tokens distribution
+
+# 5. Verify auto-scaling disabled with explicit max_tokens
+# If user specifies max_tokens in config, don't auto-scale
+./maybe-dont test policies --suite-dir ./suite --model anthropic:claude-haiku-4-5
+# With explicit max_tokens: 256 in model config
+# Expected: Uses 256 for all requests, no scaling
+
+# 6. Verify truncation cap warning
+# Force truncation at cap
+./maybe-dont test policies --suite-dir ./suite --model anthropic:claude-haiku-4-5
+# With a policy that produces very long responses
+# Expected: "WARNING: Response truncated at max_tokens=1024 (cap reached)"
+```
+
+### Backwards Compatibility
+
+- Existing `rate_limits` configuration continues to work
+- Static config is used as a fallback when headers aren't available
+- No breaking changes to CLI flags or suite.yaml schema
+- Dynamic learning is additive - enhances but doesn't replace static config

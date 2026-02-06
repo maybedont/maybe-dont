@@ -77,7 +77,7 @@ engines:
         api_key: "${ANTHROPIC_API_KEY}"
         tier: "high"
         parameters:
-          max_tokens: 4096
+          max_tokens: 256  # Policy validation responses are small JSON
           temperature: 0.0
 
       - provider: "anthropic"
@@ -85,15 +85,15 @@ engines:
         api_key: "${ANTHROPIC_API_KEY}"
         tier: "mid"
         parameters:
-          max_tokens: 4096
+          max_tokens: 256  # Policy validation responses are small JSON
           temperature: 0.0
 
       - provider: "anthropic"
-        model: "claude-3-5-haiku-20241022"
+        model: "claude-haiku-4-5-20251001"
         api_key: "${ANTHROPIC_API_KEY}"
         tier: "low"
         parameters:
-          max_tokens: 4096
+          max_tokens: 256  # Policy validation responses are small JSON
           temperature: 0.0
 
       # Example: Azure OpenAI (commented out - uncomment to test Azure endpoint)

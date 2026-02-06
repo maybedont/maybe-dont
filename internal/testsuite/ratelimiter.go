@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/maybedont/maybe-dont/internal/gateway"
 )
 
 // RateLimiter tracks and enforces rate limits per provider.
@@ -39,6 +41,25 @@ type RateLimiter struct {
 
 	// Provider stopped due to rate limit (429)
 	providerStopped map[string]bool
+
+	// Learned limits from response headers (per-provider)
+	learnedLimits map[string]*LearnedLimits
+}
+
+// LearnedLimits tracks rate limits learned from provider response headers.
+type LearnedLimits struct {
+	// Request limits
+	RequestsLimit     int
+	RequestsRemaining int
+	RequestsReset     time.Time
+
+	// Token limits
+	TokensLimit     int
+	TokensRemaining int
+	TokensReset     time.Time
+
+	// Last update time
+	LastUpdated time.Time
 }
 
 // RateLimiterConfig configures the rate limiter.
@@ -71,6 +92,7 @@ func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
 		providerLimits:         make(map[string]int),
 		providerRequests:       make(map[string][]time.Time),
 		providerStopped:        make(map[string]bool),
+		learnedLimits:          make(map[string]*LearnedLimits),
 		defaultLimit:           DefaultRequestsPerMinute,
 		delayBetweenRequestsMs: DefaultDelayBetweenRequestsMs,
 		rateLimitBufferMs:      DefaultRateLimitBufferMs,
@@ -224,10 +246,64 @@ func (rl *RateLimiter) RecordRequest(provider string) {
 	rl.providerRequests[provider] = append(rl.providerRequests[provider], time.Now())
 }
 
+// UpdateFromResponse updates rate limit tracking from API response headers.
+// This enables dynamic rate limiting based on actual provider limits.
+func (rl *RateLimiter) UpdateFromResponse(info *gateway.RateLimitInfo) {
+	if info == nil {
+		return
+	}
+
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	learned := rl.learnedLimits[info.Provider]
+	if learned == nil {
+		learned = &LearnedLimits{}
+		rl.learnedLimits[info.Provider] = learned
+	}
+
+	// Update with learned values (only if non-zero)
+	if info.RequestsLimit > 0 {
+		learned.RequestsLimit = info.RequestsLimit
+	}
+	if info.RequestsRemaining >= 0 {
+		learned.RequestsRemaining = info.RequestsRemaining
+	}
+	if !info.RequestsReset.IsZero() {
+		learned.RequestsReset = info.RequestsReset
+	}
+
+	if info.TokensLimit > 0 {
+		learned.TokensLimit = info.TokensLimit
+	}
+	if info.TokensRemaining >= 0 {
+		learned.TokensRemaining = info.TokensRemaining
+	}
+	if !info.TokensReset.IsZero() {
+		learned.TokensReset = info.TokensReset
+	}
+
+	learned.LastUpdated = time.Now()
+}
+
+// GetLearnedLimits returns the learned limits for a provider, if any.
+func (rl *RateLimiter) GetLearnedLimits(provider string) *LearnedLimits {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return rl.learnedLimits[provider]
+}
+
 // Handle429 handles a 429 response from a provider.
 // If --wait is set, waits for the rate limit window to reset plus buffer.
 // Otherwise, stops the provider.
+// Deprecated: Use Handle429WithInfo for precise wait times from headers.
 func (rl *RateLimiter) Handle429(ctx context.Context, provider string) error {
+	return rl.Handle429WithInfo(ctx, provider, nil)
+}
+
+// Handle429WithInfo handles a 429 response, using RateLimitInfo for precise wait times.
+// If info contains RetryAfter, uses that duration instead of guessing.
+func (rl *RateLimiter) Handle429WithInfo(ctx context.Context, provider string, info *gateway.RateLimitInfo) error {
 	rl.mu.Lock()
 	if !rl.waitOnLimit {
 		rl.providerStopped[provider] = true
@@ -236,13 +312,34 @@ func (rl *RateLimiter) Handle429(ctx context.Context, provider string) error {
 	}
 	rl.mu.Unlock()
 
-	// Wait for rate limit window to reset (1 minute) plus buffer
-	waitDuration := time.Minute + time.Duration(rl.rateLimitBufferMs)*time.Millisecond
-	return rl.waitWithProgress(ctx, provider, waitDuration)
+	// Determine wait duration from headers or fallback to default
+	var waitDuration time.Duration
+	var waitSource string
+
+	if info != nil && info.RetryAfter > 0 {
+		// Use precise retry-after from provider
+		waitDuration = info.RetryAfter + time.Duration(rl.rateLimitBufferMs)*time.Millisecond
+		waitSource = "retry-after header"
+	} else if info != nil && !info.RequestsReset.IsZero() {
+		// Calculate from reset timestamp
+		waitDuration = time.Until(info.RequestsReset) + time.Duration(rl.rateLimitBufferMs)*time.Millisecond
+		waitSource = "reset timestamp"
+	} else {
+		// Fallback to configured wait (60s + buffer)
+		waitDuration = time.Minute + time.Duration(rl.rateLimitBufferMs)*time.Millisecond
+		waitSource = "default"
+	}
+
+	return rl.waitWithProgressAndInfo(ctx, provider, waitDuration, waitSource, info)
 }
 
 // waitWithProgress waits for the given duration, showing progress if output is TTY.
 func (rl *RateLimiter) waitWithProgress(ctx context.Context, provider string, duration time.Duration) error {
+	return rl.waitWithProgressAndInfo(ctx, provider, duration, "", nil)
+}
+
+// waitWithProgressAndInfo waits with detailed rate limit info shown.
+func (rl *RateLimiter) waitWithProgressAndInfo(ctx context.Context, provider string, duration time.Duration, waitSource string, info *gateway.RateLimitInfo) error {
 	if duration <= 0 {
 		return nil
 	}
@@ -250,12 +347,34 @@ func (rl *RateLimiter) waitWithProgress(ctx context.Context, provider string, du
 	startTime := time.Now()
 	endTime := startTime.Add(duration)
 
-	// Print initial message
+	// Print initial message with rate limit details
 	if rl.isTTY {
 		_, _ = fmt.Fprintf(rl.output, "\n⏳ Rate limit reached for %s\n", provider)
+		if info != nil {
+			if info.RequestsLimit > 0 {
+				_, _ = fmt.Fprintf(rl.output, "   Requests: %d/%d remaining\n", info.RequestsRemaining, info.RequestsLimit)
+			}
+			if info.TokensLimit > 0 {
+				_, _ = fmt.Fprintf(rl.output, "   Tokens: %d/%d remaining\n", info.TokensRemaining, info.TokensLimit)
+			}
+		}
+		if waitSource != "" {
+			_, _ = fmt.Fprintf(rl.output, "   Waiting %v (from %s)...\n", duration.Round(time.Second), waitSource)
+		}
 	} else {
-		_, _ = fmt.Fprintf(rl.output, "[%s] Rate limit reached for %s, waiting %v...\n",
-			time.Now().Format("15:04:05"), provider, duration.Round(time.Second))
+		msg := fmt.Sprintf("[%s] Rate limit reached for %s", time.Now().Format("15:04:05"), provider)
+		if info != nil && info.RequestsLimit > 0 {
+			msg += fmt.Sprintf(" | Requests: %d/%d", info.RequestsRemaining, info.RequestsLimit)
+		}
+		if info != nil && info.TokensLimit > 0 {
+			msg += fmt.Sprintf(" | Tokens: %d/%d", info.TokensRemaining, info.TokensLimit)
+		}
+		if waitSource != "" {
+			msg += fmt.Sprintf(" | Waiting %v (%s)", duration.Round(time.Second), waitSource)
+		} else {
+			msg += fmt.Sprintf(" | Waiting %v", duration.Round(time.Second))
+		}
+		_, _ = fmt.Fprintf(rl.output, "%s\n", msg)
 	}
 
 	// Update progress periodically
@@ -283,14 +402,13 @@ func (rl *RateLimiter) waitWithProgress(ctx context.Context, provider string, du
 			}
 
 			if rl.isTTY {
-				// Progress bar
+				// Progress bar - single line that updates in place
 				elapsed := time.Since(startTime)
 				progress := float64(elapsed) / float64(duration)
 				barWidth := 30
 				filled := int(progress * float64(barWidth))
-				_, _ = fmt.Fprintf(rl.output, "\r   Waiting %ds for rate limit window to reset...\n",
-					int(remaining.Seconds()))
-				_, _ = fmt.Fprintf(rl.output, "\r   [%s%s] %ds remaining",
+				// \r returns to start of line, \033[K clears to end of line
+				_, _ = fmt.Fprintf(rl.output, "\r   [%s%s] %ds remaining\033[K",
 					repeatChar('=', filled)+">",
 					repeatChar(' ', barWidth-filled-1),
 					int(remaining.Seconds()))

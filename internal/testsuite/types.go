@@ -2,9 +2,19 @@ package testsuite
 
 // Default rate limiting values
 const (
-	DefaultRequestsPerMinute     = 30   // Default requests per minute for unlisted providers
+	DefaultRequestsPerMinute      = 30   // Default requests per minute for unlisted providers
 	DefaultDelayBetweenRequestsMs = 100  // Minimum delay between consecutive requests
-	DefaultRateLimitBufferMs     = 5000 // Extra buffer when hitting rate limit window
+	DefaultRateLimitBufferMs      = 5000 // Extra buffer when hitting rate limit window
+)
+
+// Auto-scaling max_tokens constants for Anthropic optimization.
+// Anthropic counts max_tokens (reserved capacity) against rate limits, not actual output.
+// Starting small and scaling up on truncation maximizes requests before hitting token limits.
+const (
+	InitialMaxTokens = 64   // Start small for Anthropic rate limit efficiency
+	MaxMaxTokens     = 1024 // Cap to prevent runaway in case of unexpected responses
+	MaxTokensScaleFactor = 2.0 // Double on truncation
+	MaxScalingAttempts = 4  // Max retries: 64 -> 128 -> 256 -> 512
 )
 
 // RunnerOptions configures the test suite runner from CLI flags.

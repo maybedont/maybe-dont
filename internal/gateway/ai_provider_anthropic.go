@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 )
@@ -20,7 +22,9 @@ const (
 )
 
 // Default max_tokens for Anthropic (required parameter).
-const anthropicDefaultMaxTokens = 4096
+// Kept low because Anthropic counts max_tokens against rate limits (not actual output).
+// Policy validation responses are small JSON (~100-200 tokens).
+const anthropicDefaultMaxTokens = 256
 
 // anthropicProvider implements AIProviderClient using the Anthropic REST API.
 type anthropicProvider struct {
@@ -124,13 +128,25 @@ func (p *anthropicProvider) doGenerate(ctx context.Context, req AIRequest) (AICo
 		}
 	}
 
+	// Parse rate limit headers (available even on error responses)
+	rateLimitInfo := p.parseRateLimitHeaders(resp)
+
 	// Check for error response
 	if resp.StatusCode != http.StatusOK {
-		return AICompletionResult{}, resp.StatusCode, p.normalizeError(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)), resp.StatusCode)
+		// Include rate limit info in result even on error (useful for 429s)
+		result := AICompletionResult{RateLimitInfo: rateLimitInfo}
+		return result, resp.StatusCode, p.normalizeError(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)), resp.StatusCode)
 	}
 
-	// Parse response
-	return p.parseResponse(respBody)
+	// Parse response body
+	result, statusCode, err := p.parseResponse(respBody)
+	if err != nil {
+		return result, statusCode, err
+	}
+
+	// Add rate limit info to successful result
+	result.RateLimitInfo = rateLimitInfo
+	return result, statusCode, nil
 }
 
 // buildRequestBody constructs the Anthropic messages API request body.
@@ -203,8 +219,9 @@ func (p *anthropicProvider) buildRequestBody(req AIRequest) ([]byte, error) {
 // parseResponse parses the Anthropic messages API response.
 func (p *anthropicProvider) parseResponse(respBody []byte) (AICompletionResult, int, error) {
 	var resp struct {
-		ID      string `json:"id"`
-		Content []struct {
+		ID         string `json:"id"`
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
@@ -240,7 +257,45 @@ func (p *anthropicProvider) parseResponse(respBody []byte) (AICompletionResult, 
 		RawText:           content,
 		ParsedJSON:        json.RawMessage(content),
 		ProviderRequestID: resp.ID,
+		StopReason:        resp.StopReason,
+		WasTruncated:      resp.StopReason == "max_tokens",
 	}, 200, nil
+}
+
+// parseRateLimitHeaders extracts rate limit information from Anthropic response headers.
+func (p *anthropicProvider) parseRateLimitHeaders(resp *http.Response) *RateLimitInfo {
+	info := &RateLimitInfo{Provider: ProviderAnthropic}
+
+	// Parse request limits
+	if v := resp.Header.Get("anthropic-ratelimit-requests-limit"); v != "" {
+		info.RequestsLimit, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("anthropic-ratelimit-requests-remaining"); v != "" {
+		info.RequestsRemaining, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("anthropic-ratelimit-requests-reset"); v != "" {
+		info.RequestsReset, _ = time.Parse(time.RFC3339, v)
+	}
+
+	// Parse token limits
+	if v := resp.Header.Get("anthropic-ratelimit-tokens-limit"); v != "" {
+		info.TokensLimit, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("anthropic-ratelimit-tokens-remaining"); v != "" {
+		info.TokensRemaining, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("anthropic-ratelimit-tokens-reset"); v != "" {
+		info.TokensReset, _ = time.Parse(time.RFC3339, v)
+	}
+
+	// Parse retry-after header (present on 429 responses)
+	if v := resp.Header.Get("retry-after"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil {
+			info.RetryAfter = time.Duration(secs) * time.Second
+		}
+	}
+
+	return info
 }
 
 // normalizeError converts HTTP errors to AIProviderError with appropriate categories.

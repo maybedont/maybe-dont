@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maybedont/maybe-dont/internal/gateway"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -146,4 +147,157 @@ func TestRateLimiter_IsProviderStopped(t *testing.T) {
 
 	assert.True(t, rl.IsProviderStopped("openai"))
 	assert.False(t, rl.IsProviderStopped("anthropic"))
+}
+
+func TestRateLimiter_UpdateFromResponse(t *testing.T) {
+	t.Run("updates learned limits from response info", func(t *testing.T) {
+		rl := NewRateLimiter(RateLimiterConfig{})
+
+		// Initially no learned limits
+		assert.Nil(t, rl.GetLearnedLimits("anthropic"))
+
+		// Update from response
+		info := &gateway.RateLimitInfo{
+			Provider:          "anthropic",
+			RequestsLimit:     1000,
+			RequestsRemaining: 950,
+			RequestsReset:     time.Now().Add(time.Minute),
+			TokensLimit:       80000,
+			TokensRemaining:   79000,
+			TokensReset:       time.Now().Add(time.Minute),
+		}
+		rl.UpdateFromResponse(info)
+
+		// Verify learned limits
+		learned := rl.GetLearnedLimits("anthropic")
+		require.NotNil(t, learned)
+		assert.Equal(t, 1000, learned.RequestsLimit)
+		assert.Equal(t, 950, learned.RequestsRemaining)
+		assert.Equal(t, 80000, learned.TokensLimit)
+		assert.Equal(t, 79000, learned.TokensRemaining)
+		assert.False(t, learned.LastUpdated.IsZero())
+	})
+
+	t.Run("ignores nil info", func(t *testing.T) {
+		rl := NewRateLimiter(RateLimiterConfig{})
+		rl.UpdateFromResponse(nil) // Should not panic
+		assert.Nil(t, rl.GetLearnedLimits("anthropic"))
+	})
+
+	t.Run("preserves non-zero values on partial updates", func(t *testing.T) {
+		rl := NewRateLimiter(RateLimiterConfig{})
+
+		// First update with full info
+		info1 := &gateway.RateLimitInfo{
+			Provider:          "anthropic",
+			RequestsLimit:     1000,
+			RequestsRemaining: 950,
+			TokensLimit:       80000,
+			TokensRemaining:   79000,
+		}
+		rl.UpdateFromResponse(info1)
+
+		// Second update with only requests info (tokens are zero)
+		info2 := &gateway.RateLimitInfo{
+			Provider:          "anthropic",
+			RequestsLimit:     1000,
+			RequestsRemaining: 900,
+			// TokensLimit and TokensRemaining are zero
+		}
+		rl.UpdateFromResponse(info2)
+
+		// Verify requests updated but tokens preserved
+		learned := rl.GetLearnedLimits("anthropic")
+		require.NotNil(t, learned)
+		assert.Equal(t, 900, learned.RequestsRemaining)
+		assert.Equal(t, 80000, learned.TokensLimit) // Preserved from first update
+	})
+}
+
+func TestRateLimiter_Handle429WithInfo(t *testing.T) {
+	t.Run("stops provider without wait flag", func(t *testing.T) {
+		rl := NewRateLimiter(RateLimiterConfig{
+			WaitOnLimit: false,
+		})
+
+		ctx := context.Background()
+		info := &gateway.RateLimitInfo{
+			Provider:   "openai",
+			RetryAfter: 5 * time.Second,
+		}
+		err := rl.Handle429WithInfo(ctx, "openai", info)
+		assert.Error(t, err)
+		assert.True(t, rl.IsProviderStopped("openai"))
+	})
+
+	t.Run("uses retry-after header when available", func(t *testing.T) {
+		output := &bytes.Buffer{}
+		rl := NewRateLimiter(RateLimiterConfig{
+			WaitOnLimit:       true,
+			RateLimitBufferMs: 50, // Short buffer for testing
+			Output:            output,
+		})
+
+		// Create context with short timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		info := &gateway.RateLimitInfo{
+			Provider:          "anthropic",
+			RetryAfter:        2 * time.Second, // Should use this
+			RequestsLimit:     1000,
+			RequestsRemaining: 0,
+		}
+
+		err := rl.Handle429WithInfo(ctx, "anthropic", info)
+		// Should timeout before completing the wait
+		assert.Error(t, err)
+		assert.False(t, rl.IsProviderStopped("anthropic"))
+		// Verify output mentions retry-after
+		assert.Contains(t, output.String(), "retry-after")
+	})
+
+	t.Run("uses reset timestamp when retry-after not available", func(t *testing.T) {
+		output := &bytes.Buffer{}
+		rl := NewRateLimiter(RateLimiterConfig{
+			WaitOnLimit:       true,
+			RateLimitBufferMs: 50,
+			Output:            output,
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		info := &gateway.RateLimitInfo{
+			Provider:          "anthropic",
+			RequestsReset:     time.Now().Add(2 * time.Second), // Should use this
+			RequestsLimit:     1000,
+			RequestsRemaining: 0,
+		}
+
+		err := rl.Handle429WithInfo(ctx, "anthropic", info)
+		assert.Error(t, err)
+		assert.False(t, rl.IsProviderStopped("anthropic"))
+		// Verify output mentions reset timestamp
+		assert.Contains(t, output.String(), "reset timestamp")
+	})
+
+	t.Run("falls back to default when no header info", func(t *testing.T) {
+		output := &bytes.Buffer{}
+		rl := NewRateLimiter(RateLimiterConfig{
+			WaitOnLimit:       true,
+			RateLimitBufferMs: 50,
+			Output:            output,
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		// No rate limit info
+		err := rl.Handle429WithInfo(ctx, "openai", nil)
+		assert.Error(t, err)
+		assert.False(t, rl.IsProviderStopped("openai"))
+		// Verify output mentions default
+		assert.Contains(t, output.String(), "default")
+	})
 }

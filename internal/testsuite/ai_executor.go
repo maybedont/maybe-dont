@@ -551,6 +551,7 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 }
 
 // evaluatePolicy calls the AI provider with a policy prompt and request context.
+// Implements auto-scaling max_tokens for Anthropic rate limit optimization.
 func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContext string) (*gateway.AIResponse, error) {
 	// Apply rate limiting before making the API call
 	if r.rateLimiter != nil {
@@ -568,23 +569,70 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 
 	userPrompt := fmt.Sprintf("Policy:\n%s\n\nRequest to evaluate:\n%s", prompt, requestContext)
 
-	// Create AI request with schema
-	aiReq := gateway.AIRequest{
-		Model:        r.model.Model,
-		SystemPrompt: systemPrompt,
-		UserPrompt:   userPrompt,
-		Parameters:   r.model.Parameters,
+	// Determine initial max_tokens
+	// If explicitly set in config, use that (no auto-scaling)
+	// Otherwise, use auto-scaling starting at InitialMaxTokens
+	maxTokens := InitialMaxTokens
+	autoScale := true
+	if v, ok := r.model.Parameters["max_tokens"]; ok {
+		if mt, err := toInt(v); err == nil {
+			maxTokens = mt
+			autoScale = false // User specified explicit value, don't auto-scale
+		}
 	}
 
-	// Call provider
-	result, err := r.providerClient.Generate(ctx, aiReq)
+	var result gateway.AICompletionResult
+	var err error
 
-	// Record the request for rate limiting
-	if r.rateLimiter != nil {
-		r.rateLimiter.RecordRequest(r.model.Provider)
-	}
-	if err != nil {
-		return nil, err
+	// Auto-scaling loop: try with increasing max_tokens on truncation
+	for attempt := 0; attempt < MaxScalingAttempts; attempt++ {
+		// Create AI request with current max_tokens
+		params := copyParams(r.model.Parameters)
+		params["max_tokens"] = maxTokens
+
+		aiReq := gateway.AIRequest{
+			Model:        r.model.Model,
+			SystemPrompt: systemPrompt,
+			UserPrompt:   userPrompt,
+			Parameters:   params,
+		}
+
+		// Call provider
+		result, err = r.providerClient.Generate(ctx, aiReq)
+
+		// Record the request for rate limiting
+		if r.rateLimiter != nil {
+			r.rateLimiter.RecordRequest(r.model.Provider)
+			// Update rate limiter with response headers for dynamic tracking
+			if result.RateLimitInfo != nil {
+				r.rateLimiter.UpdateFromResponse(result.RateLimitInfo)
+			}
+		}
+
+		if err != nil {
+			// Check if this is a rate limit error with info
+			var providerErr *gateway.AIProviderError
+			if errors.As(err, &providerErr) && providerErr.Category == gateway.ErrCategoryRateLimited {
+				// Handle 429 with rate limit info from response
+				if r.rateLimiter != nil {
+					return nil, r.rateLimiter.Handle429WithInfo(ctx, r.model.Provider, result.RateLimitInfo)
+				}
+			}
+			return nil, err
+		}
+
+		// Check if response was truncated
+		if !result.WasTruncated || !autoScale {
+			break // Success or auto-scaling disabled
+		}
+
+		// Scale up for next attempt
+		nextMaxTokens := int(float64(maxTokens) * MaxTokensScaleFactor)
+		if nextMaxTokens > MaxMaxTokens {
+			// Hit cap - continue with truncated response
+			break
+		}
+		maxTokens = nextMaxTokens
 	}
 
 	// Parse response - try JSON first, then raw text
@@ -608,6 +656,32 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 	}
 
 	return &aiResp, nil
+}
+
+// copyParams creates a shallow copy of the parameters map.
+func copyParams(params map[string]any) map[string]any {
+	if params == nil {
+		return make(map[string]any)
+	}
+	result := make(map[string]any, len(params))
+	for k, v := range params {
+		result[k] = v
+	}
+	return result
+}
+
+// toInt converts a value to int, handling JSON number types.
+func toInt(v any) (int, error) {
+	switch val := v.(type) {
+	case int:
+		return val, nil
+	case int64:
+		return int(val), nil
+	case float64:
+		return int(val), nil
+	default:
+		return 0, fmt.Errorf("cannot convert %T to int", v)
+	}
 }
 
 // stripMarkdownCodeFence removes markdown code fence wrappers from text.
