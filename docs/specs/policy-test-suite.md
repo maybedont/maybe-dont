@@ -1546,6 +1546,7 @@ This workflow:
 - Compute SHA256 of the raw content (no normalization)
 - Rationale: Simple, deterministic, and any change (including whitespace/formatting) invalidates cache
 - Format in state file: `"sha256:abcd1234..."` (hex-encoded, lowercase)
+- Future consideration: If comment-only or whitespace-only changes cause excessive cache invalidation in practice, consider normalizing files before hashing (strip comments, normalize line endings, trim trailing whitespace). For now, raw bytes keeps the implementation simple and git handles cross-platform line ending normalization.
 
 **Policy hash calculation:**
 - For each policy referenced in `expectations.policies[].policy_name`, find that policy in the loaded rules
