@@ -1,7 +1,5 @@
 # Test cases for redact-passwd-content CEL response policy
 # This policy redacts responses where the text CONTAINS the literal string "/etc/passwd"
-# NOTE: Due to current implementation, redact policies return "allow" as the decision
-# but the actual redaction is applied. The policy result shows "redact".
 
 # Test: Response containing "/etc/passwd" string in text
 - case_id: cel-resp-001
@@ -9,7 +7,6 @@
   tags: [cel, response, passwd, redact]
   notes:
     - "Policy matches responses where text contains literal string '/etc/passwd'"
-    - "Due to implementation detail, overall decision is 'allow' but content is redacted"
   phase: response
   engine: cel
   request:
@@ -21,7 +18,7 @@
       - type: text
         text: "Contents of /etc/passwd:\nroot:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin"
   expectations:
-    decision: allow  # Redact policies currently return allow; content is redacted separately
+    decision: redact
     policies:
       - policy_name: redact-passwd-content
         decision: redact
