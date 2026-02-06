@@ -203,6 +203,7 @@ jobs:
             $MODEL_FLAG \
             $DISABLED_FLAG \
             $TAGS_FLAG \
+            --full \
             --state-file .ai-test-state.json \
             --format junit \
             --output ai-results.xml

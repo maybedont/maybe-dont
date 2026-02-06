@@ -1368,22 +1368,24 @@ When stdout is not a TTY, use simpler line-based output without progress bars:
 New CLI flags:
 ```bash
 # Run at most N test cases per model, exit with special code if more remain
-./maybe-dont test policies --suite-dir ./suite --max-tests 5
+./maybe-dont test policies --suite-dir ./suite --incremental --max-tests 5
 
-# Continue from previous state
-./maybe-dont test policies --suite-dir ./suite --max-tests 5 --state-file ./test-state.json
+# Continue from previous state with custom state file
+./maybe-dont test policies --suite-dir ./suite --incremental --max-tests 5 --state-file ./test-state.json
 
 # Local development: run continuously until all tests complete (respecting rate limits)
-./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json --wait
+./maybe-dont test policies --suite-dir ./suite --incremental --wait
 ```
 
 **Flag behavior:**
 
 | Flag | Description |
 |------|-------------|
-| `--max-tests N` | Run at most N tests per model per invocation. If more tests remain, exit with code 5. Without `--wait`, the process exits after the batch. |
-| `--wait` | Keep running until all tests complete. When rate limited, waits and resumes. Useful for local development when you want to run the full suite without manual intervention. |
-| `--state-file` | Persist results to disk for incremental execution across invocations. |
+| `--incremental` | Skip unchanged tests, persist results to state file. Use for incremental execution. |
+| `--full` | Run all tests regardless of cache, persist results to state file. Use to refresh cache. |
+| `--max-tests N` | Run at most N tests per model per invocation. If more tests remain, exit with code 5. Without `--wait`, the process exits after the batch. Requires `--incremental` or `--full`. |
+| `--wait` | Keep running until all tests complete. When rate limited, waits and resumes. Useful for local development when you want to run the full suite without manual intervention. Requires `--incremental` or `--full`. |
+| `--state-file` | Override state file location. Requires `--incremental` or `--full`. |
 
 Exit codes:
 
@@ -1452,10 +1454,9 @@ The state file tracks test execution history, keyed by content hashes for change
 
 | Environment | Storage | Notes |
 |-------------|---------|-------|
-| Local dev | `XDG_STATE_HOME/maybe-dont/test-state.json` | Default location |
-| Local dev | `--state-file ./path/to/state.json` | Explicit path |
-| GitHub Actions | `actions/cache` with state file | Persists between runs |
-| GitHub Actions | Commit to main branch | Canonical results visible in repo |
+| Local dev | `$XDG_STATE_HOME/maybe-dont/policy-test-state.json` | Default location (with `--incremental` or `--full`) |
+| Local dev | `--state-file ./path/to/state.json` | Explicit path (requires `--incremental` or `--full`) |
+| GitHub Actions | Commit to main branch | Recommended: canonical results visible in repo |
 
 **Recommended CI strategy:**
 1. State file is committed to `main` branch (e.g., `.policy-test-state.json`)
@@ -1469,23 +1470,29 @@ The state file tracks test execution history, keyed by content hashes for change
 - Unchanged tests on a PR reuse cached results from main
 - When the PR merges, the new hash enters the state file on main
 
-**GitHub Actions example with caching:**
+**GitHub Actions example with state file:**
 ```yaml
-- name: Restore test state
-  uses: actions/cache@v4
-  with:
-    path: .test-state.json
-    key: policy-test-state-${{ github.ref }}
-    restore-keys: |
-      policy-test-state-refs/heads/main
-
 - name: Run AI tests (incremental)
   run: |
     ./maybe-dont test policies \
       --suite-dir ./internal/config/defaults/tests \
-      --state-file .test-state.json \
+      --incremental \
+      --state-file .ai-test-state.json \
       --max-tests 10 \
       --rpm 20
+
+- name: Commit state file (on main only)
+  if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  run: |
+    if git diff --quiet .ai-test-state.json 2>/dev/null; then
+      echo "No changes to state file"
+      exit 0
+    fi
+    git config user.name "github-actions[bot]"
+    git config user.email "github-actions[bot]@users.noreply.github.com"
+    git add .ai-test-state.json
+    git commit -m "chore: update AI test state file [skip ci]"
+    git push
 ```
 
 ##### 5. Behavior Modes
@@ -1493,11 +1500,11 @@ The state file tracks test execution history, keyed by content hashes for change
 | Flag Combination | Behavior |
 |-----------------|----------|
 | (none) | Run all tests, no state |
-| `--state-file` | Run only tests that need re-running (changed or not yet run) |
-| `--max-tests N` | Run at most N tests per model, exit with code 5 if more remain |
-| `--state-file` + `--max-tests N` | Incremental execution with persistence |
-| `--state-file` + `--wait` | Run until all tests complete, respecting rate limits (local dev mode) |
-| `--force` | Ignore state, re-run all tests |
+| `--incremental` | Skip unchanged tests, persist results to state file |
+| `--full` | Run all tests, persist results to state file |
+| `--incremental` + `--max-tests N` | Incremental execution with persistence, limit per invocation |
+| `--incremental` + `--wait` | Run until all tests complete, respecting rate limits (local dev mode) |
+| `--full` + `--state-file` | Re-run all tests, use custom state file location |
 
 ##### 6. Reporting with State
 
@@ -1510,16 +1517,23 @@ Progress: 45% complete across all models
 
 ##### 7. CI Strategy for Rate-Limited APIs
 
-For APIs with strict rate limits, a multi-run CI strategy:
+For APIs with strict rate limits, use incremental execution with state file committed to main:
 
 ```yaml
 # .github/workflows/policy-tests-incremental.yml
 name: Policy Tests (Incremental)
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'  # Every 15 minutes
+  push:
+    branches: [main]
+    paths:
+      - 'internal/config/defaults/**'
   workflow_dispatch:
+
+# Serialize to prevent race conditions when committing state file
+concurrency:
+  group: policy-tests-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test-batch:
@@ -1527,38 +1541,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore state
-        uses: actions/cache@v4
-        with:
-          path: .test-state.json
-          key: policy-tests-${{ github.sha }}
-          restore-keys: policy-tests-
-
       - name: Run batch
         id: batch
         run: |
           ./maybe-dont test policies \
             --suite-dir ./internal/config/defaults/tests \
-            --state-file .test-state.json \
+            --incremental \
+            --state-file .ai-test-state.json \
             --max-tests 5 \
             --rpm 10
         continue-on-error: true
 
+      - name: Commit state file
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if git diff --quiet .ai-test-state.json 2>/dev/null; then
+            echo "No changes to state file"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .ai-test-state.json
+          git commit -m "chore: update AI test state file [skip ci]"
+          git push
+
       - name: Check completion
         if: steps.batch.outcome == 'success'
         run: echo "All tests complete!"
-
-      - name: Save state
-        uses: actions/cache/save@v4
-        with:
-          path: .test-state.json
-          key: policy-tests-${{ github.sha }}
 ```
 
 This workflow:
-1. Runs every 15 minutes (or on-demand)
+1. Runs on push to main (when policies change)
 2. Processes 5 tests per run at 10 req/min
-3. Persists state via GitHub Actions cache
+3. Persists state by committing to main branch
 4. Completes full suite over multiple runs
 5. Final run exits with 0, indicating all tests passed
 
@@ -1628,42 +1643,28 @@ jobs:
         run: make build
 
       # Restore state from main branch (PRs) or previous run (main)
-      - name: Restore test state
-        uses: actions/cache/restore@v4
-        with:
-          path: .policy-test-state.json
-          key: policy-test-state-${{ github.sha }}
-          restore-keys: |
-            policy-test-state-
-
       - name: Run AI tests
         id: ai-tests
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          FORCE_FLAG=""
+          # Use --full when force is requested, otherwise --incremental
           if [ "${{ github.event.inputs.force }}" == "true" ]; then
-            FORCE_FLAG="--force"
+            MODE_FLAG="--full"
+          else
+            MODE_FLAG="--incremental"
           fi
 
           ./maybe-dont test policies \
             --suite-dir docs/specs/policy-test-suite \
             --engine ai \
             --matrix \
+            $MODE_FLAG \
             --state-file .policy-test-state.json \
             --rpm 20 \
             --format junit \
-            --output ai-results.xml \
-            $FORCE_FLAG
-
-      # Save state for future runs
-      - name: Save test state
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: .policy-test-state.json
-          key: policy-test-state-${{ github.sha }}
+            --output ai-results.xml
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -1671,6 +1672,20 @@ jobs:
         with:
           name: ai-results
           path: ai-results.xml
+
+      # Commit updated state file back to main branch
+      - name: Commit state file
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if git diff --quiet .policy-test-state.json 2>/dev/null; then
+            echo "No changes to state file"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .policy-test-state.json
+          git commit -m "chore: update AI test state file [skip ci]"
+          git push
 
   # Summary job for PR status
   summary:
@@ -1692,7 +1707,7 @@ jobs:
 - AI tests use `--matrix` to run against all models in suite.yaml
 - State file is committed to main branch (no cache expiration)
 - Concurrency group serializes runs to prevent race conditions
-- Manual dispatch allows `--force` to bypass cache when needed
+- Manual dispatch allows `--full` to bypass cache when needed
 - Both jobs upload JUnit XML for GitHub's test reporting
 
 **Workflow behavior by trigger:**
@@ -1735,22 +1750,25 @@ jobs:
 - Handle 429 responses with configurable buffer
 
 **Phase B: Incremental Execution**
-- Add `--max-tests` flag
+- Add `--incremental` flag (skip unchanged tests, persist to state file)
+- Add `--full` flag (run all tests, persist to state file)
+- Add `--max-tests` flag (requires `--incremental` or `--full`)
 - Add exit code 5 for "more tests remain"
 - Track pending tests per model
-- Add `--wait` flag for local continuous execution
+- Add `--wait` flag for local continuous execution (requires `--incremental` or `--full`)
 
 **Phase C: State Persistence**
-- Add `--state-file` flag
+- Add `--state-file` flag (override default location, requires `--incremental` or `--full`)
+- Default state file at `$XDG_STATE_HOME/maybe-dont/policy-test-state.json`
 - Implement state file schema with content-hash keys
 - Hash calculation for change detection
 - Skip tests with valid cached results
 - Stale hash pruning on write
 
 **Phase D: CI Integration**
-- Document GitHub Actions caching pattern
-- Add example workflow for incremental runs
+- Add example workflow for incremental runs with commit-to-main
 - Document recommended strategy for committing state to main
+- Add concurrency group to serialize workflow runs
 
 #### Implementation Details
 
@@ -1771,9 +1789,10 @@ jobs:
   - This ensures policy changes invalidate cache even for tests that only assert on final decision
 
 **Default state file behavior:**
-- If `--state-file` is not specified, no state is persisted (stateless mode)
-- `--max-tests` without `--state-file` works but doesn't remember results between invocations
-- `--wait` requires `--state-file` (error if used without it)
+- Without `--incremental` or `--full`, no state is persisted (stateless mode)
+- `--incremental` and `--full` use a default state file at `$XDG_STATE_HOME/maybe-dont/policy-test-state.json`
+- Use `--state-file` to override the default state file location (requires `--incremental` or `--full`)
+- `--wait` and `--max-tests` require `--incremental` or `--full` (error otherwise)
 
 **Partial run handling:**
 - State is written after each test completes (not just at end of run)
@@ -1786,8 +1805,8 @@ jobs:
 - Only `status: "passed"` results are skipped on subsequent runs
 - Rationale: A test failure might be due to AI non-determinism; re-running gives it another chance
 
-**Force flag behavior:**
-- `--force` ignores all cached results and re-runs every test
+**Full mode behavior (`--full`):**
+- `--full` ignores all cached results and re-runs every test
 - Results are still written to the state file (replacing previous results)
 - Use case: "I changed something the hash doesn't capture (e.g., AI provider behavior), re-run everything"
 
@@ -1804,7 +1823,7 @@ jobs:
 **Model configuration hashing:**
 - Model identity is `provider:model_name` (e.g., `openai:gpt-4o-mini`)
 - Model parameters (temperature, max_tokens) are NOT part of the cache key
-- Rationale: Parameter changes are rare and typically intentional; if you change temperature, use `--force`
+- Rationale: Parameter changes are rare and typically intentional; if you change temperature, use `--full`
 - Future consideration: Include parameter hash if this proves problematic
 
 **Edge cases:**
@@ -1819,19 +1838,19 @@ Before shipping, verify these scenarios work correctly:
 
 **Basic state persistence:**
 ```bash
-# 1. Run with state file, limiting to 2 tests
+# 1. Run with incremental mode, limiting to 2 tests
 ./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
-  --state-file ./test-state.json --max-tests 2
+  --incremental --max-tests 2
 
 # 2. Verify state file created with 2 results
-cat ./test-state.json | jq '.results | length'  # Should be 2
+cat $XDG_STATE_HOME/maybe-dont/policy-test-state.json | jq '.results | length'  # Should be 2
 
 # 3. Run again - should skip cached tests and run 2 more
 ./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
-  --state-file ./test-state.json --max-tests 2
+  --incremental --max-tests 2
 
 # 4. Verify state file now has 4 results
-cat ./test-state.json | jq '.results | length'  # Should be 4
+cat $XDG_STATE_HOME/maybe-dont/policy-test-state.json | jq '.results | length'  # Should be 4
 
 # 5. Verify "skipped (cached)" appears in output for first 2 tests
 ```
@@ -1840,14 +1859,14 @@ cat ./test-state.json | jq '.results | length'  # Should be 4
 ```bash
 # 1. Run a test and cache result
 ./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
-  --state-file ./test-state.json --case-pattern "req-specific-test"
+  --incremental --case-pattern "req-specific-test"
 
 # 2. Modify the test case YAML (change expected decision or add a note)
 echo "# comment" >> ./suite/cases/req-specific-test.yaml
 
 # 3. Run again - should re-run the test (hash changed)
 ./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
-  --state-file ./test-state.json --case-pattern "req-specific-test"
+  --incremental --case-pattern "req-specific-test"
 
 # 4. Verify test ran (not skipped) in output
 ```
@@ -1856,14 +1875,14 @@ echo "# comment" >> ./suite/cases/req-specific-test.yaml
 ```bash
 # 1. Run a test that references a specific policy
 ./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
-  --state-file ./test-state.json --case-pattern "req-uses-policy-x"
+  --incremental --case-pattern "req-uses-policy-x"
 
 # 2. Modify the referenced policy YAML
 # (edit the policy file to change wording or add a comment)
 
 # 3. Run again - should re-run the test (policy hash changed)
 ./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
-  --state-file ./test-state.json --case-pattern "req-uses-policy-x"
+  --incremental --case-pattern "req-uses-policy-x"
 
 # 4. Verify test ran (not skipped) in output
 ```
@@ -1871,25 +1890,25 @@ echo "# comment" >> ./suite/cases/req-specific-test.yaml
 **Stale hash pruning:**
 ```bash
 # 1. Run tests and create state
-./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json
+./maybe-dont test policies --suite-dir ./suite --incremental
 
 # 2. Delete a test case file
 rm ./suite/cases/some-test.yaml
 
 # 3. Run again
-./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json
+./maybe-dont test policies --suite-dir ./suite --incremental
 
 # 4. Verify the deleted test's hash is no longer in state file
-cat ./test-state.json | jq '.results | keys'  # Should not contain deleted test's hash
+cat $XDG_STATE_HOME/maybe-dont/policy-test-state.json | jq '.results | keys'  # Should not contain deleted test's hash
 ```
 
-**Force flag:**
+**Full mode:**
 ```bash
-# 1. Run tests with state
-./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json
+# 1. Run tests with incremental mode
+./maybe-dont test policies --suite-dir ./suite --incremental
 
-# 2. Run with --force - should re-run all tests
-./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json --force
+# 2. Run with --full - should re-run all tests
+./maybe-dont test policies --suite-dir ./suite --full
 
 # 3. Verify no "skipped (cached)" in output
 ```
@@ -1904,12 +1923,12 @@ echo "Exit code: $?"  # Should be 5 if more tests remain, 0 if all passed
 
 **Wait flag behavior:**
 ```bash
-# Should error without --state-file
+# Should error without --incremental or --full
 ./maybe-dont test policies --suite-dir ./suite --wait
-# Expected: error message about --wait requiring --state-file
+# Expected: error message about --wait requiring --incremental or --full
 
 # Should run continuously until complete
-./maybe-dont test policies --suite-dir ./suite --state-file ./test-state.json --wait --rpm 5
+./maybe-dont test policies --suite-dir ./suite --incremental --wait --rpm 5
 # Expected: runs all tests, respecting rate limit, exits 0 when done
 ```
 
@@ -1930,16 +1949,16 @@ EOF
 
 # 2. Run and observe failure
 ./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
-  --state-file ./test-state.json --case-pattern "will-fail"
+  --incremental --case-pattern "will-fail"
 # Expected: test fails, exit code 1
 
 # 3. Check state file shows failed status
-cat ./test-state.json | jq '.results[].models["openai:gpt-4o-mini"].status'
+cat $XDG_STATE_HOME/maybe-dont/policy-test-state.json | jq '.results[].models["openai:gpt-4o-mini"].status'
 # Expected: "failed"
 
 # 4. Run again - failed test should re-run (not skipped)
 ./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
-  --state-file ./test-state.json --case-pattern "will-fail"
+  --incremental --case-pattern "will-fail"
 # Expected: test runs again (not "skipped (cached)"), still fails
 
 # 5. Fix the test case
@@ -1947,7 +1966,7 @@ sed -i 's/decision: "deny"/decision: "allow"/' ./suite/cases/will-fail.yaml
 
 # 6. Run again - should pass now (new hash due to file change)
 ./maybe-dont test policies --suite-dir ./suite --engine ai --model openai:gpt-4o-mini \
-  --state-file ./test-state.json --case-pattern "will-fail"
+  --incremental --case-pattern "will-fail"
 # Expected: test passes, exit code 0
 ```
 
@@ -2072,8 +2091,8 @@ sed -i 's/decision: "deny"/decision: "allow"/' ./suite/cases/will-fail.yaml
   - On state file write, remove hashes not matching current test cases
   - Remove results for models no longer in matrix
 
-- [x] **8.6** Add `--force` CLI flag
-  - Ignore state file, re-run all tests
+- [x] **8.6** Add `--full` CLI flag
+  - Ignore cached results, re-run all tests
   - Still write results to state file
 
 - [x] **8.7** Test state persistence scenarios
