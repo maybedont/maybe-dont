@@ -1241,7 +1241,7 @@ func formatSingleTestResult(tr TestResult) string {
 	switch tr.Status {
 	case "passed":
 		sb.WriteString(fmt.Sprintf("✓ %s (%dms)\n", tr.CaseID, tr.ElapsedMs))
-		sb.WriteString(fmt.Sprintf("    expected: %s, got: %s (confidence: %.1f)\n",
+		sb.WriteString(fmt.Sprintf("    expected: %s, actual: %s (confidence: %.1f)\n",
 			tr.Expected.Decision, tr.Actual.Decision, tr.Actual.Confidence))
 		if len(tr.Actual.PoliciesExecuted) > 0 {
 			sb.WriteString("    policies: ")
@@ -1253,9 +1253,14 @@ func formatSingleTestResult(tr TestResult) string {
 			}
 			sb.WriteString("\n")
 		}
+		// Show redacted content on success for redaction tests
+		if tr.Expected.RedactedContent != "" || tr.Actual.RedactedContent != "" {
+			sb.WriteString(fmt.Sprintf("    redacted expected: %q\n", tr.Expected.RedactedContent))
+			sb.WriteString(fmt.Sprintf("    redacted actual:   %q\n", tr.Actual.RedactedContent))
+		}
 	case "failed":
 		sb.WriteString(fmt.Sprintf("✗ %s (%dms)\n", tr.CaseID, tr.ElapsedMs))
-		sb.WriteString(fmt.Sprintf("    expected: %s, got: %s (confidence: %.1f)\n",
+		sb.WriteString(fmt.Sprintf("    expected: %s, actual: %s (confidence: %.1f)\n",
 			tr.Expected.Decision, tr.Actual.Decision, tr.Actual.Confidence))
 		if len(tr.Actual.PoliciesExecuted) > 0 {
 			sb.WriteString("    policies: ")
@@ -1266,6 +1271,11 @@ func formatSingleTestResult(tr TestResult) string {
 				sb.WriteString(fmt.Sprintf("%s (%s, %dms)", p.PolicyName, p.Decision, p.ElapsedMs))
 			}
 			sb.WriteString("\n")
+		}
+		// Show redacted content on failure for redaction tests
+		if tr.Expected.RedactedContent != "" || tr.Actual.RedactedContent != "" {
+			sb.WriteString(fmt.Sprintf("    redacted expected: %q\n", tr.Expected.RedactedContent))
+			sb.WriteString(fmt.Sprintf("    redacted actual:   %q\n", tr.Actual.RedactedContent))
 		}
 		if tr.Actual.Reasoning != "" {
 			sb.WriteString(fmt.Sprintf("    reasoning: %q\n", tr.Actual.Reasoning))

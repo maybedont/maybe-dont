@@ -43,7 +43,7 @@ func TestCompareResults(t *testing.T) {
 				Decision: "allow",
 			},
 			expectedFailures: 1,
-			wantContains:    []string{"expected decision \"deny\" but got \"allow\""},
+			wantContains:    []string{"expected decision \"deny\" but actual \"allow\""},
 		},
 		{
 			name: "policy decision match",
@@ -76,7 +76,7 @@ func TestCompareResults(t *testing.T) {
 				},
 			},
 			expectedFailures: 1,
-			wantContains:    []string{"expected policy \"block-dangerous\" to return \"deny\" but got \"allow\""},
+			wantContains:    []string{"expected policy \"block-dangerous\" to return \"deny\" but actual \"allow\""},
 		},
 		{
 			name: "expected policy not executed",

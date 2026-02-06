@@ -13,7 +13,8 @@ import (
 
 // RateLimiter tracks and enforces rate limits per provider.
 type RateLimiter struct {
-	mu sync.Mutex
+	mu   sync.Mutex
+	cond *sync.Cond // For coordinating rate limit waits across goroutines
 
 	// Per-provider rate limits (requests per minute)
 	providerLimits map[string]int
@@ -44,6 +45,15 @@ type RateLimiter struct {
 
 	// Learned limits from response headers (per-provider)
 	learnedLimits map[string]*LearnedLimits
+
+	// Provider currently has someone waiting (for coordinated waits)
+	providerWaiting map[string]bool
+
+	// Provider is in sequential mode (hit rate limit, process one at a time)
+	providerSequential map[string]bool
+
+	// Per-provider semaphore for sequential mode (buffered channel of size 1)
+	providerSemaphore map[string]chan struct{}
 }
 
 // LearnedLimits tracks rate limits learned from provider response headers.
@@ -93,12 +103,16 @@ func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
 		providerRequests:       make(map[string][]time.Time),
 		providerStopped:        make(map[string]bool),
 		learnedLimits:          make(map[string]*LearnedLimits),
+		providerWaiting:        make(map[string]bool),
+		providerSequential:     make(map[string]bool),
+		providerSemaphore:      make(map[string]chan struct{}),
 		defaultLimit:           DefaultRequestsPerMinute,
 		delayBetweenRequestsMs: DefaultDelayBetweenRequestsMs,
 		rateLimitBufferMs:      DefaultRateLimitBufferMs,
 		waitOnLimit:            cfg.WaitOnLimit,
 		output:                 cfg.Output,
 	}
+	rl.cond = sync.NewCond(&rl.mu)
 
 	if rl.output == nil {
 		rl.output = os.Stdout
@@ -166,13 +180,50 @@ func (rl *RateLimiter) StopProvider(provider string) {
 // WaitBeforeRequest waits as needed before making a request to respect rate limits.
 // Returns nil if the request can proceed, or an error if the provider is stopped.
 // If ctx is cancelled, returns ctx.Err().
+//
+// Sequential fallback: Once a provider hits a rate limit, it switches to sequential mode
+// where only one request is processed at a time. This prevents thundering herd issues
+// after rate limit waits complete.
 func (rl *RateLimiter) WaitBeforeRequest(ctx context.Context, provider string) error {
+	// If provider is in sequential mode, acquire the semaphore first.
+	// This ensures only one request to this provider is in flight at a time.
+	sem := rl.getOrCreateSemaphore(provider)
+	if rl.isSequentialMode(provider) {
+		select {
+		case sem <- struct{}{}:
+			// Acquired slot - will be released by ReleaseSequentialSlot
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
 	rl.mu.Lock()
 
 	// Check if provider is stopped
 	if rl.providerStopped[provider] {
 		rl.mu.Unlock()
+		rl.releaseSequentialSlotIfNeeded(provider)
 		return fmt.Errorf("provider %s stopped due to rate limiting", provider)
+	}
+
+	// If someone else is already waiting for this provider, wait quietly for them.
+	// This implements shared wait state - only one rate limit message is shown.
+	for rl.providerWaiting[provider] {
+		rl.cond.Wait() // Releases lock, waits, reacquires lock
+
+		// Check context cancellation after waking up
+		if ctx.Err() != nil {
+			rl.mu.Unlock()
+			rl.releaseSequentialSlotIfNeeded(provider)
+			return ctx.Err()
+		}
+
+		// Check if provider was stopped while we waited
+		if rl.providerStopped[provider] {
+			rl.mu.Unlock()
+			rl.releaseSequentialSlotIfNeeded(provider)
+			return fmt.Errorf("provider %s stopped due to rate limiting", provider)
+		}
 	}
 
 	limit := rl.defaultLimit
@@ -206,12 +257,32 @@ func (rl *RateLimiter) WaitBeforeRequest(ctx context.Context, provider string) e
 				// Without --wait, stop the provider
 				rl.providerStopped[provider] = true
 				rl.mu.Unlock()
+				rl.cond.Broadcast() // Wake any waiters so they can see provider is stopped
+				rl.releaseSequentialSlotIfNeeded(provider)
 				return fmt.Errorf("rate limit reached for provider %s (limit: %d/min)", provider, limit)
 			}
 
-			// With --wait, we'll wait and show progress
+			// Mark that we're waiting - other goroutines will wait quietly
+			rl.providerWaiting[provider] = true
 			rl.mu.Unlock()
-			return rl.waitWithProgress(ctx, provider, waitDuration)
+
+			// Do the actual wait with progress display
+			err := rl.waitWithProgress(ctx, provider, waitDuration)
+
+			// After wait, switch to sequential mode and clear waiting flag
+			rl.mu.Lock()
+			rl.providerWaiting[provider] = false
+			if err == nil {
+				// Successfully waited - switch to sequential mode to prevent thundering herd
+				rl.providerSequential[provider] = true
+			}
+			rl.mu.Unlock()
+			rl.cond.Broadcast() // Wake all waiters
+
+			if err != nil {
+				rl.releaseSequentialSlotIfNeeded(provider)
+			}
+			return err
 		}
 	}
 
@@ -231,12 +302,51 @@ func (rl *RateLimiter) WaitBeforeRequest(ctx context.Context, provider string) e
 	if waitDuration > 0 {
 		select {
 		case <-ctx.Done():
+			rl.releaseSequentialSlotIfNeeded(provider)
 			return ctx.Err()
 		case <-time.After(waitDuration):
 		}
 	}
 
 	return nil
+}
+
+// getOrCreateSemaphore returns the semaphore for a provider, creating it if needed.
+func (rl *RateLimiter) getOrCreateSemaphore(provider string) chan struct{} {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	if rl.providerSemaphore[provider] == nil {
+		// Buffered channel of size 1 acts as a semaphore
+		rl.providerSemaphore[provider] = make(chan struct{}, 1)
+	}
+	return rl.providerSemaphore[provider]
+}
+
+// isSequentialMode returns true if the provider is in sequential mode.
+func (rl *RateLimiter) isSequentialMode(provider string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return rl.providerSequential[provider]
+}
+
+// releaseSequentialSlotIfNeeded releases the semaphore slot if provider is in sequential mode.
+func (rl *RateLimiter) releaseSequentialSlotIfNeeded(provider string) {
+	if rl.isSequentialMode(provider) {
+		sem := rl.getOrCreateSemaphore(provider)
+		select {
+		case <-sem:
+			// Released
+		default:
+			// Not held (shouldn't happen, but be safe)
+		}
+	}
+}
+
+// ReleaseSequentialSlot releases the semaphore slot for a provider in sequential mode.
+// Call this after the API request completes (success or failure).
+func (rl *RateLimiter) ReleaseSequentialSlot(provider string) {
+	rl.releaseSequentialSlotIfNeeded(provider)
 }
 
 // RecordRequest records that a request was made to a provider.
@@ -303,13 +413,45 @@ func (rl *RateLimiter) Handle429(ctx context.Context, provider string) error {
 
 // Handle429WithInfo handles a 429 response, using RateLimitInfo for precise wait times.
 // If info contains RetryAfter, uses that duration instead of guessing.
+// Implements shared wait state - if another goroutine is already waiting for this provider,
+// we wait quietly for them instead of all printing rate limit messages.
 func (rl *RateLimiter) Handle429WithInfo(ctx context.Context, provider string, info *gateway.RateLimitInfo) error {
 	rl.mu.Lock()
+
 	if !rl.waitOnLimit {
 		rl.providerStopped[provider] = true
 		rl.mu.Unlock()
+		rl.cond.Broadcast() // Wake any waiters so they can see provider is stopped
 		return fmt.Errorf("received 429 from provider %s", provider)
 	}
+
+	// If someone else is already waiting for this provider, wait quietly for them.
+	// This implements shared wait state - only one rate limit message is shown.
+	for rl.providerWaiting[provider] {
+		rl.cond.Wait() // Releases lock, waits, reacquires lock
+
+		// Check context cancellation after waking up
+		if ctx.Err() != nil {
+			rl.mu.Unlock()
+			return ctx.Err()
+		}
+
+		// Check if provider was stopped while we waited
+		if rl.providerStopped[provider] {
+			rl.mu.Unlock()
+			return fmt.Errorf("provider %s stopped due to rate limiting", provider)
+		}
+
+		// After waking, if provider is now in sequential mode, we can proceed
+		// (the other waiter did the actual wait, we just waited for them)
+		if rl.providerSequential[provider] {
+			rl.mu.Unlock()
+			return nil
+		}
+	}
+
+	// Mark that we're waiting - other goroutines will wait quietly
+	rl.providerWaiting[provider] = true
 	rl.mu.Unlock()
 
 	// Determine wait duration from headers or fallback to default
@@ -330,7 +472,20 @@ func (rl *RateLimiter) Handle429WithInfo(ctx context.Context, provider string, i
 		waitSource = "default"
 	}
 
-	return rl.waitWithProgressAndInfo(ctx, provider, waitDuration, waitSource, info)
+	// Do the actual wait
+	err := rl.waitWithProgressAndInfo(ctx, provider, waitDuration, waitSource, info)
+
+	// After wait, switch to sequential mode and clear waiting flag
+	rl.mu.Lock()
+	rl.providerWaiting[provider] = false
+	if err == nil {
+		// Successfully waited - switch to sequential mode to prevent thundering herd
+		rl.providerSequential[provider] = true
+	}
+	rl.mu.Unlock()
+	rl.cond.Broadcast() // Wake all waiters
+
+	return err
 }
 
 // waitWithProgress waits for the given duration, showing progress if output is TTY.

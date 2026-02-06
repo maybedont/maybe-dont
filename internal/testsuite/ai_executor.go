@@ -268,9 +268,10 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 		},
 	}
 
-	// Create timeout context
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(r.timeoutMs)*time.Millisecond)
-	defer cancel()
+	// Note: We don't create a timeout context here. Instead, fresh timeouts are created
+	// per API call in evaluatePolicy. This ensures rate limit waits (which can be 60s+)
+	// don't consume the test's execution budget. The timeout measures actual API call time,
+	// not wall clock time including expected rate limit waits.
 
 	var evalResult *aiEvalResult
 	var err error
@@ -281,7 +282,7 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 			time.Sleep(time.Duration(r.retryDelayMs) * time.Millisecond)
 		}
 
-		evalResult, err = r.evaluateWithRetry(timeoutCtx, tc)
+		evalResult, err = r.evaluateWithRetry(ctx, tc)
 		if err == nil {
 			break
 		}
@@ -552,8 +553,12 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 
 // evaluatePolicy calls the AI provider with a policy prompt and request context.
 // Implements auto-scaling max_tokens for Anthropic rate limit optimization.
+// The timeout is applied per API call, not to the entire operation including rate limit waits.
 func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContext string) (*gateway.AIResponse, error) {
-	// Apply rate limiting before making the API call
+	// Apply rate limiting before making the API call.
+	// Note: This uses the parent context without test timeout, so rate limit waits
+	// (which can be 60s+) don't cause test timeout errors.
+	// WaitBeforeRequest acquires a semaphore if the provider is in sequential mode.
 	if r.rateLimiter != nil {
 		if err := r.rateLimiter.WaitBeforeRequest(ctx, r.model.Provider); err != nil {
 			return nil, &gateway.AIProviderError{
@@ -562,6 +567,9 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 				Retryable: false,
 			}
 		}
+		// Release the sequential slot when this function returns (if provider is in sequential mode).
+		// This ensures the semaphore is released after the API call completes.
+		defer r.rateLimiter.ReleaseSequentialSlot(r.model.Provider)
 	}
 
 	// Build the full prompt
@@ -597,8 +605,13 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 			Parameters:   params,
 		}
 
-		// Call provider
-		result, err = r.providerClient.Generate(ctx, aiReq)
+		// Create a fresh timeout context for this API call.
+		// Each call gets its own timeout budget, so rate limit waits don't consume it.
+		apiCtx, apiCancel := context.WithTimeout(ctx, time.Duration(r.timeoutMs)*time.Millisecond)
+
+		// Call provider with the timeout context
+		result, err = r.providerClient.Generate(apiCtx, aiReq)
+		apiCancel() // Clean up the context
 
 		// Record the request for rate limiting
 		if r.rateLimiter != nil {
@@ -613,7 +626,8 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 			// Check if this is a rate limit error with info
 			var providerErr *gateway.AIProviderError
 			if errors.As(err, &providerErr) && providerErr.Category == gateway.ErrCategoryRateLimited {
-				// Handle 429 with rate limit info from response
+				// Handle 429 with rate limit info from response.
+				// Note: This uses the parent context, so the wait doesn't timeout.
 				if r.rateLimiter != nil {
 					return nil, r.rateLimiter.Handle429WithInfo(ctx, r.model.Provider, result.RateLimitInfo)
 				}
