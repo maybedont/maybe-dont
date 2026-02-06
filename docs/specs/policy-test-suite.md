@@ -1302,6 +1302,49 @@ CLI override:
   - **With `--wait`**: Pause until the rate limit window resets (typically 60 seconds), add `rate_limit_buffer_ms` padding, then resume. This is for local development.
 - The `rate_limit_buffer_ms` (default: 5 seconds) adds extra padding after rate limit window to avoid immediately hitting the limit again
 
+**Progress output with `--wait`:**
+
+When using `--wait`, the harness provides real-time feedback so users know the process isn't hung:
+
+```
+Running AI tests with --wait (will pause on rate limits)
+Provider: anthropic (20 req/min limit)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ req-command-exec-deny (1.2s)
+✓ req-file-delete-deny (0.9s)
+✓ req-network-access-deny (1.1s)
+
+⏳ Rate limit reached for anthropic (20/20 requests)
+   Waiting 47s for rate limit window to reset...
+   [=========>                    ] 47s remaining
+
+✓ req-credential-access-deny (1.0s)
+...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Progress: 45/100 tests complete (45%)
+Elapsed: 4m 32s | Rate limit pauses: 2 (total wait: 1m 52s)
+Estimated remaining: ~6m (based on current rate)
+```
+
+**Output elements:**
+- Test results as they complete (same as normal output)
+- Rate limit notification when 429 received or proactive limit reached
+- Countdown timer with progress bar during wait periods
+- Running summary: tests complete, elapsed time, total pause time
+- Estimated remaining time (based on tests remaining × average time + expected pauses)
+
+**Non-interactive mode (CI/pipes):**
+When stdout is not a TTY, use simpler line-based output without progress bars:
+```
+[12:34:56] ✓ req-command-exec-deny (1.2s)
+[12:34:57] ✓ req-file-delete-deny (0.9s)
+[12:34:58] Rate limit reached for anthropic, waiting 60s...
+[12:35:58] Resuming after rate limit pause
+[12:35:59] ✓ req-credential-access-deny (1.0s)
+```
+
 ##### 2. Incremental Execution Mode
 
 New CLI flags:
