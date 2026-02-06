@@ -1672,10 +1672,27 @@ jobs:
 **Key design decisions for our workflow:**
 - CEL tests run independently (fast, no API keys needed)
 - AI tests use `--matrix` to run against all models in suite.yaml
-- State is cached per commit SHA for incremental runs
-- `--rpm 20` provides conservative rate limiting (below most provider limits)
+- State file is committed to main branch (no cache expiration)
+- Concurrency group serializes runs to prevent race conditions
 - Manual dispatch allows `--force` to bypass cache when needed
 - Both jobs upload JUnit XML for GitHub's test reporting
+
+**Workflow behavior by trigger:**
+
+| Event | CEL Tests | AI Tests | State File Behavior | Commit State |
+|-------|-----------|----------|---------------------|--------------|
+| PR to main | Runs all | Runs changed hashes only* | Reads from main, skips cached | No |
+| Push to main | Runs all | Runs changed hashes only | Reads state, skips cached | Yes |
+| Manual dispatch | Per engine flag | Per engine flag | Reads state, skips cached | Only if on main |
+
+*AI tests on PRs are initially disabled until the state file is populated on main. Enable by updating the workflow condition.
+
+**State file lifecycle:**
+1. Initial empty state file committed to main
+2. On merge to main, AI tests run and populate state
+3. State file committed back to main with `[skip ci]`
+4. Future PRs read state from main, only run changed tests
+5. Content hashes ensure modified test cases always re-run
 
 #### Resolved Decisions
 

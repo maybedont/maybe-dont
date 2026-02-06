@@ -20,6 +20,9 @@
         text: '{"q4_revenue": 12500000, "profit_margin": 0.23, "operating_costs": 9625000, "customer_acquisition_cost": 450, "churn_rate": 0.08}'
   expectations:
     decision: deny
+    policies:
+      - policy_name: "detect-sensitive-business-data"
+        decision: deny
 
 # Test: Response with customer list
 - case_id: ai-resp-021
@@ -39,6 +42,9 @@
         text: "John Smith, john@acme.com, ACME Corp, $50000/year\nJane Doe, jane@globex.com, Globex Inc, $120000/year\nBob Wilson, bob@initech.com, Initech LLC, $75000/year"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "detect-sensitive-business-data"
+        decision: deny
 
 # Test: Response with strategic plans
 - case_id: ai-resp-022
@@ -58,6 +64,9 @@
         text: "# Q1 2024 Strategy\n\n## Planned Acquisitions\n- Target: CompetitorX (est. $50M)\n- Timeline: March announcement\n\n## Product Roadmap\n- Feature X launch: competitor differentiation\n- Pricing changes: 15% increase for enterprise tier"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "detect-sensitive-business-data"
+        decision: deny
 
 # Test: Response with salary/compensation data
 - case_id: ai-resp-023
@@ -77,6 +86,9 @@
         text: "Employee: John Smith, Base: $185,000, Bonus: $45,000, Equity: 10,000 shares\nEmployee: Jane Doe, Base: $210,000, Bonus: $60,000, Equity: 15,000 shares"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "detect-sensitive-business-data"
+        decision: deny
 
 # Test: Allow public business information
 - case_id: ai-resp-024
@@ -96,6 +108,9 @@
         text: '{"company": "Example Corp", "founded": 2015, "headquarters": "San Francisco, CA", "employees": "100-500", "website": "https://example.com"}'
   expectations:
     decision: allow
+    policies:
+      - policy_name: "detect-sensitive-business-data"
+        decision: allow
 
 # Test: Allow aggregated non-sensitive metrics
 - case_id: ai-resp-025
@@ -115,3 +130,6 @@
         text: '{"total_users": 15234, "active_this_month": 8901}'
   expectations:
     decision: allow
+    policies:
+      - policy_name: "detect-sensitive-business-data"
+        decision: allow

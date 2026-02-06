@@ -16,6 +16,9 @@
       content: "127.0.0.1 malicious.com"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check system directory access"
+        decision: deny
 
 # Test: Modify /usr/bin
 - case_id: ai-req-011
@@ -32,6 +35,9 @@
       destination: "/usr/bin/myscript"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check system directory access"
+        decision: deny
 
 # Test: Delete from /var/log
 - case_id: ai-req-012
@@ -47,6 +53,9 @@
       path: "/var/log/auth.log"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check system directory access"
+        decision: deny
 
 # Test: Modify Windows system directory
 - case_id: ai-req-013
@@ -63,6 +72,9 @@
       content: "modified"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check system directory access"
+        decision: deny
 
 # Test: Allow writes to user directories
 - case_id: ai-req-014
@@ -79,6 +91,9 @@
       content: "debug: true"
   expectations:
     decision: allow
+    policies:
+      - policy_name: "Check system directory access"
+        decision: allow
 
 # Test: Allow writes to /tmp
 - case_id: ai-req-015
@@ -95,3 +110,6 @@
       content: "Report data"
   expectations:
     decision: allow
+    policies:
+      - policy_name: "Check system directory access"
+        decision: allow

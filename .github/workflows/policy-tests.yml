@@ -4,8 +4,15 @@
 # See docs/specs/policy-test-suite.md for full specification.
 #
 # Triggers:
-#   - PR to main when policy files change (CEL tests only)
+#   - PR to main when policy files change (CEL tests only by default)
+#   - Push to main (runs AI tests and commits updated state file)
 #   - Manual dispatch with configurable options (CEL and/or AI tests)
+#
+# State Persistence:
+#   - AI test results are cached in .ai-test-state.json (committed to main)
+#   - PRs read state from main but don't commit changes
+#   - On merge to main, updated state is committed back
+#   - Content hashes ensure test case changes trigger re-runs
 #
 # Model matrix is defined in suite.yaml, not hardcoded here.
 # Tests run serially to avoid rate limiting issues.
@@ -33,6 +40,11 @@ name: Policy Test Suite
 
 on:
   pull_request:
+    branches: [main]
+    paths:
+      - 'internal/config/defaults/**/*.yaml'
+      - 'internal/config/defaults/tests/**'
+  push:
     branches: [main]
     paths:
       - 'internal/config/defaults/**/*.yaml'
@@ -66,6 +78,12 @@ on:
 
 env:
   SUITE_DIR: ${{ github.event.inputs.suite_dir || 'internal/config/defaults/tests' }}
+
+# Serialize workflow runs to prevent race conditions when committing state file
+# If two PRs merge in quick succession, the second will wait for the first to complete
+concurrency:
+  group: policy-tests-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -135,10 +153,13 @@ jobs:
     name: AI Policy Tests
     runs-on: ubuntu-latest
     needs: validate
-    # AI tests only run on manual dispatch until API keys are configured.
-    # To enable for PRs/schedule, change condition to:
-    #   if: github.event.inputs.engine != 'cel' || github.event_name != 'workflow_dispatch'
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.engine != 'cel'
+    # AI tests run on:
+    #   - Push to main (to update state file after merge)
+    #   - Manual dispatch (when engine is 'all' or 'ai')
+    # To enable for PRs, add: || github.event_name == 'pull_request'
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.engine != 'cel')
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -152,6 +173,10 @@ jobs:
 
       - name: Build
         run: make build
+
+      # State file (.ai-test-state.json) is committed to main branch
+      # PRs read from main's state but don't commit changes
+      # On merge to main, updated state is committed back
 
       - name: Run AI tests
         run: |
@@ -178,6 +203,7 @@ jobs:
             $MODEL_FLAG \
             $DISABLED_FLAG \
             $TAGS_FLAG \
+            --state-file .ai-test-state.json \
             --format junit \
             --output ai-results.xml
 
@@ -190,6 +216,23 @@ jobs:
         with:
           name: ai-test-results
           path: ai-results.xml
+
+      # Commit updated state file back to main branch
+      # Only runs on push to main (not PRs or manual dispatch from other branches)
+      - name: Commit state file
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          # Check if state file has changes
+          if git diff --quiet .ai-test-state.json 2>/dev/null; then
+            echo "No changes to state file"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .ai-test-state.json
+          git commit -m "chore: update AI test state file [skip ci]"
+          git push
 
   summary:
     name: Test Summary

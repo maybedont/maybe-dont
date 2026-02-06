@@ -16,6 +16,9 @@
       size_hint: "15GB"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check large file operations"
+        decision: deny
 
 # Test: Write huge content
 - case_id: ai-req-051
@@ -33,6 +36,9 @@
       generate: "zeros"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check large file operations"
+        decision: deny
 
 # Test: Copy large backup file
 - case_id: ai-req-052
@@ -50,6 +56,9 @@
       source_size: "50GB"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check large file operations"
+        decision: deny
 
 # Test: Allow normal sized files
 - case_id: ai-req-053
@@ -65,6 +74,9 @@
       path: "/app/config.yaml"
   expectations:
     decision: allow
+    policies:
+      - policy_name: "Check large file operations"
+        decision: allow
 
 # Test: Allow reasonable log tail
 - case_id: ai-req-054
@@ -82,3 +94,6 @@
       lines_only: true
   expectations:
     decision: allow
+    policies:
+      - policy_name: "Check large file operations"
+        decision: allow

@@ -1,4 +1,4 @@
-# Test cases for AI request policy: prevent-mass-deletion
+# Test cases for AI request policy: Check mass deletion operations
 # This policy detects bulk/mass deletion operations that could cause data loss
 
 # Test: Mass file deletion request
@@ -16,6 +16,9 @@
       recursive: true
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check mass deletion operations"
+        decision: deny
 
 # Test: Bulk database record deletion
 - case_id: ai-req-002
@@ -32,6 +35,9 @@
       confirm: true
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check mass deletion operations"
+        decision: deny
 
 # Test: Multiple file deletion list
 - case_id: ai-req-003
@@ -58,6 +64,9 @@
       force: true
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check mass deletion operations"
+        decision: deny
 
 # Test: Allow single file deletion (not mass)
 - case_id: ai-req-004
@@ -73,6 +82,9 @@
       path: "/tmp/temp-report.txt"
   expectations:
     decision: allow
+    policies:
+      - policy_name: "Check mass deletion operations"
+        decision: allow
 
 # Test: Allow database deletion with specific WHERE
 - case_id: ai-req-005
@@ -88,3 +100,6 @@
       query: "DELETE FROM sessions WHERE expires_at < NOW()"
   expectations:
     decision: allow
+    policies:
+      - policy_name: "Check mass deletion operations"
+        decision: allow

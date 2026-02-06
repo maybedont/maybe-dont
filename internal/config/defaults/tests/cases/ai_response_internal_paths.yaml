@@ -19,6 +19,9 @@
         text: "Error: Cannot find module '/opt/deployments/prod-east-1/app-v2.3.1/node_modules/express'\n    at /opt/deployments/prod-east-1/app-v2.3.1/server.js:15:1"
   expectations:
     decision: redact
+    policies:
+      - policy_name: "redact-internal-paths"
+        decision: redact
 
 # Test: Response with home directory paths
 - case_id: ai-resp-011
@@ -38,6 +41,9 @@
         text: "Traceback:\n  File \"/home/deploy-user/services/api-gateway/handlers/auth.py\", line 42"
   expectations:
     decision: redact
+    policies:
+      - policy_name: "redact-internal-paths"
+        decision: redact
 
 # Test: Response with internal network paths
 - case_id: ai-resp-012
@@ -57,6 +63,9 @@
         text: "2024-01-15 Connected to database at internal-db-prod-3.corp.example.local:5432\nApplication started from /opt/deployments/prod-east-1/app-v2.3.1/"
   expectations:
     decision: redact
+    policies:
+      - policy_name: "redact-internal-paths"
+        decision: redact
 
 # Test: Allow public paths
 - case_id: ai-resp-013
@@ -76,6 +85,9 @@
         text: "API Documentation available at https://docs.example.com/api/v2\nExample: curl https://api.example.com/users"
   expectations:
     decision: allow
+    policies:
+      - policy_name: "redact-internal-paths"
+        decision: allow
 
 # Test: Allow generic error messages
 - case_id: ai-resp-014
@@ -95,3 +107,6 @@
         text: "Build failed: syntax error in main.go line 42\nExpected '}' but found 'EOF'"
   expectations:
     decision: allow
+    policies:
+      - policy_name: "redact-internal-paths"
+        decision: allow

