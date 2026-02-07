@@ -1,7 +1,7 @@
 # policy-test-case
 
 ## Description
-Guide for writing policy test cases and configuring test suites for the Maybe Don't gateway. Covers suite.yaml configuration, test case YAML structure, and the test runner CLI.
+Guide for writing policy test cases and configuring test suites for Maybe Don't. Covers suite.yaml configuration, test case YAML structure, and the test runner CLI.
 
 ## Instructions
 

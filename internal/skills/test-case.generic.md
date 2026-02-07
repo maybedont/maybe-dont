@@ -1,7 +1,7 @@
 # Policy Test Case Authoring Instructions
 
 ## Purpose
-Write and configure policy test cases for the Maybe Don't gateway. The test framework validates CEL and AI policy rules by running structured test cases defined in YAML files.
+Write and configure policy test cases for Maybe Don't. The test framework validates CEL and AI policy rules by running structured test cases defined in YAML files.
 
 ## Directory Structure
 

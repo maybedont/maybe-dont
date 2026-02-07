@@ -121,7 +121,7 @@ func TestCursorFormat(t *testing.T) {
 	}{
 		{"cli", "cli", "# Maybe Don't CLI Proxy Rules", "## Rules", "--dry-run"},
 		{"cel-policy", "cel-policy", "# CEL Policy Authoring Rules", "## Rules", "mcp_expression"},
-		{"ai-policy", "ai-policy", "# AI Policy Authoring Rules", "## Rules", "redacted_content"},
+		{"ai-policy", "ai-policy", "# AI Policy Authoring Rules", "## Writing Effective Prompts", "redacted_content"},
 		{"test-case", "test-case", "# Policy Test Case Authoring Rules", "## Rules", "case_id"},
 	}
 
@@ -174,7 +174,7 @@ func TestGenericFormat(t *testing.T) {
 	}{
 		{"cli", "cli", "# CLI Command Validation Instructions", "## Behavior Guidelines"},
 		{"cel-policy", "cel-policy", "# CEL Policy Authoring Instructions", "## Behavior Guidelines"},
-		{"ai-policy", "ai-policy", "# AI Policy Authoring Instructions", "## Behavior Guidelines"},
+		{"ai-policy", "ai-policy", "# AI Policy Authoring Instructions", "## Writing Effective Prompts"},
 		{"test-case", "test-case", "# Policy Test Case Authoring Instructions", "## Behavior Guidelines"},
 	}
 

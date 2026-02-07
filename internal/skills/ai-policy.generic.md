@@ -1,7 +1,7 @@
 # AI Policy Authoring Instructions
 
 ## Purpose
-Author AI (LLM-powered) policy rules for the Maybe Don't gateway. AI policies evaluate MCP tool calls, CLI commands, and tool responses using large language models to detect security risks that are difficult to express as deterministic rules.
+Author AI (LLM-powered) policy rules for Maybe Don't. AI policies evaluate tool calls, CLI commands, and tool responses using large language models to detect security risks that are difficult to express as deterministic rules.
 
 ## Rule File Structure
 
@@ -26,31 +26,27 @@ rules:
       - Dangerous operation → DANGEROUS: Explanation
 ```
 
-## Response Format
+## Writing Effective Prompts
 
-The AI response format is enforced automatically by the gateway engine via JSON schema (`GenerateSchema[T]()` with `strict: true`). **Do not include response format instructions in policy prompts.** The engine handles this — policy authors should focus exclusively on describing what to detect.
-
-## Behavior Guidelines
-
-1. **The engine appends operation context automatically** — do not include `%s` in prompts (prompts containing `%s` are rejected at load time)
-2. **Structure prompts clearly** with ANALYZE, Look for, EXAMPLES sections
-3. **Include both safe and dangerous examples** to calibrate the AI's judgment
-4. **One concern per rule** — do not combine unrelated threat types in a single prompt
-5. **`action: redact`** is only valid for response rules
-6. **Use plain-text classification labels in examples** — write as `→ SAFE:` / `→ DANGEROUS:`, not JSON
+1. **Describe the threat clearly** in an ANALYZE section that frames the specific security concern
+2. **List specific patterns to detect** in a "Look for" section naming the exact behaviors that indicate risk
+3. **Include calibration examples** of both safe and dangerous operations to help the AI distinguish routine usage from genuine threats
+4. **Use plain-text classification labels** — write as `→ SAFE:` / `→ DANGEROUS:`
+5. **One concern per rule** — keep rules focused; separate credential detection from data exfiltration
+6. **Specify replacement text in redact rules** — e.g., "replace with [PII_REDACTED]"
 7. **Test with `mode: audit_only`** first, then remove it to enable blocking
-8. **Specify replacement text in redact rules** — e.g., "replace with [PII_REDACTED]"
+8. **`action: redact`** is only valid for response rules
 
 ## Operation Context
 
-The engine appends operation context to your prompt automatically with a context-appropriate label:
-- **MCP tool calls**: `Tool call:` + JSON `{"type": "mcp_tool", "name": "...", "arguments": {...}}`
+The policy engine appends operation context to your prompt automatically with a context-appropriate label:
+- **Tool calls**: `Tool call:` + JSON `{"type": "mcp_tool", "name": "...", "arguments": {...}}`
 - **CLI commands**: `CLI command:` + JSON `{"type": "cli", "name": "...", "arguments": [...]}`
 - **Responses**: `Response content:` + formatted text with `IsError:`, `Content:`, `Meta:` sections
 
 ## AI Response Format
 
-The engine enforces these structures via JSON schema:
+The AI response format is enforced automatically at runtime. The server uses these structures:
 
 Request validation:
 ```json

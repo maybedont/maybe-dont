@@ -1,15 +1,15 @@
 # ai-policy-authoring
 
 ## Description
-Guide for authoring AI (LLM-powered) policy rules for the Maybe Don't gateway. Covers request validation, response validation, and response redaction.
+Guide for authoring AI (LLM-powered) policy rules for Maybe Don't. Covers request validation, response validation, and response redaction.
 
 ## Instructions
 
-AI policies use large language models to evaluate MCP tool calls, CLI commands, and tool responses for security risks that are difficult to express as deterministic rules. Rules are defined in YAML files with prompts that describe what to detect.
+AI policies use large language models to evaluate tool calls, CLI commands, and tool responses for security risks that are difficult to express as deterministic rules. Rules are defined in YAML files with prompts that describe what to detect.
 
 ### Rule YAML Structure
 
-Rules are stored in separate files referenced by the gateway configuration:
+Rules are stored in separate files referenced by the server configuration:
 - **Request rules**: `ai_request_rules.yaml` (when `request_validation.ai.enabled: true`)
 - **Response rules**: `ai_response_rules.yaml` (when `response_validation.ai.enabled: true`)
 
@@ -36,23 +36,36 @@ rules:
       - Deleting production databases → DANGEROUS: Destructive operation on production data
 ```
 
-### Response Format
+### Writing Effective Prompts
 
-The AI response format is enforced automatically by the gateway engine via JSON schema (`GenerateSchema[T]()` with `strict: true`). **Do not include response format instructions in policy prompts.** The engine handles this — policy authors should focus exclusively on describing what to detect.
+The prompt is the core of each AI policy rule. Focus on clearly describing the security concern and providing calibration examples.
 
-The engine sends the response schema as a separate API parameter, and all major providers (OpenAI, Anthropic, Google, etc.) enforce it at the decoding level. Including format instructions in prompts wastes tokens and risks conflicting with the engine's schema.
+1. **Describe the threat clearly**: Start with an ANALYZE section that frames the specific security concern
+2. **List specific patterns to detect**: Use a "Look for" section naming the exact behaviors or patterns that indicate risk
+3. **Include calibration examples**: Provide EXAMPLES of both safe and dangerous operations so the AI can distinguish routine usage from genuine threats
+4. **Use plain-text classification labels**: Write examples as `input → LABEL: reasoning` (e.g., `→ SAFE: Routine cleanup`)
+5. **Keep each rule focused on one concern**: A rule about credential detection should not also check for data exfiltration — create separate rules for separate concerns
+6. **Specify replacement text in redact rules**: Tell the AI what placeholder to use (e.g., "replace with [PII_REDACTED]") and use distinct placeholders for different redaction types (e.g., `[PII_REDACTED]`, `[CREDENTIAL_REDACTED]`)
+7. **Test with `mode: audit_only`**: Start in audit mode to observe rule behavior, then remove the mode to enable blocking
 
-### Operation Context Injection
+### Operation Context
 
-The engine automatically appends the operation being evaluated to the end of your prompt at runtime. **Do not include a `%s` placeholder or manually reference the operation in your prompt.** Just describe what to detect — the engine handles context injection with a context-appropriate label:
+The policy engine automatically appends the operation being evaluated to the end of your prompt at runtime. The context is labeled appropriately:
 
-- **MCP tool calls**: Appended as `Tool call:` followed by JSON like `{"type": "mcp_tool", "name": "github__delete_repo", "arguments": {"owner": "org", "repo": "prod-db"}}`
+- **Tool calls**: Appended as `Tool call:` followed by JSON like `{"type": "mcp_tool", "name": "github__delete_repo", "arguments": {"owner": "org", "repo": "prod-db"}}`
 - **CLI commands**: Appended as `CLI command:` followed by JSON like `{"type": "cli", "name": "rm", "arguments": ["-rf", "/etc"]}`
 - **Response content**: Appended as `Response content:` followed by the formatted response text
 
-### Expected AI Response Format
+### Actions
 
-The engine enforces these response structures via JSON schema:
+| Action  | Request Rules | Response Rules | Behavior |
+|---------|:---:|:---:|----------|
+| `deny`  | Yes | Yes | Block if AI returns `allowed: false` |
+| `redact`| No  | Yes | Replace content with `redacted_content` from AI response |
+
+### AI Response Format
+
+The AI response format is enforced automatically at runtime. The server uses these structures:
 
 **Request validation:**
 ```json
@@ -72,23 +85,6 @@ The engine enforces these response structures via JSON schema:
 ```
 
 The `redacted_content` field is only used when `action: redact` and the AI determines content should be sanitized.
-
-### Actions
-
-| Action  | Request Rules | Response Rules | Behavior |
-|---------|:---:|:---:|----------|
-| `deny`  | Yes | Yes | Block if AI returns `allowed: false` |
-| `redact`| No  | Yes | Replace content with `redacted_content` from AI response |
-
-### Prompt Engineering Best Practices
-
-1. **Structure prompts clearly**: Use sections like ANALYZE, Look for, EXAMPLES
-2. **Include both positive and negative examples**: Show what should be allowed AND denied
-3. **Be specific about the threat model**: Name the exact patterns to detect
-4. **Keep prompts focused**: One rule per concern (don't combine credential detection with data exfiltration)
-5. **Do not include `%s` in prompts**: The engine appends operation context automatically — prompts containing `%s` are rejected at load time
-6. **Use plain-text classification labels in examples**: Write examples as `input → LABEL: reasoning` (e.g., `→ SAFE: Not a deletion operation`). Do not include JSON in examples — the response format is handled by the engine.
-7. **Specify replacement text in redact rules**: Always tell the AI what placeholder to use (e.g., "replace with [PII_REDACTED]"). Without explicit replacement text, the AI may use inconsistent placeholders across calls and models. Use distinct placeholders for different redaction types (e.g., `[PII_REDACTED]`, `[PATH_REDACTED]`, `[CREDENTIAL_REDACTED]`).
 
 ### Examples
 
@@ -166,11 +162,9 @@ rules:
 
 | Mistake | Problem | Fix |
 |---------|---------|-----|
-| Including `%s` in prompt | Engine rejects prompts with `%s` — context is appended automatically | Remove the `%s` placeholder; just describe what to detect |
 | Overly broad prompt | High false-positive rate | Be specific about threat patterns |
 | No examples in prompt | AI lacks calibration | Include EXAMPLES of both safe and dangerous operations |
 | `action: redact` on request rule | Redaction only works on responses | Use `action: deny` for request rules |
-| Including response format in prompt | Wastes tokens; format is enforced by the engine's JSON schema | Remove format instructions — the engine handles this automatically |
 | Combining multiple concerns | Hard to tune and debug | One focused concern per rule |
 | No replacement text in redact rules | AI uses inconsistent placeholders | Specify explicit replacement text (e.g., "replace with [PII_REDACTED]") |
 
@@ -189,7 +183,7 @@ validation:
 
 ### Key Notes
 
-- AI rules run in parallel goroutines with per-rule timeout (`max_rule_evaluation_ms`, default: 45s)
+- AI rules run in parallel with per-rule timeout (`max_rule_evaluation_ms`, default: 45s)
 - Total blocking budget across all validation phases is `max_blocking_ms` (default: 90s)
 - When all rules are `audit_only`, request returns immediately (fail-open) and audit continues async
 - First enabled `deny` match short-circuits evaluation
