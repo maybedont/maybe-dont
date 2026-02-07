@@ -227,6 +227,26 @@ validation:
     api_key: "${GEMINI_API_KEY}"
 ```
 
+**Groq:**
+```yaml
+validation:
+  ai:
+    provider: "openai_compatible"
+    endpoint: "https://api.groq.com/openai/v1/chat/completions"
+    model: "llama-3.3-70b-versatile"
+    api_key: "${GROQ_API_KEY}"
+```
+
+**Perplexity:**
+```yaml
+validation:
+  ai:
+    provider: "openai_compatible"
+    endpoint: "https://api.perplexity.ai/chat/completions"
+    model: "sonar-pro"
+    api_key: "${PERPLEXITY_API_KEY}"
+```
+
 **Azure OpenAI (with query params):**
 ```yaml
 validation:
@@ -315,7 +335,26 @@ Note: `max_tokens` is **required** for Anthropic (unlike OpenAI where it's optio
 
 **JSON schema support:** Anthropic does not have native JSON schema enforcement like OpenAI's `response_format`. The adapter must embed schema instructions in the prompt and validate the response locally.
 
-### 5) Providers Requiring Native Adapters (Future Work)
+### 5) Vendor Evaluation: Gemini, Groq, Perplexity
+
+The `openai_compatible` adapter should be sufficient for all three vendors. Discrete adapters are **not recommended** unless testing reveals incompatibilities that cannot be resolved through configuration.
+
+**Rationale:** All three vendors follow the OpenAI message format, use Bearer auth, and use `x-ratelimit-*` headers. The discrete `openai` and `anthropic` adapters exist because those providers have fundamentally incompatible API contracts (Anthropic: different auth header, system prompt location, required `max_tokens`, different structured output schema, different rate limit header format, unique HTTP 529 status code). Gemini, Groq, and Perplexity do not have these divergences.
+
+**Known risks to validate during testing:**
+- **JSON schema support**: Groq supports JSON mode but not strict `json_schema`. Perplexity's schema support is experimental. The fallback to free-text JSON parsing should handle this, but needs validation.
+- **Rate limit headers**: All three use `x-ratelimit-*` format (same as OpenAI), but actual behavior under load needs testing.
+
+**Evaluation steps per vendor:**
+1. Enable via `provider: openai_compatible` with the vendor's endpoint, model, and API key
+2. Functional test — does basic policy evaluation work at all?
+3. Rate limit test — hit a rate limit condition in the policy test suite to verify handling works, or identify if new code is needed for nuanced differences
+
+**Decision criteria for discrete adapters:** If testing reveals broken behavior (e.g., rate limit handling, structured output, response parsing) that cannot be resolved through configuration or minor `openai_compatible` adjustments, then build a discrete adapter following the existing patterns. Do not build proactively.
+
+### 6) Providers Requiring Native Adapters (Future Work)
+
+**Note:** This does NOT include Gemini, Groq, or Perplexity — those should use `openai_compatible` (see Section 5).
 
 The following providers cannot use `openai_compatible` and would require dedicated adapters:
 
@@ -326,7 +365,7 @@ The following providers cannot use `openai_compatible` and would require dedicat
 
 **Workaround:** Users can route requests through LiteLLM (which exposes an OpenAI-compatible API) to reach these providers without native adapter support.
 
-### 6) Adding New Provider Adapters (Future)
+### 7) Adding New Provider Adapters (Future)
 
 To add support for a new provider:
 
@@ -338,7 +377,7 @@ To add support for a new provider:
 6. **Add provider constant** to the config validation and adapter factory.
 7. **Document** the provider's endpoint, auth format, and any quirks in this spec.
 
-### 7) SDK vs REST Analysis and Decision
+### 8) SDK vs REST Analysis and Decision
 
 #### Binary Size and Dependency Analysis
 
@@ -528,6 +567,8 @@ These are full URLs for use with `provider: openai_compatible`:
 | Service | Full Endpoint URL | Notes |
 |---------|-------------------|-------|
 | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | Use Gemini 2.5+ for JSON schema |
+| Groq | `https://api.groq.com/openai/v1/chat/completions` | High throughput, low latency; JSON mode (not strict json_schema) |
+| Perplexity | `https://api.perplexity.ai/chat/completions` | JSON schema support is experimental |
 | Azure OpenAI | `https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions` | Requires `query_params: {api-version: "2024-02-15-preview"}` |
 | LiteLLM | `http://localhost:4000/v1/chat/completions` | Port configurable |
 | Ollama | `http://localhost:11434/v1/chat/completions` | Local models |
@@ -536,7 +577,7 @@ These are full URLs for use with `provider: openai_compatible`:
 
 For standard OpenAI, use `provider: openai` (not `openai_compatible`) with the SDK.
 
-### 8) Backward Compatibility
+### 9) Backward Compatibility
 
 Compatibility strategy:
 - `validation.ai.provider` is now required (explicit, no auto-detection).
@@ -545,7 +586,7 @@ Compatibility strategy:
 - Keep existing config keys (`endpoint`, `model`, `api_key`) and env vars intact.
 - Audit log schema will be extended with new optional fields (see next section).
 
-### 9) Audit Log Updates
+### 10) Audit Log Updates
 
 **Decision: Yes**, audit logs will include provider/model/endpoint metadata for debugging and traceability.
 
@@ -708,7 +749,7 @@ Note: `request_id` stays in the per-validation section because each AI API call 
 - Update `docs/specs/validation-chain-audit-schema.md` with new fields
 - Update audit entry tests to verify new fields are populated
 
-### 10) Prompt Reliability Evaluation
+### 11) Prompt Reliability Evaluation
 
 **Moved to separate spec:** See `docs/specs/policy-test-suite.md` for the complete specification of the policy test harness.
 
@@ -718,7 +759,7 @@ This spec (provider-agnostic AI validation) provides the multi-provider infrastr
 - CI integration with GitHub Actions
 - Historical trend tracking
 
-### 11) Tests
+### 12) Tests
 
 **Unit tests**
 - `internal/gateway/ai_client_test.go`:
@@ -831,8 +872,14 @@ Current policies are user-message-only. To preserve behavior:
 
 ## Resolved Questions
 
-1. **Provider detection**: Explicit `provider` configuration required (no auto-detection from URL). For backward compatibility, if `provider` is unset, default to `openai` with a deprecation warning. Default endpoints are applied per provider unless overridden.
-2. **SDK vs REST**: Using official SDKs for `openai` and `anthropic`. Using direct REST for `openai_compatible` to support arbitrary URL structures. REST-only alternative for all providers documented in Section 7 for future consideration.
+1. **Provider detection (considered and rejected: auto-detection)**: Explicit `provider` configuration required (no auto-detection from URL). For backward compatibility, if `provider` is unset, default to `openai` with a deprecation warning. Default endpoints are applied per provider unless overridden.
+
+   **Why auto-detection was rejected:** We considered making `provider` optional and inferring it from the endpoint URL (e.g., detecting `api.openai.com` → openai, `api.anthropic.com` → anthropic, everything else → openai_compatible). This was rejected for several reasons:
+   - **The `provider` field documents intent, not just configuration.** When someone sets `provider: openai_compatible` alongside a Gemini endpoint, that's an explicit signal they're targeting the OpenAI-compatible API surface. Vendors like Gemini have multiple API formats — auto-detection removes the signal about which one is intended.
+   - **Detection heuristics are fragile.** Users behind proxies, using Azure OpenAI (`openai.azure.com`), or routing through LiteLLM would hit edge cases. Each edge case needs code, tests, and documentation explaining why detection chose wrong.
+   - **The failure mode is worse.** A missing required field gives a clear config validation error. A wrong auto-detection guess gives a cryptic 400 from the vendor API, which is harder to debug.
+   - **The burden is minimal.** This is one field in a config file written once. The cost of requiring it is negligible compared to the debugging cost when auto-detection guesses wrong.
+2. **SDK vs REST**: Using official SDKs for `openai` and `anthropic`. Using direct REST for `openai_compatible` to support arbitrary URL structures. REST-only alternative for all providers documented in Section 8 for future consideration.
 3. **Endpoint semantics**: For SDK providers (`openai`, `anthropic`), `endpoint` is a base URL and the SDK appends the API path. For `openai_compatible`, `endpoint` is the full URL to the chat completions endpoint.
 4. **Provider-specific parameters**: Added generic `parameters` map for provider-specific API parameters (e.g., `max_tokens`, `temperature`). Each adapter validates required parameters during config validation (fail-fast). Supports env vars like `MAYBE_DONT_VALIDATION_AI_PARAMETERS_MAX_TOKENS=4096`.
 5. **Query parameters**: Added `query_params` config field for providers that require URL query parameters (e.g., Azure's `api-version`).
@@ -980,7 +1027,7 @@ This checklist provides a concrete task list for implementing the spec. Tasks ar
 - [ ] **3C.1** Add Anthropic SDK dependency:
   - `go get github.com/anthropics/anthropic-sdk-go`
   - Run `go mod tidy`
-  - Note: This adds ~33 dependencies and ~4MB to binary (see Section 7)
+  - Note: This adds ~33 dependencies and ~4MB to binary (see Section 8)
 
 - [ ] **3C.2** Create `internal/gateway/ai_provider_anthropic.go`:
   - Implement `AIProviderClient` using Anthropic SDK
