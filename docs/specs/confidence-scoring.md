@@ -18,22 +18,23 @@
 > - **CLI proxy**: Check if `test_matrix` implemented any CLI proxy endpoint code.
 > - **Skills**: Verify skill file paths and content on main match what this spec references.
 > - **State files**: Confirm state file schema version handling and backward compatibility with merged state management code.
+> - **Empirical validation**: Confirm test suite model matrix is available and plan the A/B baseline test described in Section 19.
 
 ## Summary
 
-Replace binary allow/deny AI policy responses with structured responses that include a confidence score (0.0-1.0). Centralize the AI response format so it is injected at runtime rather than duplicated in every rule prompt. Add configurable thresholds so operators can tune sensitivity, and propagate confidence through the audit trail.
+Add a confidence score (0.0-1.0) to AI policy responses alongside the existing binary allow/deny decision. Centralize the AI response format instruction so it is owned by the gateway engine rather than duplicated in every rule prompt. Add configurable thresholds so operators can tune sensitivity, and propagate confidence through the audit trail.
 
 ## Motivation
 
 Today every AI policy returns `{"allowed": true/false, "message": "..."}`. This has three problems:
 
 1. **No nuance**: A high-confidence "this is definitely malicious" and a low-confidence "I'm not sure but maybe" both produce the same binary deny. Operators cannot distinguish between the two in audit logs or at decision time.
-2. **Boilerplate duplication**: Every rule prompt ends with `Return ONLY JSON in this exact format: { "allowed": true/false, "message": "your message" }`. This wastes tokens, introduces inconsistency risk, and makes format changes require editing every rule.
+2. **Boilerplate duplication**: Every rule prompt ends with `Return ONLY JSON in this exact format: { "allowed": true/false, "message": "your message" }`. This wastes tokens, introduces inconsistency risk, and makes format changes require editing every rule. More importantly, the AI response format is business logic that belongs to the gateway engine, not to the policy author. Policy authors should focus on describing what to detect, not how to format the response.
 3. **No threshold tuning**: Operators cannot adjust sensitivity without rewriting prompts. There is no way to say "only block if the AI is at least 80% confident."
 
 Confidence scoring addresses all three by:
 - Adding a `confidence` field (0.0-1.0) to the AI response schema
-- Moving the response format instruction out of rule prompts and into a runtime-injected system/suffix prompt
+- Moving the response format instruction out of rule prompts and into a runtime-injected suffix controlled by the engine
 - Making decision thresholds configurable at the global and per-rule level
 - Propagating scores through audit entries for forensic analysis and threshold tuning
 
@@ -43,9 +44,9 @@ This spec consolidates and supersedes confidence scoring design scattered across
 
 | Spec | Section | Disposition |
 |------|---------|-------------|
-| `docs/specs/policy-test-suite/README.md` | "Future: Confidence Scoring", `min_confidence` field | Absorbed into [Test Suite Changes](#9-test-suite-changes) below |
-| `docs/specs/runtime-action-interception-architecture.md` | "Batching with Structured Outputs" (confidence per policy) | Absorbed into [AI Response Format](#1-centralized-ai-response-format) below |
-| `docs/specs/cli-proxy-for-ai-agents.md` | AI rules response with `confidence: 0.0-1.0` | Absorbed into [AI Response Format](#1-centralized-ai-response-format) below |
+| `docs/specs/policy-test-suite/README.md` | "Future: Confidence Scoring", `min_confidence` field | Absorbed into [Test Suite Changes](#10-test-suite-changes) below |
+| `docs/specs/runtime-action-interception-architecture.md` | "Batching with Structured Outputs" (confidence per policy) | Absorbed into [AI Response Format](#2-centralized-ai-response-format) below |
+| `docs/specs/cli-proxy-for-ai-agents.md` | AI rules response with `confidence: 0.0-1.0` | Absorbed into [AI Response Format](#2-centralized-ai-response-format) below |
 
 Once this spec is finalized, those sections should be updated to reference this spec as the authoritative source.
 
@@ -75,9 +76,11 @@ Before designing the system, it is worth addressing whether LLMs can consistentl
 
 5. **Non-determinism at threshold boundaries**: Two identical requests may receive confidence 0.71 and 0.69 from the same model with temperature 0. If the threshold is 0.7, one blocks and the other doesn't. This is inherent to any continuous scoring system and operators should be aware that near-threshold behavior is probabilistic. The audit trail captures the raw score so these cases can be identified and thresholds adjusted.
 
+6. **Potential impact on primary decision quality**: Asking an LLM to simultaneously classify AND self-assess certainty is a different cognitive task than classification alone. There is a risk that adding confidence scoring changes how the model makes its primary allow/deny decision — for example, the model may hedge on borderline cases where it previously would have committed to a clear deny. This is an open empirical question that must be validated before shipping. See [Section 19: Empirical Validation](#19-empirical-validation-required).
+
 ### Recommendation
 
-Confidence scoring is viable and valuable. The key is to treat scores as **ordinal signals for ranking and thresholding**, not as calibrated probabilities. The test suite model matrix provides the mechanism to validate that default thresholds work across supported models.
+Confidence scoring is viable and likely valuable. The key is to treat scores as **ordinal signals for ranking and thresholding**, not as calibrated probabilities. However, we must empirically validate that adding confidence does not degrade the quality of the primary allow/deny decision before shipping this feature. The test suite model matrix provides the mechanism to do this.
 
 ### Alternative Considered: Categorical Confidence
 
@@ -85,48 +88,65 @@ Instead of a continuous 0.0-1.0 score, we considered asking the AI to return a c
 
 ## Design
 
-### 1. Centralized AI Response Format
+### 1. Design Decision: Additive Confidence vs. Response Format Replacement
+
+An earlier revision of this spec proposed replacing the entire response format: changing `allowed` (bool) to `decision` (string enum) and `message` to `reason`. After review, we recommend the **additive approach** instead: keep the existing `allowed` and `message` fields, and add `confidence` alongside them.
+
+#### Option A: Additive (recommended)
+
+```go
+type AIResponse struct {
+    Allowed    bool    `json:"allowed"`
+    Confidence float64 `json:"confidence" jsonschema:"minimum=0,maximum=1"`
+    Message    string  `json:"message"`
+}
+```
+
+**Advantages:**
+- **Zero breaking change** to the response schema — purely additive
+- **No legacy format detection needed** — old responses just lack `confidence`
+- **No prompt regression risk from field renaming** — the AI is still answering the same question (`allowed: true/false`), just adding a self-assessment
+- **Existing inversion logic is tested and works** — no need to rewrite decision logic
+- **Simpler implementation** — fewer moving parts, fewer tests, lower risk
+- **Decouples concerns** — confidence scoring ships without the risk of a response format overhaul
+
+**Disadvantages:**
+- The inversion logic remains (deny-rule + `allowed: false` = deny), which is confusing to read in code
+- `allowed` is less expressive than a string enum for response validation (no first-class `redact` value)
+
+#### Option B: Full replacement (deferred)
+
+```go
+type AIResponse struct {
+    Decision   string  `json:"decision" jsonschema:"enum=allow,enum=deny"`
+    Confidence float64 `json:"confidence" jsonschema:"minimum=0,maximum=1"`
+    Reason     string  `json:"reason"`
+}
+```
+
+This approach has merits (cleaner API, eliminates inversion logic, first-class `redact` support) but introduces unnecessary risk by bundling two independent changes. The `decision` enum can be revisited as a separate, future enhancement once confidence scoring is stable and validated.
+
+#### Decision
+
+**Go with Option A (additive).** Ship the confidence score alongside the existing binary response. Revisit the response format cleanup separately if desired.
+
+### 2. Centralized AI Response Format (Engine-Owned Prompt Suffix)
+
+**Regardless of whether we keep `allowed`/`message` or switch to `decision`/`reason`**, the response format instruction should be owned by the gateway engine, not duplicated in every policy prompt.
 
 **Current state**: Each rule prompt contains a line like:
 ```
 Return ONLY JSON in this exact format: { "allowed": true/false, "message": "your message" }
 ```
 
+This is wrong for several reasons:
+- The response format is **business logic of the gateway**, not a concern of the policy author
+- Policy authors should describe **what to detect**, not how to structure the response
+- Duplicating the format instruction in every rule wastes tokens and risks inconsistency
+- Changing the format (e.g., adding `confidence`) requires editing every rule
+- Asking the user to get the format exactly right is error-prone and unnecessary
+
 **New state**: The response format instruction is removed from rule prompts and injected at runtime by the AI engine. Rule authors write only the analytical prompt.
-
-#### New AIResponse struct (request validation)
-
-```go
-type AIResponse struct {
-    Decision   string  `json:"decision"   jsonschema:"enum=allow,enum=deny"`
-    Confidence float64 `json:"confidence" jsonschema:"minimum=0,maximum=1"`
-    Reason     string  `json:"reason"`
-}
-```
-
-Changes from current:
-- `allowed` (bool) becomes `decision` (string enum: `allow` or `deny`)
-- `message` (string) becomes `reason` (string) for clarity
-- `confidence` (float64) is new
-
-**Why `decision` instead of `allowed`**: The current boolean `allowed` is inverted for deny-rules (AI returns `false` to mean "yes, this is dangerous"). This is confusing and error-prone. A string enum directly expresses the intent: "I think this should be denied" vs "I think this should be allowed." This eliminates the truth-table inversion logic in the current decision code.
-
-**Why no `redact` in request validation**: Request validation only supports `allow` and `deny` actions. Including `redact` in the enum would allow the AI to return a value the engine cannot handle. The request engine schema constrains to `allow`/`deny` only.
-
-#### New AIResponseEvaluation struct (response validation)
-
-Response validation uses a separate struct (`AIResponseEvaluation` in `ai_response_engine.go`) that includes an additional `RedactedContent` field. This struct must be updated in parallel:
-
-```go
-type AIResponseEvaluation struct {
-    Decision        string `json:"decision"         jsonschema:"enum=allow,enum=deny,enum=redact"`
-    Confidence      float64 `json:"confidence"      jsonschema:"minimum=0,maximum=1"`
-    Reason          string `json:"reason"`
-    RedactedContent string `json:"redacted_content"`
-}
-```
-
-The response validation enum includes `redact` because response rules support the `redact` action.
 
 #### Runtime-injected response instruction
 
@@ -136,19 +156,19 @@ When the AI engine constructs the prompt for a policy evaluation, it appends a s
 ```
 ---
 Respond with a JSON object containing exactly these fields:
-- "decision": Your assessment. Use "allow" if the operation appears safe, or "deny" if it appears dangerous.
-- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your decision. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
-- "reason": A brief explanation of your reasoning.
+- "allowed": true if the operation appears safe, false if it appears dangerous.
+- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your assessment. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
+- "message": A brief explanation of your reasoning.
 ```
 
 **Response validation suffix:**
 ```
 ---
 Respond with a JSON object containing exactly these fields:
-- "decision": Your assessment. Use "allow" if the response is safe, "deny" if it should be blocked, or "redact" if sensitive content should be sanitized.
-- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your decision. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
-- "reason": A brief explanation of your reasoning.
-- "redacted_content": If decision is "redact", provide the sanitized version of the content with sensitive data replaced. Otherwise leave empty.
+- "allowed": true if the response content is safe, false if it should be blocked or redacted.
+- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your assessment. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
+- "message": A brief explanation of your reasoning.
+- "redacted_content": If sensitive content was found that should be sanitized, provide the redacted version. Otherwise leave empty.
 ```
 
 These suffixes are appended by the engine, not written by the rule author. The JSON schema constraint (`GenerateSchema[AIResponse]()` / `GenerateSchema[AIResponseEvaluation]()`) enforces the structure at the provider level.
@@ -180,17 +200,13 @@ The engine appends the response format instruction automatically.
 
 Users who have written custom rules with response format instructions in their prompts will not break. There are two scenarios:
 
-**Providers with structured output support (OpenAI, Anthropic):** The JSON schema constraint forces the AI to return the new format regardless of what the prompt says. User prompts that include old instructions like `Return JSON: {"allowed": true/false, "message": "..."}` are simply ignored by the AI in favor of the schema. The old prompt text becomes dead-weight tokens — harmless but wasteful. Users should clean up their prompts to save tokens, but nothing breaks.
+**Providers with structured output support (OpenAI, Anthropic):** The JSON schema constraint forces the AI to return the schema-defined format regardless of what the prompt says. User prompts that include old instructions like `Return JSON: {"allowed": true/false, "message": "..."}` are consistent with the schema (we kept the same field names). The prompt instruction and the engine suffix now say the same thing — the only difference is the engine suffix also asks for `confidence`. The old prompt text becomes partially redundant but entirely harmless.
 
-**Providers without structured output support (some OpenAI-compatible endpoints):** The AI may attempt to follow the old prompt instructions and return the legacy format. For these cases, the engine includes a safety net:
+**Providers without structured output support (some OpenAI-compatible endpoints):** The AI will see both the user's format instruction and the engine suffix. Since both ask for `allowed` and `message`, there is no conflict — the engine suffix simply adds `confidence`. The AI may or may not include `confidence` in its response. If `confidence` is missing from the parsed response, the engine defaults to `1.0` to preserve existing behavior.
 
-1. **Parse-time migration**: If the parsed JSON contains an `allowed` field (boolean) instead of `decision` (string), the engine detects this and translates: `allowed: true` -> `decision: "allow"`, `allowed: false` -> `decision: "deny"`, `message` -> `reason`.
-2. **Warning log**: When legacy format is detected, log at INFO level: `"AI rule returned legacy format (allowed/message), migrating to decision/confidence/reason. Update your prompt to remove the response format instruction."`
-3. **Confidence default**: If legacy format is detected (no confidence field), default to `1.0` to preserve existing behavior — all existing decisions continue to be enforced at full confidence.
+### 3. Decision Logic
 
-### 2. Decision Logic Changes
-
-**Current truth table** (inverting logic):
+The existing truth-table inversion logic is unchanged:
 
 | Policy Action | AI `allowed` | Result |
 |---------------|-------------|--------|
@@ -199,47 +215,35 @@ Users who have written custom rules with response format instructions in their p
 | allow | true | allow |
 | allow | false | deny |
 
-**New decision logic**:
-
-The AI now returns `decision` directly (`allow`, `deny`, `redact`). The policy's `action` field no longer participates in an inversion. Instead:
-
-- **deny-action rules**: The AI is asked to evaluate whether the operation is dangerous. If the AI returns `decision: "deny"`, the rule fires. If `decision: "allow"`, the rule does not fire.
-- **allow-action rules**: The AI is asked to evaluate whether the operation passes a gate. If the AI returns `decision: "allow"`, the gate passes. If `decision: "deny"`, the gate fails.
-- **redact-action rules** (response only): If the AI returns `decision: "redact"`, the response is sanitized.
-
 #### Confidence threshold application
 
-The confidence threshold is applied **only when the AI's decision would change the outcome** — that is, only when the AI returns a decision that would cause the rule to fire or gate to fail:
+The confidence threshold is applied **only when the AI's decision would cause the rule to fire** — that is, only when the result would be a blocking action:
 
 ```
-# Determine if the AI's decision would cause the rule to act
-rule_would_fire = false
-if p.action == "deny" and aiResp.decision == "deny":
-    rule_would_fire = true
-if p.action == "allow" and aiResp.decision == "deny":
-    rule_would_fire = true  # gate failed
-if p.action == "redact" and aiResp.decision == "redact":
-    rule_would_fire = true
+# Existing logic determines the result
+result = apply_truth_table(p.action, aiResp.allowed)
 
-# Apply confidence threshold only to firing decisions
+# Confidence threshold applies only to firing (blocking) decisions
+rule_would_fire = (result == "deny") or (result == "redact")
+
 if rule_would_fire:
     threshold = p.confidence_threshold ?? global_confidence_threshold
     if aiResp.confidence < threshold:
         effective_result = low_confidence_action  # default: "audit_only"
         confidence_applied = true
     else:
-        effective_result = aiResp.decision
+        effective_result = result
         confidence_applied = false
 else:
-    effective_result = aiResp.decision
+    effective_result = result
     confidence_applied = false
 ```
 
-**Why directional application matters**: If the AI returns `allow` with 0.4 confidence on a deny-rule, the rule already doesn't fire — the request passes. Applying the threshold here would incorrectly flip the result. The threshold only makes sense when it can *soften* a blocking decision, not when it would *create* one.
+**Why directional application matters**: If the AI returns `allowed: true` with 0.4 confidence on a deny-rule, the rule already doesn't fire — the request passes. Applying the threshold here would incorrectly flip the result. The threshold only makes sense when it can *soften* a blocking decision, not when it would *create* one.
 
-This means: if the AI says "deny" with 0.4 confidence and the threshold is 0.7, the deny is downgraded to audit-only (logged but not enforced). But if the AI says "allow" with 0.4 confidence, the allow stands — the low confidence is logged in the audit trail for analysis, but does not change the outcome.
+This means: if a deny-rule's AI says `allowed: false` with 0.4 confidence and the threshold is 0.7, the deny is downgraded to audit-only (logged but not enforced). But if the AI says `allowed: true` with 0.4 confidence, the allow stands — the low confidence is logged in the audit trail for analysis, but does not change the outcome.
 
-### 3. Configuration Changes
+### 4. Configuration Changes
 
 #### Global AI confidence settings
 
@@ -281,34 +285,44 @@ CEL rules are deterministic and do not produce confidence scores from an AI. Whe
 - Per-rule `confidence_threshold` is validated with the same range
 - Invalid values cause startup failure with a clear error message
 
-### 4. AIResponse Struct and Schema
+### 5. AIResponse Struct and Schema
 
 ```go
 // AIResponse is the structured response expected from AI request policy evaluations.
-// The JSON schema for this struct is generated via GenerateSchema[AIResponse]()
-// and enforced by the AI provider's structured output feature.
+// The JSON schema is generated via GenerateSchema[AIResponse]() and enforced by
+// the AI provider's structured output feature.
 type AIResponse struct {
-    Decision   string  `json:"decision"   jsonschema:"enum=allow,enum=deny"`
+    Allowed    bool    `json:"allowed"`
     Confidence float64 `json:"confidence" jsonschema:"minimum=0,maximum=1"`
-    Reason     string  `json:"reason"`
+    Message    string  `json:"message"`
 }
 
 // AIResponseEvaluation is the structured response expected from AI response policy evaluations.
 // It extends AIResponse with a RedactedContent field for response sanitization.
 type AIResponseEvaluation struct {
-    Decision        string  `json:"decision"         jsonschema:"enum=allow,enum=deny,enum=redact"`
-    Confidence      float64 `json:"confidence"       jsonschema:"minimum=0,maximum=1"`
-    Reason          string  `json:"reason"`
+    Allowed         bool    `json:"allowed"`
+    Confidence      float64 `json:"confidence" jsonschema:"minimum=0,maximum=1"`
+    Message         string  `json:"message"`
     RedactedContent string  `json:"redacted_content"`
 }
 ```
 
 The `jsonschema` tags ensure provider-level enforcement:
-- `decision` is constrained to the appropriate enum values per engine
 - `confidence` is constrained to [0.0, 1.0]
-- `reason` is a free-form string
+- `allowed` and `message` are unchanged from current behavior
 
-### 5. Internal Result Struct Changes
+When `confidence` is missing from the AI response (e.g., non-compliant provider, or pre-existing cached response), it deserializes to `0.0` (Go zero value). The engine treats `0.0` as "no confidence data" and defaults to `1.0` to preserve existing behavior. This is handled explicitly in the parsing code, not by relying on the zero value:
+
+```go
+if aiResp.Confidence == 0.0 {
+    // Provider did not return confidence — preserve existing behavior
+    aiResp.Confidence = 1.0
+}
+```
+
+**Note**: This means a model cannot express genuine 0.0 confidence. This is acceptable — 0.0 ("I have literally zero signal") is not a meaningful real-world response, and using it as a sentinel for "missing" is safe.
+
+### 6. Internal Result Struct Changes
 
 The `aiRuleResult` internal struct (used to pass results through goroutine channels) must also carry the confidence score:
 
@@ -330,7 +344,7 @@ type aiRuleResult struct {
 
 This struct is goroutine-safe (written by one goroutine, read by the collector via channel). Adding fields does not introduce concurrency concerns.
 
-### 6. Audit Entry Changes
+### 7. Audit Entry Changes
 
 #### AuditAIRuleResult (per-rule)
 
@@ -340,7 +354,7 @@ type AuditAIRuleResult struct {
     Action            string  `json:"action"`
     Mode              string  `json:"mode,omitempty"`
     Result            string  `json:"result"`             // "allow", "deny", "redact", or "error"
-    Confidence        float64 `json:"confidence"`         // 0.0-1.0 (1.0 for legacy, 0.0 for error)
+    Confidence        float64 `json:"confidence"`         // 0.0-1.0 (1.0 for missing, 0.0 for error)
     ConfidenceApplied bool    `json:"confidence_applied"` // true if threshold changed the outcome
     EvaluationMs      int64   `json:"evaluation_ms"`
     Error             string  `json:"error,omitempty"`
@@ -348,7 +362,7 @@ type AuditAIRuleResult struct {
 ```
 
 New fields:
-- `confidence`: The raw score returned by the AI. Set to `1.0` for legacy format responses, `0.0` for errors and budget-exhaustion fail-opens.
+- `confidence`: The raw score returned by the AI. Set to `1.0` when confidence was missing from the response (backward compat), `0.0` for errors and budget-exhaustion fail-opens.
 - `confidence_applied`: `true` when the confidence was below threshold and the result was changed from the AI's decision to `low_confidence_action`. This makes it easy to find cases in audit logs where the threshold changed the outcome.
 
 #### AuditAIResult (aggregate)
@@ -368,7 +382,7 @@ type AuditAIResult struct {
 
 The aggregate level does not include a rolled-up confidence score because the semantics are unclear (min? mean? of the deciding rule?). The per-rule `confidence` is sufficient. Consumers who want the deciding rule's confidence can look up `results[deciding_rule].confidence`.
 
-### 7. Validation Chain Changes
+### 8. Validation Chain Changes
 
 The `ValidationResult` struct in `tool_validation.go` is shared by both CEL and AI engines and needs a `Confidence` field:
 
@@ -387,7 +401,7 @@ type ValidationResult struct {
 
 CEL results always set `Confidence: 1.0`. AI results set it from the parsed response.
 
-### 8. Prompt Construction Changes
+### 9. Prompt Construction Changes
 
 **Current flow** (`ai_engine.go`):
 ```go
@@ -405,7 +419,7 @@ toolCallStr := fmt.Sprintf("Tool: %s\nArguments: %v", req.Params.Name, req.Param
 // Expand the user's prompt template with the tool call
 userPrompt := fmt.Sprintf(p.Prompt, toolCallStr)
 
-// Append the centralized response format instruction
+// Append the centralized response format instruction (owned by the engine)
 userPrompt += "\n\n" + aiRequestResponseFormatInstruction
 
 result, err := e.providerClient.Generate(ctx, AIRequest{
@@ -421,19 +435,19 @@ Both instruction constants are package-level:
 ```go
 const aiRequestResponseFormatInstruction = `---
 Respond with a JSON object containing exactly these fields:
-- "decision": Your assessment. Use "allow" if the operation appears safe, or "deny" if it appears dangerous.
-- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your decision. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
-- "reason": A brief explanation of your reasoning.`
+- "allowed": true if the operation appears safe, false if it appears dangerous.
+- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your assessment. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
+- "message": A brief explanation of your reasoning.`
 
 const aiResponseResponseFormatInstruction = `---
 Respond with a JSON object containing exactly these fields:
-- "decision": Your assessment. Use "allow" if the response is safe, "deny" if it should be blocked, or "redact" if sensitive content should be sanitized.
-- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your decision. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
-- "reason": A brief explanation of your reasoning.
-- "redacted_content": If decision is "redact", provide the sanitized version with sensitive data replaced. Otherwise leave empty.`
+- "allowed": true if the response content is safe, false if it should be blocked or redacted.
+- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your assessment. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
+- "message": A brief explanation of your reasoning.
+- "redacted_content": If sensitive content was found that should be sanitized, provide the redacted version. Otherwise leave empty.`
 ```
 
-### 9. Test Suite Changes
+### 10. Test Suite Changes
 
 The policy test suite (on the `degroff/test_matrix` branch) has partial scaffolding for confidence:
 - `CachedResult` in `state.go` already has a `Confidence` field
@@ -478,7 +492,7 @@ The test suite's model matrix feature becomes the primary mechanism for validati
 - If a model consistently produces confidence below the default threshold for tests that should match, the threshold needs adjustment or the prompt needs improvement
 - The custom JSON output format already captures per-result confidence, enabling distribution analysis
 
-### 10. Skill Updates
+### 11. Skill Updates
 
 #### `cel-policy-authoring` skill
 
@@ -488,10 +502,10 @@ Add a brief note explaining that CEL rules always produce confidence 1.0 since t
 
 Major updates:
 1. **Remove response format from examples**: All example prompts should end at the analytical content. The response format instruction is injected by the engine.
-2. **Remove "Specify the response format" from best practices**: Replace with a note that the engine handles response format automatically.
+2. **Remove "Specify the response format" from best practices**: Replace with a note that the engine handles response format automatically. Policy authors should focus on describing what to detect, not how to format the response.
 3. **Add confidence guidance**: Explain that the AI will be asked to return a confidence score and how thresholds work.
-4. **Update the "Expected AI Response Format" section**: Show the new `{decision, confidence, reason}` format.
-5. **Update Common Mistakes table**: Remove "Vague response format" (no longer relevant). Add "Specifying response format in prompt" as a mild anti-pattern (harmless but wasteful).
+4. **Update the "Expected AI Response Format" section**: Show the format with the added `confidence` field.
+5. **Update Common Mistakes table**: Remove "Vague response format" (no longer relevant). Add "Specifying response format in prompt" as a mild anti-pattern (harmless but wasteful of tokens).
 
 #### `policy-test-case` skill (`internal/skills/test-case.md`)
 
@@ -499,7 +513,7 @@ Major updates:
 2. **Add examples**: Show test cases with `min_confidence` assertions.
 3. **Add guidance**: "Use `min_confidence` to validate that the AI model is sufficiently confident in its decisions. This is especially useful in model matrix testing to identify models that are unreliable for specific policy types."
 
-### 11. Default Rules Migration
+### 12. Default Rules Migration
 
 All shipped rules in `internal/config/defaults/ai_request_rules.yaml` and `ai_response_rules.yaml` need updating:
 
@@ -535,7 +549,7 @@ prompt: |-
   Tool call: %s
 ```
 
-### 12. Policy File Versioning
+### 13. Policy File Versioning
 
 **Current state**: Rule files (`ai_request_rules.yaml`, etc.) have no version field. The config loader unmarshals YAML directly into structs with no schema validation. The test suite's `suite.yaml` has `version: "v1"` but rule files don't follow this pattern.
 
@@ -557,20 +571,20 @@ Behavior:
 
 This does not need to gate the confidence scoring feature — it is a low-cost addition that provides a migration hook for the future.
 
-### 13. Backward Compatibility and Migration Strategy
+### 14. Backward Compatibility and Migration Strategy
 
 **User-authored rules do not need modification.** The engine changes are invisible to rule authors:
 
 | Scenario | What happens | User action required |
 |----------|-------------|---------------------|
-| User rule with old response format boilerplate | AI ignores prompt instruction, follows schema constraint. Old text is dead tokens. | None (optional cleanup to save tokens) |
+| User rule with old response format boilerplate | Engine suffix adds `confidence` to the same `allowed`/`message` format. No conflict. | None (optional cleanup to save tokens) |
 | User rule without response format boilerplate | Engine appends instruction automatically | None |
 | User rule with `confidence_threshold` | Per-rule threshold applied | None (new opt-in feature) |
-| User rule on non-compliant provider (no structured output) | Legacy format detection kicks in, migrates response | None (engine handles it) |
+| AI response missing `confidence` field | Engine defaults to confidence 1.0 (preserve existing behavior) | None |
 
 **Shipped default rules WILL be modified** to remove boilerplate and simplify examples. This is safe because defaults are embedded at compile time — users who have copied and modified them are already diverged.
 
-### 14. Assumptions
+### 15. Assumptions
 
 | Assumption | Basis | Risk if wrong |
 |-----------|-------|---------------|
@@ -579,11 +593,12 @@ This does not need to gate the confidence scoring feature — it is a low-cost a
 | `ActualResult` struct in test executor does NOT have `Confidence` field | Explored on `test_matrix` branch; `CachedResult` has it, `ActualResult` doesn't | Low — easy to add; re-review after merge will confirm |
 | Skills exist on `test_matrix` branch only (`internal/skills/ai-policy.md`, `internal/skills/test-case.md`) | Only `cel-policy-authoring` exists on main in `.claude/skills/` | Medium — if skills aren't merged first, Phase 4 targets files that don't exist |
 | State file `schema_version: "v1"` has no upgrade logic | Explored state.go; load() does not validate version | Low — old files deserialize cleanly with zero-value defaults |
-| `GenerateSchema` supports `jsonschema` tags for enum/min/max | `invopop/jsonschema` library is used; `jsonschema:"required"` tag already used elsewhere in codebase | Low — verify enum tag syntax against library docs |
+| `GenerateSchema` supports `jsonschema` tags for min/max | `invopop/jsonschema` library is used; `jsonschema:"required"` tag already used elsewhere in codebase | Low — verify tag syntax against library docs |
 | `maybedont__generate_audit_report` tool will handle new audit fields | Tool uses AI to analyze audit entries; new fields change the schema it reads | Medium — may need prompt update to reference confidence |
 | Blocking budget exhaustion produces a result that needs confidence | Budget exhaustion triggers fail-open with `result: "allow"` | Low — assign confidence 0.0, same as errors |
+| Adding confidence does not degrade primary decision quality | Untested assumption — see Section 19 | **High — must be empirically validated before shipping** |
 
-### 15. CLI Proxy Impact
+### 16. CLI Proxy Impact
 
 **The CLI proxy endpoint does not exist yet** — it is spec-only (`docs/specs/cli-proxy-for-ai-agents.md`). When implemented, it will use the same `Gateway.ValidateToolCall()` -> `validationChain.Handle()` path as MCP requests. Confidence scoring will flow through automatically because:
 
@@ -608,23 +623,22 @@ This does not need to gate the confidence scoring feature — it is a low-cost a
 
 This should be added to Phase 5 (existing spec cleanup).
 
-### 16. Required Tests
+### 17. Required Tests
 
 #### AI Engine (`ai_engine.go` and `ai_response_engine.go`)
 
 **Response parsing:**
-- Parse new format correctly: `{decision: "deny", confidence: 0.85, reason: "..."}`
-- Parse new format with `decision: "allow"` and `decision: "redact"` (response engine only)
-- Legacy format detection: `{allowed: false, message: "..."}` -> translated to new format with confidence 1.0
-- Legacy format warning logged
+- Parse response with `confidence` field correctly
+- Parse response without `confidence` field -> defaults to 1.0
+- Confidence 0.0 from AI treated as missing -> defaults to 1.0
 
 **Confidence threshold logic:**
-- Deny at 0.8 with threshold 0.7 -> blocks (threshold met)
-- Deny at 0.5 with threshold 0.7 -> audit_only (threshold not met, downgraded)
+- Deny fires at 0.8 with threshold 0.7 -> blocks (threshold met)
+- Deny fires at 0.5 with threshold 0.7 -> audit_only (threshold not met, downgraded)
 - Allow at 0.5 on deny-rule -> rule doesn't fire (threshold NOT applied to non-firing decisions)
-- Deny at 0.5 with threshold 0.7 and `low_confidence_action: "deny"` -> blocks (conservative mode)
+- Deny fires at 0.5 with threshold 0.7 and `low_confidence_action: "deny"` -> blocks (conservative mode)
 - Per-rule threshold overrides global threshold
-- Boundary: deny at exactly 0.7 with threshold 0.7 -> blocks (>= semantics)
+- Boundary: deny fires at exactly 0.7 with threshold 0.7 -> blocks (>= semantics)
 
 **Error and edge cases:**
 - AI call error -> confidence 0.0, result "error"
@@ -670,7 +684,7 @@ This should be added to Phase 5 (existing spec cleanup).
 - State file correctly caches and restores confidence values
 - Model matrix output includes confidence in results
 
-### 17. Documentation Changes
+### 18. Documentation Changes
 
 This feature requires updates to external documentation at `https://maybedont.ai/docs`:
 
@@ -678,25 +692,72 @@ This feature requires updates to external documentation at `https://maybedont.ai
 - [ ] **AI rule authoring guide**: Update to reflect that response format is injected by the engine; rule authors should not include it
 - [ ] **Audit log schema reference**: Document new `confidence` and `confidence_applied` fields in `AuditAIRuleResult`
 - [ ] **Threshold tuning guide**: New page explaining how to interpret confidence scores, adjust thresholds, and use the model matrix to validate
-- [ ] **Changelog / migration notes**: Document the transition from binary to confidence-scored responses, emphasizing that existing rules continue to work
+- [ ] **Changelog / migration notes**: Document the addition of confidence scoring, emphasizing that existing rules continue to work unchanged
 
 The `maybe-dont.yaml` example config (shipped with the binary) must also be updated to show the new fields with their defaults.
 
-### 18. Tradeoffs: Confidence Scoring vs. Binary Approach
+### 19. Empirical Validation (Required)
+
+**This section describes testing that MUST be completed before this feature ships.** Adding a confidence score to the AI response changes the cognitive task for the model. Instead of just classifying ("is this dangerous?"), the model must now classify AND self-assess ("is this dangerous, and how sure am I?"). This could affect decision quality in several ways:
+
+#### Concern: Decision quality degradation
+
+There is research suggesting that asking LLMs to simultaneously produce a classification and a confidence score can change the primary classification. Potential effects:
+
+1. **Hedging**: The model may become less decisive on borderline cases. Where it previously committed to `allowed: false`, it might now return `allowed: true` with low confidence, because the confidence framing encourages it to express uncertainty rather than commit.
+
+2. **Anchoring on confidence**: The model may anchor on producing a "reasonable-looking" confidence score and let that influence the primary decision. For example, if it thinks the confidence should be around 0.5, it might rationalize an `allowed: true` to match that moderate confidence.
+
+3. **Increased token overhead**: The confidence instruction adds ~80 tokens per call. With 7 rules, that's ~560 extra input tokens per request. This marginally reduces the token budget available for reasoning.
+
+4. **No effect (best case)**: The model treats the confidence as a separate output dimension and the primary classification is unaffected. This is the most likely outcome for well-structured prompts, but must be verified.
+
+#### Validation plan
+
+Use the policy test suite model matrix to compare decision quality with and without confidence scoring:
+
+**Step 1: Baseline (no confidence)**
+- Run the full test suite with the current binary format (`allowed`/`message` only)
+- Record per-test decisions across all models in the matrix
+- This is the ground truth
+
+**Step 2: With confidence**
+- Run the same test suite with confidence scoring enabled (`allowed`/`confidence`/`message`)
+- Record per-test decisions AND confidence scores across all models
+
+**Step 3: Compare**
+- For each model: how many test cases changed their primary `allowed` decision?
+- Categorize changes: did the model become more permissive (false -> true) or more restrictive (true -> false)?
+- Are the changed cases borderline (expected) or clear-cut (concerning)?
+- What is the confidence score distribution? Is there meaningful variance, or does the model cluster around 0.9-1.0?
+
+**Step 4: Decide**
+- If decision quality is maintained or improved: ship with confidence
+- If decision quality degrades significantly: investigate prompt adjustments, or consider shipping confidence as audit-only (always recorded but not used for thresholding) until prompt tuning resolves the issue
+- If confidence scores cluster tightly (e.g., everything is 0.95-1.0): the signal is not useful and thresholding adds complexity without benefit — reconsider whether continuous scoring is worth it vs. just centralizing the prompt
+
+#### Research to conduct
+
+Before or alongside the empirical testing:
+- Survey existing literature on LLM confidence calibration in classification tasks
+- Review how other AI security/moderation systems handle confidence (OpenAI Moderation API, Perspective API, AWS Comprehend)
+- Check if any providers offer native confidence/logprob features that could be used instead of asking the model to self-report
+
+### 20. Tradeoffs: Confidence Scoring vs. Binary Approach
 
 #### Risks of moving to confidence scoring
 
-1. **Increased latency from prompt suffix**: The response format instruction adds ~80 tokens per AI call. With 7 enabled rules, that's ~560 extra input tokens per request. Small but measurable.
+1. **Potential decision quality degradation**: Adding confidence may change how the model makes its primary allow/deny decision. This is the single biggest risk and must be empirically validated (see Section 19).
 
-2. **Non-determinism at threshold boundaries**: Two identical requests may get confidence 0.71 and 0.69 from the same model with temperature 0. If the threshold is 0.7, one blocks and one doesn't. The binary approach doesn't have this edge case.
+2. **Increased latency from prompt suffix**: The response format instruction adds ~80 tokens per AI call. With 7 enabled rules, that's ~560 extra input tokens per request. Small but measurable.
 
-3. **Threshold cliff effect**: A deny at 0.69 becomes audit-only while a deny at 0.71 blocks. There is no buffer zone. Users may not understand why seemingly identical requests are treated differently.
+3. **Non-determinism at threshold boundaries**: Two identical requests may get confidence 0.71 and 0.69 from the same model with temperature 0. If the threshold is 0.7, one blocks and one doesn't. The binary approach doesn't have this edge case.
 
-4. **Regression in prompt-tuned rules**: Existing rules were prompt-engineered against the binary format. Asking the AI to also produce a confidence score changes the cognitive task. Some models may produce different decisions than they would have with the old format.
+4. **Threshold cliff effect**: A deny at 0.69 becomes audit-only while a deny at 0.71 blocks. There is no buffer zone. Users may not understand why seemingly identical requests are treated differently.
 
 5. **Operational complexity**: Operators must understand confidence thresholds, not just enable/disable and audit_only. The config surface area grows.
 
-6. **Debugging is harder**: "Why was this request allowed?" goes from "the AI said allowed=true" to "the AI said deny with 0.65 confidence, below the 0.7 threshold, downgraded to audit_only." More moving parts.
+6. **Debugging is harder**: "Why was this request allowed?" goes from "the AI said allowed=true" to "the AI said allowed=false with 0.65 confidence, below the 0.7 threshold, downgraded to audit_only." More moving parts.
 
 7. **Model switching becomes riskier**: Changing models could shift the confidence distribution enough to change blocking behavior. With binary, model changes affect accuracy but not threshold logic.
 
@@ -707,55 +768,66 @@ The `maybe-dont.yaml` example config (shipped with the binary) must also be upda
 - **Easier to debug**: Two-step chain from AI response to outcome.
 - **No tuning required**: Works out of the box without threshold configuration.
 - **Lower cognitive load for operators**: enable/disable and audit_only are the only knobs.
+- **No risk to decision quality**: The model does exactly what it does today.
 
 #### Why confidence scoring is still the right direction
 
 The binary approach is fine when you trust the AI's judgment completely. Confidence scoring is better when you want to *observe* the AI's judgment before trusting it — which is exactly the position of operators deploying a security gateway for the first time. The ability to see "this rule denied with 0.45 confidence" vs "this rule denied with 0.98 confidence" fundamentally changes how operators tune and trust the system. The test suite model matrix provides the mechanism to validate thresholds before deployment, and the `audit_only` default for `low_confidence_action` means the system is safe by default.
 
+**Importantly**: even if empirical testing shows that confidence scores are not useful for thresholding (e.g., scores cluster too tightly), the prompt centralization change is independently valuable. Moving the response format out of policy prompts and into the engine is the right separation of concerns regardless of confidence scoring.
+
 ## Implementation Plan
 
+### Phase 0: Empirical Validation
+1. Establish baseline: run test suite with current binary format, record all decisions
+2. Add confidence to schema and prompt suffix (local branch, not shipped)
+3. Run test suite with confidence enabled, record decisions and scores
+4. Compare: identify any decision changes, analyze confidence distributions
+5. Go/no-go decision on confidence thresholding based on results
+
 ### Phase 1: Core Infrastructure
-1. Update `AIResponse` struct with `decision`, `confidence`, `reason` fields and JSON schema tags
-2. Update `AIResponseEvaluation` struct with matching changes plus `redacted_content`
-3. Add `aiRuleResult.confidence` and `aiRuleResult.confidenceApplied` fields
-4. Add legacy format detection and migration (backward compatibility)
-5. Add response format instruction constants (request and response variants)
-6. Update prompt construction to append response format suffix in both engines
-7. Update response parsing and decision logic in both engines
-8. Add config fields (`confidence_threshold`, `low_confidence_action`) with validation
-9. Add per-rule `confidence_threshold` to `AIPolicy` and `AIResponsePolicy` config structs
-10. Update `AuditAIRuleResult` with `confidence` and `confidence_applied` fields
-11. Add `Confidence` field to `ValidationResult` struct
-12. Update mock AI client for tests
+6. Add `confidence` field to `AIResponse` and `AIResponseEvaluation` structs
+7. Add `aiRuleResult.confidence` and `aiRuleResult.confidenceApplied` fields
+8. Add response format instruction constants (request and response variants)
+9. Update prompt construction to append response format suffix in both engines
+10. Handle missing confidence (default to 1.0)
+11. Add config fields (`confidence_threshold`, `low_confidence_action`) with validation
+12. Add per-rule `confidence_threshold` to `AIPolicy` and `AIResponsePolicy` config structs
+13. Update confidence threshold application in decision logic (directional)
+14. Update `AuditAIRuleResult` with `confidence` and `confidence_applied` fields
+15. Add `Confidence` field to `ValidationResult` struct
+16. Update mock AI client for tests
 
 ### Phase 2: Default Rules Migration
-13. Strip response format boilerplate from all shipped AI request rules
-14. Strip response format boilerplate from all shipped AI response rules
-15. Simplify EXAMPLES in shipped rules (remove JSON response examples)
-16. Update `maybe-dont.yaml` example config with new fields
-17. Add optional `version: "1"` to shipped rule files
+17. Strip response format boilerplate from all shipped AI request rules
+18. Strip response format boilerplate from all shipped AI response rules
+19. Simplify EXAMPLES in shipped rules (remove JSON response examples)
+20. Update `maybe-dont.yaml` example config with new fields
+21. Add optional `version: "1"` to shipped rule files
 
 ### Phase 3: Test Suite Integration
-18. Add `Confidence` field to `ActualResult` struct in executor
-19. Wire confidence from AI responses through test runner
-20. Add `min_confidence` to test case expectation validation
-21. Update test output formatters to show confidence
+22. Add `Confidence` field to `ActualResult` struct in executor
+23. Wire confidence from AI responses through test runner
+24. Add `min_confidence` to test case expectation validation
+25. Update test output formatters to show confidence
 
 ### Phase 4: Skill Updates
-22. Update `ai-policy-authoring` skill
-23. Update `policy-test-case` skill
-24. Add confidence note to `cel-policy-authoring` skill
+26. Update `ai-policy-authoring` skill
+27. Update `policy-test-case` skill
+28. Add confidence note to `cel-policy-authoring` skill
 
 ### Phase 5: Existing Spec and Documentation Cleanup
-25. Update `policy-test-suite/README.md` to reference this spec
-26. Update `runtime-action-interception-architecture.md` to reference this spec
-27. Update `cli-proxy-for-ai-agents.md` to reference this spec (including REST response structure)
-28. Create documentation update checklist for `maybedont.ai/docs`
+29. Update `policy-test-suite/README.md` to reference this spec
+30. Update `runtime-action-interception-architecture.md` to reference this spec
+31. Update `cli-proxy-for-ai-agents.md` to reference this spec (including REST response structure)
+32. Create documentation update checklist for `maybedont.ai/docs`
 
 ## Open Questions
 
-1. **Default threshold value**: The issue suggests 0.7. Should we run the test suite across models before committing to a default, or ship 0.7 and adjust based on feedback? (Recommendation: ship 0.7 with clear documentation that it should be tuned per-model.)
+1. **Default threshold value**: The issue suggests 0.7. Should we run the test suite across models before committing to a default, or ship 0.7 and adjust based on feedback? (Recommendation: ship 0.7 with clear documentation that it should be tuned per-model. Phase 0 validation will inform whether this is reasonable.)
 
 2. **Response format injection point**: Should the response format instruction be appended to the user prompt (as proposed) or provided as a system prompt? System prompts are more semantically appropriate for meta-instructions, but not all providers handle them identically. (Recommendation: user prompt suffix, since it's simpler and the gateway already does not use system prompts for policy evaluation.)
 
 3. **Confidence on error and budget exhaustion**: When the AI call fails (timeout, parse error) or the blocking budget is exhausted, what confidence should be recorded? (Recommendation: 0.0, since we have zero signal. The error field and budget exhaustion flag already indicate the failure mode.)
+
+4. **Future: `decision` enum migration**: If the additive approach proves stable, should we later migrate from `allowed: bool` to `decision: string` for a cleaner API? (Recommendation: defer. Revisit only if the inversion logic causes real confusion or if first-class `redact` support in request validation becomes needed.)
