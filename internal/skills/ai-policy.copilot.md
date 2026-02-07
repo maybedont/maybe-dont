@@ -22,23 +22,25 @@ rules:
       Look for:
       - Dangerous patterns to detect
 
-      EXAMPLES of dangerous operations:
-      - Example 1
-      EXAMPLES of safe operations:
-      - Example 1
-
-      Respond with JSON: {"allowed": true/false, "message": "explanation"}
+      EXAMPLES:
+      - Safe operation example → SAFE: Explanation
+      - Dangerous operation example → DANGEROUS: Explanation
 ```
+
+## Response Format
+
+The AI response format is enforced automatically by the gateway engine via JSON schema (`GenerateSchema[T]()` with `strict: true`). **Do not include response format instructions in policy prompts.** The engine handles this — policy authors should focus exclusively on describing what to detect.
 
 ## Important Rules
 
 - **Always** include exactly one `%s` placeholder in the prompt — it is replaced with the operation context
-- Structure prompts with clear sections: ANALYZE, Look for, EXAMPLES, response format
+- Structure prompts with clear sections: ANALYZE, Look for, EXAMPLES
 - Include **both** safe and dangerous examples in every prompt
 - Keep each rule focused on **one** concern — do not combine unrelated threat types
 - `action: redact` is **only** valid for response rules
-- Always end prompts with the expected JSON response format
 - Use `mode: audit_only` to test rules without blocking
+- Use plain-text classification labels in examples (`→ SAFE:` / `→ DANGEROUS:`), not JSON
+- For redact rules, always specify replacement text (e.g., "replace with [PII_REDACTED]")
 
 ## Prompt Substitution
 
@@ -48,6 +50,8 @@ The `%s` placeholder receives:
 - **Responses**: Formatted text with `IsError:`, `Content:`, `Meta:` sections
 
 ## AI Response Format
+
+The engine enforces these structures via JSON schema:
 
 Request validation:
 ```json
@@ -84,10 +88,11 @@ Response validation with redaction:
     - Reading .env, .credentials, .pem, .key files
     - Accessing password stores or secret managers
 
-    EXAMPLES of dangerous: reading ~/.ssh/id_rsa, cat .env
-    EXAMPLES of safe: reading README.md, listing directory
-
-    Respond with JSON: {"allowed": true/false, "message": "explanation"}
+    EXAMPLES:
+    - Reading ~/.ssh/id_rsa → DANGEROUS: SSH private key access
+    - cat .env → DANGEROUS: Environment file with secrets
+    - Reading README.md → SAFE: Documentation file
+    - Listing directory → SAFE: Non-sensitive operation
 
 # Response: Redact PII
 - name: redact-pii
@@ -100,7 +105,9 @@ Response validation with redaction:
 
     Look for: email addresses, phone numbers, SSNs, credit card numbers
 
-    If found, provide sanitized version with [REDACTED] replacements.
+    If found, provide sanitized version with sensitive data replaced by [PII_REDACTED].
 
-    Respond with JSON: {"allowed": true/false, "message": "explanation", "redacted_content": "sanitized if needed"}
+    EXAMPLES:
+    - "Contact john@example.com" → PII DETECTED: Email address found
+    - "Server returned 200 OK" → SAFE: No PII detected
 ```

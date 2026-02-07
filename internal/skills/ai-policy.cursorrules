@@ -8,15 +8,20 @@ Rules are defined in YAML files loaded by the gateway:
 - Request rules: `ai_request_rules.yaml`
 - Response rules: `ai_response_rules.yaml`
 
+## Response Format
+
+The AI response format is enforced automatically by the gateway engine via JSON schema (`GenerateSchema[T]()` with `strict: true`). Do NOT include response format instructions in policy prompts. The engine handles this — policy authors should focus exclusively on describing what to detect.
+
 ## Rules
 
 1. ALWAYS include exactly one `%s` placeholder in every prompt — it is replaced with the operation context
-2. Structure prompts with clear sections: ANALYZE, Look for, EXAMPLES, response format
+2. Structure prompts with clear sections: ANALYZE, Look for, EXAMPLES
 3. Include both positive (safe) and negative (dangerous) examples in every prompt
 4. Keep each rule focused on one concern — do not combine multiple threat types
 5. `action: redact` is only valid for response rules, not request rules
-6. Always end prompts with the expected JSON response format
+6. Use plain-text classification labels in examples (`→ SAFE:` / `→ DANGEROUS:`), not JSON format
 7. Use `mode: audit_only` to test rules without blocking, then remove it when confident
+8. For redact rules, always specify replacement text (e.g., "replace with [PII_REDACTED]")
 
 ## Rule Structure
 
@@ -35,15 +40,14 @@ rules:
       Look for:
       - Specific dangerous patterns
 
-      EXAMPLES of dangerous operations:
-      - Example 1
-      EXAMPLES of safe operations:
-      - Example 1
-
-      Respond with JSON: {"allowed": true/false, "message": "explanation"}
+      EXAMPLES:
+      - Safe operation → SAFE: Explanation
+      - Dangerous operation → DANGEROUS: Explanation
 ```
 
 ## AI Response Format
+
+The engine enforces these structures via JSON schema:
 
 Request validation:
 ```json
@@ -71,10 +75,11 @@ Response validation (with redaction):
     - Recursive or wildcard deletion patterns
     - Operations targeting shared or production resources
 
-    EXAMPLES of dangerous: deleting all files, dropping tables
-    EXAMPLES of safe: removing a single temp file, cleaning drafts
-
-    Respond with JSON: {"allowed": true/false, "message": "explanation"}
+    EXAMPLES:
+    - Deleting all files recursively → DANGEROUS: Mass file deletion
+    - Dropping database tables → DANGEROUS: Irreversible data loss
+    - Removing a single temp file → SAFE: Routine cleanup
+    - Cleaning up personal drafts → SAFE: Non-destructive operation
 
 # Response: Redact credentials
 - name: redact-credentials
@@ -87,7 +92,9 @@ Response validation (with redaction):
 
     Look for: API keys, tokens, passwords, private keys
 
-    If found, provide sanitized version with [REDACTED] replacements.
+    If found, provide sanitized version with sensitive values replaced by [CREDENTIAL_REDACTED].
 
-    Respond with JSON: {"allowed": true/false, "message": "explanation", "redacted_content": "sanitized if needed"}
+    EXAMPLES:
+    - "Connected to db on port 5432" → SAFE: No credentials
+    - "API_KEY=sk-proj-abc123" → CREDENTIALS DETECTED: API key exposed
 ```

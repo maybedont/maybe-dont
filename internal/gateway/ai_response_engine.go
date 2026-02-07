@@ -253,11 +253,18 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				return
 			}
 
+			// Determine the result based on rule action type.
+			// Redact rules never produce "deny" — the only meaningful signal is whether
+			// redacted_content was provided. For deny/allow rules, use the allowed field.
 			var resultStr string
-			if !evaluation.Allowed {
+			if p.Action == config.PolicyActionRedact {
+				if evaluation.RedactedContent != "" {
+					resultStr = "redact"
+				} else {
+					resultStr = "allow"
+				}
+			} else if !evaluation.Allowed {
 				resultStr = "deny"
-			} else if p.Action == config.PolicyActionRedact && evaluation.RedactedContent != "" {
-				resultStr = "redact"
 			} else {
 				resultStr = "allow"
 			}

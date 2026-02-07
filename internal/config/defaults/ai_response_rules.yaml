@@ -13,24 +13,14 @@ rules:
       Look for: email addresses, phone numbers, social security numbers, physical addresses,
       credit card numbers, passport numbers, driver's license numbers, or other identifying information.
 
+      If PII is found, provide a redacted version with sensitive data replaced by [PII_REDACTED].
+
+      EXAMPLES:
+      - "Contact John at john@example.com" → PII DETECTED: Email address found, redact to "[PII_REDACTED]"
+      - "The server returned 200 OK" → SAFE: No PII detected
+      - "User SSN: 123-45-6789" → PII DETECTED: Social security number found
+
       Response content: %s
-
-      If PII is found:
-      - Set "allowed" to true (we'll redact, not block)
-      - Provide the response with PII replaced by [PII_REDACTED]
-      - Explain what was redacted in the message
-
-      If no PII is found:
-      - Set "allowed" to true
-      - Leave "redacted_content" empty or null
-      - Set message to "No PII detected"
-
-      Return ONLY JSON in this exact format:
-      {
-        "allowed": true/false,
-        "message": "explanation of what was found/redacted",
-        "redacted_content": "sanitized version with [PII_REDACTED] replacing sensitive data (only if PII found)"
-      }
     message: PII detected and redacted from response
 
   # Example: Detect credential leakage in responses
@@ -56,17 +46,13 @@ rules:
         - export SECRET="actual-password-here"
         - Environment dumps showing resolved values
 
+      EXAMPLES:
+      - "Connected to database on port 5432" → SAFE: No credentials exposed
+      - "API_KEY=sk-proj-abc123def456" → DANGEROUS: API key with actual value exposed
+      - "Using endpoint ${API_URL}" → SAFE: Environment variable reference, not a value
+      - "-----BEGIN RSA PRIVATE KEY-----" → DANGEROUS: Private key material
+
       Response content: %s
-
-      If credentials are found:
-      - Set "allowed" to false (BLOCK the response)
-      - Explain what type of credential was detected
-
-      If no credentials are found:
-      - Set "allowed" to true
-      - Set message to "No credentials detected"
-
-      Return ONLY JSON: { "allowed": true/false, "message": "explanation" }
     message: Credential leakage detected in response
 
   # Example: Detect and redact internal system paths
@@ -85,24 +71,14 @@ rules:
       - Application paths in stack traces or error messages
       - Paths revealing infrastructure: /app/, /services/, specific usernames
 
+      If internal paths or infrastructure details are found, provide redacted content with sensitive parts replaced by [PATH_REDACTED] or [HOST_REDACTED].
+
+      EXAMPLES:
+      - "File not found: /home/deploy/app/v2.3.1/config.yaml" → PATHS DETECTED: Deployment path with version info
+      - "Query returned 42 results" → SAFE: No sensitive paths detected
+      - "Error at staging-db-01.corp.internal:5432" → PATHS DETECTED: Internal hostname exposed
+
       Response content: %s
-
-      If internal paths or infrastructure details are found:
-      - Set "allowed" to true (we redact, not block)
-      - Provide redacted content with sensitive parts replaced by [PATH_REDACTED] or [HOST_REDACTED]
-      - Explain what was redacted
-
-      If no sensitive paths are found:
-      - Set "allowed" to true
-      - Leave "redacted_content" empty
-      - Set message to "No sensitive paths detected"
-
-      Return ONLY JSON:
-      {
-        "allowed": true,
-        "message": "explanation",
-        "redacted_content": "version with paths redacted (only if paths found)"
-      }
     message: Internal paths redacted from response
 
   # Example: Detect sensitive business data
@@ -128,15 +104,10 @@ rules:
       - Public metrics without individual identifiers
       - General system status or health information
 
+      EXAMPLES:
+      - "Total active users: 15,234" → SAFE: Aggregated statistic
+      - "Customer: Jane Doe, email: jane@company.com, revenue: $45,000" → DANGEROUS: Individual customer record with PII
+      - "System health: all services operational" → SAFE: General status information
+
       Response content: %s
-
-      If sensitive business data is found:
-      - Set "allowed" to false
-      - Explain what type of sensitive data was detected
-
-      If no sensitive data is found:
-      - Set "allowed" to true
-      - Set message to "No sensitive business data detected"
-
-      Return ONLY JSON: { "allowed": true/false, "message": "explanation" }
     message: Sensitive business data detected in response

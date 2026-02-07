@@ -33,16 +33,16 @@ rules:
       - Patterns indicating dangerous behavior
       - Attempts to access sensitive resources
 
-      EXAMPLES of dangerous operations:
-      - Deleting production databases
-      - Accessing credential files
-
-      EXAMPLES of safe operations:
-      - Reading documentation
-      - Listing directory contents
-
-      Respond with JSON: {"allowed": true/false, "message": "explanation"}
+      EXAMPLES:
+      - Reading documentation → SAFE: Normal read operation
+      - Deleting production databases → DANGEROUS: Destructive operation on production data
 ```
+
+### Response Format
+
+The AI response format is enforced automatically by the gateway engine via JSON schema (`GenerateSchema[T]()` with `strict: true`). **Do not include response format instructions in policy prompts.** The engine handles this — policy authors should focus exclusively on describing what to detect.
+
+The engine sends the response schema as a separate API parameter, and all major providers (OpenAI, Anthropic, Google, etc.) enforce it at the decoding level. Including format instructions in prompts wastes tokens and risks conflicting with the engine's schema.
 
 ### Prompt Template
 
@@ -66,6 +66,8 @@ Content:
 ```
 
 ### Expected AI Response Format
+
+The engine enforces these response structures via JSON schema:
 
 **Request validation:**
 ```json
@@ -100,7 +102,8 @@ The `redacted_content` field is only used when `action: redact` and the AI deter
 3. **Be specific about the threat model**: Name the exact patterns to detect
 4. **Keep prompts focused**: One rule per concern (don't combine credential detection with data exfiltration)
 5. **Use the `%s` placeholder exactly once**: It must appear in every prompt
-6. **Specify the response format**: Always end with the expected JSON format
+6. **Use plain-text classification labels in examples**: Write examples as `input → LABEL: reasoning` (e.g., `→ SAFE: Not a deletion operation`). Do not include JSON in examples — the response format is handled by the engine.
+7. **Specify replacement text in redact rules**: Always tell the AI what placeholder to use (e.g., "replace with [PII_REDACTED]"). Without explicit replacement text, the AI may use inconsistent placeholders across calls and models. Use distinct placeholders for different redaction types (e.g., `[PII_REDACTED]`, `[PATH_REDACTED]`, `[CREDENTIAL_REDACTED]`).
 
 ### Examples
 
@@ -122,17 +125,12 @@ rules:
       - Wildcard or recursive deletion patterns
       - Operations targeting production or shared resources
 
-      EXAMPLES of dangerous operations:
-      - Deleting all files in a directory recursively
-      - Dropping a database table
-      - Removing all members from a team
-
-      EXAMPLES of safe operations:
-      - Deleting a single temporary file
-      - Removing one outdated branch
-      - Cleaning up a personal draft
-
-      Respond with JSON: {"allowed": true/false, "message": "brief explanation"}
+      EXAMPLES:
+      - Deleting all files in a directory recursively → DANGEROUS: Recursive mass deletion
+      - Dropping a database table → DANGEROUS: Irreversible data loss
+      - Removing all members from a team → DANGEROUS: Mass permission change
+      - Deleting a single temporary file → SAFE: Single file cleanup
+      - Removing one outdated branch → SAFE: Routine maintenance
 ```
 
 #### Response Rule: Redact credentials from output
@@ -155,12 +153,11 @@ rules:
       - AWS access keys, GitHub tokens, etc.
 
       If credentials are found, provide a redacted version with sensitive
-      values replaced by [REDACTED].
+      values replaced by [CREDENTIAL_REDACTED].
 
-      If no credentials are found, mark as allowed.
-
-      Respond with JSON:
-      {"allowed": true/false, "message": "explanation", "redacted_content": "sanitized version if needed"}
+      EXAMPLES:
+      - "Connected to db on port 5432" → SAFE: No credentials
+      - "API_KEY=sk-proj-abc123" → CREDENTIALS DETECTED: API key exposed
 ```
 
 #### Response Rule: Deny on sensitive data (no redaction)
@@ -181,7 +178,9 @@ rules:
       - Database connection strings with embedded passwords
       - Cloud provider credentials (AWS, GCP, Azure)
 
-      Respond with JSON: {"allowed": true/false, "message": "explanation"}
+      EXAMPLES:
+      - "Server uptime: 42 days" → SAFE: No credentials
+      - "-----BEGIN RSA PRIVATE KEY-----" → DANGEROUS: Private key material
 ```
 
 ### Common Mistakes
@@ -192,8 +191,9 @@ rules:
 | Overly broad prompt | High false-positive rate | Be specific about threat patterns |
 | No examples in prompt | AI lacks calibration | Include EXAMPLES of both safe and dangerous operations |
 | `action: redact` on request rule | Redaction only works on responses | Use `action: deny` for request rules |
-| Vague response format | AI returns unparseable responses | Always specify the exact JSON format expected |
+| Including response format in prompt | Wastes tokens; format is enforced by the engine's JSON schema | Remove format instructions — the engine handles this automatically |
 | Combining multiple concerns | Hard to tune and debug | One focused concern per rule |
+| No replacement text in redact rules | AI uses inconsistent placeholders | Specify explicit replacement text (e.g., "replace with [PII_REDACTED]") |
 
 ### Configuration
 
