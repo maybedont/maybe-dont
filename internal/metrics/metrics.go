@@ -36,6 +36,8 @@ type Config struct {
 	Dataset string
 	// APIToken is the Axiom API token for authentication
 	APIToken string
+	// FlushInterval is the interval for flushing metrics state to disk (optional, defaults to DefaultFlushInterval)
+	FlushInterval time.Duration
 }
 
 // Collector manages anonymous usage metrics collection
@@ -114,10 +116,15 @@ func NewCollector(version string, cfg Config, logger *zap.Logger) (*Collector, e
 	configFilePath := filepath.Join(stateDir, InstallationIDFile)
 	stateFilePath := filepath.Join(stateDir, MetricsStateFile)
 
+	flushInterval := DefaultFlushInterval
+	if cfg.FlushInterval > 0 {
+		flushInterval = cfg.FlushInterval
+	}
+
 	c := &Collector{
 		version:           version,
 		reportingInterval: DefaultReportingInterval,
-		flushInterval:     DefaultFlushInterval,
+		flushInterval:     flushInterval,
 		datasetName:       cfg.Dataset,
 		apiToken:          cfg.APIToken,
 		optedOut:          optedOut,

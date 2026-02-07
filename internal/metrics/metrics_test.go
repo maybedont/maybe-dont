@@ -428,16 +428,14 @@ func TestBackgroundFlush(t *testing.T) {
 	defer os.Setenv("HOME", originalHome)
 
 	cfg := Config{
-		Dataset:  "test-dataset",
-		APIToken: "test-token",
+		Dataset:       "test-dataset",
+		APIToken:      "test-token",
+		FlushInterval: 100 * time.Millisecond,
 	}
 
 	c, err := NewCollector("v1.0.0", cfg, logger)
 	require.NoError(t, err)
 	defer c.Close()
-
-	// Set a short flush interval for testing
-	c.flushInterval = 100 * time.Millisecond
 
 	// Increment some metrics
 	c.IncrementToolInvocations()
