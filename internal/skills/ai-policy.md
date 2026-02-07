@@ -93,6 +93,15 @@ The `redacted_content` field is only used when `action: redact` and the AI deter
 | `deny`  | Yes | Yes | Block if AI returns `allowed: false` |
 | `redact`| No  | Yes | Replace content with `redacted_content` from AI response |
 
+### Writing Response Rules
+
+**Performance**: AI response rules can be slow because the tool or CLI response content is not known ahead of time and may be large, requiring the LLM to process significant payloads. Consider this latency impact when enabling AI response validation.
+
+**Understanding `deny` vs `redact` on responses:**
+- **`deny`** means "don't show the response to the AI agent." Use sparingly — this is only meaningful for **read-only** operations (e.g., get, list, search) where withholding the result makes sense.
+- **`redact`** means "don't show parts of the response to the AI agent." This is generally preferred over `deny` for response rules.
+- **Avoid `deny` on mutating operations**: If the tool call or CLI command created, modified, or deleted something, the action has already completed. Denying the response hides the outcome from the AI agent without undoing the action, which is misleading — the agent won't know the operation succeeded.
+
 ### Prompt Engineering Best Practices
 
 1. **Structure prompts clearly**: Use sections like ANALYZE, Look for, EXAMPLES
@@ -163,12 +172,14 @@ rules:
       {"allowed": true/false, "message": "explanation", "redacted_content": "sanitized version if needed"}
 ```
 
-#### Response Rule: Deny on sensitive data (no redaction)
+#### Response Rule: Deny on sensitive read-only data
+
+Use `deny` only when the originating request is read-only (e.g., get, list). For mutating operations, prefer `redact` instead.
 
 ```yaml
 rules:
   - name: block-credential-leakage
-    description: Block responses containing raw credentials
+    description: Block read-only responses containing raw credentials
     action: deny
     message: "Response blocked: contains raw credentials"
     prompt: |-
@@ -192,6 +203,7 @@ rules:
 | Overly broad prompt | High false-positive rate | Be specific about threat patterns |
 | No examples in prompt | AI lacks calibration | Include EXAMPLES of both safe and dangerous operations |
 | `action: redact` on request rule | Redaction only works on responses | Use `action: deny` for request rules |
+| `action: deny` on response for mutating ops | Action already completed; hiding the result is misleading | Use `redact` instead, or restrict `deny` to read-only operations |
 | Vague response format | AI returns unparseable responses | Always specify the exact JSON format expected |
 | Combining multiple concerns | Hard to tune and debug | One focused concern per rule |
 

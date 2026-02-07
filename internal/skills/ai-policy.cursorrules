@@ -17,6 +17,9 @@ Rules are defined in YAML files loaded by the gateway:
 5. `action: redact` is only valid for response rules, not request rules
 6. Always end prompts with the expected JSON response format
 7. Use `mode: audit_only` to test rules without blocking, then remove it when confident
+8. AI response rules can be slow — response content is not known ahead of time and may be large
+9. Response `deny` means "don't show the response to the AI agent" — only use for read-only operations (get, list). For mutating operations (create, modify, delete), the action already completed; denying the response hides the outcome without undoing it
+10. Response `redact` means "don't show parts of the response to the AI agent" — generally preferred over `deny` for response rules
 
 ## Rule Structure
 

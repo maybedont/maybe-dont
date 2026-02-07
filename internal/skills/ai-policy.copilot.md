@@ -65,8 +65,11 @@ Response validation with redaction:
 - `deny` — Block if AI returns `allowed: false`, with the AI's message as the reason
 
 ### Response Rules
-- `deny` — Block the response entirely
-- `redact` — Replace response content with `redacted_content` from the AI response
+- `deny` — Don't show the response to the AI agent. Use sparingly — only meaningful for **read-only** operations (get, list) where withholding the result makes sense. For mutating operations (create, modify, delete), the action has already completed; denying the response hides the outcome without undoing it.
+- `redact` — Don't show parts of the response to the AI agent. Replace content with `redacted_content` from the AI response. Generally preferred over `deny` for response rules.
+
+### Response Rule Performance
+AI response rules can be slow because response content is not known ahead of time and may be large. Consider this latency impact when enabling AI response validation.
 
 ## Examples
 

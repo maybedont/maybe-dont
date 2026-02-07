@@ -32,6 +32,8 @@ rules:
 5. **Use Go regexp syntax** for `redaction_pattern` and `.matches()` — PCRE features are not supported
 6. **`action: redact`** is only valid for response rules
 7. **Test with `mode: audit_only`** first, then remove it to enable blocking
+8. **Response `deny`** means "don't show the response to the AI agent" — only use for read-only operations (get, list). For mutating operations (create, modify, delete), the action already completed; denying the response hides the outcome without undoing it
+9. **Response `redact`** means "don't show parts of the response to the AI agent" — generally preferred over `deny` for response rules
 
 ## Context Variables
 

@@ -64,6 +64,15 @@ Response validation (with optional redaction):
 - `deny` — Block if AI returns `allowed: false` (request and response rules)
 - `redact` — Replace content with AI-provided `redacted_content` (response rules only)
 
+## Writing Response Rules
+
+**Performance**: AI response rules can be slow because the tool or CLI response content is not known ahead of time and may be large, requiring the LLM to process significant payloads.
+
+**Understanding response actions:**
+- `deny` means "don't show the response to the AI agent." Use sparingly — only meaningful for read-only operations (get, list) where withholding the result makes sense.
+- `redact` means "don't show parts of the response to the AI agent." Generally preferred over `deny`.
+- Avoid `deny` on mutating operations (create, modify, delete): the action has already completed, so hiding the result is misleading — the agent won't know the operation succeeded.
+
 ## Examples
 
 ```yaml
