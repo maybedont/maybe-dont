@@ -3,22 +3,19 @@
 > **Issue**: [#90 - Add confidence scoring to AI policy responses](https://github.com/maybedont/maybe-dont/issues/90)
 > **Status**: Draft
 
-## Post-Merge Re-Review Checklist
+## Post-Merge Re-Review (Completed)
 
-> **Context**: The `degroff/test_matrix` branch has a large pending PR that adds the policy test suite runner, executor, state management, and skills (`ai-policy.md`, `test-case.md`). This spec was written with exploratory reads of that branch but should be re-reviewed against the merged code. After merging `test_matrix` into main and main into this branch, re-review this spec asking:
+> **Reviewed**: 2026-02-06 after merging main (which includes the `degroff/test_matrix` branch) into this branch. Key findings:
 >
-> - **Accuracy**: Do the struct names, field names, and file paths still match? Verify `ActualResult`, `CachedResult`, `TestResult`, `AIResponse`, `AIResponseEvaluation`, and `aiRuleResult` against merged code.
-> - **Runtime issues**: Trace the full code path for a request validation and response validation with the merged test runner to confirm no gaps.
-> - **Documentation**: Confirm whether maybedont.ai/docs content has changed and what pages need updating.
-> - **Migration**: Verify backward compatibility claims against the actual structured output enforcement in merged provider code.
-> - **Policy versioning**: Check if `test_matrix` introduced any versioning for rule files.
-> - **Assumptions**: Validate the assumptions table (Section 14) against merged code.
-> - **Risks/downsides/benefits**: Re-assess with full test suite available.
-> - **Required tests**: Cross-reference the test plan (Section 16) against existing test coverage in merged code.
-> - **CLI proxy**: Check if `test_matrix` implemented any CLI proxy endpoint code.
-> - **Skills**: Verify skill file paths and content on main match what this spec references.
-> - **State files**: Confirm state file schema version handling and backward compatibility with merged state management code.
-> - **Empirical validation**: Confirm test suite model matrix is available and plan the A/B baseline test described in Section 19.
+> - **Accuracy**: All struct names and field names verified. `AIResponse`, `AIResponseEvaluation`, `aiRuleResult`, `ValidationResult`, `AuditAIRuleResult`, `AuditAIResult`, `AIPolicy`, `AIResponsePolicy` all match. `ActualResult` now has a placeholder `Confidence` field (always 1.0). `CachedResult` has `Confidence`.
+> - **CLI proxy**: Fully implemented (`internal/gateway/cli_validation.go`, routes in `server.go`). Section 16 updated.
+> - **Skills**: All skill files exist on main (`internal/skills/ai-policy.md`, `test-case.md`, `cel-policy.md` plus variants). Phase 4 targets are valid.
+> - **Policy versioning**: No versioning introduced for rule files. Spec proposal for optional `version: "1"` field still applies.
+> - **State files**: Schema version "v1" with no upgrade/migration logic. Backward compatibility confirmed — old files deserialize with zero-value defaults.
+> - **Default rules**: Still contain "Return ONLY JSON" boilerplate. Phase 2 migration still needed.
+> - **Test suite expectations**: `ExpectationsConfig` and `PolicyExpectation` have no `min_confidence`. Phase 3 work still needed.
+> - **Assumptions table**: Updated in Section 15.
+> - **New finding**: `CLIValidationPolicyResult` struct needs `Confidence` field added (Phase 1).
 
 ## Summary
 
@@ -455,7 +452,7 @@ The policy test suite (on the `degroff/test_matrix` branch) has partial scaffold
 - The custom JSON output format includes `confidence` per result
 - The spec defines `overall.min_confidence` in test expectations
 
-**NOTE**: The `ActualResult` struct in `executor.go` does NOT yet have a `Confidence` field — it must be added. The runner code already references it, so the plumbing is in place but the field definition is missing.
+**NOTE**: The `ActualResult` struct in `executor.go` already has a `Confidence float64` field, but it is a placeholder — currently hardcoded to `1.0` for all results. The `CachedResult` struct also has `Confidence`. The plumbing is in place; this feature wires real confidence values through.
 
 This feature completes the integration:
 
@@ -586,27 +583,47 @@ This does not need to gate the confidence scoring feature — it is a low-cost a
 
 ### 15. Assumptions
 
-| Assumption | Basis | Risk if wrong |
-|-----------|-------|---------------|
-| `ai_response_engine.go` is structurally parallel to `ai_engine.go` | Code exploration confirmed parallel but independent structs | Low — changes need to be applied to both files |
-| CLI proxy endpoint is not yet implemented | No handler code found in `server.go` or `gateway.go` | Low — if it landed on `test_matrix`, the re-review will catch it |
-| `ActualResult` struct in test executor does NOT have `Confidence` field | Explored on `test_matrix` branch; `CachedResult` has it, `ActualResult` doesn't | Low — easy to add; re-review after merge will confirm |
-| Skills exist on `test_matrix` branch only (`internal/skills/ai-policy.md`, `internal/skills/test-case.md`) | Only `cel-policy-authoring` exists on main in `.claude/skills/` | Medium — if skills aren't merged first, Phase 4 targets files that don't exist |
-| State file `schema_version: "v1"` has no upgrade logic | Explored state.go; load() does not validate version | Low — old files deserialize cleanly with zero-value defaults |
-| `GenerateSchema` supports `jsonschema` tags for min/max | `invopop/jsonschema` library is used; `jsonschema:"required"` tag already used elsewhere in codebase | Low — verify tag syntax against library docs |
-| `maybedont__generate_audit_report` tool will handle new audit fields | Tool uses AI to analyze audit entries; new fields change the schema it reads | Medium — may need prompt update to reference confidence |
-| Blocking budget exhaustion produces a result that needs confidence | Budget exhaustion triggers fail-open with `result: "allow"` | Low — assign confidence 0.0, same as errors |
-| Adding confidence does not degrade primary decision quality | Untested assumption — see Section 19 | **High — must be empirically validated before shipping** |
+| Assumption | Basis | Risk if wrong | Status |
+|-----------|-------|---------------|--------|
+| `ai_response_engine.go` is structurally parallel to `ai_engine.go` | Code exploration confirmed parallel but independent structs | Low — changes need to be applied to both files | **Verified** |
+| ~~CLI proxy endpoint is not yet implemented~~ | ~~No handler code found~~ | — | **Invalidated** — CLI proxy is fully implemented (`cli_validation.go`, routes in `server.go`). See updated Section 16. |
+| ~~`ActualResult` struct does NOT have `Confidence` field~~ | ~~Explored on `test_matrix` branch~~ | — | **Invalidated** — `ActualResult` has `Confidence float64` (placeholder, always 1.0). Phase 3 step 22 is already done. |
+| ~~Skills exist on `test_matrix` branch only~~ | ~~Only `cel-policy-authoring` exists on main~~ | — | **Invalidated** — All skills exist on main in `internal/skills/` (ai-policy.md, test-case.md, cel-policy.md plus variants). Phase 4 targets are valid. |
+| State file `schema_version: "v1"` has no upgrade logic | Explored state.go; load() does not validate version | Low — old files deserialize cleanly with zero-value defaults | **Verified** |
+| `GenerateSchema` supports `jsonschema` tags for min/max | `invopop/jsonschema` library is used; `jsonschema:"required"` tag already used elsewhere in codebase | Low — verify tag syntax against library docs | **Verified** — `GenerateSchema[T]()` at `ai_engine.go:1242` uses `invopop/jsonschema` reflector |
+| `maybedont__generate_audit_report` tool will handle new audit fields | Tool uses AI to analyze audit entries; new fields change the schema it reads | Medium — may need prompt update to reference confidence | Open |
+| Blocking budget exhaustion produces a result that needs confidence | Budget exhaustion triggers fail-open with `result: "allow"` | Low — assign confidence 0.0, same as errors | Open |
+| Adding confidence does not degrade primary decision quality | Untested assumption — see Section 19 | **High — must be empirically validated before shipping** | Open |
+| `CLIValidationPolicyResult` needs `Confidence` field | CLI proxy response struct has no confidence field | Low — straightforward addition | **New** — discovered during post-merge review |
 
 ### 16. CLI Proxy Impact
 
-**The CLI proxy endpoint does not exist yet** — it is spec-only (`docs/specs/cli-proxy-for-ai-agents.md`). When implemented, it will use the same `Gateway.ValidateToolCall()` -> `validationChain.Handle()` path as MCP requests. Confidence scoring will flow through automatically because:
+The CLI proxy endpoint is fully implemented (`internal/gateway/cli_validation.go`, routes registered in `server.go` at `/api/v1/cli/validate`). It evaluates both CEL and AI policies against CLI commands via `evaluatePolicies()`.
 
-1. The validation chain is shared — CLI and MCP requests use the same handlers
-2. The `AIResponse` struct change applies to the shared AI engine
-3. Audit entries are generated by the same code path
+#### How confidence flows through CLI validation
 
-**Spec update needed**: The CLI proxy spec's REST API response structure should be updated to include `confidence` per result:
+The CLI proxy uses the same AI engine (`providerClient.Generate()`) and the same `AIResponse` / `AIResponseEvaluation` structs as MCP request validation. Confidence scoring will flow through the AI evaluation path automatically. Specifically:
+
+1. `evaluatePolicies()` in `cli_validation.go` calls the AI provider with `GenerateSchema[AIResponse]()` — the schema change adds `confidence` to AI responses for CLI validation too.
+2. The AI engine's prompt suffix injection applies to CLI operations identically to MCP tool calls (the `operationStr` differs but the suffix is the same).
+3. CEL evaluation for CLI commands uses `cli_expression` — these are deterministic and get `confidence: 1.0`.
+
+#### `CLIValidationPolicyResult` needs a `Confidence` field
+
+The CLI response struct `CLIValidationPolicyResult` currently has `PolicyName`, `PolicyType`, `Action`, `Message`, and `DurationMs` but no confidence. This needs to be added in Phase 1:
+
+```go
+type CLIValidationPolicyResult struct {
+    PolicyName string `json:"policy_name"`
+    PolicyType string `json:"policy_type"`
+    Action     string `json:"action"`
+    Message    string `json:"message,omitempty"`
+    DurationMs int64  `json:"duration_ms"`
+    Confidence float64 `json:"confidence"` // NEW: 1.0 for CEL, AI score for AI
+}
+```
+
+The REST API response then includes confidence per result:
 ```json
 {
   "results": [
@@ -615,13 +632,14 @@ This does not need to gate the confidence scoring feature — it is a low-cost a
       "policy_type": "ai",
       "action": "allow",
       "message": "Command is safe to execute",
+      "duration_ms": 1200,
       "confidence": 0.95
     }
   ]
 }
 ```
 
-This should be added to Phase 5 (existing spec cleanup).
+**Spec update needed**: The CLI proxy spec (`cli-proxy-for-ai-agents.md`) should be updated to reference this spec for confidence in its response structure. This is tracked in Phase 5.
 
 ### 17. Required Tests
 
@@ -778,55 +796,85 @@ The binary approach is fine when you trust the AI's judgment completely. Confide
 
 ## Implementation Plan
 
-### Phase 0: Empirical Validation
-1. Establish baseline: run test suite with current binary format, record all decisions
-2. Add confidence to schema and prompt suffix (local branch, not shipped)
-3. Run test suite with confidence enabled, record decisions and scores
-4. Compare: identify any decision changes, analyze confidence distributions
-5. Go/no-go decision on confidence thresholding based on results
+### Phasing Strategy
 
-### Phase 1: Core Infrastructure
-6. Add `confidence` field to `AIResponse` and `AIResponseEvaluation` structs
-7. Add `aiRuleResult.confidence` and `aiRuleResult.confidenceApplied` fields
-8. Add response format instruction constants (request and response variants)
-9. Update prompt construction to append response format suffix in both engines
-10. Handle missing confidence (default to 1.0)
-11. Add config fields (`confidence_threshold`, `low_confidence_action`) with validation
-12. Add per-rule `confidence_threshold` to `AIPolicy` and `AIResponsePolicy` config structs
-13. Update confidence threshold application in decision logic (directional)
-14. Update `AuditAIRuleResult` with `confidence` and `confidence_applied` fields
-15. Add `Confidence` field to `ValidationResult` struct
-16. Update mock AI client for tests
+The implementation is split into two independently shippable milestones:
 
-### Phase 2: Default Rules Migration
-17. Strip response format boilerplate from all shipped AI request rules
-18. Strip response format boilerplate from all shipped AI response rules
-19. Simplify EXAMPLES in shipped rules (remove JSON response examples)
-20. Update `maybe-dont.yaml` example config with new fields
-21. Add optional `version: "1"` to shipped rule files
+**Milestone A (Phase 1–2): Prompt Centralization** — Move the AI response format instruction out of policy prompts and into the engine runtime. This is a pure refactor: the AI receives the same instruction it receives today, but the engine owns it instead of every policy duplicating it. No schema changes, no new config fields, no behavioral changes. Shippable on its own, and independently valuable because:
+- Policy authors no longer need to get the response format right
+- Changing the response format (e.g., adding `confidence` later) requires zero policy edits
+- Shipped default rules become shorter and focused on detection logic
+- Skills and documentation reflect the correct separation of concerns
 
-### Phase 3: Test Suite Integration
-22. Add `Confidence` field to `ActualResult` struct in executor
-23. Wire confidence from AI responses through test runner
-24. Add `min_confidence` to test case expectation validation
-25. Update test output formatters to show confidence
+**Milestone B (Phase 3–7): Confidence Scoring** — Layer confidence scoring on top of the centralized prompt. This adds the `confidence` field to the schema, threshold logic, config fields, audit propagation, test suite integration, and empirical validation. Milestone A must ship first, but Milestone B can follow immediately or be deferred based on priorities.
 
-### Phase 4: Skill Updates
-26. Update `ai-policy-authoring` skill
-27. Update `policy-test-case` skill
-28. Add confidence note to `cel-policy-authoring` skill
+---
 
-### Phase 5: Existing Spec and Documentation Cleanup
-29. Update `policy-test-suite/README.md` to reference this spec
-30. Update `runtime-action-interception-architecture.md` to reference this spec
-31. Update `cli-proxy-for-ai-agents.md` to reference this spec (including REST response structure)
-32. Create documentation update checklist for `maybedont.ai/docs`
+### Milestone A: Prompt Centralization (shippable independently)
+
+#### Phase 1: Engine-Owned Response Format Suffix
+1. Add response format instruction constants for request and response validation (same `allowed`/`message` format as today — no `confidence` yet)
+2. Update prompt construction in `ai_engine.go` to append the request validation suffix after `fmt.Sprintf(p.Prompt, operationStr)`
+3. Update prompt construction in `ai_response_engine.go` to append the response validation suffix
+4. Add tests verifying the suffix is appended and the AI response is parsed correctly
+5. Verify backward compatibility: user-authored prompts that still include their own format instruction produce no conflict (the suffix is additive/redundant)
+
+#### Phase 2: Default Rules and Skills Migration
+6. Strip `Return ONLY JSON...` boilerplate from all shipped AI request rules (`ai_request_rules.yaml`)
+7. Strip `Return ONLY JSON...` boilerplate from all shipped AI response rules (`ai_response_rules.yaml`)
+8. Simplify EXAMPLES in shipped rules — replace JSON response examples (e.g., `-> { "allowed": true, "message": "..." }`) with plain-text classification labels (e.g., `-> SAFE: Not a deletion operation`)
+9. Update `ai-policy-authoring` skill (`internal/skills/ai-policy.md` and variants): remove response format from examples, add note that the engine handles format automatically
+10. Run policy test suite to verify no decision regressions from prompt changes
+11. Add optional `version: "1"` to shipped rule files (low-cost forward compatibility hook)
+
+---
+
+### Milestone B: Confidence Scoring (requires Milestone A)
+
+#### Phase 3: Empirical Validation
+12. Establish baseline: run test suite with Milestone A binary (centralized prompt, no confidence), record all decisions
+13. Add `confidence` to schema and prompt suffix on a local branch (not shipped)
+14. Run test suite with confidence enabled, record decisions and scores
+15. Compare: identify any decision changes, analyze confidence distributions
+16. Go/no-go decision on confidence thresholding based on results
+
+#### Phase 4: Core Confidence Infrastructure
+17. Add `confidence` field to `AIResponse` and `AIResponseEvaluation` structs (with `jsonschema:"minimum=0,maximum=1"` tag)
+18. Update response format instruction constants to include confidence guidance
+19. Handle missing confidence in response parsing (default to 1.0)
+20. Add `aiRuleResult.confidence` and `aiRuleResult.confidenceApplied` fields
+21. Add config fields (`confidence_threshold`, `low_confidence_action`) with startup validation
+22. Add per-rule `confidence_threshold` to `AIPolicy` and `AIResponsePolicy` config structs
+23. Implement confidence threshold application in decision logic (directional — only softens firing decisions)
+24. Update `AuditAIRuleResult` with `confidence` and `confidence_applied` fields
+25. Add `Confidence` field to `ValidationResult` struct
+26. Add `Confidence` field to `CLIValidationPolicyResult` struct in `cli_validation.go`
+27. Update `maybe-dont.yaml` example config with new fields and defaults
+28. Update mock AI client for tests
+
+#### Phase 5: Test Suite Integration
+29. ~~Add `Confidence` field to `ActualResult` struct in executor~~ (already exists as placeholder, always 1.0)
+30. Wire real confidence values from AI responses through test runner (replace placeholder 1.0)
+31. Add `min_confidence` to `ExpectationsConfig` and `PolicyExpectation` in test case types
+32. Add `min_confidence` validation logic in test runner
+33. Update test output formatters to show confidence
+
+#### Phase 6: Skill and Documentation Updates
+34. Update `ai-policy-authoring` skill with confidence guidance and threshold documentation
+35. Update `policy-test-case` skill with `min_confidence` field reference and examples
+36. Add confidence note to `cel-policy-authoring` skill (CEL rules always produce 1.0)
+
+#### Phase 7: Existing Spec and Documentation Cleanup
+37. Update `policy-test-suite/README.md` to reference this spec
+38. Update `runtime-action-interception-architecture.md` to reference this spec
+39. Update `cli-proxy-for-ai-agents.md` to reference this spec (including REST response structure)
+40. Create documentation update checklist for `maybedont.ai/docs`
 
 ## Open Questions
 
 1. **Default threshold value**: The issue suggests 0.7. Should we run the test suite across models before committing to a default, or ship 0.7 and adjust based on feedback? (Recommendation: ship 0.7 with clear documentation that it should be tuned per-model. Phase 0 validation will inform whether this is reasonable.)
 
-2. **Response format injection point**: Should the response format instruction be appended to the user prompt (as proposed) or provided as a system prompt? System prompts are more semantically appropriate for meta-instructions, but not all providers handle them identically. (Recommendation: user prompt suffix, since it's simpler and the gateway already does not use system prompts for policy evaluation.)
+2. **Response format injection point**: Should the response format instruction be appended to the user prompt (as proposed) or provided as a system prompt? System prompts are more semantically appropriate for meta-instructions, but not all providers handle them identically. (Recommendation: user prompt suffix, since it's simpler and the gateway already does not use system prompts for policy evaluation.) This will be resolved in Milestone A (Phase 1).
 
 3. **Confidence on error and budget exhaustion**: When the AI call fails (timeout, parse error) or the blocking budget is exhausted, what confidence should be recorded? (Recommendation: 0.0, since we have zero signal. The error field and budget exhaustion flag already indicate the failure mode.)
 
