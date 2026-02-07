@@ -57,6 +57,35 @@ engines:
         model: claude-opus-4-6 # Latest flagship, highest quality
         enabled: true
 
+      # Google Gemini (via OpenAI-compatible endpoint)
+      # Requires GEMINI_API_KEY - enable after setting up API key
+      - provider: openai_compatible
+        model: gemini-2.5-flash
+        endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        api_key: "${GEMINI_API_KEY}"
+        enabled: false
+      - provider: openai_compatible
+        model: gemini-2.5-pro
+        endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        api_key: "${GEMINI_API_KEY}"
+        enabled: false
+
+      # Groq (via OpenAI-compatible endpoint)
+      # Requires GROQ_API_KEY - enable after setting up API key
+      - provider: openai_compatible
+        model: llama-3.3-70b-versatile
+        endpoint: "https://api.groq.com/openai/v1/chat/completions"
+        api_key: "${GROQ_API_KEY}"
+        enabled: false
+
+      # Perplexity (via OpenAI-compatible endpoint)
+      # Requires PERPLEXITY_API_KEY - enable after setting up API key
+      - provider: openai_compatible
+        model: sonar-pro
+        endpoint: "https://api.perplexity.ai/chat/completions"
+        api_key: "${PERPLEXITY_API_KEY}"
+        enabled: false
+
 filters:
   tags: []
   exclude_tags: []
