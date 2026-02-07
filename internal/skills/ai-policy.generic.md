@@ -22,8 +22,8 @@ rules:
       - Specific dangerous patterns
 
       EXAMPLES:
-      - Safe operation → SAFE: Explanation
-      - Dangerous operation → DANGEROUS: Explanation
+      - Safe operation -> SAFE: Explanation
+      - Dangerous operation -> DANGEROUS: Explanation
 ```
 
 ## Writing Effective Prompts
@@ -31,7 +31,7 @@ rules:
 1. **Describe the threat clearly** in an ANALYZE section that frames the specific security concern
 2. **List specific patterns to detect** in a "Look for" section naming the exact behaviors that indicate risk
 3. **Include calibration examples** of both safe and dangerous operations to help the AI distinguish routine usage from genuine threats
-4. **Use plain-text classification labels** — write as `→ SAFE:` / `→ DANGEROUS:`
+4. **Use plain-text classification labels** — write as `-> SAFE:` / `-> DANGEROUS:`
 5. **One concern per rule** — keep rules focused; separate credential detection from data exfiltration
 6. **Specify replacement text in redact rules** — e.g., "replace with [PII_REDACTED]"
 7. **Test with `mode: audit_only`** first, then remove it to enable blocking
@@ -77,10 +77,10 @@ Response validation (with optional redaction):
     - Operations targeting shared or production resources
 
     EXAMPLES:
-    - Deleting all files recursively → DANGEROUS: Mass file deletion
-    - Dropping database tables → DANGEROUS: Irreversible data loss
-    - Removing a single temp file → SAFE: Routine cleanup
-    - Cleaning up personal drafts → SAFE: Non-destructive operation
+    - Deleting all files recursively -> DANGEROUS: Mass file deletion
+    - Dropping database tables -> DANGEROUS: Irreversible data loss
+    - Removing a single temp file -> SAFE: Routine cleanup
+    - Cleaning up personal drafts -> SAFE: Non-destructive operation
 
 # Response: Redact leaked credentials
 - name: redact-credentials
@@ -94,6 +94,6 @@ Response validation (with optional redaction):
     If found, provide sanitized version with sensitive values replaced by [CREDENTIAL_REDACTED].
 
     EXAMPLES:
-    - "Connected to db on port 5432" → SAFE: No credentials
-    - "API_KEY=sk-proj-abc123" → CREDENTIALS DETECTED: API key exposed
+    - "Connected to db on port 5432" -> SAFE: No credentials
+    - "API_KEY=sk-proj-abc123" -> CREDENTIALS DETECTED: API key exposed
 ```

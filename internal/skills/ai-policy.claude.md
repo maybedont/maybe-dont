@@ -32,8 +32,8 @@ rules:
       - Attempts to access sensitive resources
 
       EXAMPLES:
-      - Reading documentation → SAFE: Normal read operation
-      - Deleting production databases → DANGEROUS: Destructive operation on production data
+      - Reading documentation -> SAFE: Normal read operation
+      - Deleting production databases -> DANGEROUS: Destructive operation on production data
 ```
 
 ### Writing Effective Prompts
@@ -43,7 +43,7 @@ The prompt is the core of each AI policy rule. Focus on clearly describing the s
 1. **Describe the threat clearly**: Start with an ANALYZE section that frames the specific security concern
 2. **List specific patterns to detect**: Use a "Look for" section naming the exact behaviors or patterns that indicate risk
 3. **Include calibration examples**: Provide EXAMPLES of both safe and dangerous operations so the AI can distinguish routine usage from genuine threats
-4. **Use plain-text classification labels**: Write examples as `input → LABEL: reasoning` (e.g., `→ SAFE: Routine cleanup`)
+4. **Use plain-text classification labels**: Write examples as `input -> LABEL: reasoning` (e.g., `-> SAFE: Routine cleanup`)
 5. **Keep each rule focused on one concern**: A rule about credential detection should not also check for data exfiltration — create separate rules for separate concerns
 6. **Specify replacement text in redact rules**: Tell the AI what placeholder to use (e.g., "replace with [PII_REDACTED]") and use distinct placeholders for different redaction types (e.g., `[PII_REDACTED]`, `[CREDENTIAL_REDACTED]`)
 7. **Test with `mode: audit_only`**: Start in audit mode to observe rule behavior, then remove the mode to enable blocking
@@ -105,11 +105,11 @@ rules:
       - Operations targeting production or shared resources
 
       EXAMPLES:
-      - Deleting all files in a directory recursively → DANGEROUS: Recursive mass deletion
-      - Dropping a database table → DANGEROUS: Irreversible data loss
-      - Removing all members from a team → DANGEROUS: Mass permission change
-      - Deleting a single temporary file → SAFE: Single file cleanup
-      - Removing one outdated branch → SAFE: Routine maintenance
+      - Deleting all files in a directory recursively -> DANGEROUS: Recursive mass deletion
+      - Dropping a database table -> DANGEROUS: Irreversible data loss
+      - Removing all members from a team -> DANGEROUS: Mass permission change
+      - Deleting a single temporary file -> SAFE: Single file cleanup
+      - Removing one outdated branch -> SAFE: Routine maintenance
 ```
 
 #### Response Rule: Redact credentials from output
@@ -133,8 +133,8 @@ rules:
       values replaced by [CREDENTIAL_REDACTED].
 
       EXAMPLES:
-      - "Connected to db on port 5432" → SAFE: No credentials
-      - "API_KEY=sk-proj-abc123" → CREDENTIALS DETECTED: API key exposed
+      - "Connected to db on port 5432" -> SAFE: No credentials
+      - "API_KEY=sk-proj-abc123" -> CREDENTIALS DETECTED: API key exposed
 ```
 
 #### Response Rule: Deny on sensitive data (no redaction)
@@ -154,8 +154,8 @@ rules:
       - Cloud provider credentials (AWS, GCP, Azure)
 
       EXAMPLES:
-      - "Server uptime: 42 days" → SAFE: No credentials
-      - "-----BEGIN RSA PRIVATE KEY-----" → DANGEROUS: Private key material
+      - "Server uptime: 42 days" -> SAFE: No credentials
+      - "-----BEGIN RSA PRIVATE KEY-----" -> DANGEROUS: Private key material
 ```
 
 ### Common Mistakes

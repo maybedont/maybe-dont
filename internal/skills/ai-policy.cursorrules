@@ -13,7 +13,7 @@ Rules are defined in YAML files loaded by the server:
 1. Describe the specific security concern in an ANALYZE section
 2. List the exact patterns to detect in a "Look for" section
 3. Include both safe and dangerous examples to calibrate the AI's judgment
-4. Use plain-text classification labels in examples (`→ SAFE:` / `→ DANGEROUS:`)
+4. Use plain-text classification labels in examples (`-> SAFE:` / `-> DANGEROUS:`)
 5. Keep each rule focused on one concern — separate rules for separate threats
 6. For redact rules, specify replacement text (e.g., "replace with [PII_REDACTED]")
 7. Use `mode: audit_only` to test rules without blocking, then remove it when confident
@@ -35,8 +35,8 @@ rules:
       - Specific dangerous patterns
 
       EXAMPLES:
-      - Safe operation → SAFE: Explanation
-      - Dangerous operation → DANGEROUS: Explanation
+      - Safe operation -> SAFE: Explanation
+      - Dangerous operation -> DANGEROUS: Explanation
 ```
 
 ## Operation Context
@@ -75,10 +75,10 @@ Response validation (with redaction):
     - Operations targeting shared or production resources
 
     EXAMPLES:
-    - Deleting all files recursively → DANGEROUS: Mass file deletion
-    - Dropping database tables → DANGEROUS: Irreversible data loss
-    - Removing a single temp file → SAFE: Routine cleanup
-    - Cleaning up personal drafts → SAFE: Non-destructive operation
+    - Deleting all files recursively -> DANGEROUS: Mass file deletion
+    - Dropping database tables -> DANGEROUS: Irreversible data loss
+    - Removing a single temp file -> SAFE: Routine cleanup
+    - Cleaning up personal drafts -> SAFE: Non-destructive operation
 
 # Response: Redact credentials
 - name: redact-credentials
@@ -92,6 +92,6 @@ Response validation (with redaction):
     If found, provide sanitized version with sensitive values replaced by [CREDENTIAL_REDACTED].
 
     EXAMPLES:
-    - "Connected to db on port 5432" → SAFE: No credentials
-    - "API_KEY=sk-proj-abc123" → CREDENTIALS DETECTED: API key exposed
+    - "Connected to db on port 5432" -> SAFE: No credentials
+    - "API_KEY=sk-proj-abc123" -> CREDENTIALS DETECTED: API key exposed
 ```

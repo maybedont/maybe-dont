@@ -21,8 +21,8 @@ rules:
       - Dangerous patterns to detect
 
       EXAMPLES:
-      - Safe operation example → SAFE: Explanation
-      - Dangerous operation example → DANGEROUS: Explanation
+      - Safe operation example -> SAFE: Explanation
+      - Dangerous operation example -> DANGEROUS: Explanation
 ```
 
 ## Writing Effective Prompts
@@ -30,7 +30,7 @@ rules:
 - Describe the specific security concern in an ANALYZE section
 - List the exact patterns to detect in a "Look for" section
 - Include **both** safe and dangerous examples to calibrate the AI's judgment
-- Use plain-text classification labels in examples (`→ SAFE:` / `→ DANGEROUS:`)
+- Use plain-text classification labels in examples (`-> SAFE:` / `-> DANGEROUS:`)
 - Keep each rule focused on **one** concern — separate rules for separate threats
 - For redact rules, specify replacement text (e.g., "replace with [PII_REDACTED]")
 - Use `mode: audit_only` to test rules without blocking, then remove it when confident
@@ -81,10 +81,10 @@ Response validation with redaction:
     - Accessing password stores or secret managers
 
     EXAMPLES:
-    - Reading ~/.ssh/id_rsa → DANGEROUS: SSH private key access
-    - cat .env → DANGEROUS: Environment file with secrets
-    - Reading README.md → SAFE: Documentation file
-    - Listing directory → SAFE: Non-sensitive operation
+    - Reading ~/.ssh/id_rsa -> DANGEROUS: SSH private key access
+    - cat .env -> DANGEROUS: Environment file with secrets
+    - Reading README.md -> SAFE: Documentation file
+    - Listing directory -> SAFE: Non-sensitive operation
 
 # Response: Redact PII
 - name: redact-pii
@@ -98,6 +98,6 @@ Response validation with redaction:
     If found, provide sanitized version with sensitive data replaced by [PII_REDACTED].
 
     EXAMPLES:
-    - "Contact john@example.com" → PII DETECTED: Email address found
-    - "Server returned 200 OK" → SAFE: No PII detected
+    - "Contact john@example.com" -> PII DETECTED: Email address found
+    - "Server returned 200 OK" -> SAFE: No PII detected
 ```

@@ -15,14 +15,14 @@ rules:
         - Kubernetes deletions: kubectl delete with --all or wildcard selectors
 
         EXAMPLES:
-        - kubectl get po → SAFE: Not a deletion operation
-        - kubectl delete po --all → DANGEROUS: Wildcard deletion of all pods
-        - kubectl delete po app-1234 → SAFE: Single pod deletion
-        - delete_file path="*" → DANGEROUS: Wildcard file deletion
-        - delete_file path="./file.txt" → SAFE: Single file deletion
-        - DELETE FROM users → DANGEROUS: Mass database deletion with no WHERE clause
-        - DELETE FROM users WHERE id = 5 → SAFE: Single record deletion
-        - TRUNCATE TABLE logs → DANGEROUS: Table truncation destroys all data
+        - kubectl get po -> SAFE: Not a deletion operation
+        - kubectl delete po --all -> DANGEROUS: Wildcard deletion of all pods
+        - kubectl delete po app-1234 -> SAFE: Single pod deletion
+        - delete_file path="*" -> DANGEROUS: Wildcard file deletion
+        - delete_file path="./file.txt" -> SAFE: Single file deletion
+        - DELETE FROM users -> DANGEROUS: Mass database deletion with no WHERE clause
+        - DELETE FROM users WHERE id = 5 -> SAFE: Single record deletion
+        - TRUNCATE TABLE logs -> DANGEROUS: Table truncation destroys all data
 
     - name: "Check system directory access"
       description: "Prevent access to critical system directories"
@@ -37,9 +37,9 @@ rules:
         - /var/log/ (reading application logs is normal)
 
         EXAMPLES:
-        - kubectl get po → SAFE: No file path involved
-        - read_file path="/etc/passwd" → DANGEROUS: System directory access
-        - read_file path="./config.txt" → SAFE: Local file path
+        - kubectl get po -> SAFE: No file path involved
+        - read_file path="/etc/passwd" -> DANGEROUS: System directory access
+        - read_file path="./config.txt" -> SAFE: Local file path
 
     - name: "Check command execution tools"
       description: "Prevent execution of system commands and shell access"
@@ -51,9 +51,9 @@ rules:
         DANGEROUS TOOLS: execute_command, exec, system, shell, bash, cmd, powershell, sh, run_command, subprocess
 
         EXAMPLES:
-        - kubectl get po → SAFE: kubectl is not on the dangerous list
-        - bash command="ls" → DANGEROUS: bash is a shell execution tool
-        - git status → SAFE: git is not on the dangerous list
+        - kubectl get po -> SAFE: kubectl is not on the dangerous list
+        - bash command="ls" -> DANGEROUS: bash is a shell execution tool
+        - git status -> SAFE: git is not on the dangerous list
 
     - name: "Check credential file access"
       description: "Prevent access to files that typically contain credentials"
@@ -65,9 +65,9 @@ rules:
         Look for: files ending with .env, .key, .pem, .p12, .pfx, .crt, .cer OR paths containing /.ssh/, /.aws/, /.gcp/, /.kube/, /credentials, /secrets, id_rsa, private_key OR files named passwd, shadow, htpasswd, config (in .kube directory)
 
         EXAMPLES:
-        - kubectl get po → SAFE: No file access
-        - read_file path=".env" → DANGEROUS: Credential file access
-        - read_file path="config.txt" → SAFE: Normal file access
+        - kubectl get po -> SAFE: No file access
+        - read_file path=".env" -> DANGEROUS: Credential file access
+        - read_file path="config.txt" -> SAFE: Normal file access
 
     - name: "Check external network access"
       description: "Prevent HTTP requests to external domains"
@@ -79,9 +79,9 @@ rules:
         Look for: http_request, fetch, download_file with URLs NOT on approved list (localhost, 127.0.0.1, ::1, *.company.com, api.openai.com)
 
         EXAMPLES:
-        - kubectl get po → SAFE: No network request
-        - http_request url="https://malicious.com" → DANGEROUS: External domain access
-        - fetch url="http://localhost:3000" → SAFE: Approved local domain
+        - kubectl get po -> SAFE: No network request
+        - http_request url="https://malicious.com" -> DANGEROUS: External domain access
+        - fetch url="http://localhost:3000" -> SAFE: Approved local domain
 
     - name: "Check executable file creation"
       description: "Prevent creation of executable files"
@@ -95,11 +95,11 @@ rules:
         APPROVED directories for scripts: ./scripts/, ./dev/, ./test/, /test/, test/fixtures/, tests/
 
         EXAMPLES:
-        - kubectl get po → SAFE: No file creation
-        - write_file path="malware.exe" → DANGEROUS: Executable file creation
-        - write_file path="./scripts/build.py" → SAFE: Script in approved directory
-        - write_file path="./test/fixtures/setup.sh" → SAFE: Test script in approved directory
-        - write_file path="report.txt" → SAFE: Non-executable file
+        - kubectl get po -> SAFE: No file creation
+        - write_file path="malware.exe" -> DANGEROUS: Executable file creation
+        - write_file path="./scripts/build.py" -> SAFE: Script in approved directory
+        - write_file path="./test/fixtures/setup.sh" -> SAFE: Test script in approved directory
+        - write_file path="report.txt" -> SAFE: Non-executable file
 
     - name: "Check large file operations"
       description: "Prevent operations on excessively large files"
@@ -111,7 +111,7 @@ rules:
         Look for: file sizes >100MB, content >10MB, processing >1000 files at once
 
         EXAMPLES:
-        - kubectl get po → SAFE: No file sizes mentioned
-        - read_file path="huge.csv" size=200MB → DANGEROUS: File exceeds 100MB limit
-        - write_file content="[10MB+ data]" → DANGEROUS: Content exceeds size limit
-        - read_file path="document.pdf" → SAFE: Normal file size
+        - kubectl get po -> SAFE: No file sizes mentioned
+        - read_file path="huge.csv" size=200MB -> DANGEROUS: File exceeds 100MB limit
+        - write_file content="[10MB+ data]" -> DANGEROUS: Content exceeds size limit
+        - read_file path="document.pdf" -> SAFE: Normal file size
