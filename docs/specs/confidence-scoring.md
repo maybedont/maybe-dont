@@ -308,16 +308,7 @@ The `jsonschema` tags ensure provider-level enforcement:
 - `confidence` is constrained to [0.0, 1.0]
 - `allowed` and `message` are unchanged from current behavior
 
-When `confidence` is missing from the AI response (e.g., non-compliant provider, or pre-existing cached response), it deserializes to `0.0` (Go zero value). The engine treats `0.0` as "no confidence data" and defaults to `1.0` to preserve existing behavior. This is handled explicitly in the parsing code, not by relying on the zero value:
-
-```go
-if aiResp.Confidence == 0.0 {
-    // Provider did not return confidence — preserve existing behavior
-    aiResp.Confidence = 1.0
-}
-```
-
-**Note**: This means a model cannot express genuine 0.0 confidence. This is acceptable — 0.0 ("I have literally zero signal") is not a meaningful real-world response, and using it as a sentinel for "missing" is safe.
+**Updated approach (post-research):** The revised implementation plan (see Implementation Plan) uses logprob-derived confidence rather than self-reported confidence. The sentinel value for "no confidence data available" is **`-1.0`**, which is outside the valid 0.0–1.0 range, making it unambiguous. Any consumer (audit log viewer, test suite, future threshold logic) can immediately distinguish "model was X% confident" from "we have no confidence data." This avoids the original design's problem of overloading `0.0` as both "missing" and a potentially valid (if unlikely) score, and avoids silently pretending full confidence by defaulting to `1.0`.
 
 ### 6. Internal Result Struct Changes
 
@@ -798,77 +789,482 @@ The binary approach is fine when you trust the AI's judgment completely. Confide
 
 ### Phasing Strategy
 
-The implementation is split into two independently shippable milestones:
+The implementation is split into two milestones. Milestone 1 is independently shippable. Milestone 2 is exploratory and requires empirical testing before committing to ship.
 
-**Milestone A (Phase 1–2): Prompt Centralization** — Move the AI response format instruction out of policy prompts and into the engine runtime. This is a pure refactor: the AI receives the same instruction it receives today, but the engine owns it instead of every policy duplicating it. No schema changes, no new config fields, no behavioral changes. Shippable on its own, and independently valuable because:
-- Policy authors no longer need to get the response format right
-- Changing the response format (e.g., adding `confidence` later) requires zero policy edits
-- Shipped default rules become shorter and focused on detection logic
+**Milestone 1 (Phase 1a–1b): Policy Prompt Cleanup** — Remove redundant response format instructions from all policy prompts. The JSON response format is already enforced by the API-level schema (`GenerateSchema[T]()` with `strict: true`), making the prompt-level instructions a no-op that wastes tokens. This milestone also simplifies the EXAMPLES sections in default rules from JSON-formatted examples to plain-text classification labels (see Section 23). Shippable on its own, and independently valuable because:
+- Saves 161-350+ wasted input tokens per validation request across default rules
+- Policy authors focus on detection logic, not JSON syntax
+- Default rules become shorter and more readable
 - Skills and documentation reflect the correct separation of concerns
+- Changing the response format in the future requires zero policy edits
 
-**Milestone B (Phase 3–7): Confidence Scoring** — Layer confidence scoring on top of the centralized prompt. This adds the `confidence` field to the schema, threshold logic, config fields, audit propagation, test suite integration, and empirical validation. Milestone A must ship first, but Milestone B can follow immediately or be deferred based on priorities.
+**Milestone 2 (Phase 2–2b): Logprob-Based Confidence (Exploratory)** — Investigate extracting confidence from API log probabilities rather than asking the model to self-report a confidence number. Logprobs represent the model's actual internal probability for its classification decision and are the superior signal (see Section 21). This milestone is exploratory — logprob availability with structured outputs needs empirical testing before committing. If logprobs are available, propagate them through audit logs and the policy test matrix for informational purposes only. No thresholding, no decision-making changes.
+
+**Future: Threshold-Based Decision Tuning** — If Milestone 2 demonstrates that logprobs are consistently available and provide meaningful signal variance, the gateway could allow operators to define confidence thresholds that tighten or loosen the boundary between allow and deny for specific use cases. This is deferred until there is empirical evidence that the signal is useful.
+
+### Why Not Self-Reported Confidence?
+
+The original design proposed adding a `confidence` field to the AI response schema and asking the model to self-assess its certainty. After research (detailed in Section 21), this approach was rejected for the following reasons:
+
+1. **Self-reported confidence is unreliable.** Research (Jinks 2025, Kadavath et al. 2022) and industry practice show that LLMs produce poorly calibrated self-assessments. Every major production moderation system (OpenAI Moderation API, Google Perspective API, AWS Comprehend) uses model-internal signals (logprobs, logits) — none ask the model to self-report a number.
+
+2. **Risk of degrading primary classification.** Asking the model to simultaneously classify AND self-assess changes the cognitive task. Research suggests models may hedge on borderline cases or anchor on producing a reasonable-looking confidence score, affecting the quality of the primary allow/deny decision.
+
+3. **Threshold cliff effects.** Two identical requests could receive 0.69 and 0.71 confidence from the same model at temperature 0. With a threshold of 0.7, one blocks and one doesn't — introducing non-determinism that the binary approach doesn't have.
+
+4. **Operational complexity without proven benefit.** Adding threshold configuration, per-rule overrides, and low-confidence actions increases the config surface area significantly, but only delivers value if the underlying confidence signal is meaningful — which is unproven for self-reported scores.
+
+The research notes, tradeoff analysis, and detailed reasoning are preserved in Sections 19, 20, and 21 for future reference.
+
+### Structured Output Support Across Providers
+
+Research confirms that structured JSON output with schema enforcement is now standard across all major LLM providers (as of 2026):
+
+| Provider | Supports `response_format` with JSON schema | `strict` mode |
+|----------|---------------------------------------------|---------------|
+| OpenAI | Yes | Yes |
+| Anthropic | Yes (via `output_config`) | Yes |
+| Google Gemini | Yes | Yes |
+| Groq | Yes | Yes |
+| xAI Grok | Yes | Implicit |
+| Azure OpenAI | Yes | Yes |
+| AWS Bedrock | Yes (GA Feb 2026) | Yes |
+| Together AI | Yes | Yes |
+| Fireworks AI | Yes | Yes |
+| Mistral AI | Yes | Yes |
+| Cohere | Yes | Yes |
+| LiteLLM (router) | Pass-through | Depends on downstream |
+| Ollama | Partial (non-standard `format` param) | No |
+
+The only notable gap is **Ollama**, which uses a non-standard parameter name (`format` instead of `response_format`). Ollama wouldn't work with the `openai_compatible` provider for structured outputs regardless of prompt instructions.
+
+Given this landscape, removing prompt-level format instructions is safe for all production providers. The `openai_compatible` provider already has a comment acknowledging that not all compatible endpoints support structured outputs — this is an existing limitation, not a new one introduced by this change.
 
 ---
 
-### Milestone A: Prompt Centralization (shippable independently)
+### Milestone 1: Policy Prompt Cleanup and Engine Fixes
 
-#### Phase 1: Engine-Owned Response Format Suffix
-1. Add response format instruction constants for request and response validation (same `allowed`/`message` format as today — no `confidence` yet)
-2. Update prompt construction in `ai_engine.go` to append the request validation suffix after `fmt.Sprintf(p.Prompt, operationStr)`
-3. Update prompt construction in `ai_response_engine.go` to append the response validation suffix
-4. Add tests verifying the suffix is appended and the AI response is parsed correctly
-5. Verify backward compatibility: user-authored prompts that still include their own format instruction produce no conflict (the suffix is additive/redundant)
+#### Phase 1a: Remove Redundant Prompt Text and Fix Redact Logic
 
-#### Phase 2: Default Rules and Skills Migration
-6. Strip `Return ONLY JSON...` boilerplate from all shipped AI request rules (`ai_request_rules.yaml`)
-7. Strip `Return ONLY JSON...` boilerplate from all shipped AI response rules (`ai_response_rules.yaml`)
-8. Simplify EXAMPLES in shipped rules — replace JSON response examples (e.g., `-> { "allowed": true, "message": "..." }`) with plain-text classification labels (e.g., `-> SAFE: Not a deletion operation`)
-9. Update `ai-policy-authoring` skill (`internal/skills/ai-policy.md` and variants): remove response format from examples, add note that the engine handles format automatically
-10. Run policy test suite to verify no decision regressions from prompt changes
-11. Add optional `version: "1"` to shipped rule files (low-cost forward compatibility hook)
+**Policy prompt cleanup:**
+1. Strip `Return ONLY JSON...` boilerplate from all shipped AI request rules (`internal/config/defaults/ai_request_rules.yaml`)
+2. Strip `Return ONLY JSON...` boilerplate and multi-line JSON format blocks from all shipped AI response rules (`internal/config/defaults/ai_response_rules.yaml`)
+3. Remove conditional field-mapping instructions from response rules (e.g., "If PII is found: Set allowed to true...") — the schema and engine handle field semantics
+4. Simplify EXAMPLES in shipped rules — replace JSON response examples (e.g., `→ { "allowed": true, "message": "..." }`) with plain-text classification labels (e.g., `→ SAFE: Not a deletion operation`). See Section 23 for detailed before/after examples including response validation rules.
+5. Update `ai-policy-authoring` skill (`internal/skills/ai-policy.md` and variants): remove response format from examples, add note that the response format is enforced by the API-level schema and should not be included in policy prompts. Document that redact rules should specify replacement text in the prompt (see Section 24 for details).
+6. Add optional `version: "1"` to shipped rule files (low-cost forward compatibility hook)
+
+**Fix redact rule decision logic (bug fix):**
+
+The current logic in `ai_response_engine.go:256-263` uses `allowed` as the primary decision for all rule types, including redact rules. This means a redact rule can produce a "deny" result when the model returns `allowed: false`, which contradicts the policy author's declared intent. A policy author who chooses `action: redact` is saying "sanitize if needed, always pass through" — if they wanted blocking, they'd use `action: deny`.
+
+7. Update the decision logic in `ai_response_engine.go` so that `allowed` is ignored for redact rules. The only meaningful signal for redact rules is whether `redacted_content` was provided:
+
+**Current logic (buggy):**
+```go
+if !evaluation.Allowed {
+    resultStr = "deny"
+} else if p.Action == config.PolicyActionRedact && evaluation.RedactedContent != "" {
+    resultStr = "redact"
+} else {
+    resultStr = "allow"
+}
+```
+
+**Fixed logic:**
+```go
+if p.Action == config.PolicyActionRedact {
+    if evaluation.RedactedContent != "" {
+        resultStr = "redact"    // Model provided sanitized content, use it
+    } else {
+        resultStr = "allow"     // Nothing to redact, pass through original
+    }
+} else if !evaluation.Allowed {
+    resultStr = "deny"
+} else {
+    resultStr = "allow"
+}
+```
+
+8. Add/update tests for the redact decision logic covering all cases in the truth table below.
+
+**Response engine decision truth table (after fix):**
+
+| Rule Action | `allowed` | `redacted_content` | Result | Why |
+|------------|-----------|-------------------|--------|-----|
+| redact | true | present | redact | Model provided sanitized content |
+| redact | true | empty | allow | Nothing to redact, pass through original |
+| redact | false | present | redact | Model provided sanitized content (`allowed` is irrelevant for redact rules) |
+| redact | false | empty | allow | Nothing to redact; redact rules never deny |
+| deny | false | n/a | deny | Content flagged as dangerous |
+| deny | true | n/a | allow | Content is safe |
+
+Key principle: **redact rules never produce "deny."** The `allowed` field is only meaningful for deny (and allow) rules. For redact rules, the relevant signal is `redacted_content` — did the model provide sanitized content or not?
+
+If a policy author wants "redact if possible, block if too severe to redact," that requires two separate rules: a `redact` rule for sanitizable content and a `deny` rule for content that can't be sanitized.
+
+#### Phase 1b: Verification
+9. Run `make test` — all existing unit tests must pass
+10. Run `make lint` — no new lint issues
+11. Run the policy test suite against the default rules to verify no decision regressions from the prompt changes
+12. Sample the policy test matrix across at least 2 models to confirm classification behavior is unchanged
+
+#### Phase 1c: Skip Response Validation for Empty Responses
+
+Currently, response validation runs unconditionally after every tool call, even when the response has no content. The AI engine formats the response via `formatResponseForAI()` which produces just `"IsError: false\n"` for empty responses, then sends this to the AI provider for every enabled response policy. This wastes API calls and adds unnecessary latency.
+
+13. Add a check in `gateway.go` before the response validation chain to skip validation when the response has no content:
+
+```go
+if g.responseValidationChain != nil && result != nil && len(result.Content) > 0 {
+    // Run response validation
+}
+```
+
+14. Log at DEBUG level when response validation is skipped due to empty content
+15. Add a test verifying that response validation is skipped for empty responses
 
 ---
 
-### Milestone B: Confidence Scoring (requires Milestone A)
+### Milestone 2: Logprob-Based Confidence (Exploratory)
 
-#### Phase 3: Empirical Validation
-12. Establish baseline: run test suite with Milestone A binary (centralized prompt, no confidence), record all decisions
-13. Add `confidence` to schema and prompt suffix on a local branch (not shipped)
-14. Run test suite with confidence enabled, record decisions and scores
-15. Compare: identify any decision changes, analyze confidence distributions
-16. Go/no-go decision on confidence thresholding based on results
+#### Phase 2: Logprob Extraction
+11. **Empirical test**: Determine whether OpenAI returns meaningful logprobs when `response_format` with `strict: true` is used. If constrained decoding eliminates alternatives at each token position, logprobs may always be near 0.0 (100% for the chosen token), providing no useful signal. This test gates the rest of Milestone 2.
+12. Extend the `AIProviderResponse` struct with an optional `Logprob *float64` field
+13. Update the OpenAI provider to request logprobs (`logprobs: true`) and extract the logprob for the `allowed` token (`true`/`false`)
+14. Convert the raw logprob to a 0.0–1.0 probability via `exp(logprob)`
+15. For providers that do not support logprobs (Anthropic, some OpenAI-compatible), or when logprobs are unavailable, set the value to `-1.0` (sentinel: "no data available"). `-1.0` is outside the valid 0.0–1.0 range, making it unambiguous — any consumer can immediately distinguish "confident" from "no data."
+16. Update the Anthropic provider and OpenAI-compatible provider to return `-1.0` when logprobs are not available
+17. CEL rule results always set confidence to `1.0` (deterministic match = full confidence)
 
-#### Phase 4: Core Confidence Infrastructure
-17. Add `confidence` field to `AIResponse` and `AIResponseEvaluation` structs (with `jsonschema:"minimum=0,maximum=1"` tag)
-18. Update response format instruction constants to include confidence guidance
-19. Handle missing confidence in response parsing (default to 1.0)
-20. Add `aiRuleResult.confidence` and `aiRuleResult.confidenceApplied` fields
-21. Add config fields (`confidence_threshold`, `low_confidence_action`) with startup validation
-22. Add per-rule `confidence_threshold` to `AIPolicy` and `AIResponsePolicy` config structs
-23. Implement confidence threshold application in decision logic (directional — only softens firing decisions)
-24. Update `AuditAIRuleResult` with `confidence` and `confidence_applied` fields
-25. Add `Confidence` field to `ValidationResult` struct
-26. Add `Confidence` field to `CLIValidationPolicyResult` struct in `cli_validation.go`
-27. Update `maybe-dont.yaml` example config with new fields and defaults
-28. Update mock AI client for tests
+#### Phase 2b: Audit and Observability Integration
+18. Add `Confidence float64` field to `AuditAIRuleResult` — raw logprob-derived score, or `-1.0` for no data
+19. Add `Confidence float64` field to `ValidationResult` — `1.0` for CEL, logprob-derived for AI, `-1.0` for no data
+20. Add `Confidence float64` field to `CLIValidationPolicyResult` in `cli_validation.go`
+21. Add `Confidence float64` field to `aiRuleResult` internal struct (goroutine channel)
+22. Wire confidence through the AI engine evaluation flow (`ai_engine.go` and `ai_response_engine.go`)
+23. Log confidence at DEBUG level when available (never at INFO — this fires per rule per request)
+24. Wire real confidence values through the policy test suite runner (replace the placeholder `1.0` in `ActualResult.Confidence`)
+25. Update test output formatters to display confidence when available (show `-1.0` as "N/A" or "no data")
+26. Document in test suite output that confidence values are **informational only** and not used for decision-making
 
-#### Phase 5: Test Suite Integration
-29. ~~Add `Confidence` field to `ActualResult` struct in executor~~ (already exists as placeholder, always 1.0)
-30. Wire real confidence values from AI responses through test runner (replace placeholder 1.0)
-31. Add `min_confidence` to `ExpectationsConfig` and `PolicyExpectation` in test case types
-32. Add `min_confidence` validation logic in test runner
-33. Update test output formatters to show confidence
+**Important**: No threshold logic, no `confidence_threshold` config field, no `low_confidence_action`, no per-rule overrides. Confidence is purely observational in this milestone.
 
-#### Phase 6: Skill and Documentation Updates
-34. Update `ai-policy-authoring` skill with confidence guidance and threshold documentation
-35. Update `policy-test-case` skill with `min_confidence` field reference and examples
-36. Add confidence note to `cel-policy-authoring` skill (CEL rules always produce 1.0)
+---
 
-#### Phase 7: Existing Spec and Documentation Cleanup
-37. Update `policy-test-suite/README.md` to reference this spec
-38. Update `runtime-action-interception-architecture.md` to reference this spec
-39. Update `cli-proxy-for-ai-agents.md` to reference this spec (including REST response structure)
-40. Create documentation update checklist for `maybedont.ai/docs`
+### Future: Threshold-Based Decision Tuning (Not Scheduled)
+
+If Milestone 2 demonstrates that logprobs are consistently available across providers and produce meaningful score variance (not clustered at 0.95-1.0), the following could be considered:
+
+- Configurable `confidence_threshold` at global and per-rule level
+- `low_confidence_action` setting (e.g., `audit_only` to downgrade low-confidence denials)
+- Directional threshold application (only softens firing/blocking decisions, never creates new blocks)
+- `min_confidence` expectations in policy test suite for threshold validation across models
+
+The design for these features is preserved in Sections 3, 4, 6, and 10 of this spec for reference. Implementation should only proceed after empirical evidence shows the confidence signal is useful for decision-making — not just for observability.
+
+---
+
+### Documentation and Cleanup (After Milestone 1)
+
+27. Update `policy-test-suite/README.md` to reference this spec for confidence-related design
+28. Update `runtime-action-interception-architecture.md` to reference this spec
+29. Update `cli-proxy-for-ai-agents.md` to reference this spec
+30. Update `policy-test-case` skill (`internal/skills/test-case.md`) if test suite confidence display is added
+31. Create documentation update checklist for `maybedont.ai/docs` (configuration reference, AI rule authoring guide)
+
+## 21. Research Findings: Confidence Scoring Cost/Benefit Analysis
+
+This section captures research conducted to evaluate the viability and tradeoffs of self-reported confidence scoring versus the existing binary allow/deny approach.
+
+### Speed Impact
+
+**Negligible.** Adding a `confidence` float field to the JSON schema sent via OpenAI's `response_format` or Anthropic's `output_config` adds approximately 1 extra output token per response. The dominant latency factors are model inference time, network round-trip, and total token count — not one additional JSON field.
+
+The prompt suffix proposed in Section 9 (~80 tokens of confidence guidance per rule) adds up across rules. With 7 enabled rules evaluated in parallel, that's ~560 extra input tokens per request. Input tokens don't affect per-rule latency (rules are evaluated concurrently), but they do marginally increase cost per validation. This is not a blocking concern.
+
+### Accuracy Impact of Self-Reported Confidence
+
+Research suggests self-reported confidence is problematic for decision-making:
+
+**1. Self-reported confidence is unreliable.** Every major production moderation system (OpenAI Moderation API, Google Perspective API, AWS Comprehend) uses model-internal signals (logprobs, logits) for confidence scores — not self-reported numbers. Research from 2025 (Jinks, "Estimating LLM classification confidence with log probabilities") explicitly calls self-reported confidence "highly unreliable" with "the lowest accuracy and highest standard deviation" compared to logprob-based approaches. Models tend to generate a plausible-sounding number rather than meaningfully self-assess.
+
+**2. Confidence may degrade the primary classification.** This aligns with Section 19's concerns. Asking the model to simultaneously classify AND self-assess introduces a different cognitive task. Research shows models may:
+- **Hedge** on borderline cases — returning `allowed: true` with low confidence where they'd have committed to `allowed: false` without the confidence framing
+- **Anchor** on producing a reasonable-looking confidence number and let it influence the primary decision
+- Produce confidence distributions with insufficient variance (clustering at 0.9-1.0), providing zero useful signal for thresholding
+
+**3. Threshold placement matters and 50% is suboptimal for security.** Standard ML practice (see Evidently AI, Google ML Crash Course on classification thresholds) states that when false negatives (allowing a dangerous operation) cost more than false positives (blocking a safe one), the threshold should shift toward the expensive error. For security, that means a *lower* deny threshold (e.g., >0.3), not a midpoint at 0.5. However, this entire optimization is moot if the underlying scores aren't calibrated.
+
+**4. Non-determinism at threshold boundaries.** Two identical requests may receive confidence 0.69 and 0.71 from the same model at temperature 0. If the threshold is 0.7, one blocks and one doesn't. The binary approach has no such non-determinism at the decision boundary — the model either says allow or deny.
+
+### When Confidence Scoring Is Valuable
+
+Despite the above concerns, confidence scores provide legitimate value for **audit enrichment and observability**. Seeing "denied with 0.45 confidence" vs "denied with 0.98 confidence" in audit logs is genuinely useful for operators tuning rules. This is an observability use case, not a decision-making use case. The spec's `low_confidence_action: audit_only` default (Section 4) correctly acknowledges this.
+
+### Logprobs as an Alternative to Self-Reported Confidence
+
+Instead of asking the model to self-report a confidence number, the gateway could extract confidence from **log probabilities** (logprobs) returned by the API. Logprobs represent the model's actual internal probability for each generated token — they are the ground truth for how confident the model was, rather than a post-hoc self-assessment.
+
+**How it would work:**
+
+1. The gateway already asks the model to return `"allowed": true` or `"allowed": false` via structured output
+2. Most AI providers can return logprobs alongside the response — the probability the model assigned to each token it generated
+3. The logprob of the `true` or `false` token directly after `"allowed":` represents the model's actual confidence in its classification decision
+4. Convert the logprob (which is `log(p)`, ranging from 0.0 for 100% confidence to negative infinity for 0%) into a 0.0-1.0 probability via `exp(logprob)`
+
+**Example:** If the model returns `"allowed": false` with a logprob of `-0.105` for the `false` token, the actual confidence is `exp(-0.105) ≈ 0.90` — the model was 90% confident in its deny decision.
+
+**Advantages over self-reported confidence:**
+- Reflects the model's actual internal state, not a hallucinated number
+- Does not change the classification prompt at all — no risk of degrading the primary decision
+- Zero additional prompt tokens (no confidence guidance suffix needed)
+- Research consistently shows logprobs are "by far the most accurate technique" for estimating LLM confidence (Jinks 2025)
+
+**Current limitations:**
+- **OpenAI**: Supports logprobs via the `logprobs: true` parameter on chat completions. However, logprobs may not be available when `response_format` with `strict: true` is used — this needs empirical testing.
+- **Anthropic**: Does not currently expose logprobs in the API.
+- **OpenAI-compatible providers**: Support varies by provider.
+
+**Recommendation:** Logprobs are the superior confidence signal when available. The gateway's provider abstraction (`AIProviderClient` interface) could be extended to optionally return logprobs alongside the parsed response. This would require:
+- Adding an optional `Logprobs` field to `AIProviderResponse`
+- Each provider implementation extracting logprobs if available
+- The engine converting the `allowed` token's logprob to a 0.0-1.0 confidence score
+- Falling back to self-reported confidence (or 1.0) when logprobs are unavailable
+
+This is a cleaner long-term approach than self-reported confidence, but provider support gaps mean it cannot be the sole mechanism today. Worth tracking as provider APIs evolve.
+
+### Recommendations
+
+| Topic | Recommendation |
+|-------|---------------|
+| **Milestone A: Prompt centralization (Phases 1-2)** | **Ship it.** Independently valuable, low risk, correct separation of concerns. See Section 22 for why. |
+| **Confidence scoring for decision-making (thresholding)** | **Do not ship without empirical validation.** Self-reported confidence is unreliable per research. The Section 19 validation plan must complete first. |
+| **Confidence scoring for audit enrichment** | **Reasonable** — but only if it does not degrade primary classification quality. Validate with the test suite model matrix first. Ship as audit-only data initially. |
+| **Threshold of ≤0.5 = allow, >0.5 = deny** | **Do not use.** If thresholding is adopted, the threshold must be tuned empirically per model, not set at an arbitrary midpoint. Security cost asymmetry favors a lower deny threshold. |
+| **Logprobs as alternative** | **Track for the future.** Superior signal when available. Extend the provider interface to optionally return logprobs. Use as the primary confidence source when supported, fall back to self-reported or 1.0 when not. |
+| **Implementation sequence** | Ship Milestone A first. Defer Milestone B until empirical validation is complete. If confidence distributions cluster tightly or degrade decisions, the prompt centralization alone is still valuable. |
+
+### Research Sources
+
+- Kadavath et al. (2022) — "Language Models (Mostly) Know What They Know" ([arXiv:2207.05221](https://arxiv.org/abs/2207.05221))
+- Jinks (2025) — "Estimating LLM classification confidence with log probabilities" ([ericjinks.com](https://ericjinks.com/blog/2025/logprobs/))
+- STED Framework — "Evaluating LLM Structured Output Reliability" ([arXiv:2512.23712](https://arxiv.org/html/2512.23712))
+- Amazon Research — "Label with Confidence: Effective Confidence Calibration and Ensembles in LLM-Powered Classification" ([amazon.science](https://www.amazon.science/publications/label-with-confidence-effective-confidence-calibration-and-ensembles-in-llm-powered-classification))
+- OpenAI — "Using logprobs" ([OpenAI Cookbook](https://cookbook.openai.com/examples/using_logprobs))
+- Google — "Thresholds and the confusion matrix" ([ML Crash Course](https://developers.google.com/machine-learning/crash-course/classification/thresholding))
+- Google Research — "Introducing ASPIRE for selective prediction in LLMs" ([research.google](https://research.google/blog/introducing-aspire-for-selective-prediction-in-llms/))
+
+## 22. Why the Prompt Boilerplate Is Redundant (Detailed Explanation)
+
+This section explains in detail why the `Return ONLY JSON...` instruction in every rule prompt is unnecessary, to support the case for Milestone A.
+
+### The Schema Is Sent Separately from the Prompt
+
+The gateway's AI provider implementation sends the expected response format as a **machine-enforced JSON schema** alongside the prompt — not embedded within it. This is a distinct API parameter that the AI provider uses to constrain the model's output at the decoding level.
+
+**What happens today in `ai_engine.go:230`:**
+
+```go
+result, err := e.providerClient.Generate(policyCtx, AIRequest{
+    UserPrompt:     fmt.Sprintf(p.Prompt, operationStr),    // The rule prompt
+    ResponseSchema: GenerateSchema[AIResponse](),            // Schema sent separately
+    Parameters:     e.cfg.Validation.AI.Parameters,
+})
+```
+
+These are two independent inputs to the API call:
+1. `UserPrompt` — the rule's analytical prompt (what to detect)
+2. `ResponseSchema` — the Go struct reflected into a JSON schema (how to respond)
+
+**What the OpenAI provider sends (`ai_provider_openai.go:177`):**
+
+```go
+body["response_format"] = map[string]any{
+    "type": "json_schema",
+    "json_schema": map[string]any{
+        "name":   "response",
+        "schema": req.ResponseSchema,
+        "strict": true,       // Provider enforces exact schema compliance
+    },
+}
+```
+
+The `strict: true` flag means OpenAI's API will **reject any response that doesn't match the schema**. The model is physically constrained to produce `{"allowed": bool, "message": string}`. It cannot deviate from this format regardless of what the prompt says.
+
+**The Anthropic provider does the same** via `output_config.format` with `json_schema`.
+
+### What This Means for the Prompt Instruction
+
+Every default rule currently ends with a line like:
+
+```
+Return ONLY JSON in this exact format: { "allowed": true/false, "message": "your message" }
+```
+
+This instruction is telling the model to do something it is **already forced to do** by the schema constraint. It is redundant — the model would return `{"allowed": ..., "message": ...}` even if the prompt said nothing about format, because the API-level schema enforcement leaves no alternative.
+
+Removing this line from each rule saves ~23-50 tokens per rule (161-350 tokens across 7 default request rules) with zero behavioral change.
+
+### Why the Engine Suffix Is Still Useful
+
+If the schema enforcement makes prompt-level format instructions redundant, why does Phase 1 propose an engine-owned suffix at all?
+
+Two reasons:
+
+1. **Not all providers support structured outputs.** Some OpenAI-compatible endpoints (local models, third-party proxies) may not implement `response_format.json_schema`. For these providers, the prompt suffix is the *only* guidance the model receives about response format. The engine suffix provides a safety net.
+
+2. **Semantic guidance beyond structure.** The schema enforces that `allowed` is a boolean and `message` is a string, but it doesn't explain what `allowed: true` *means*. The suffix provides semantics: "true if the operation appears safe, false if it appears dangerous." This helps the model understand the intent, especially for less capable models or providers without system prompt support.
+
+The key difference from today: the suffix is written once in the engine code and maintained by the gateway developers, not duplicated across every policy file and maintained (inconsistently) by policy authors.
+
+## 23. Migrating from JSON-Formatted Examples to Plain-Text Classification
+
+This section explains the rationale and mechanics of simplifying the EXAMPLES sections in default rules.
+
+### What Changes
+
+The examples in each rule prompt are classification demonstrations — they teach the model the decision boundary for the rule. Currently, each example encodes both the classification AND the response format:
+
+**Before (current):**
+```
+EXAMPLES:
+- kubectl get po → NOT deletion → { "allowed": true, "message": "Not a deletion operation" }
+- kubectl delete po --all → IS dangerous → { "allowed": false, "message": "Wildcard deletion blocked" }
+- DELETE FROM users → IS dangerous (no WHERE) → { "allowed": false, "message": "Mass database deletion blocked" }
+```
+
+**After (proposed):**
+```
+EXAMPLES:
+- kubectl get po → SAFE: Not a deletion operation
+- kubectl delete po --all → DANGEROUS: Wildcard deletion of all pods
+- DELETE FROM users → DANGEROUS: Mass database deletion with no WHERE clause
+```
+
+### What Does NOT Change
+
+The model's response format is unchanged. The model still returns:
+```json
+{"allowed": true, "message": "Not a deletion operation"}
+```
+
+This is enforced by the JSON schema sent via the API's structured output feature (see Section 22). The examples are not teaching the model how to format its response — the schema does that. The examples are teaching the model **what to classify as safe vs dangerous**.
+
+### Why This Is Better
+
+**1. Separates classification from formatting.** The examples should teach the decision boundary, not JSON syntax. When examples include `{ "allowed": true, "message": "..." }`, they conflate two concerns: "what should be blocked?" and "how should I format the answer?" The model already knows the format from the schema.
+
+**2. Saves tokens.** Each JSON example adds ~15-20 tokens of format overhead (`{ "allowed": true/false, "message": "..." }`). With 3-8 examples per rule and 7 rules, this is 300-1100 wasted tokens per request across all rules.
+
+**3. More natural classification examples.** LLMs are better at few-shot classification when examples are written as natural-language labels rather than structured output. The pattern `input → LABEL: reasoning` is the standard few-shot classification format used in prompting research. Asking the model to map examples to JSON structure is an unnecessary cognitive step when the structure is already enforced externally.
+
+**4. Reduces risk of conflicting instructions.** If the engine suffix describes the response format and the examples also embed a response format, there are two sources of truth. If they ever diverge (e.g., when adding `confidence`), the model receives conflicting signals. Plain-text examples eliminate this risk entirely.
+
+### Response Validation Rules: Same Principle, More Fields
+
+The response validation rules use a larger struct (`AIResponseEvaluation`) that includes `redacted_content` alongside `allowed` and `message`. The same schema enforcement applies — at `ai_response_engine.go:223`, the engine sends `GenerateSchema[AIResponseEvaluation]()` which produces a JSON schema with all three fields. The provider enforces this schema identically to the request validation case.
+
+This means the multi-line JSON format block in response rules like `detect-pii-in-response` is also fully redundant:
+
+**Before (current `detect-pii-in-response`):**
+```yaml
+prompt: |-
+  ANALYZE: Does this response contain PII (personally identifiable information)?
+
+  Look for: email addresses, phone numbers, social security numbers, physical addresses,
+  credit card numbers, passport numbers, driver's license numbers, or other identifying information.
+
+  Response content: %s
+
+  If PII is found:
+  - Set "allowed" to true (we'll redact, not block)
+  - Provide the response with PII replaced by [PII_REDACTED]
+  - Explain what was redacted in the message
+
+  If no PII is found:
+  - Set "allowed" to true
+  - Leave "redacted_content" empty or null
+  - Set message to "No PII detected"
+
+  Return ONLY JSON in this exact format:
+  {
+    "allowed": true/false,
+    "message": "explanation of what was found/redacted",
+    "redacted_content": "sanitized version with [PII_REDACTED] replacing sensitive data (only if PII found)"
+  }
+```
+
+**After (proposed):**
+```yaml
+prompt: |-
+  ANALYZE: Does this response contain PII (personally identifiable information)?
+
+  Look for: email addresses, phone numbers, social security numbers, physical addresses,
+  credit card numbers, passport numbers, driver's license numbers, or other identifying information.
+
+  If PII is found, provide a redacted version with sensitive data replaced by [PII_REDACTED].
+
+  EXAMPLES:
+  - "Contact John at john@example.com" → PII DETECTED: Email address found, redact to "[PII_REDACTED]"
+  - "The server returned 200 OK" → SAFE: No PII detected
+  - "User SSN: 123-45-6789" → PII DETECTED: Social security number found
+
+  Response content: %s
+```
+
+**What changed:**
+1. The `Return ONLY JSON...` block with the three-field JSON template is removed entirely. The engine-owned suffix (Section 9) and the `GenerateSchema[AIResponseEvaluation]()` schema handle the response format.
+2. The conditional instructions ("If PII is found: Set allowed to true...") are removed. These were teaching the model how to map its classification to JSON field values — that mapping is now handled by the engine suffix which explains the semantics of each field.
+3. Simple classification examples are added instead, following the same `input → LABEL: reasoning` pattern as request rules.
+
+**What the model still returns** (enforced by schema):
+```json
+{
+  "allowed": true,
+  "message": "Email address found and redacted",
+  "redacted_content": "Contact John at [PII_REDACTED]"
+}
+```
+
+The response format instruction that the engine appends for response validation (Section 9) covers the `redacted_content` field:
+```
+- "redacted_content": If sensitive content was found that should be sanitized, provide the redacted version. Otherwise leave empty.
+```
+
+This is the single place where the `redacted_content` field's semantics are explained — not duplicated across every response rule.
+
+### Not Changing the AI's Decision Logic
+
+To be clear: the model still returns `{"allowed": true/false, "message": "..."}` (or `{"allowed": ..., "message": "...", "redacted_content": "..."}` for response rules) in JSON. The migration only changes the *examples within the prompt* from showing JSON to showing plain-text classification labels. The actual response is structured JSON, enforced by the schema — not by the examples.
+
+## 24. Replacement Text in Redact Policies
+
+### Who Specifies Replacement Text?
+
+The replacement text for redacted content is specified **in the policy prompt**, not in the engine. The engine has no default replacement text — it uses whatever the model returns in `redacted_content` verbatim.
+
+Current default rules demonstrate this:
+- `detect-pii-in-response`: "Provide the response with PII replaced by [PII_REDACTED]"
+- `redact-internal-paths`: "Provide redacted content with sensitive parts replaced by [PATH_REDACTED] or [HOST_REDACTED]"
+
+### What Happens When Replacement Text Is Omitted?
+
+If a policy prompt says "redact sensitive content" without specifying what to replace it with, the behavior is **non-deterministic**. The AI model will improvise — likely choosing something like `[REDACTED]`, `***`, or `<removed>`, but there is no guarantee of consistency across calls or models. This is acceptable for a quick start but not recommended for production use.
+
+### Empty `redacted_content` Semantics
+
+The engine treats `redacted_content` as follows:
+- **Non-empty string** → content was redacted, use this version (result: "redact")
+- **Empty string (`""`)** → nothing to redact, pass through the original response unchanged (result: "allow")
+
+This means a fully-redacted response should NOT return an empty string. If the entire response is sensitive, the model should return something like `"[FULLY_REDACTED]"` or `"[PII_REDACTED]"` — not `""`. The policy prompt's replacement text instructions ensure this: if the prompt says "replace with [PII_REDACTED]", a fully-redacted response contains `"[PII_REDACTED]"`, which is non-empty.
+
+### Best Practices (for skill documentation)
+
+1. **Always specify replacement text** in redact policy prompts. Example: "Replace sensitive content with [PII_REDACTED]"
+2. **Use distinct placeholder strings** for different types of redaction so operators can identify what was redacted in audit logs (e.g., `[PII_REDACTED]`, `[PATH_REDACTED]`, `[CREDENTIAL_REDACTED]`)
+3. **Do not rely on the AI to choose replacement text** — different models and temperatures will produce different placeholders, making audit logs inconsistent
 
 ## Open Questions
 
@@ -879,3 +1275,7 @@ The implementation is split into two independently shippable milestones:
 3. **Confidence on error and budget exhaustion**: When the AI call fails (timeout, parse error) or the blocking budget is exhausted, what confidence should be recorded? (Recommendation: 0.0, since we have zero signal. The error field and budget exhaustion flag already indicate the failure mode.)
 
 4. **Future: `decision` enum migration**: If the additive approach proves stable, should we later migrate from `allowed: bool` to `decision: string` for a cleaner API? (Recommendation: defer. Revisit only if the inversion logic causes real confusion or if first-class `redact` support in request validation becomes needed.)
+
+5. **Logprobs feasibility with structured outputs**: Does OpenAI return logprobs when `response_format` with `strict: true` is used? This needs empirical testing before committing to a logprob-based confidence strategy. If logprobs are not available with structured outputs, self-reported confidence may be the only option for providers that support structured outputs but not logprobs alongside them.
+
+6. **Confidence as audit-only vs decision-making**: Should confidence scoring ship initially as audit-only enrichment (always logged, never used for thresholding), with thresholding gated behind the empirical validation in Section 19? This would decouple the observability value from the decision-quality risk.
