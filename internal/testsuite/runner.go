@@ -141,15 +141,9 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 			currentHashes[hash] = true
 		}
 
-		// Build list of current model keys
-		var currentModels []string
-		models, _ := r.getModelsToTest() // Ignore error here - pruning is best-effort
-		for _, model := range models {
-			currentModels = append(currentModels, ModelKey(model.Provider, model.Model))
-		}
-
-		// Prune stale entries
-		r.stateManager.PruneStaleHashes(currentHashes, currentModels)
+		// Prune test cases that no longer exist in the suite. Model results within
+		// surviving test cases are preserved for historical comparison.
+		r.stateManager.PruneStaleHashes(currentHashes)
 	}
 
 	return result, nil
@@ -810,24 +804,101 @@ func (r *Runner) executeTests(ctx context.Context) (*RunResult, error) {
 	}
 
 	// Filter test cases based on options
-	cases := r.filterTestCases()
+	cases, filterStats := r.filterTestCases()
 
 	// Determine which engines to run
 	runCEL := r.shouldRunEngine("cel")
 	runAI := r.shouldRunEngine("ai")
+
+	// Determine which models to test against (needed for pre-run summary)
+	var models []ModelConfig
+	if runAI && r.suite.Engines.AI.Enabled {
+		var err error
+		models, err = r.getModelsToTest()
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Set up streaming output to stdout (unless --quiet)
 	var onProgress ProgressCallback
 	isStreaming := !r.opts.Quiet
 
 	if isStreaming {
-		// Print header at start
+		// Print header
 		fmt.Printf("Policy Test Suite: %s\n", r.suite.BundleID)
-		// Show how many test cases matched filters (especially useful when using --case-pattern)
-		if r.opts.CasePattern != "" && r.opts.CasePattern != "*" {
-			fmt.Printf("%d test case(s) matched pattern %q\n", len(cases), r.opts.CasePattern)
+		fmt.Printf("──────────────────────────────────────────────────\n")
+
+		// State file info
+		if r.opts.StateFile != "" {
+			if r.opts.Force {
+				fmt.Printf("Using state file: %s\n  (full mode - running all tests)\n", r.opts.StateFile)
+			} else {
+				fmt.Printf("Using state file: %s\n  (incremental mode - skipping unchanged tests)\n", r.opts.StateFile)
+			}
 		}
-		fmt.Printf("──────────────────────────────────────────────────\n\n")
+
+		// Filter lines — only shown when a filter is active
+		hasFilters := false
+		if filterStats.CasePattern != "" && filterStats.CasePattern != "*" {
+			if !hasFilters {
+				fmt.Println()
+			}
+			fmt.Printf("Filters: --case-pattern %q (%d of %d matched)\n",
+				filterStats.CasePattern, filterStats.AfterPattern, filterStats.Total)
+			hasFilters = true
+		}
+		if filterStats.Tags != "" {
+			if !hasFilters {
+				fmt.Println()
+			}
+			prev := filterStats.AfterPattern
+			if filterStats.CasePattern == "" || filterStats.CasePattern == "*" {
+				prev = filterStats.Total
+			}
+			prefix := "         "
+			if !hasFilters {
+				prefix = "Filters: "
+			}
+			fmt.Printf("%s--tags %q (%d of %d matched)\n",
+				prefix, filterStats.Tags, filterStats.AfterTags, prev)
+			hasFilters = true
+		}
+		if filterStats.ExcludeTags != "" {
+			if !hasFilters {
+				fmt.Println()
+			}
+			prev := filterStats.AfterTags
+			if filterStats.Tags == "" {
+				prev = filterStats.AfterPattern
+				if filterStats.CasePattern == "" || filterStats.CasePattern == "*" {
+					prev = filterStats.Total
+				}
+			}
+			prefix := "         "
+			if !hasFilters {
+				prefix = "Filters: "
+			}
+			fmt.Printf("%s--exclude-tags %q (%d of %d matched)\n",
+				prefix, filterStats.ExcludeTags, filterStats.AfterExclude, prev)
+			hasFilters = true
+		}
+
+		// Zero-match early exit
+		if len(cases) == 0 {
+			fmt.Println()
+			if hasFilters {
+				fmt.Println("No eligible test cases after filtering")
+			} else {
+				fmt.Println("No test cases found")
+			}
+			return &RunResult{ThresholdsMet: true, TotalCases: 0}, nil
+		}
+
+		// Tests summary line
+		fmt.Println()
+		r.printTestsSummary(cases, models)
+		fmt.Println()
 
 		// Set up callback to print each result as it completes
 		onProgress = func(result TestResult) {
@@ -867,7 +938,7 @@ func (r *Runner) executeTests(ctx context.Context) (*RunResult, error) {
 		}
 
 		if len(aiOnlyCases) > 0 {
-			aiResults, err := r.executeAITests(ctx, aiOnlyCases, onProgress)
+			aiResults, err := r.executeAITests(ctx, aiOnlyCases, models, onProgress)
 			if err != nil {
 				return nil, err
 			}
@@ -886,6 +957,40 @@ func (r *Runner) executeTests(ctx context.Context) (*RunResult, error) {
 	return result, nil
 }
 
+// printTestsSummary prints the "Tests:" summary line showing eligible, to-run,
+// and cached counts. For matrix mode, shows per-model count instead.
+func (r *Runner) printTestsSummary(cases []TestCase, models []ModelConfig) {
+	eligible := len(cases)
+
+	// For matrix mode with multiple models, use simplified summary
+	if len(models) > 1 {
+		fmt.Printf("Tests: %d eligible per model, %d models\n", eligible, len(models))
+		return
+	}
+
+	// Single model (or CEL-only): compute cached count
+	cached := 0
+	if r.stateManager != nil && !r.opts.Force && len(models) == 1 {
+		modelKey := ModelKey(models[0].Provider, models[0].Model)
+		for _, tc := range cases {
+			if tc.Engine != "ai" && tc.Engine != "both" {
+				continue
+			}
+			contentHash := r.testCaseHashes[tc.CaseID]
+			if r.stateManager.ShouldSkip(contentHash, r.policyHashes, modelKey, r.opts.RetryFailed) {
+				cached++
+			}
+		}
+	}
+
+	toRun := eligible - cached
+	if cached > 0 {
+		fmt.Printf("Tests: %d eligible, %d to run, %d cached (skip)\n", eligible, toRun, cached)
+	} else {
+		fmt.Printf("Tests: %d eligible, %d to run\n", eligible, toRun)
+	}
+}
+
 // shouldRunEngine determines if a specific engine should be run.
 func (r *Runner) shouldRunEngine(engine string) bool {
 	if r.opts.Engine == "" || r.opts.Engine == "all" {
@@ -895,13 +1000,8 @@ func (r *Runner) shouldRunEngine(engine string) bool {
 }
 
 // executeAITests runs AI tests against configured models.
-func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgress ProgressCallback) ([]TestResult, error) {
-	// Determine which models to test against
-	models, err := r.getModelsToTest()
-	if err != nil {
-		return nil, err
-	}
-
+// models is pre-computed by the caller so it can be used for pre-run summaries.
+func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, models []ModelConfig, onProgress ProgressCallback) ([]TestResult, error) {
 	if len(models) == 0 {
 		// No models configured, skip all AI tests
 		var results []TestResult
@@ -939,6 +1039,8 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 				result := TestResult{
 					CaseID: tc.CaseID,
 					Title:  tc.Title,
+					Engine: "ai",
+					Model:  modelKey,
 					Status: "errored",
 					Error: &TestError{
 						Type:    "config_error",
@@ -968,28 +1070,39 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 			// Check if we should skip this test (valid cached result)
 			if r.stateManager != nil && !r.opts.Force {
 				if r.stateManager.ShouldSkip(contentHash, r.policyHashes, modelKey, r.opts.RetryFailed) {
-					// Report as skipped (cached), including the previous status
+					// Report as skipped (cached), including the previous status and duration
 					cachedStatus := r.stateManager.GetCachedStatus(contentHash, r.policyHashes, modelKey)
+					cachedDuration := r.stateManager.GetCachedDuration(contentHash, r.policyHashes, modelKey)
 					result := TestResult{
-						CaseID: tc.CaseID,
-						Title:  tc.Title,
-						Engine: "ai",
-						Model:  modelKey,
-						Status: "skipped",
+						CaseID:    tc.CaseID,
+						Title:     tc.Title,
+						Engine:    "ai",
+						Model:     modelKey,
+						Status:    "skipped",
+						ElapsedMs: cachedDuration,
 						Error: &TestError{
 							Type:    "cached",
 							Message: fmt.Sprintf("cached %s", cachedStatus),
 						},
 					}
 					skippedCached = append(skippedCached, result)
-					if onProgress != nil {
-						onProgress(result)
-					}
 					continue
 				}
 			}
 
 			casesToRun = append(casesToRun, tc)
+		}
+
+		// Assign test numbering: cached skips come first, then executed tests
+		sectionTotal := len(skippedCached) + len(casesToRun)
+		testNum := 0
+		for i := range skippedCached {
+			testNum++
+			skippedCached[i].TestNumber = testNum
+			skippedCached[i].TestTotal = sectionTotal
+			if onProgress != nil {
+				onProgress(skippedCached[i])
+			}
 		}
 
 		allResults = append(allResults, skippedCached...)
@@ -1006,8 +1119,10 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 		// Create progress indicator for this model's tests (TTY-only animation)
 		progressIndicator := NewTestProgressIndicator(os.Stdout, colorEnabled)
 
-		// onStart fires before each test — starts the progress bar animation
+		// onStart fires before each test — starts the progress bar animation.
+		// testNum is incremented here to provide the [N/M] prefix for the progress indicator.
 		onStart := func(tc TestCase) {
+			testNum++
 			if onProgress == nil {
 				return // no streaming output, skip animation
 			}
@@ -1017,13 +1132,17 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 				contentHash := r.testCaseHashes[tc.CaseID]
 				estimatedMs = r.stateManager.GetCachedDuration(contentHash, r.policyHashes, modelKey)
 			}
-			progressIndicator.Start(tc.CaseID, engineInfo, estimatedMs)
+			progressIndicator.Start(tc.CaseID, engineInfo, tc.Title, estimatedMs, testNum, sectionTotal)
 		}
 
-		// Wrap progress callback to stop animation, record state, then print result
+		// Wrap progress callback to stop animation, assign numbering, record state, then print result
 		wrappedProgress := func(result TestResult) {
 			// Stop progress animation before printing result
 			progressIndicator.Stop()
+
+			// Assign test numbering (testNum was incremented in onStart)
+			result.TestNumber = testNum
+			result.TestTotal = sectionTotal
 
 			// Record to state manager
 			if r.stateManager != nil {
@@ -1049,9 +1168,16 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, onProgres
 			}
 		}
 
+		// Tell the rate limiter about the progress indicator so it can pause/resume
+		// the animation around rate limit output.
+		r.rateLimiter.SetProgressControl(progressIndicator)
+
 		// Execute tests with this model
 		modelResults := runner.ExecuteTests(ctx, casesToRun, onStart, wrappedProgress)
 		allResults = append(allResults, modelResults...)
+
+		// Clear progress control for this model (tests done, no animation to coordinate)
+		r.rateLimiter.SetProgressControl(nil)
 	}
 
 	return allResults, nil
@@ -1180,47 +1306,74 @@ func parseModelFlag(flag string, modelMatrix []ModelConfig) *ModelConfig {
 	return nil
 }
 
-// filterTestCases filters test cases based on CLI options.
-func (r *Runner) filterTestCases() []TestCase {
-	var filtered []TestCase
+// FilterStats tracks how many test cases survived each filter stage.
+type FilterStats struct {
+	Total        int    // total test cases in suite
+	AfterPattern int    // after --case-pattern (= Total if no pattern)
+	AfterTags    int    // after --tags (= AfterPattern if no tags)
+	AfterExclude int    // after --exclude-tags (= AfterTags if no exclude)
+	CasePattern  string // the pattern used (empty if none)
+	Tags         string // the tags used (empty if none)
+	ExcludeTags  string // the exclude tags used (empty if none)
+}
 
-	for _, tc := range r.testCases {
-		// Apply tag filtering
-		if r.opts.Tags != "" {
-			tags := splitTags(r.opts.Tags)
-			if !hasAllTags(tc.Tags, tags) {
-				continue
-			}
-		}
+// filterTestCases filters test cases based on CLI options and returns
+// both the filtered cases and stats about how many survived each stage.
+func (r *Runner) filterTestCases() ([]TestCase, FilterStats) {
+	stats := FilterStats{
+		Total:       len(r.testCases),
+		CasePattern: r.opts.CasePattern,
+		Tags:        r.opts.Tags,
+		ExcludeTags: r.opts.ExcludeTags,
+	}
 
-		// Apply exclude tag filtering
-		if r.opts.ExcludeTags != "" {
-			excludeTags := splitTags(r.opts.ExcludeTags)
-			if hasAnyTag(tc.Tags, excludeTags) {
-				continue
-			}
-		}
-
-		// Apply case pattern filtering (supports comma-separated patterns)
-		if r.opts.CasePattern != "" && r.opts.CasePattern != "*" {
-			patterns := strings.Split(r.opts.CasePattern, ",")
-			matched := false
+	// Stage 1: Apply case pattern filtering (supports comma-separated patterns)
+	afterPattern := r.testCases
+	if r.opts.CasePattern != "" && r.opts.CasePattern != "*" {
+		var matched []TestCase
+		patterns := strings.Split(r.opts.CasePattern, ",")
+		for _, tc := range afterPattern {
 			for _, pattern := range patterns {
 				pattern = strings.TrimSpace(pattern)
 				if m, _ := filepath.Match(pattern, tc.CaseID); m {
-					matched = true
+					matched = append(matched, tc)
 					break
 				}
 			}
-			if !matched {
-				continue
+		}
+		afterPattern = matched
+	}
+	stats.AfterPattern = len(afterPattern)
+
+	// Stage 2: Apply tag filtering
+	afterTags := afterPattern
+	if r.opts.Tags != "" {
+		tags := splitTags(r.opts.Tags)
+		var matched []TestCase
+		for _, tc := range afterTags {
+			if hasAllTags(tc.Tags, tags) {
+				matched = append(matched, tc)
 			}
 		}
-
-		filtered = append(filtered, tc)
+		afterTags = matched
 	}
+	stats.AfterTags = len(afterTags)
 
-	return filtered
+	// Stage 3: Apply exclude tag filtering
+	afterExclude := afterTags
+	if r.opts.ExcludeTags != "" {
+		excludeTags := splitTags(r.opts.ExcludeTags)
+		var matched []TestCase
+		for _, tc := range afterExclude {
+			if !hasAnyTag(tc.Tags, excludeTags) {
+				matched = append(matched, tc)
+			}
+		}
+		afterExclude = matched
+	}
+	stats.AfterExclude = len(afterExclude)
+
+	return afterExclude, stats
 }
 
 // filterCasesForEngine returns cases that should run for a specific engine.
@@ -1320,7 +1473,8 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 
 	// Calculate remaining tests (for --max-tests)
 	if r.opts.MaxTests > 0 {
-		totalFilteredCases := len(r.filterTestCases())
+		filtered, _ := r.filterTestCases()
+		totalFilteredCases := len(filtered)
 		// All outcomes are already categorized in TotalCases (passed + failed + errored + skipped).
 		// Remaining = cases not yet accounted for in any outcome.
 		result.Remaining = totalFilteredCases - result.TotalCases
@@ -1468,16 +1622,29 @@ func formatPolicies(policies []PolicyResult, actualDecision string, expectedPoli
 	var sb strings.Builder
 	sb.WriteString("    policies:\n")
 
-	// For "allow" decisions, triggering markers are not meaningful — every policy
-	// returns "allow" by default (it's the absence of deny, not an active action).
-	// Just list all policies uniformly sorted alphabetically.
+	// For "allow" decisions, no policy actively triggered — allow is the absence of deny.
+	// When the test case declares expected policies, highlight them with a green ► to
+	// show which policy is under test, and sort them to the top for scannability.
 	if actualDecision == "allow" {
-		sorted := make([]PolicyResult, len(policies))
-		copy(sorted, policies)
-		sort.Slice(sorted, func(i, j int) bool {
-			return sorted[i].PolicyName < sorted[j].PolicyName
+		var expected, rest []PolicyResult
+		for _, p := range policies {
+			if len(expectedPolicies) > 0 && expectedPolicies[p.PolicyName] {
+				expected = append(expected, p)
+			} else {
+				rest = append(rest, p)
+			}
+		}
+		sort.Slice(expected, func(i, j int) bool {
+			return expected[i].PolicyName < expected[j].PolicyName
 		})
-		for _, p := range sorted {
+		sort.Slice(rest, func(i, j int) bool {
+			return rest[i].PolicyName < rest[j].PolicyName
+		})
+		for _, p := range expected {
+			marker := colorize(ansiBoldGreen, "►")
+			sb.WriteString(fmt.Sprintf("      %s %-*s  %-5s  %s\n", marker, maxNameLen, p.PolicyName, p.Decision, formatMs(p.ElapsedMs)))
+		}
+		for _, p := range rest {
 			sb.WriteString(fmt.Sprintf("        %-*s  %-5s  %s\n", maxNameLen, p.PolicyName, p.Decision, formatMs(p.ElapsedMs)))
 		}
 		return sb.String()
@@ -1501,17 +1668,24 @@ func formatPolicies(policies []PolicyResult, actualDecision string, expectedPoli
 		return other[i].PolicyName < other[j].PolicyName
 	})
 
-	// Write triggering policies first with colored ► marker
+	// Write triggering policies first with colored ► marker.
+	// Unexpected policies also show their AI reasoning as a wrapped paragraph
+	// to help diagnose why they triggered.
 	for _, p := range triggering {
 		marker := "►"
+		isUnexpected := false
 		if len(expectedPolicies) > 0 {
 			if expectedPolicies[p.PolicyName] {
 				marker = colorize(ansiBoldGreen, "►")
 			} else {
 				marker = colorize(ansiBoldYellow, "►")
+				isUnexpected = true
 			}
 		}
 		sb.WriteString(fmt.Sprintf("      %s %-*s  %-5s  %s\n", marker, maxNameLen, p.PolicyName, p.Decision, formatMs(p.ElapsedMs)))
+		if isUnexpected && p.Reasoning != "" {
+			sb.WriteString(wrapReasoning(p.Reasoning, policyReasoningIndent, policyReasoningMaxWidth))
+		}
 	}
 	// Write remaining policies
 	for _, p := range other {
@@ -1532,6 +1706,59 @@ func formatReasoning(reasoning string) string {
 		return fmt.Sprintf("    reasoning: %s...\n", reasoning[:idx])
 	}
 	return fmt.Sprintf("    reasoning: %s\n", reasoning)
+}
+
+// policyReasoningIndent is the whitespace prefix for wrapped reasoning lines
+// displayed below unexpected policy markers. Aligns visually under the policy
+// name text (past the "      ► " prefix).
+const policyReasoningIndent = "          "
+
+// policyReasoningMaxWidth is the total line width target for wrapped reasoning.
+const policyReasoningMaxWidth = 80
+
+// wrapReasoning wraps reasoning text into indented paragraph lines for display
+// below an unexpected policy marker. Each line is prefixed with indent and
+// content is wrapped at maxWidth characters (including indent).
+func wrapReasoning(reasoning, indent string, maxWidth int) string {
+	if reasoning == "" {
+		return ""
+	}
+
+	contentWidth := maxWidth - len(indent)
+	if contentWidth < 20 {
+		contentWidth = 20
+	}
+
+	words := strings.Fields(reasoning)
+	if len(words) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	lineLen := 0
+
+	for i, word := range words {
+		if i == 0 {
+			sb.WriteString(indent)
+			sb.WriteString(word)
+			lineLen = len(word)
+			continue
+		}
+
+		if lineLen+1+len(word) > contentWidth {
+			sb.WriteByte('\n')
+			sb.WriteString(indent)
+			sb.WriteString(word)
+			lineLen = len(word)
+		} else {
+			sb.WriteByte(' ')
+			sb.WriteString(word)
+			lineLen += 1 + len(word)
+		}
+	}
+
+	sb.WriteByte('\n')
+	return sb.String()
 }
 
 // formatRedacted formats redacted content for human output.
@@ -1579,12 +1806,22 @@ func expectedPolicyNames(expected ExpectedResult) map[string]bool {
 	return names
 }
 
+// formatTestNumberPrefix returns a dimmed [N/M] prefix for test numbering.
+// Returns empty string when numbering is not available (either value is 0).
+func formatTestNumberPrefix(testNumber, testTotal int) string {
+	if testNumber <= 0 || testTotal <= 0 {
+		return ""
+	}
+	return colorize(ansiDim, fmt.Sprintf("[%d/%d]", testNumber, testTotal)) + " "
+}
+
 // formatSingleTestResult formats a single test result for streaming output.
 func formatSingleTestResult(tr TestResult) string {
 	var sb strings.Builder
 
 	// Build engine/model suffix for display
 	engineInfo := formatEngineInfo(tr.Engine, tr.Model)
+	numberPrefix := formatTestNumberPrefix(tr.TestNumber, tr.TestTotal)
 	isCEL := tr.Engine == "cel"
 	expectedNames := expectedPolicyNames(tr.Expected)
 
@@ -1616,7 +1853,7 @@ func formatSingleTestResult(tr TestResult) string {
 	switch tr.Status {
 	case "passed":
 		icon := colorize(ansiBoldGreen, "✓")
-		sb.WriteString(fmt.Sprintf("%s %s%s\n", icon, tr.CaseID, engineInfo))
+		sb.WriteString(fmt.Sprintf("%s %s%s%s\n", icon, numberPrefix, tr.CaseID, engineInfo))
 		if tr.Title != "" {
 			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
@@ -1632,7 +1869,7 @@ func formatSingleTestResult(tr TestResult) string {
 		}
 	case "failed":
 		icon := colorize(ansiBoldRed, "✗")
-		sb.WriteString(fmt.Sprintf("%s %s%s\n", icon, tr.CaseID, engineInfo))
+		sb.WriteString(fmt.Sprintf("%s %s%s%s\n", icon, numberPrefix, tr.CaseID, engineInfo))
 		if tr.Title != "" {
 			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
@@ -1649,7 +1886,12 @@ func formatSingleTestResult(tr TestResult) string {
 			sb.WriteString(formatRedacted("redacted expected", tr.Expected.RedactedContent))
 			sb.WriteString(formatRedacted("redacted actual  ", tr.Actual.RedactedContent))
 		}
-		sb.WriteString(formatReasoning(tr.Actual.Reasoning))
+		// Show top-level reasoning only when the decision itself mismatched.
+		// When the decision matches but unexpected policies caused the failure,
+		// per-policy reasoning is shown inline under each ► marker instead.
+		if tr.Expected.Decision != tr.Actual.Decision {
+			sb.WriteString(formatReasoning(tr.Actual.Reasoning))
+		}
 		for _, f := range tr.Failures {
 			// Colorize ► in failure messages to match the yellow policy markers above
 			display := strings.ReplaceAll(f, "►", colorize(ansiBoldYellow, "►"))
@@ -1657,7 +1899,7 @@ func formatSingleTestResult(tr TestResult) string {
 		}
 	case "errored":
 		icon := colorize(ansiBoldYellow, "⚠")
-		sb.WriteString(fmt.Sprintf("%s %s%s\n", icon, tr.CaseID, engineInfo))
+		sb.WriteString(fmt.Sprintf("%s %s%s%s\n", icon, numberPrefix, tr.CaseID, engineInfo))
 		if tr.Title != "" {
 			sb.WriteString(fmt.Sprintf("    %s\n", tr.Title))
 		}
@@ -1685,7 +1927,7 @@ func formatSingleTestResult(tr TestResult) string {
 		}
 	case "skipped":
 		icon := colorize(ansiDim, "○")
-		sb.WriteString(fmt.Sprintf("%s %s%s (skipped)\n", icon, tr.CaseID, engineInfo))
+		sb.WriteString(fmt.Sprintf("%s %s%s%s (skipped)\n", icon, numberPrefix, tr.CaseID, engineInfo))
 		if tr.Error != nil {
 			sb.WriteString(fmt.Sprintf("    reason: %s\n", tr.Error.Message))
 		}
@@ -1827,16 +2069,16 @@ func formatSlowestPolicies(results []TestResult) string {
 	var sb strings.Builder
 	sb.WriteString("\nSlowest policies (top 5):\n")
 
-	const slowThresholdMs = 3000 // Mark policies over 3s as slow
+	const slowThresholdMs = 2000 // Mark policies with avg over 2s as slow
 
 	for _, t := range sorted {
 		avgMs := t.totalMs / int64(t.count)
-		slowMarker := ""
+		prefix := "  - "
 		if avgMs > slowThresholdMs {
-			slowMarker = " ⚠"
+			prefix = "  " + colorize(ansiBoldYellow, "⚠") + " "
 		}
-		sb.WriteString(fmt.Sprintf("  - %s: avg %s, max %s (%d runs)%s\n",
-			t.name, formatMs(avgMs), formatMs(t.maxMs), t.count, slowMarker))
+		sb.WriteString(fmt.Sprintf("%s%s: avg %s, max %s (%d runs)\n",
+			prefix, t.name, formatMs(avgMs), formatMs(t.maxMs), t.count))
 	}
 
 	return sb.String()
@@ -1858,18 +2100,39 @@ func formatTextOutput(suite *Suite, results []TestResult, summary *RunResult, co
 	return sb.String()
 }
 
-// buildModelComparison builds per-model comparison entries from current results
-// and cached state. When a state manager is available, AI model data comes from
-// the state file (which includes both current and previous run results). CEL data
-// always comes from the current run since CEL results are not cached.
-// Returns nil if fewer than 2 models have data (nothing to compare).
+// buildModelComparison builds per-model comparison entries from the current run's
+// results, then augments with historical data from cached state for models that
+// didn't run in this invocation. This ensures the model summary always matches
+// the overall summary for models tested in the current run.
 func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEntry {
-	// Track which models were tested in this run
-	modelsInRun := make(map[string]bool)
+	// Aggregate AI model stats from the current run's results (authoritative source)
+	aiStats := make(map[string]*ModelComparisonEntry)
 	for _, tr := range results {
-		if tr.Model != "" {
-			modelsInRun[tr.Model] = true
+		if tr.Engine != "ai" || tr.Model == "" {
+			continue
 		}
+
+		entry, ok := aiStats[tr.Model]
+		if !ok {
+			entry = &ModelComparisonEntry{Model: tr.Model}
+			aiStats[tr.Model] = entry
+		}
+
+		// For cached-skipped tests, count by their original status
+		status := tr.Status
+		if status == "skipped" && tr.Error != nil && tr.Error.Type == "cached" {
+			status = strings.TrimPrefix(tr.Error.Message, "cached ")
+		}
+
+		switch status {
+		case "passed":
+			entry.Passed++
+		case "failed":
+			entry.Failed++
+		case "errored":
+			entry.Errored++
+		}
+		entry.TotalMs += tr.ElapsedMs
 	}
 
 	var entries []ModelComparisonEntry
@@ -1911,10 +2174,23 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 		entries = append(entries, entry)
 	}
 
-	// AI model entries: prefer state file (cumulative across runs) over current results
+	// Add current run's AI model entries
+	for _, entry := range aiStats {
+		evaluated := entry.Passed + entry.Failed + entry.Errored
+		if evaluated > 0 {
+			entry.MatchRate = float64(entry.Passed) / float64(evaluated)
+			entry.AvgMs = entry.TotalMs / int64(evaluated)
+		}
+		entries = append(entries, *entry)
+	}
+
+	// Augment with historical models from state that didn't run in this invocation
 	if r.stateManager != nil {
 		cachedSummaries := r.stateManager.GetModelSummaries(r.policyHashes)
 		for modelKey, summary := range cachedSummaries {
+			if aiStats[modelKey] != nil {
+				continue // Already have current-run data for this model
+			}
 			evaluated := summary.Passed + summary.Failed + summary.Errored
 			entry := ModelComparisonEntry{
 				Model:     modelKey,
@@ -1922,7 +2198,7 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 				Failed:    summary.Failed,
 				Errored:   summary.Errored,
 				TotalMs:   summary.TotalMs,
-				FromCache: !modelsInRun[modelKey],
+				FromCache: true,
 			}
 			if evaluated > 0 {
 				entry.MatchRate = float64(summary.Passed) / float64(evaluated)
@@ -1930,49 +2206,9 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 			}
 			entries = append(entries, entry)
 		}
-	} else {
-		// No state file — derive AI model data from current run results
-		aiStats := make(map[string]*ModelComparisonEntry)
-		for _, tr := range results {
-			if tr.Engine != "ai" || tr.Model == "" {
-				continue
-			}
-
-			entry, ok := aiStats[tr.Model]
-			if !ok {
-				entry = &ModelComparisonEntry{Model: tr.Model}
-				aiStats[tr.Model] = entry
-			}
-
-			// For cached-skipped tests, count by their original status
-			status := tr.Status
-			if status == "skipped" && tr.Error != nil && tr.Error.Type == "cached" {
-				status = strings.TrimPrefix(tr.Error.Message, "cached ")
-			}
-
-			switch status {
-			case "passed":
-				entry.Passed++
-			case "failed":
-				entry.Failed++
-			case "errored":
-				entry.Errored++
-			}
-			entry.TotalMs += tr.ElapsedMs
-		}
-
-		for _, entry := range aiStats {
-			evaluated := entry.Passed + entry.Failed + entry.Errored
-			if evaluated > 0 {
-				entry.MatchRate = float64(entry.Passed) / float64(evaluated)
-				entry.AvgMs = entry.TotalMs / int64(evaluated)
-			}
-			entries = append(entries, *entry)
-		}
 	}
 
-	// Only show comparison when there are 2+ models to compare
-	if len(entries) < 2 {
+	if len(entries) == 0 {
 		return nil
 	}
 
@@ -2017,7 +2253,10 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 	var sb strings.Builder
 
 	// Top separator with label
-	label := "Model Comparison"
+	label := "Model Summary"
+	if len(entries) > 1 {
+		label = "Model Comparison"
+	}
 	prefix := "\n── " + label + " "
 	remaining := tableWidth - utf8.RuneCountInString(prefix) + 1 // +1 for leading \n
 	if remaining < 2 {

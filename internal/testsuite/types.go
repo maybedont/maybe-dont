@@ -231,9 +231,10 @@ func (a AcceptanceConfig) IsStrictPolicyMatch() bool {
 
 // ExecutionConfig defines test execution parameters.
 type ExecutionConfig struct {
-	TimeoutMs    int `yaml:"timeout_ms"`
-	Retries      int `yaml:"retries"`
-	RetryDelayMs int `yaml:"retry_delay_ms"`
+	TimeoutMs          int `yaml:"timeout_ms"`
+	MaxTestDurationMs  int `yaml:"max_test_duration_ms"`
+	Retries            int `yaml:"retries"`
+	RetryDelayMs       int `yaml:"retry_delay_ms"`
 
 	// Rate limiting configuration
 	RateLimits              map[string]ProviderRateLimit `yaml:"rate_limits,omitempty"`

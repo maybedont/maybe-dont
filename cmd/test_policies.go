@@ -162,6 +162,10 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cannot use both --incremental and --full")
 	}
 
+	if model != "" && runMatrix {
+		return fmt.Errorf("cannot use both --model and --matrix; --model selects a single model, --matrix runs all enabled models")
+	}
+
 	useState := incremental || full
 
 	if stateFile != "" && !useState {
@@ -187,15 +191,6 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 		stateDir := filepath.Dir(resolvedStateFile)
 		if err := os.MkdirAll(stateDir, 0700); err != nil {
 			return fmt.Errorf("failed to create state directory %s: %w", stateDir, err)
-		}
-	}
-
-	// Print state file messaging
-	if useState && !quiet {
-		if incremental {
-			fmt.Printf("Using state file: %s (incremental mode - skipping unchanged tests)\n", resolvedStateFile)
-		} else {
-			fmt.Printf("Using state file: %s (full mode - running all tests)\n", resolvedStateFile)
 		}
 	}
 

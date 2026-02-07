@@ -22,6 +22,7 @@ type AITestRunner struct {
 	responsePolicies   []config.AIResponsePolicy
 	logger             *config.SessionLogger
 	timeoutMs          int
+	maxTestDurationMs  int
 	retries            int
 	retryDelayMs       int
 	rateLimiter        *RateLimiter
@@ -41,6 +42,7 @@ func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *c
 		providerClient:    client,
 		logger:            logger,
 		timeoutMs:         suite.Execution.TimeoutMs,
+		maxTestDurationMs: suite.Execution.MaxTestDurationMs,
 		retries:           suite.Execution.Retries,
 		retryDelayMs:      suite.Execution.RetryDelayMs,
 		rateLimiter:       rateLimiter,
@@ -49,7 +51,10 @@ func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *c
 
 	// Set defaults
 	if runner.timeoutMs == 0 {
-		runner.timeoutMs = 30000
+		runner.timeoutMs = 60000
+	}
+	if runner.maxTestDurationMs == 0 {
+		runner.maxTestDurationMs = 300000 // 5 minutes
 	}
 	if runner.retries == 0 {
 		runner.retries = 2
@@ -278,10 +283,12 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 		},
 	}
 
-	// Note: We don't create a timeout context here. Instead, fresh timeouts are created
-	// per API call in evaluatePolicy. This ensures rate limit waits (which can be 60s+)
-	// don't consume the test's execution budget. The timeout measures actual API call time,
-	// not wall clock time including expected rate limit waits.
+	// Apply a per-test-case deadline that caps the total wall-clock time including
+	// rate limit waits, retries, and all policy evaluations. Individual API calls
+	// still have their own timeout (timeoutMs), but this prevents a single test
+	// from running indefinitely when sequential mode + retries compound.
+	testCtx, testCancel := context.WithTimeout(ctx, time.Duration(r.maxTestDurationMs)*time.Millisecond)
+	defer testCancel()
 
 	var evalResult *aiEvalResult
 	var err error
@@ -292,7 +299,7 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 			time.Sleep(time.Duration(r.retryDelayMs) * time.Millisecond)
 		}
 
-		evalResult, err = r.evaluateWithRetry(ctx, tc)
+		evalResult, err = r.evaluateWithRetry(testCtx, tc)
 		if err == nil {
 			break
 		}
@@ -307,7 +314,17 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 
 	if err != nil {
 		result.Status = "errored"
-		result.Error = classifyError(err, r.timeoutMs)
+		// If the per-test-case deadline fired (not a provider-level timeout), classify
+		// it distinctly so the user knows which setting to adjust.
+		if errors.Is(testCtx.Err(), context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			result.Error = &TestError{
+				Type:    "test_timeout",
+				Message: fmt.Sprintf("test case exceeded max duration (%dms)", r.maxTestDurationMs),
+				Details: "increase execution.max_test_duration_ms in suite config if this persists",
+			}
+		} else {
+			result.Error = classifyError(err, r.timeoutMs)
+		}
 		return result
 	}
 

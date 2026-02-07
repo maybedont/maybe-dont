@@ -181,21 +181,86 @@ func TestStateManager_ShouldSkip(t *testing.T) {
 }
 
 func TestStateManager_RecordResult(t *testing.T) {
-	sm, _ := NewStateManager("", "test-suite", "1.0.0")
+	t.Run("creates new entry", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
 
-	sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
-		Status:     "passed",
-		Confidence: 1.0,
-		LastRun:    time.Now(),
-		DurationMs: 100,
+		sm.RecordResult("sha256:abc123", "test-1", []string{"sha256:pol1"}, "openai:gpt-4", &CachedResult{
+			Status:     "passed",
+			Confidence: 1.0,
+			LastRun:    time.Now(),
+			DurationMs: 100,
+		})
+
+		cached := sm.state.Results["sha256:abc123"]
+		require.NotNil(t, cached)
+		assert.Equal(t, "test-1", cached.CaseID)
+		assert.Equal(t, []string{"sha256:pol1"}, cached.PolicyHashes)
+		assert.Equal(t, "passed", cached.Models["openai:gpt-4"].Status)
 	})
 
-	// Verify it's recorded
-	cached := sm.state.Results["sha256:abc123"]
-	require.NotNil(t, cached)
-	assert.Equal(t, "test-1", cached.CaseID)
-	assert.Equal(t, []string{"sha256:pol1"}, cached.PolicyHashes)
-	assert.Equal(t, "passed", cached.Models["openai:gpt-4"].Status)
+	t.Run("adds second model to existing entry", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+		hashes := []string{"sha256:pol1"}
+
+		sm.RecordResult("sha256:abc123", "test-1", hashes, "openai:gpt-4", &CachedResult{Status: "passed"})
+		sm.RecordResult("sha256:abc123", "test-1", hashes, "anthropic:claude", &CachedResult{Status: "failed"})
+
+		cached := sm.state.Results["sha256:abc123"]
+		require.NotNil(t, cached)
+		assert.Len(t, cached.Models, 2)
+		assert.Equal(t, "passed", cached.Models["openai:gpt-4"].Status)
+		assert.Equal(t, "failed", cached.Models["anthropic:claude"].Status)
+	})
+
+	t.Run("overwrites existing model result", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+		hashes := []string{"sha256:pol1"}
+
+		sm.RecordResult("sha256:abc123", "test-1", hashes, "openai:gpt-4", &CachedResult{
+			Status: "failed", DurationMs: 100,
+		})
+		sm.RecordResult("sha256:abc123", "test-1", hashes, "openai:gpt-4", &CachedResult{
+			Status: "passed", DurationMs: 200,
+		})
+
+		cached := sm.state.Results["sha256:abc123"]
+		require.NotNil(t, cached)
+		assert.Equal(t, "passed", cached.Models["openai:gpt-4"].Status)
+		assert.Equal(t, int64(200), cached.Models["openai:gpt-4"].DurationMs)
+	})
+
+	// Regression test: RecordResult must update PolicyHashes on existing entries.
+	// Without this, entries created with nil hashes (e.g., from before computePolicyHashes
+	// was added) can never be skipped because ShouldSkip sees hashesMatch(nil, computed)
+	// which always fails. The entry gets re-recorded on every run but PolicyHashes stays
+	// nil, creating an infinite re-run loop.
+	t.Run("updates policy hashes on existing entry", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+		// Simulate a legacy entry recorded before policy hashing was implemented
+		sm.RecordResult("sha256:abc123", "test-1", nil, "openai:gpt-4", &CachedResult{
+			Status: "passed", DurationMs: 100,
+		})
+
+		// Verify initial state: nil hashes
+		cached := sm.state.Results["sha256:abc123"]
+		require.NotNil(t, cached)
+		assert.Nil(t, cached.PolicyHashes)
+
+		// Re-record the same test with computed policy hashes (simulates a re-run
+		// after computePolicyHashes was added)
+		newHashes := []string{"sha256:pol1", "sha256:pol2"}
+		sm.RecordResult("sha256:abc123", "test-1", newHashes, "openai:gpt-4", &CachedResult{
+			Status: "passed", DurationMs: 120,
+		})
+
+		// PolicyHashes must be updated so that future ShouldSkip calls succeed
+		assert.Equal(t, newHashes, cached.PolicyHashes)
+
+		// The critical assertion: ShouldSkip must now return true with the new hashes
+		assert.True(t, sm.ShouldSkip("sha256:abc123", newHashes, "openai:gpt-4", false),
+			"ShouldSkip must return true after RecordResult updates policy hashes")
+	})
 }
 
 func TestStateManager_PruneStaleHashes(t *testing.T) {
@@ -208,31 +273,28 @@ func TestStateManager_PruneStaleHashes(t *testing.T) {
 
 		// Prune with only one test remaining
 		currentHashes := map[string]bool{"sha256:abc123": true}
-		currentModels := []string{"openai:gpt-4"}
-		sm.PruneStaleHashes(currentHashes, currentModels)
+		sm.PruneStaleHashes(currentHashes)
 
 		// test-1 should remain, test-2 should be removed
 		assert.Contains(t, sm.state.Results, "sha256:abc123")
 		assert.NotContains(t, sm.state.Results, "sha256:def456")
 	})
 
-	t.Run("removes stale model results", func(t *testing.T) {
+	t.Run("preserves all model results within surviving test cases", func(t *testing.T) {
 		sm, _ := NewStateManager("", "test-suite", "1.0.0")
 
-		// Record results for two models
+		// Record results for two models on the same test case
 		sm.RecordResult("sha256:abc123", "test-1", []string{}, "openai:gpt-4", &CachedResult{Status: "passed"})
 		sm.RecordResult("sha256:abc123", "test-1", []string{}, "anthropic:claude", &CachedResult{Status: "passed"})
 
-		// Prune with only one model remaining
+		// Prune test cases — model data within surviving entries is preserved
 		currentHashes := map[string]bool{"sha256:abc123": true}
-		currentModels := []string{"openai:gpt-4"}
-		sm.PruneStaleHashes(currentHashes, currentModels)
+		sm.PruneStaleHashes(currentHashes)
 
-		// openai model should remain, anthropic should be removed
 		cached := sm.state.Results["sha256:abc123"]
 		require.NotNil(t, cached)
 		assert.Contains(t, cached.Models, "openai:gpt-4")
-		assert.NotContains(t, cached.Models, "anthropic:claude")
+		assert.Contains(t, cached.Models, "anthropic:claude", "model results should be preserved across prune")
 	})
 }
 
@@ -276,6 +338,56 @@ func TestStateManager_Save(t *testing.T) {
 		_, err = os.Stat(statePath)
 		assert.True(t, os.IsNotExist(err))
 	})
+}
+
+// TestStateManager_MultiModelPersistence verifies that multiple model results
+// on the same test case survive a save/load round-trip. This reproduces the bug
+// where running --model A then --model B would lose model A's cached results.
+func TestStateManager_MultiModelPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+	policyHashes := []string{"sha256:policy1"}
+
+	// Simulate first run: record results for model A
+	sm1, err := NewStateManager(statePath, "test-suite", "1.0.0")
+	require.NoError(t, err)
+
+	sm1.RecordResult("sha256:test1", "case-1", policyHashes, "anthropic:claude", &CachedResult{
+		Status: "passed", DurationMs: 5000,
+	})
+	sm1.RecordResult("sha256:test2", "case-2", policyHashes, "anthropic:claude", &CachedResult{
+		Status: "failed", DurationMs: 3000,
+	})
+	require.NoError(t, sm1.Save())
+
+	// Simulate second run: load state, record results for model B on same test cases
+	sm2, err := NewStateManager(statePath, "test-suite", "1.0.0")
+	require.NoError(t, err)
+
+	sm2.RecordResult("sha256:test1", "case-1", policyHashes, "openai:gpt-5", &CachedResult{
+		Status: "passed", DurationMs: 2000,
+	})
+	sm2.RecordResult("sha256:test2", "case-2", policyHashes, "openai:gpt-5", &CachedResult{
+		Status: "passed", DurationMs: 1500,
+	})
+	require.NoError(t, sm2.Save())
+
+	// Load final state and verify both models are present
+	sm3, err := NewStateManager(statePath, "test-suite", "1.0.0")
+	require.NoError(t, err)
+
+	summaries := sm3.GetModelSummaries(policyHashes)
+	require.Len(t, summaries, 2, "expected both models to survive save/load round-trip")
+
+	anthropic := summaries["anthropic:claude"]
+	require.NotNil(t, anthropic, "anthropic model results should be preserved")
+	assert.Equal(t, 1, anthropic.Passed)
+	assert.Equal(t, 1, anthropic.Failed)
+
+	openai := summaries["openai:gpt-5"]
+	require.NotNil(t, openai, "openai model results should be preserved")
+	assert.Equal(t, 2, openai.Passed)
+	assert.Equal(t, 0, openai.Failed)
 }
 
 func TestComputeContentHash(t *testing.T) {
@@ -392,4 +504,127 @@ func TestGetModelSummaries(t *testing.T) {
 		summaries := sm.GetModelSummaries([]string{"sha256:different"})
 		assert.Empty(t, summaries)
 	})
+}
+
+// TestHashesMatch exercises the order-independent hash comparison, including
+// nil vs non-nil edge cases that caused the incremental re-run bug.
+func TestHashesMatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		a, b     []string
+		expected bool
+	}{
+		{name: "both nil", a: nil, b: nil, expected: true},
+		{name: "both empty", a: []string{}, b: []string{}, expected: true},
+		{name: "nil vs non-nil", a: nil, b: []string{"sha256:abc"}, expected: false},
+		{name: "non-nil vs nil", a: []string{"sha256:abc"}, b: nil, expected: false},
+		{name: "nil vs empty", a: nil, b: []string{}, expected: true},
+		{name: "same single element", a: []string{"sha256:abc"}, b: []string{"sha256:abc"}, expected: true},
+		{name: "different single element", a: []string{"sha256:abc"}, b: []string{"sha256:def"}, expected: false},
+		{name: "same elements different order", a: []string{"sha256:b", "sha256:a"}, b: []string{"sha256:a", "sha256:b"}, expected: true},
+		{name: "different lengths", a: []string{"sha256:a"}, b: []string{"sha256:a", "sha256:b"}, expected: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, hashesMatch(tc.a, tc.b))
+		})
+	}
+}
+
+// TestGetCachedStatus verifies that GetCachedStatus returns the cached status
+// for a test case/model, or empty string when no matching entry exists.
+func TestGetCachedStatus(t *testing.T) {
+	sm, _ := NewStateManager("", "test-suite", "1.0.0")
+	hashes := []string{"sha256:pol1"}
+
+	sm.RecordResult("sha256:test1", "case-1", hashes, "openai:gpt-5", &CachedResult{Status: "passed"})
+	sm.RecordResult("sha256:test2", "case-2", hashes, "openai:gpt-5", &CachedResult{Status: "failed"})
+
+	tests := []struct {
+		name         string
+		contentHash  string
+		policyHashes []string
+		modelKey     string
+		expected     string
+	}{
+		{name: "returns passed status", contentHash: "sha256:test1", policyHashes: hashes, modelKey: "openai:gpt-5", expected: "passed"},
+		{name: "returns failed status", contentHash: "sha256:test2", policyHashes: hashes, modelKey: "openai:gpt-5", expected: "failed"},
+		{name: "empty for unknown hash", contentHash: "sha256:unknown", policyHashes: hashes, modelKey: "openai:gpt-5", expected: ""},
+		{name: "empty for mismatched policies", contentHash: "sha256:test1", policyHashes: []string{"sha256:other"}, modelKey: "openai:gpt-5", expected: ""},
+		{name: "empty for unknown model", contentHash: "sha256:test1", policyHashes: hashes, modelKey: "anthropic:claude", expected: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, sm.GetCachedStatus(tc.contentHash, tc.policyHashes, tc.modelKey))
+		})
+	}
+}
+
+// TestPersistenceRoundTrip_PolicyHashUpdate verifies that updated policy hashes
+// survive a save/load cycle. This covers the scenario where a legacy state file
+// (with null policy_hashes) gets corrected and the correction persists to disk.
+func TestPersistenceRoundTrip_PolicyHashUpdate(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Session 1: Record result with nil policy hashes (simulates legacy state)
+	sm1, err := NewStateManager(statePath, "test-suite", "1.0.0")
+	require.NoError(t, err)
+	sm1.RecordResult("sha256:abc123", "test-1", nil, "openai:gpt-4", &CachedResult{
+		Status: "passed", DurationMs: 100,
+	})
+	require.NoError(t, sm1.Save())
+
+	// Session 2: Re-record with computed policy hashes (simulates fix)
+	sm2, err := NewStateManager(statePath, "test-suite", "1.0.0")
+	require.NoError(t, err)
+
+	// Before fix: entry has nil hashes, ShouldSkip fails
+	newHashes := []string{"sha256:pol1", "sha256:pol2"}
+	assert.False(t, sm2.ShouldSkip("sha256:abc123", newHashes, "openai:gpt-4", false),
+		"ShouldSkip should fail before re-recording because hashes don't match")
+
+	// Re-record updates the hashes
+	sm2.RecordResult("sha256:abc123", "test-1", newHashes, "openai:gpt-4", &CachedResult{
+		Status: "passed", DurationMs: 120,
+	})
+	require.NoError(t, sm2.Save())
+
+	// Session 3: Fresh load should now skip correctly
+	sm3, err := NewStateManager(statePath, "test-suite", "1.0.0")
+	require.NoError(t, err)
+
+	assert.True(t, sm3.ShouldSkip("sha256:abc123", newHashes, "openai:gpt-4", false),
+		"ShouldSkip should succeed after policy hashes were corrected and persisted")
+}
+
+// TestShouldSkip_NilCachedHashesVsComputedHashes directly tests the exact
+// scenario that caused the incremental re-run bug: cached entry has nil
+// policy hashes but the query provides non-nil computed hashes.
+func TestShouldSkip_NilCachedHashesVsComputedHashes(t *testing.T) {
+	sm, _ := NewStateManager("", "test-suite", "1.0.0")
+
+	// Directly manipulate state to simulate a legacy entry with nil PolicyHashes
+	sm.state.Results["sha256:abc123"] = &CachedTestCase{
+		CaseID:       "test-1",
+		PolicyHashes: nil,
+		Models: map[string]*CachedResult{
+			"openai:gpt-4": {Status: "passed", DurationMs: 100},
+		},
+	}
+
+	// This is the exact scenario that caused the bug: nil cached hashes
+	// vs non-nil computed hashes from computePolicyHashes()
+	computedHashes := []string{"sha256:pol1", "sha256:pol2"}
+	assert.False(t, sm.ShouldSkip("sha256:abc123", computedHashes, "openai:gpt-4", false),
+		"ShouldSkip must return false when cached hashes are nil but query hashes are non-nil")
+
+	// After RecordResult updates the hashes, it should now skip
+	sm.RecordResult("sha256:abc123", "test-1", computedHashes, "openai:gpt-4", &CachedResult{
+		Status: "passed", DurationMs: 100,
+	})
+	assert.True(t, sm.ShouldSkip("sha256:abc123", computedHashes, "openai:gpt-4", false),
+		"ShouldSkip must return true after RecordResult corrects the policy hashes")
 }

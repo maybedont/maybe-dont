@@ -266,43 +266,31 @@ func (sm *StateManager) RecordResult(contentHash, caseID string, policyHashes []
 	cached, ok := sm.state.Results[contentHash]
 	if !ok {
 		cached = &CachedTestCase{
-			CaseID:       caseID,
-			PolicyHashes: policyHashes,
-			Models:       make(map[string]*CachedResult),
+			CaseID: caseID,
+			Models: make(map[string]*CachedResult),
 		}
 		sm.state.Results[contentHash] = cached
 	}
 
+	// Always update policy hashes to current values. This fixes stale entries
+	// recorded before policy hashing was implemented (where PolicyHashes is nil)
+	// and ensures hashes stay current when policies change.
+	cached.PolicyHashes = policyHashes
 	cached.Models[modelKey] = result
 	sm.dirty = true
 }
 
-// PruneStaleHashes removes entries for hashes that no longer exist in the current test cases.
-func (sm *StateManager) PruneStaleHashes(currentHashes map[string]bool, currentModels []string) {
+// PruneStaleHashes removes test case entries whose content hashes no longer exist
+// in the current suite. Model results within surviving test cases are preserved —
+// historical model data is valuable for cross-model comparison and costs little to keep.
+func (sm *StateManager) PruneStaleHashes(currentHashes map[string]bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Build model key set
-	modelSet := make(map[string]bool)
-	for _, m := range currentModels {
-		modelSet[m] = true
-	}
-
-	// Remove stale test case hashes
 	for hash := range sm.state.Results {
 		if !currentHashes[hash] {
 			delete(sm.state.Results, hash)
 			sm.dirty = true
-		}
-	}
-
-	// Remove stale model results within remaining test cases
-	for _, cached := range sm.state.Results {
-		for modelKey := range cached.Models {
-			if !modelSet[modelKey] {
-				delete(cached.Models, modelKey)
-				sm.dirty = true
-			}
 		}
 	}
 }

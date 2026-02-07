@@ -18,7 +18,7 @@ policies:
   ai_response_rules: "../ai_response_rules.yaml"
 
 acceptance:
-  min_match_rate: 1.0  # All tests must pass for default policies
+  min_match_rate: 1.0 # All tests must pass for default policies
 
 execution:
   timeout_ms: 30000
@@ -33,27 +33,29 @@ engines:
     model_matrix:
       # OpenAI models - fast to slow, cheap to expensive
       - provider: openai
-        model: gpt-5-mini  # Fast and cost-effective
+        model: gpt-5-mini # Fast and cost-effective
+        enabled: true
       - provider: openai
-        model: gpt-5  # Balanced performance and quality
-        enabled: false
+        model: gpt-5 # Balanced performance and quality
+        enabled: true
       - provider: openai
-        model: gpt-5.2  # Flagship reasoning model, highest quality
-        enabled: false
+        model: gpt-5.2 # Flagship reasoning model, highest quality
+        enabled: true
 
       # Anthropic models - fast to slow, cheap to expensive
       # Using dated versions for reproducible test results
       - provider: anthropic
-        model: claude-haiku-4-5-20251001  # Fast and cost-effective
+        model: claude-haiku-4-5-20251001 # Fast and cost-effective
+        enabled: true
       - provider: anthropic
-        model: claude-sonnet-4-5-20250929  # Balanced performance and quality
-        enabled: false
+        model: claude-sonnet-4-5-20250929 # Balanced performance and quality
+        enabled: true
       - provider: anthropic
-        model: claude-opus-4-5-20251101  # High quality
-        enabled: false
+        model: claude-opus-4-5-20251101 # High quality
+        enabled: true
       - provider: anthropic
-        model: claude-opus-4-6  # Latest flagship, highest quality
-        enabled: false
+        model: claude-opus-4-6 # Latest flagship, highest quality
+        enabled: true
 
 filters:
   tags: []

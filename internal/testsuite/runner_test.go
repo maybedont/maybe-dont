@@ -660,6 +660,34 @@ func TestFormatPolicies(t *testing.T) {
 			},
 		},
 		{
+			name: "allow with expected policies highlights and sorts to top",
+			policies: []PolicyResult{
+				{PolicyName: "Check command execution", Decision: "allow", ElapsedMs: 100},
+				{PolicyName: "Check credential access", Decision: "allow", ElapsedMs: 200},
+				{PolicyName: "Check executable creation", Decision: "allow", ElapsedMs: 150},
+			},
+			actualDecision:   "allow",
+			expectedPolicies: map[string]bool{"Check executable creation": true},
+			wantContains: []string{
+				"► Check executable creation",
+				"  Check command execution",
+				"  Check credential access",
+			},
+		},
+		{
+			name: "allow without expected policies has no markers",
+			policies: []PolicyResult{
+				{PolicyName: "Beta policy", Decision: "allow", ElapsedMs: 100},
+				{PolicyName: "Alpha policy", Decision: "allow", ElapsedMs: 200},
+			},
+			actualDecision: "allow",
+			wantContains: []string{
+				"  Alpha policy",
+				"  Beta policy",
+			},
+			wantNotContains: []string{"►"},
+		},
+		{
 			name: "columns include decision and elapsed",
 			policies: []PolicyResult{
 				{PolicyName: "Check exec", Decision: "deny", ElapsedMs: 1872},
@@ -668,6 +696,47 @@ func TestFormatPolicies(t *testing.T) {
 			wantContains: []string{
 				"deny",
 				"1872 ms (1.9s)",
+			},
+		},
+		{
+			name: "unexpected triggering policy shows reasoning",
+			policies: []PolicyResult{
+				{PolicyName: "Check command execution", Decision: "deny", ElapsedMs: 986, Reasoning: "Dangerous command tool blocked"},
+				{PolicyName: "Check system access", Decision: "deny", ElapsedMs: 1454, Reasoning: "The sudo command requests elevated privileges"},
+				{PolicyName: "Check credential access", Decision: "allow", ElapsedMs: 800},
+			},
+			actualDecision:   "deny",
+			expectedPolicies: map[string]bool{"Check system access": true},
+			wantContains: []string{
+				"► Check command execution",
+				"Dangerous command tool blocked",
+				"► Check system access",
+			},
+			// Expected policy reasoning should NOT be shown, only unexpected
+			wantNotContains: []string{"sudo command requests elevated"},
+		},
+		{
+			name: "expected triggering policy does not show reasoning",
+			policies: []PolicyResult{
+				{PolicyName: "Check system access", Decision: "deny", ElapsedMs: 1454, Reasoning: "Should not appear in output"},
+			},
+			actualDecision:   "deny",
+			expectedPolicies: map[string]bool{"Check system access": true},
+			wantContains: []string{
+				"► Check system access",
+			},
+			wantNotContains: []string{"Should not appear in output"},
+		},
+		{
+			name: "unexpected policy with empty reasoning shows no extra lines",
+			policies: []PolicyResult{
+				{PolicyName: "Check exec", Decision: "deny", ElapsedMs: 100, Reasoning: ""},
+			},
+			actualDecision:   "deny",
+			expectedPolicies: map[string]bool{"Other policy": true},
+			wantContains: []string{
+				"► Check exec",
+				"deny",
 			},
 		},
 	}
@@ -685,6 +754,71 @@ func TestFormatPolicies(t *testing.T) {
 			for _, notWant := range tt.wantNotContains {
 				assert.NotContains(t, result, notWant, "output should NOT contain %q", notWant)
 			}
+		})
+	}
+}
+
+// TestWrapReasoning verifies word-wrapping of per-policy reasoning text.
+func TestWrapReasoning(t *testing.T) {
+	tests := []struct {
+		name      string
+		reasoning string
+		indent    string
+		maxWidth  int
+		expected  string
+	}{
+		{
+			name:     "empty reasoning returns empty",
+			indent:   "    ",
+			maxWidth: 40,
+			expected: "",
+		},
+		{
+			name:      "whitespace-only reasoning returns empty",
+			reasoning: "   \n  \t  ",
+			indent:    "    ",
+			maxWidth:  40,
+			expected:  "",
+		},
+		{
+			name:      "short reasoning fits on one line",
+			reasoning: "Tool is dangerous",
+			indent:    "          ",
+			maxWidth:  80,
+			expected:  "          Tool is dangerous\n",
+		},
+		{
+			name:      "long reasoning wraps at word boundary",
+			reasoning: "Dangerous command tool blocked because shell__run_command contains shell and run_command which are both on the dangerous tools list",
+			indent:    "          ",
+			maxWidth:  60,
+			// Content width = 60 - 10 = 50 chars
+			expected: "          Dangerous command tool blocked because\n" +
+				"          shell__run_command contains shell and run_command\n" +
+				"          which are both on the dangerous tools list\n",
+		},
+		{
+			name:      "very long single word exceeds width",
+			reasoning: "superlongwordthatcannotbewrapped short",
+			indent:    "          ",
+			maxWidth:  40,
+			// Content width = 30, but the word is longer — still placed on one line
+			expected: "          superlongwordthatcannotbewrapped\n" +
+				"          short\n",
+		},
+		{
+			name:      "multiline reasoning collapses whitespace",
+			reasoning: "First line\nSecond line\n  Third line",
+			indent:    "    ",
+			maxWidth:  50,
+			expected:  "    First line Second line Third line\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := wrapReasoning(tt.reasoning, tt.indent, tt.maxWidth)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
@@ -793,6 +927,73 @@ func TestAcceptanceConfig_IsStrictPolicyMatch(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.config.IsStrictPolicyMatch())
 		})
 	}
+}
+
+// TestFormatSingleTestResult_UnexpectedPolicyReasoning verifies that per-policy reasoning
+// replaces the top-level reasoning line when the failure is from unexpected policy matches
+// (decision matches but extra policies triggered).
+func TestFormatSingleTestResult_UnexpectedPolicyReasoning(t *testing.T) {
+	// Disable color for deterministic test output
+	origColor := colorEnabled
+	colorEnabled = false
+	defer func() { colorEnabled = origColor }()
+
+	t.Run("decision mismatch shows top-level reasoning", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "test-mismatch",
+			Engine: "ai",
+			Model:  "openai:gpt-4o-mini",
+			Status: "failed",
+			Expected: ExpectedResult{
+				Decision: "deny",
+			},
+			Actual: ActualResult{
+				Decision:   "allow",
+				Confidence: 0.8,
+				Reasoning:  "AI determined request is safe",
+			},
+			Failures: []string{`expected "deny", actual "allow"`},
+		}
+
+		output := formatSingleTestResult(result)
+		assert.Contains(t, output, "reasoning: AI determined request is safe")
+	})
+
+	t.Run("unexpected policies suppress top-level reasoning, show per-policy", func(t *testing.T) {
+		result := TestResult{
+			CaseID: "test-unexpected",
+			Engine: "ai",
+			Model:  "anthropic:claude-haiku",
+			Status: "failed",
+			Expected: ExpectedResult{
+				Decision: "deny",
+				Policies: []PolicyExpectation{
+					{PolicyName: "Check system access", Decision: "deny"},
+				},
+			},
+			Actual: ActualResult{
+				Decision:   "deny",
+				Confidence: 1.0,
+				Reasoning:  "Overall deny reasoning that should be hidden",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "Check command execution", Decision: "deny", ElapsedMs: 986,
+						Reasoning: "Dangerous tool blocked because shell__run_command is on the blocklist"},
+					{PolicyName: "Check system access", Decision: "deny", ElapsedMs: 1454,
+						Reasoning: "Sudo command detected"},
+					{PolicyName: "Check credential access", Decision: "allow", ElapsedMs: 800},
+				},
+			},
+			Failures: []string{"1 unexpected policy match(es) — see highlighted ► above"},
+		}
+
+		output := formatSingleTestResult(result)
+		// Top-level reasoning should NOT appear (decision matches)
+		assert.NotContains(t, output, "reasoning: Overall deny reasoning")
+		// Unexpected policy reasoning SHOULD appear (Check command execution is unexpected)
+		assert.Contains(t, output, "Dangerous tool blocked because")
+		// Expected policy reasoning should NOT appear (Check system access is expected)
+		assert.NotContains(t, output, "Sudo command detected")
+	})
 }
 
 // TestFormatSingleTestResult_Warnings verifies that warnings are displayed in test output.
@@ -1047,6 +1248,19 @@ func TestFormatModelComparison(t *testing.T) {
 		assert.Contains(t, output, "previous run")
 	})
 
+	t.Run("renders summary for single model", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "openai:gpt-5", Passed: 8, Failed: 2, Errored: 0, MatchRate: 0.8, AvgMs: 1200, TotalMs: 12000},
+		}
+
+		output := formatModelComparison(entries)
+
+		assert.Contains(t, output, "Model Summary")
+		assert.NotContains(t, output, "Model Comparison")
+		assert.Contains(t, output, "openai:gpt-5")
+		assert.Contains(t, output, "80.0%")
+	})
+
 	t.Run("no cached footnote when all tested in current run", func(t *testing.T) {
 		entries := []ModelComparisonEntry{
 			{Model: "cel", Passed: 5, MatchRate: 1.0},
@@ -1055,6 +1269,154 @@ func TestFormatModelComparison(t *testing.T) {
 
 		output := formatModelComparison(entries)
 		assert.NotContains(t, output, "previous run")
+	})
+}
+
+// TestBuildModelComparison verifies that the model summary table always reflects
+// the current run's results, not stale state data. This is a regression test for
+// the bug where the Summary showed 50 results but Model Summary showed only 9.
+func TestBuildModelComparison(t *testing.T) {
+	t.Run("derives AI stats from results not state", func(t *testing.T) {
+		// Set up state with stale data (fewer results than current run)
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+		policyHashes := []string{"sha256:policy1"}
+		sm.RecordResult("sha256:test1", "case-1", policyHashes, "openai:gpt-5", &CachedResult{
+			Status: "passed", DurationMs: 100,
+		})
+
+		runner := &Runner{
+			stateManager: sm,
+			policyHashes: policyHashes,
+		}
+
+		// Current run has 3 results for this model
+		results := []TestResult{
+			{Engine: "ai", Model: "openai:gpt-5", Status: "passed", ElapsedMs: 100},
+			{Engine: "ai", Model: "openai:gpt-5", Status: "failed", ElapsedMs: 200},
+			{Engine: "ai", Model: "openai:gpt-5", Status: "passed", ElapsedMs: 150},
+		}
+
+		entries := runner.buildModelComparison(results)
+		require.Len(t, entries, 1)
+		assert.Equal(t, "openai:gpt-5", entries[0].Model)
+		assert.Equal(t, 2, entries[0].Passed, "should count from results, not state")
+		assert.Equal(t, 1, entries[0].Failed, "should count from results, not state")
+		assert.False(t, entries[0].FromCache)
+	})
+
+	t.Run("augments with historical models from state", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+		policyHashes := []string{"sha256:policy1"}
+		// Historical model not in current run
+		sm.RecordResult("sha256:test1", "case-1", policyHashes, "anthropic:claude", &CachedResult{
+			Status: "passed", DurationMs: 5000,
+		})
+
+		runner := &Runner{
+			stateManager: sm,
+			policyHashes: policyHashes,
+		}
+
+		// Current run only has openai
+		results := []TestResult{
+			{Engine: "ai", Model: "openai:gpt-5", Status: "passed", ElapsedMs: 100},
+		}
+
+		entries := runner.buildModelComparison(results)
+		require.Len(t, entries, 2, "should include both current and historical models")
+
+		// Find entries by model name (order may vary before sort)
+		modelMap := make(map[string]ModelComparisonEntry)
+		for _, e := range entries {
+			modelMap[e.Model] = e
+		}
+
+		openai := modelMap["openai:gpt-5"]
+		assert.Equal(t, 1, openai.Passed)
+		assert.False(t, openai.FromCache)
+
+		anthropic := modelMap["anthropic:claude"]
+		assert.Equal(t, 1, anthropic.Passed)
+		assert.True(t, anthropic.FromCache)
+	})
+
+	t.Run("error on init results appear in summary", func(t *testing.T) {
+		runner := &Runner{}
+
+		// Error-on-init results now have Engine and Model set
+		results := []TestResult{
+			{Engine: "ai", Model: "openai:gpt-5", Status: "passed", ElapsedMs: 100},
+			{Engine: "ai", Model: "anthropic:claude", Status: "errored", ElapsedMs: 50},
+			{Engine: "ai", Model: "anthropic:claude", Status: "errored", ElapsedMs: 30},
+		}
+
+		entries := runner.buildModelComparison(results)
+		require.Len(t, entries, 2)
+
+		modelMap := make(map[string]ModelComparisonEntry)
+		for _, e := range entries {
+			modelMap[e.Model] = e
+		}
+
+		assert.Equal(t, 1, modelMap["openai:gpt-5"].Passed)
+		assert.Equal(t, 2, modelMap["anthropic:claude"].Errored)
+	})
+
+	t.Run("includes CEL and AI entries", func(t *testing.T) {
+		runner := &Runner{}
+
+		results := []TestResult{
+			{Engine: "cel", Status: "passed", ElapsedMs: 5},
+			{Engine: "cel", Status: "passed", ElapsedMs: 3},
+			{Engine: "ai", Model: "openai:gpt-5", Status: "passed", ElapsedMs: 100},
+		}
+
+		entries := runner.buildModelComparison(results)
+		require.Len(t, entries, 2)
+
+		modelMap := make(map[string]ModelComparisonEntry)
+		for _, e := range entries {
+			modelMap[e.Model] = e
+		}
+
+		assert.Equal(t, 2, modelMap["cel"].Passed)
+		assert.Equal(t, 1, modelMap["openai:gpt-5"].Passed)
+	})
+
+	t.Run("cached-skipped results counted by original status", func(t *testing.T) {
+		runner := &Runner{}
+
+		results := []TestResult{
+			{Engine: "ai", Model: "openai:gpt-5", Status: "skipped", Error: &TestError{
+				Type: "cached", Message: "cached passed",
+			}},
+			{Engine: "ai", Model: "openai:gpt-5", Status: "skipped", Error: &TestError{
+				Type: "cached", Message: "cached failed",
+			}},
+		}
+
+		entries := runner.buildModelComparison(results)
+		require.Len(t, entries, 1)
+		assert.Equal(t, 1, entries[0].Passed)
+		assert.Equal(t, 1, entries[0].Failed)
+	})
+
+	t.Run("cached-skipped results include elapsed time in model comparison", func(t *testing.T) {
+		runner := &Runner{}
+
+		results := []TestResult{
+			{Engine: "ai", Model: "openai:gpt-5", Status: "skipped", ElapsedMs: 3200, Error: &TestError{
+				Type: "cached", Message: "cached passed",
+			}},
+			{Engine: "ai", Model: "openai:gpt-5", Status: "skipped", ElapsedMs: 1500, Error: &TestError{
+				Type: "cached", Message: "cached passed",
+			}},
+		}
+
+		entries := runner.buildModelComparison(results)
+		require.Len(t, entries, 1)
+		assert.Equal(t, int64(4700), entries[0].TotalMs, "TotalMs should sum cached durations")
+		assert.Equal(t, int64(2350), entries[0].AvgMs, "AvgMs should average cached durations")
 	})
 }
 
@@ -1172,6 +1534,246 @@ func TestSuite_ResolveEndpoint(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.suite.ResolveEndpoint(tt.model)
 			assert.Equal(t, tt.wantEndpoint, got)
+		})
+	}
+}
+
+// TestFilterTestCases_Stats verifies that filterTestCases returns accurate
+// intermediate counts at each filter stage.
+func TestFilterTestCases_Stats(t *testing.T) {
+	tests := []struct {
+		name         string
+		cases        []TestCase
+		opts         RunnerOptions
+		wantCount    int
+		wantStats    FilterStats
+	}{
+		{
+			name: "no filters returns all cases",
+			cases: []TestCase{
+				{CaseID: "a", Tags: []string{"x"}},
+				{CaseID: "b", Tags: []string{"y"}},
+				{CaseID: "c", Tags: []string{"x", "y"}},
+			},
+			opts:      RunnerOptions{},
+			wantCount: 3,
+			wantStats: FilterStats{
+				Total: 3, AfterPattern: 3, AfterTags: 3, AfterExclude: 3,
+			},
+		},
+		{
+			name: "case pattern filters first",
+			cases: []TestCase{
+				{CaseID: "ai-req-001"},
+				{CaseID: "ai-req-002"},
+				{CaseID: "cel-req-001"},
+			},
+			opts:      RunnerOptions{CasePattern: "ai-*"},
+			wantCount: 2,
+			wantStats: FilterStats{
+				Total: 3, AfterPattern: 2, AfterTags: 2, AfterExclude: 2,
+				CasePattern: "ai-*",
+			},
+		},
+		{
+			name: "tags filter after pattern",
+			cases: []TestCase{
+				{CaseID: "a", Tags: []string{"security"}},
+				{CaseID: "b", Tags: []string{"perf"}},
+				{CaseID: "c", Tags: []string{"security", "perf"}},
+			},
+			opts:      RunnerOptions{Tags: "security"},
+			wantCount: 2,
+			wantStats: FilterStats{
+				Total: 3, AfterPattern: 3, AfterTags: 2, AfterExclude: 2,
+				Tags: "security",
+			},
+		},
+		{
+			name: "exclude tags filter after tags",
+			cases: []TestCase{
+				{CaseID: "a", Tags: []string{"security"}},
+				{CaseID: "b", Tags: []string{"security", "slow"}},
+				{CaseID: "c", Tags: []string{"perf"}},
+			},
+			opts:      RunnerOptions{Tags: "security", ExcludeTags: "slow"},
+			wantCount: 1,
+			wantStats: FilterStats{
+				Total: 3, AfterPattern: 3, AfterTags: 2, AfterExclude: 1,
+				Tags: "security", ExcludeTags: "slow",
+			},
+		},
+		{
+			name: "all filters chained",
+			cases: []TestCase{
+				{CaseID: "ai-req-001", Tags: []string{"security"}},
+				{CaseID: "ai-req-002", Tags: []string{"security", "slow"}},
+				{CaseID: "cel-req-001", Tags: []string{"security"}},
+				{CaseID: "ai-req-003", Tags: []string{"perf"}},
+			},
+			opts:      RunnerOptions{CasePattern: "ai-*", Tags: "security", ExcludeTags: "slow"},
+			wantCount: 1,
+			wantStats: FilterStats{
+				Total: 4, AfterPattern: 3, AfterTags: 2, AfterExclude: 1,
+				CasePattern: "ai-*", Tags: "security", ExcludeTags: "slow",
+			},
+		},
+		{
+			name: "zero match from pattern",
+			cases: []TestCase{
+				{CaseID: "a"},
+				{CaseID: "b"},
+			},
+			opts:      RunnerOptions{CasePattern: "nonexistent-*"},
+			wantCount: 0,
+			wantStats: FilterStats{
+				Total: 2, AfterPattern: 0, AfterTags: 0, AfterExclude: 0,
+				CasePattern: "nonexistent-*",
+			},
+		},
+		{
+			name: "zero match from tags",
+			cases: []TestCase{
+				{CaseID: "a", Tags: []string{"x"}},
+				{CaseID: "b", Tags: []string{"y"}},
+			},
+			opts:      RunnerOptions{Tags: "nonexistent"},
+			wantCount: 0,
+			wantStats: FilterStats{
+				Total: 2, AfterPattern: 2, AfterTags: 0, AfterExclude: 0,
+				Tags: "nonexistent",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Runner{
+				testCases: tt.cases,
+				opts:      tt.opts,
+			}
+			cases, stats := r.filterTestCases()
+			assert.Equal(t, tt.wantCount, len(cases))
+			assert.Equal(t, tt.wantStats, stats)
+		})
+	}
+}
+
+// TestFormatSingleTestResult_TestNumbering verifies that [N/M] prefix appears
+// when TestNumber and TestTotal are set, and is omitted when they are zero.
+func TestFormatSingleTestResult_TestNumbering(t *testing.T) {
+	// Disable color for deterministic test output
+	origColor := colorEnabled
+	colorEnabled = false
+	defer func() { colorEnabled = origColor }()
+
+	t.Run("shows [N/M] when set", func(t *testing.T) {
+		result := TestResult{
+			CaseID:     "ai-req-030",
+			Engine:     "ai",
+			Model:      "openai:gpt-5-mini",
+			Status:     "passed",
+			TestNumber: 3,
+			TestTotal:  17,
+			Expected:   ExpectedResult{Decision: "deny"},
+			Actual:     ActualResult{Decision: "deny", Confidence: 1.0},
+		}
+		output := formatSingleTestResult(result)
+		assert.Contains(t, output, "[3/17]")
+		assert.Contains(t, output, "ai-req-030")
+	})
+
+	t.Run("omits [N/M] when zero", func(t *testing.T) {
+		result := TestResult{
+			CaseID:     "ai-req-030",
+			Engine:     "ai",
+			Model:      "openai:gpt-5-mini",
+			Status:     "passed",
+			TestNumber: 0,
+			TestTotal:  0,
+			Expected:   ExpectedResult{Decision: "deny"},
+			Actual:     ActualResult{Decision: "deny", Confidence: 1.0},
+		}
+		output := formatSingleTestResult(result)
+		assert.NotContains(t, output, "[0/0]")
+		assert.NotContains(t, output, "[/]")
+	})
+
+	t.Run("numbering on skipped tests", func(t *testing.T) {
+		result := TestResult{
+			CaseID:     "ai-req-005",
+			Engine:     "ai",
+			Model:      "openai:gpt-5",
+			Status:     "skipped",
+			TestNumber: 1,
+			TestTotal:  10,
+			Error:      &TestError{Type: "cached", Message: "cached passed"},
+		}
+		output := formatSingleTestResult(result)
+		assert.Contains(t, output, "[1/10]")
+		assert.Contains(t, output, "ai-req-005")
+	})
+
+	t.Run("numbering on failed tests", func(t *testing.T) {
+		result := TestResult{
+			CaseID:     "ai-req-010",
+			Engine:     "ai",
+			Model:      "openai:gpt-5",
+			Status:     "failed",
+			TestNumber: 5,
+			TestTotal:  20,
+			Expected:   ExpectedResult{Decision: "deny"},
+			Actual:     ActualResult{Decision: "allow", Confidence: 0.8},
+			Failures:   []string{"expected deny, got allow"},
+		}
+		output := formatSingleTestResult(result)
+		assert.Contains(t, output, "[5/20]")
+	})
+
+	t.Run("numbering on errored tests", func(t *testing.T) {
+		result := TestResult{
+			CaseID:     "ai-req-015",
+			Engine:     "ai",
+			Model:      "openai:gpt-5",
+			Status:     "errored",
+			TestNumber: 7,
+			TestTotal:  10,
+			Error:      &TestError{Type: "timeout", Message: "timed out"},
+		}
+		output := formatSingleTestResult(result)
+		assert.Contains(t, output, "[7/10]")
+	})
+}
+
+// TestFormatTestNumberPrefix verifies the [N/M] prefix formatting helper.
+func TestFormatTestNumberPrefix(t *testing.T) {
+	// Disable color for deterministic test output
+	origColor := colorEnabled
+	colorEnabled = false
+	defer func() { colorEnabled = origColor }()
+
+	tests := []struct {
+		name       string
+		number     int
+		total      int
+		wantEmpty  bool
+		wantPrefix string
+	}{
+		{name: "both zero", number: 0, total: 0, wantEmpty: true},
+		{name: "number zero", number: 0, total: 5, wantEmpty: true},
+		{name: "total zero", number: 3, total: 0, wantEmpty: true},
+		{name: "valid values", number: 3, total: 17, wantPrefix: "[3/17] "},
+		{name: "single test", number: 1, total: 1, wantPrefix: "[1/1] "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatTestNumberPrefix(tt.number, tt.total)
+			if tt.wantEmpty {
+				assert.Empty(t, result)
+			} else {
+				assert.Equal(t, tt.wantPrefix, result)
+			}
 		})
 	}
 }

@@ -54,6 +54,10 @@ type RateLimiter struct {
 
 	// Per-provider semaphore for sequential mode (buffered channel of size 1)
 	providerSemaphore map[string]chan struct{}
+
+	// progressControl is paused before rate limit output and resumed after,
+	// preventing the progress bar animation from interleaving with rate limit messages.
+	progressControl ProgressControl
 }
 
 // LearnedLimits tracks rate limits learned from provider response headers.
@@ -151,6 +155,15 @@ func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
 	}
 
 	return rl
+}
+
+// SetProgressControl sets the progress indicator that should be paused during
+// rate limit waits. Pass nil to clear. Called by the runner before/after each
+// model's test batch so rate limit output doesn't collide with the progress bar.
+func (rl *RateLimiter) SetProgressControl(pc ProgressControl) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.progressControl = pc
 }
 
 // GetLimit returns the rate limit for a provider.
@@ -509,9 +522,21 @@ func (rl *RateLimiter) waitWithProgress(ctx context.Context, provider string, du
 }
 
 // waitWithProgressAndInfo waits with detailed rate limit info shown.
+// Pauses any active progress indicator so rate limit output appears cleanly,
+// then resumes it after the wait completes.
 func (rl *RateLimiter) waitWithProgressAndInfo(ctx context.Context, provider string, duration time.Duration, waitSource string, info *gateway.RateLimitInfo) error {
 	if duration <= 0 {
 		return nil
+	}
+
+	// Pause progress indicator so rate limit output doesn't interleave
+	// with the animated progress bar on the same terminal line.
+	rl.mu.Lock()
+	pc := rl.progressControl
+	rl.mu.Unlock()
+	if pc != nil {
+		pc.Pause()
+		defer pc.Resume()
 	}
 
 	startTime := time.Now()

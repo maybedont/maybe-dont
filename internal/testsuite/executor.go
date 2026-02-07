@@ -22,6 +22,8 @@ type TestResult struct {
 	Model       string // Model key for AI tests (e.g., "anthropic:claude-haiku"), empty for CEL
 	Status      string // passed, failed, errored, skipped
 	ElapsedMs   int64
+	TestNumber  int    // 1-based index within the current engine/model section
+	TestTotal   int    // total tests in the current engine/model section
 	Expected    ExpectedResult
 	Actual      ActualResult
 	Failures    []string
@@ -270,7 +272,16 @@ func filterEnabledResponsePolicies(policies []config.ResponsePolicy) []config.Re
 // ExecuteCELTests runs test cases that target the CEL engine.
 // If onProgress is provided, it's called after each test completes for streaming output.
 func (e *Executor) ExecuteCELTests(ctx context.Context, cases []TestCase, onProgress ProgressCallback) []TestResult {
+	// Count eligible cases for TestTotal
+	total := 0
+	for _, tc := range cases {
+		if tc.Engine == "cel" || tc.Engine == "both" {
+			total++
+		}
+	}
+
 	var results []TestResult
+	num := 0
 
 	for _, tc := range cases {
 		// Skip if test case doesn't target CEL engine
@@ -278,7 +289,10 @@ func (e *Executor) ExecuteCELTests(ctx context.Context, cases []TestCase, onProg
 			continue
 		}
 
+		num++
 		result := e.executeCELTest(ctx, tc)
+		result.TestNumber = num
+		result.TestTotal = total
 		results = append(results, result)
 
 		// Call progress callback for streaming output
