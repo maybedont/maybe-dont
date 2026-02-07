@@ -710,18 +710,13 @@ Note: `request_id` stays in the per-validation section because each AI API call 
 
 ### 10) Prompt Reliability Evaluation
 
-We need a repeatable evaluation harness to ensure AI validation responses remain stable across providers and models.
+**Moved to separate spec:** See `docs/specs/policy-test-suite.md` for the complete specification of the policy test harness.
 
-Suggested evaluation layers:
-1. **Local golden tests**:
-   - Create a test suite of MCP tool calls and expected validation outcomes (see `docs/specs/policy-test-suite/`).
-   - Run in CI with a deterministic mock AI client.
-2. **External evals**: Out of scope for this spec - will be addressed in a separate prompt reliability evaluation spec.
-3. **Local model runners**: Out of scope for this spec - will be addressed in a separate prompt reliability evaluation spec.
-
-Future CLI tool-call support:
-- Extend validation input schema to include `call_type` (`tool_call` or `cli_command`), `command`, and `args`.
-- Ensure the prompt template can render both MCP tool calls and CLI commands consistently.
+This spec (provider-agnostic AI validation) provides the multi-provider infrastructure that the policy test suite validates against. The test suite covers:
+- CLI-based policy testing (`maybe-dont test policies`)
+- Model matrix configuration for cross-provider/model comparison
+- CI integration with GitHub Actions
+- Historical trend tracking
 
 ### 11) Tests
 

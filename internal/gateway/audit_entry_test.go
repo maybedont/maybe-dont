@@ -270,7 +270,7 @@ func TestAuditEntry_FullSerialization(t *testing.T) {
 		entry := &AuditEntry{
 			ValidationStarted: "2026-01-14T15:59:58Z",
 			CreatedAt:         "2026-01-14T16:00:00Z",
-			Tool: AuditToolInfo{
+			Tool: &AuditToolInfo{
 				Name:         "create_issue",
 				Client:       "github",
 				PrefixedName: "github__create_issue",
@@ -322,12 +322,60 @@ func TestAuditEntry_FullSerialization(t *testing.T) {
 	})
 }
 
+func TestAuditEntry_CLIInfo(t *testing.T) {
+	// Test: Audit entry with CLI info marshals correctly
+	entry := AuditEntry{
+		ValidationStarted: "2024-01-15T10:30:00.123456789Z",
+		CreatedAt:         "2024-01-15T10:30:00.234567890Z",
+		CLI: &AuditCLIInfo{
+			Command:          "gh",
+			Arguments:        []string{"pr", "comment", "123"},
+			WorkingDirectory: "/home/user/project",
+			ClientInfo: &CLIClientInfo{
+				Hostname:   "dev-workstation",
+				Username:   "developer",
+				OS:         "darwin",
+				CLIVersion: "1.2.0",
+			},
+		},
+		Action: "allow",
+	}
+
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	// CLI field present, Tool field omitted
+	assert.Contains(t, string(data), `"cli":{`)
+	assert.NotContains(t, string(data), `"tool":{`)
+	assert.Contains(t, string(data), `"command":"gh"`)
+}
+
+func TestAuditEntry_ToolAndCLIMutuallyExclusive(t *testing.T) {
+	// Test: Only one of Tool or CLI should be populated
+	entryWithTool := AuditEntry{
+		Tool: &AuditToolInfo{Name: "test_tool"},
+	}
+	entryWithCLI := AuditEntry{
+		CLI: &AuditCLIInfo{Command: "test"},
+	}
+
+	// Tool entry has no CLI
+	toolData, _ := json.Marshal(entryWithTool)
+	assert.Contains(t, string(toolData), `"tool":{`)
+	assert.NotContains(t, string(toolData), `"cli":{`)
+
+	// CLI entry has no Tool
+	cliData, _ := json.Marshal(entryWithCLI)
+	assert.Contains(t, string(cliData), `"cli":{`)
+	assert.NotContains(t, string(cliData), `"tool":{`)
+}
+
 func TestAuditEntry_EarlyTerminationScenarios(t *testing.T) {
 	t.Run("early_termination_deny", func(t *testing.T) {
 		// Simulate early termination: first rule denies, second rule still running
 		entry := &AuditEntry{
 			CreatedAt: "2026-01-14T16:00:00Z",
-			Tool: AuditToolInfo{
+			Tool: &AuditToolInfo{
 				Name:         "delete_repo",
 				Client:       "github",
 				PrefixedName: "github__delete_repo",
@@ -377,7 +425,7 @@ func TestAuditEntry_EarlyTerminationScenarios(t *testing.T) {
 		// All policies pass - blocked_ms equals evaluation_ms
 		entry := &AuditEntry{
 			CreatedAt: "2026-01-14T16:00:00Z",
-			Tool: AuditToolInfo{
+			Tool: &AuditToolInfo{
 				Name:         "create_issue",
 				Client:       "github",
 				PrefixedName: "github__create_issue",
@@ -429,7 +477,7 @@ func TestAuditEntry_EarlyTerminationScenarios(t *testing.T) {
 		// All policies are audit_only - blocked_ms is 0
 		entry := &AuditEntry{
 			CreatedAt: "2026-01-14T16:00:00Z",
-			Tool: AuditToolInfo{
+			Tool: &AuditToolInfo{
 				Name:         "search_code",
 				Client:       "github",
 				PrefixedName: "github__search_code",
@@ -484,7 +532,7 @@ func TestAuditEntry_EarlyTerminationScenarios(t *testing.T) {
 		// Error on enabled policy causes deny (fail closed)
 		entry := &AuditEntry{
 			CreatedAt: "2026-01-14T16:00:00Z",
-			Tool: AuditToolInfo{
+			Tool: &AuditToolInfo{
 				Name:         "create_pr",
 				Client:       "github",
 				PrefixedName: "github__create_pr",
@@ -531,7 +579,7 @@ func TestAuditEntry_EarlyTerminationScenarios(t *testing.T) {
 		// Mix of enabled and audit_only policies
 		entry := &AuditEntry{
 			CreatedAt: "2026-01-14T16:00:00Z",
-			Tool: AuditToolInfo{
+			Tool: &AuditToolInfo{
 				Name:         "merge_pr",
 				Client:       "github",
 				PrefixedName: "github__merge_pr",

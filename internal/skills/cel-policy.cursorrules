@@ -1,0 +1,90 @@
+# CEL Policy Authoring Rules
+
+CEL policies provide deterministic validation for MCP tool calls, CLI commands, and tool responses in the Maybe Don't gateway.
+
+## Required Command Format
+
+Rules are defined in YAML files loaded by the gateway:
+- Request rules: `cel_request_rules.yaml`
+- Response rules: `cel_response_rules.yaml`
+
+## Rules
+
+1. ALWAYS use `mcp_expression` for MCP tool call rules (not the legacy `expression` field)
+2. Use `cli_expression` for CLI command rules — different context variables apply
+3. Expressions MUST return a boolean value; non-boolean results cause fail-open behavior
+4. Use `has(obj, field)` before accessing optional fields to avoid nil errors
+5. Use Go `regexp` syntax for `redaction_pattern` and `.matches()` — PCRE features like lookaheads are not supported
+6. `action: redact` is only valid for response rules, not request rules
+7. Use `mode: audit_only` to test rules without blocking, then remove it when confident
+
+## Rule Structure
+
+```yaml
+rules:
+  - name: rule-name
+    description: "Purpose"
+    mcp_expression: |                   # For MCP tool calls
+      tool.name == "github__delete_repo"
+    cli_expression: |                   # For CLI commands
+      cli.command == "gh" && cli.arguments[1] == "delete"
+    action: deny                        # allow, deny, redact (response only)
+    message: "User-facing message"
+    mode: audit_only                    # Optional: log without blocking
+    redaction_pattern: "regex"          # Response redact only
+    redaction_replacement: "[REDACTED]" # Response redact only
+```
+
+## MCP Request Context
+
+```cel
+tool.name                   # Prefixed tool name
+tool.arguments              # Tool arguments map
+request.method              # MCP method
+request.params.name         # Same as tool.name
+request.params.arguments    # Same as tool.arguments
+```
+
+## CLI Context
+
+```cel
+cli.command                 # Command name
+cli.arguments               # Argument list ([]string)
+cli.working_directory       # Working directory
+cli.client_info.hostname    # Client hostname
+cli.client_info.username    # Username
+cli.client_info.os          # OS name
+```
+
+## Response Context
+
+```cel
+response.isError            # Boolean error flag
+response.content            # Content item list
+response.content[0].type    # "text", "image", "resource"
+response.content[0].text    # Text content
+request.params.name         # Original tool name
+```
+
+## Examples
+
+```yaml
+# Deny destructive operations (MCP + CLI)
+- name: no-destructive-github
+  mcp_expression: |
+    tool.name in ["github__delete_repo", "github__delete_file"]
+  cli_expression: |
+    cli.command == "gh" && cli.arguments.exists(a, a == "delete")
+  action: deny
+  message: "Destructive GitHub operations not permitted"
+
+# Redact API keys from responses
+- name: redact-api-keys
+  expression: |
+    size(response.content) > 0 &&
+    response.content[0].type == "text" &&
+    response.content[0].text.matches("(?i)api[_-]?key\\s*[:=]\\s*\\S+")
+  action: redact
+  redaction_pattern: "(?i)(api[_-]?key\\s*[:=]\\s*)\\S+"
+  redaction_replacement: "${1}[REDACTED]"
+```

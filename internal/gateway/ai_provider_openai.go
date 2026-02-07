@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 )
@@ -129,13 +131,24 @@ func (p *openAIProvider) doGenerate(ctx context.Context, req AIRequest) (AICompl
 		}
 	}
 
+	// Parse rate limit headers (available even on error responses)
+	rateLimitInfo := p.parseRateLimitHeaders(resp)
+
 	// Check for error response
 	if resp.StatusCode != http.StatusOK {
-		return AICompletionResult{}, resp.StatusCode, p.normalizeError(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)), resp.StatusCode)
+		result := AICompletionResult{RateLimitInfo: rateLimitInfo}
+		return result, resp.StatusCode, p.normalizeError(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)), resp.StatusCode)
 	}
 
-	// Parse response
-	return p.parseResponse(respBody)
+	// Parse response body
+	result, statusCode, err := p.parseResponse(respBody)
+	if err != nil {
+		return result, statusCode, err
+	}
+
+	// Add rate limit info to successful result
+	result.RateLimitInfo = rateLimitInfo
+	return result, statusCode, nil
 }
 
 // buildRequestBody constructs the OpenAI chat completions request body.
@@ -183,6 +196,13 @@ func (p *openAIProvider) buildRequestBody(req AIRequest) ([]byte, error) {
 		body[k] = v
 	}
 
+	// OpenAI deprecated max_tokens in favor of max_completion_tokens for newer
+	// models. Translate so callers can use the canonical max_tokens name.
+	if v, ok := body["max_tokens"]; ok {
+		body["max_completion_tokens"] = v
+		delete(body, "max_tokens")
+	}
+
 	return json.Marshal(body)
 }
 
@@ -194,6 +214,7 @@ func (p *openAIProvider) parseResponse(respBody []byte) (AICompletionResult, int
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 
@@ -214,13 +235,70 @@ func (p *openAIProvider) parseResponse(respBody []byte) (AICompletionResult, int
 		}
 	}
 
-	content := resp.Choices[0].Message.Content
+	choice := resp.Choices[0]
+	content := choice.Message.Content
+
+	if content == "" {
+		return AICompletionResult{}, 0, &AIProviderError{
+			Category:  ErrCategoryNoResponse,
+			Message:   "OpenAI returned empty response content",
+			Retryable: false,
+		}
+	}
 
 	return AICompletionResult{
 		RawText:           content,
 		ParsedJSON:        json.RawMessage(content),
 		ProviderRequestID: resp.ID,
+		StopReason:        choice.FinishReason,
+		WasTruncated:      choice.FinishReason == "length",
 	}, http.StatusOK, nil
+}
+
+// parseRateLimitHeaders extracts rate limit information from OpenAI response headers.
+func (p *openAIProvider) parseRateLimitHeaders(resp *http.Response) *RateLimitInfo {
+	info := &RateLimitInfo{Provider: ProviderOpenAI}
+
+	// Parse request limits
+	if v := resp.Header.Get("x-ratelimit-limit-requests"); v != "" {
+		info.RequestsLimit, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("x-ratelimit-remaining-requests"); v != "" {
+		info.RequestsRemaining, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("x-ratelimit-reset-requests"); v != "" {
+		info.RequestsReset = parseOpenAIResetTime(v)
+	}
+
+	// Parse token limits
+	if v := resp.Header.Get("x-ratelimit-limit-tokens"); v != "" {
+		info.TokensLimit, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("x-ratelimit-remaining-tokens"); v != "" {
+		info.TokensRemaining, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("x-ratelimit-reset-tokens"); v != "" {
+		info.TokensReset = parseOpenAIResetTime(v)
+	}
+
+	// Parse retry-after header (present on 429 responses)
+	if v := resp.Header.Get("retry-after"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil {
+			info.RetryAfter = time.Duration(secs) * time.Second
+		}
+	}
+
+	return info
+}
+
+// parseOpenAIResetTime parses OpenAI's reset time format (e.g., "1m30s", "500ms", "2s").
+func parseOpenAIResetTime(v string) time.Time {
+	// OpenAI uses duration format like "1m30s", "500ms", "2s"
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Now().Add(d)
 }
 
 // normalizeError converts HTTP errors to AIProviderError with appropriate categories.
@@ -229,7 +307,7 @@ func (p *openAIProvider) normalizeError(err error, statusCode int) *AIProviderEr
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &AIProviderError{
 			Category:  ErrCategoryTimeout,
-			Message:   "request timed out",
+			Message:   "request to OpenAI timed out",
 			Retryable: false,
 			Cause:     err,
 		}

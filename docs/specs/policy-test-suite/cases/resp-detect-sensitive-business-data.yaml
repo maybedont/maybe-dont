@@ -1,24 +1,25 @@
 case_id: "resp-detect-sensitive-business-data"
 title: "Detect sensitive business data in response"
-action_envelope:
-  action_type: "MCP_TOOL_CALL"
-  actor: "agent:test"
-  target: "analytics__get_report"
-  parameters:
-    report: "q4_financials"
-  request_id: "req-016"
-response_sample:
-  raw:
-    content:
-      - type: "text"
-        text: "Q4 revenue was $12M with 38% margin."
-expectations:
-  policies:
-    - policy_id: "detect-sensitive-business-data"
-      decision: "deny"
-      reason_tags: ["business-sensitive"]
-  overall:
-    decision: "deny"
-    min_confidence: 0.7
+tags: ["business-sensitive", "ai"]
 notes:
-  - "This rule is audit_only by default; enforcement should not block in runtime."
+  - "This rule is audit_only by default; enforcement should not block in runtime"
+
+phase: "response"
+engine: "ai"
+
+request:
+  tool_name: "analytics__get_report"
+  arguments:
+    report: "q4_financials"
+
+response:
+  content:
+    - type: "text"
+      text: "Q4 revenue was $12M with 38% margin."
+  is_error: false
+
+expectations:
+  decision: "deny"
+  policies:
+    - policy_name: "detect-sensitive-business-data"
+      decision: "deny"

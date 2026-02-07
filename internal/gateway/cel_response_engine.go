@@ -53,9 +53,12 @@ func NewCELResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 
 // LoadPolicies loads response policies from configuration
 // topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
-func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy, topLevelMode config.PolicyMode) error {
+func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy, topLevelMode config.PolicyMode, includeDisabled ...bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	// Check if we should include disabled policies (default: false)
+	loadDisabled := len(includeDisabled) > 0 && includeDisabled[0]
 
 	// Track seen policy names to detect duplicates
 	seenNames := make(map[string]bool)
@@ -68,8 +71,8 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy,
 		}
 		seenNames[policy.Name] = true
 
-		// Skip disabled policies (enabled: false)
-		if !policy.IsEnabled() {
+		// Skip disabled policies (enabled: false) unless includeDisabled is set
+		if !policy.IsEnabled() && !loadDisabled {
 			e.logger.Debug(context.Background(), "Skipping disabled response policy",
 				zap.String("name", policy.Name),
 			)
@@ -395,6 +398,18 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			default:
 				results.Message = "No CEL response policies matched"
 			}
+		}
+	}
+
+	// Set RecommendedAction based on final action (unless fail-open)
+	if !results.FailedOpen {
+		switch finalAction {
+		case "deny":
+			results.RecommendedAction = config.PolicyActionDeny
+		case "redact":
+			results.RecommendedAction = config.PolicyActionRedact
+		default:
+			results.RecommendedAction = config.PolicyActionAllow
 		}
 	}
 

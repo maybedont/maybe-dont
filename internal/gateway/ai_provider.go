@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 )
@@ -27,7 +28,7 @@ type AIProviderClient interface {
 // AIRequest is a vendor-neutral structure for AI completion requests.
 // Adapters translate this to the provider's native request format.
 type AIRequest struct {
-	// Model is the model identifier (e.g., "gpt-4o-mini", "claude-sonnet-4-5-20250929").
+	// Model is the model identifier (e.g., "gpt-5-mini", "claude-sonnet-4-5-20250929").
 	Model string
 
 	// SystemPrompt is the optional system prompt/instructions.
@@ -67,6 +68,50 @@ type AICompletionResult struct {
 	// Used for debugging and correlating with provider logs.
 	// May be empty if the provider doesn't return a request ID.
 	ProviderRequestID string
+
+	// RateLimitInfo contains rate limit information from response headers.
+	// May be nil if the provider doesn't return rate limit headers.
+	RateLimitInfo *RateLimitInfo
+
+	// StopReason indicates why the model stopped generating.
+	// Anthropic: "end_turn", "max_tokens", "stop_sequence"
+	// OpenAI: "stop", "length", "content_filter"
+	StopReason string
+
+	// WasTruncated is true if the response was truncated due to max_tokens.
+	// Convenience field derived from StopReason.
+	WasTruncated bool
+}
+
+// RateLimitInfo captures rate limit state from provider response headers.
+// Used for dynamic rate limiting and CLI output.
+type RateLimitInfo struct {
+	// Provider is the provider name (e.g., "anthropic", "openai").
+	Provider string
+
+	// RequestsLimit is the maximum requests allowed in the current window.
+	// 0 means unknown (header not present).
+	RequestsLimit int
+
+	// RequestsRemaining is the number of requests remaining in the current window.
+	RequestsRemaining int
+
+	// RequestsReset is when the request limit resets.
+	RequestsReset time.Time
+
+	// TokensLimit is the maximum tokens allowed in the current window.
+	// 0 means unknown (header not present).
+	TokensLimit int
+
+	// TokensRemaining is the number of tokens remaining in the current window.
+	TokensRemaining int
+
+	// TokensReset is when the token limit resets.
+	TokensReset time.Time
+
+	// RetryAfter is the duration to wait before retrying (from 429 responses).
+	// Zero means no retry-after header was present.
+	RetryAfter time.Duration
 }
 
 // AIProviderInfo contains metadata about the configured AI provider for audit logging.

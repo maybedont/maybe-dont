@@ -2,6 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Especially when using Opus 4.6
+Do not jump into implementation or change files unless clearly instructed. When the user’s intent is ambiguous, default to providing information, doing research, and providing recommendations rather than taking action.
+
 ## Project Overview
 
 Maybe Don't Gateway is a security middleware service built in Go that acts as a protective gateway between LLM/AI agents and Model Context Protocol (MCP) servers. It intercepts and validates MCP requests using both deterministic rules (CEL-based policies) and AI-powered validation to prevent potentially dangerous operations.
@@ -29,6 +32,12 @@ Maybe Don't Gateway is a security middleware service built in Go that acts as a 
 - `./maybe-dont start` - Start the gateway with default config
 - `./maybe-dont start --config-dir {some dir}` - Start the gateway with a specific location for the config file
 - `./maybe-dont version` - Show version information
+
+### CLI Proxy
+- `./maybe-dont cli -s <gateway-url> -- <command> [args...]` - Validate and execute CLI commands
+- `./maybe-dont cli -s <gateway-url> --dry-run -- <command>` - Validate only (don't execute)
+- `./maybe-dont skill list` - List available skills for AI agents
+- `./maybe-dont skill view <name>` - Output a skill definition
 
 ### Release Management
 - `make bump-version` - Bump version using commitizen
@@ -67,6 +76,23 @@ Configuration is loaded in this order (later overrides earlier):
 2. Environment variables (prefix: `MAYBE_DONT_`)
 3. Command-line flags
 
+### CLI Request Validation
+The gateway can validate CLI commands from AI agents via the `/api/v1/cli/validate` endpoint:
+
+```yaml
+cli_request_validation:
+  enabled: true
+  validate_commands:
+    - gh
+    - aws
+    - kubectl
+    - "*"  # Use "*" to validate all commands
+```
+
+Environment variables:
+- `MAYBE_DONT_CLI_REQUEST_VALIDATION_ENABLED=true`
+- `MAYBE_DONT_CLI_REQUEST_VALIDATION_VALIDATE_COMMANDS=gh,aws,kubectl`
+
 ### Validation Policy Configuration
 Each validation phase (CEL request, AI request, CEL response, AI response) has two settings:
 - **enabled** (bool) - Whether the validation phase runs at all
@@ -90,7 +116,7 @@ All AI-powered features share a common configuration under `validation.ai`:
 validation:
   ai:
     endpoint: "https://api.openai.com/v1/chat/completions"
-    model: "gpt-4o-mini"
+    model: "gpt-5"
     api_key: "${OPENAI_API_KEY}"
 ```
 This configuration is used by:
@@ -112,6 +138,22 @@ When the blocking budget is exhausted, remaining validations continue asynchrono
 - **AI Response Rules**: Loaded from external `ai_response_rules.yaml` file when `response_validation.ai.enabled` is true
 - **Multi-Client Validation**: Policies can target specific clients using name prefixes
 - **Required When Enabled**: Rules files must be specified in config when their corresponding validation phase is enabled
+
+### CLI Expression Support in CEL Rules
+CEL rules can have separate expressions for MCP tool calls and CLI commands:
+- `mcp_expression`: Evaluated for MCP tool calls (or use legacy `expression` field)
+- `cli_expression`: Evaluated for CLI commands
+
+Example rule that blocks destructive GitHub operations on both MCP and CLI:
+```yaml
+- name: no-destructive-github-actions
+  mcp_expression: |
+    tool.name == "github__delete_repo"
+  cli_expression: |
+    cli.command == "gh" && cli.arguments[1] == "delete"
+  action: deny
+  message: "Destructive GitHub operations not permitted"
+```
 
 ### Native Tools
 The gateway provides built-in introspection tools (prefixed with `maybedont__`):
@@ -142,6 +184,17 @@ For feature development or any sizeable code change, follow this spec-driven app
 4. **Leverage sub-agents**: When possible, suggest using sub-agents to parallelize work and improve accuracy.
 5. **Version control specs**: Commit specs to source control and keep them updated so they remain useful for future reference.
 6. **Check existing specs**: Before starting a new spec or feature, review `docs/specs/` for relevant existing specs. Consider updating an existing spec rather than creating a new one. When modifying an existing spec, you can create a temporary worklist file in `docs/specs/` to track implementation progress.
+
+### Spec Status Management
+Spec status is tracked in `docs/specs/README.md` (single source of truth). Valid statuses:
+- **Draft** - Work in progress, not ready for implementation
+- **Ready for Implementation** - Design approved, ready to build
+- **Implemented** - Feature shipped, spec is reference documentation
+- **Superseded** - Replaced by another spec (link to replacement)
+
+When creating or updating specs:
+1. Add or move the spec to the appropriate section in `docs/specs/README.md`
+2. Specs can optionally include a note pointing to README for status: `> **Status**: See [README.md](README.md)`
 
 ### Code Navigation with LSP
 **Prefer `gopls` over grep/glob** for Go code navigation. See the `go-development` skill for command reference. Fall back to grep/glob only for non-code patterns (comments, strings, config values).

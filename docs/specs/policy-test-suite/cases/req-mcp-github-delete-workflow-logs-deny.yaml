@@ -1,24 +1,21 @@
 case_id: "req-mcp-github-delete-workflow-logs-deny"
 title: "Deny github delete workflow run logs tool"
-action_envelope:
-  action_type: "MCP_TOOL_CALL"
-  actor: "agent:test"
-  target: "github__delete_workflow_run_logs"
-  parameters:
+tags: ["security", "github", "cel"]
+notes:
+  - "CEL rule blocks github__delete_workflow_run_logs by name"
+
+phase: "request"
+engine: "cel"
+
+request:
+  tool_name: "github__delete_workflow_run_logs"
+  arguments:
     owner: "example"
     repo: "demo"
     run_id: 123456
-  estimated_impact:
-    scope: "repo"
-    data_classification: ["internal"]
-  request_id: "req-012"
+
 expectations:
+  decision: "deny"
   policies:
-    - policy_id: "deny-github-delete-workflow-run-logs"
+    - policy_name: "deny-github-delete-workflow-run-logs"
       decision: "deny"
-      reason_tags: ["cel"]
-  overall:
-    decision: "deny"
-    min_confidence: 0.9
-notes:
-  - "CEL rule blocks github__delete_workflow_run_logs by name."

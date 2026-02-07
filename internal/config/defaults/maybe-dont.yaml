@@ -58,7 +58,7 @@ validation:
   # AI configuration (required when AI validation or audit report is enabled)
   ai:
     endpoint: "https://api.openai.com/v1/chat/completions"
-    model: "gpt-4o-mini"
+    model: "gpt-5"
     api_key: "${OPENAI_API_KEY}"  # Set via environment variable
 
 # Request validation configuration
@@ -99,3 +99,23 @@ native_tools:
     enabled: true
   list_sessions:
     enabled: true
+
+# CLI Request Validation
+# Validates CLI commands from AI agents via REST API endpoint.
+# See docs/specs/cli-proxy-for-ai-agents.md for details.
+cli_request_validation:
+  # Enable the /api/v1/cli/validate REST endpoint
+  enabled: false
+
+  # Commands that require validation when enabled.
+  # Use "*" to validate ALL commands (has performance implications).
+  # Example commands (uncomment to enable):
+  #   - gh
+  #   - aws
+  #   - kubectl
+  validate_commands: []
+
+  # Include full argument values in audit log entries.
+  # When true (default), full argument values are logged for forensic analysis.
+  # When false, only argument flags/names are logged to protect sensitive data.
+  include_argument_values: true

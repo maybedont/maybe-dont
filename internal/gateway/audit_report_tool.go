@@ -239,16 +239,18 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 			stats.ErrorCount++
 		}
 
-		// Extract tool name and client from the new structure
-		toolName := entry.Audit.Tool.PrefixedName
-		if toolName != "" {
-			stats.TopTools[toolName]++
-			uniqueTools[toolName] = true
+		// Extract tool name and client from the new structure (nil-safe for CLI audit entries)
+		if entry.Audit.Tool != nil {
+			toolName := entry.Audit.Tool.PrefixedName
+			if toolName != "" {
+				stats.TopTools[toolName]++
+				uniqueTools[toolName] = true
 
-			// Use the client field directly
-			if entry.Audit.Tool.Client != "" {
-				stats.TopClients[entry.Audit.Tool.Client]++
-				uniqueClients[entry.Audit.Tool.Client] = true
+				// Use the client field directly
+				if entry.Audit.Tool.Client != "" {
+					stats.TopClients[entry.Audit.Tool.Client]++
+					uniqueClients[entry.Audit.Tool.Client] = true
+				}
 			}
 		}
 
@@ -450,7 +452,7 @@ func (h *NativeToolsHandler) prepareEntrySummary(entries []AuditLogEntry, stats 
 		if deniedCount >= 5 {
 			break
 		}
-		if entry.Audit == nil {
+		if entry.Audit == nil || entry.Audit.Tool == nil {
 			continue
 		}
 		if entry.Audit.Action == string(config.PolicyActionDeny) {
@@ -474,7 +476,7 @@ func (h *NativeToolsHandler) collectAuditOnlySamples(entries []AuditLogEntry) st
 		if count >= 5 {
 			break
 		}
-		if entry.Audit == nil {
+		if entry.Audit == nil || entry.Audit.Tool == nil {
 			continue
 		}
 
@@ -527,7 +529,7 @@ func (h *NativeToolsHandler) collectTimeoutSamples(entries []AuditLogEntry) stri
 		if count >= 5 {
 			break
 		}
-		if entry.Audit == nil {
+		if entry.Audit == nil || entry.Audit.Tool == nil {
 			continue
 		}
 
