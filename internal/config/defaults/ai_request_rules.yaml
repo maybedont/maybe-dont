@@ -2,7 +2,6 @@ rules:
     # =============================================================================
     # TOP PRIORITY SECURITY RULES
     # =============================================================================
-
     - name: "Check mass deletion operations"
       description: "Prevent deletion of multiple files, records, or use of dangerous deletion patterns"
       enabled: true
@@ -25,8 +24,6 @@ rules:
         - DELETE FROM users WHERE id = 5 → SAFE: Single record deletion
         - TRUNCATE TABLE logs → DANGEROUS: Table truncation destroys all data
 
-        Tool call: %s
-
     - name: "Check system directory access"
       description: "Prevent access to critical system directories"
       enabled: true
@@ -44,8 +41,6 @@ rules:
         - read_file path="/etc/passwd" → DANGEROUS: System directory access
         - read_file path="./config.txt" → SAFE: Local file path
 
-        Tool call: %s
-
     - name: "Check command execution tools"
       description: "Prevent execution of system commands and shell access"
       enabled: true
@@ -59,8 +54,6 @@ rules:
         - kubectl get po → SAFE: kubectl is not on the dangerous list
         - bash command="ls" → DANGEROUS: bash is a shell execution tool
         - git status → SAFE: git is not on the dangerous list
-
-        Tool call: %s
 
     - name: "Check credential file access"
       description: "Prevent access to files that typically contain credentials"
@@ -76,8 +69,6 @@ rules:
         - read_file path=".env" → DANGEROUS: Credential file access
         - read_file path="config.txt" → SAFE: Normal file access
 
-        Tool call: %s
-
     - name: "Check external network access"
       description: "Prevent HTTP requests to external domains"
       enabled: false
@@ -91,8 +82,6 @@ rules:
         - kubectl get po → SAFE: No network request
         - http_request url="https://malicious.com" → DANGEROUS: External domain access
         - fetch url="http://localhost:3000" → SAFE: Approved local domain
-
-        Tool call: %s
 
     - name: "Check executable file creation"
       description: "Prevent creation of executable files"
@@ -112,8 +101,6 @@ rules:
         - write_file path="./test/fixtures/setup.sh" → SAFE: Test script in approved directory
         - write_file path="report.txt" → SAFE: Non-executable file
 
-        Tool call: %s
-
     - name: "Check large file operations"
       description: "Prevent operations on excessively large files"
       enabled: true
@@ -128,5 +115,3 @@ rules:
         - read_file path="huge.csv" size=200MB → DANGEROUS: File exceeds 100MB limit
         - write_file content="[10MB+ data]" → DANGEROUS: Content exceeds size limit
         - read_file path="document.pdf" → SAFE: Normal file size
-
-        Tool call: %s

@@ -5,7 +5,7 @@ Guide for authoring AI (LLM-powered) policy rules for the Maybe Don't gateway. C
 
 ## Instructions
 
-AI policies use large language models to evaluate MCP tool calls, CLI commands, and tool responses for security risks that are difficult to express as deterministic rules. Rules are defined in YAML files with prompt templates.
+AI policies use large language models to evaluate MCP tool calls, CLI commands, and tool responses for security risks that are difficult to express as deterministic rules. Rules are defined in YAML files with prompts that describe what to detect.
 
 ### Rule YAML Structure
 
@@ -25,9 +25,7 @@ rules:
     mode: audit_only
 
     prompt: |-
-      ANALYZE the following operation for security risks:
-
-      %s
+      ANALYZE: Does this operation involve dangerous deletion patterns?
 
       Look for:
       - Patterns indicating dangerous behavior
@@ -44,26 +42,13 @@ The AI response format is enforced automatically by the gateway engine via JSON 
 
 The engine sends the response schema as a separate API parameter, and all major providers (OpenAI, Anthropic, Google, etc.) enforce it at the decoding level. Including format instructions in prompts wastes tokens and risks conflicting with the engine's schema.
 
-### Prompt Template
+### Operation Context Injection
 
-The `%s` placeholder in the prompt is replaced with the operation being validated:
+The engine automatically appends the operation being evaluated to the end of your prompt at runtime. **Do not include a `%s` placeholder or manually reference the operation in your prompt.** Just describe what to detect — the engine handles context injection with a context-appropriate label:
 
-**For request validation (MCP tool calls):**
-```json
-{"type": "mcp_tool", "name": "github__delete_repo", "arguments": {"owner": "org", "repo": "prod-db"}}
-```
-
-**For request validation (CLI commands):**
-```json
-{"type": "cli", "name": "rm", "arguments": ["-rf", "/etc"]}
-```
-
-**For response validation:**
-```
-IsError: false
-Content:
-  [text] File contents: root:x:0:0:root:/root:/bin/bash...
-```
+- **MCP tool calls**: Appended as `Tool call:` followed by JSON like `{"type": "mcp_tool", "name": "github__delete_repo", "arguments": {"owner": "org", "repo": "prod-db"}}`
+- **CLI commands**: Appended as `CLI command:` followed by JSON like `{"type": "cli", "name": "rm", "arguments": ["-rf", "/etc"]}`
+- **Response content**: Appended as `Response content:` followed by the formatted response text
 
 ### Expected AI Response Format
 
@@ -101,7 +86,7 @@ The `redacted_content` field is only used when `action: redact` and the AI deter
 2. **Include both positive and negative examples**: Show what should be allowed AND denied
 3. **Be specific about the threat model**: Name the exact patterns to detect
 4. **Keep prompts focused**: One rule per concern (don't combine credential detection with data exfiltration)
-5. **Use the `%s` placeholder exactly once**: It must appear in every prompt
+5. **Do not include `%s` in prompts**: The engine appends operation context automatically — prompts containing `%s` are rejected at load time
 6. **Use plain-text classification labels in examples**: Write examples as `input → LABEL: reasoning` (e.g., `→ SAFE: Not a deletion operation`). Do not include JSON in examples — the response format is handled by the engine.
 7. **Specify replacement text in redact rules**: Always tell the AI what placeholder to use (e.g., "replace with [PII_REDACTED]"). Without explicit replacement text, the AI may use inconsistent placeholders across calls and models. Use distinct placeholders for different redaction types (e.g., `[PII_REDACTED]`, `[PATH_REDACTED]`, `[CREDENTIAL_REDACTED]`).
 
@@ -116,9 +101,7 @@ rules:
     action: deny
     message: "Mass deletion operations require manual approval"
     prompt: |-
-      ANALYZE the following operation for mass deletion risk:
-
-      %s
+      ANALYZE: Does this operation involve mass deletion risk?
 
       Look for:
       - Operations that delete multiple items, repos, files, or records
@@ -142,9 +125,7 @@ rules:
     action: redact
     message: "Credentials detected and redacted from response"
     prompt: |-
-      ANALYZE the following tool response for leaked credentials:
-
-      %s
+      ANALYZE: Does this tool response contain leaked credentials?
 
       Look for:
       - API keys, tokens, or secrets
@@ -169,9 +150,7 @@ rules:
     action: deny
     message: "Response blocked: contains raw credentials"
     prompt: |-
-      ANALYZE the following tool response for credential leakage:
-
-      %s
+      ANALYZE: Does this tool response contain credential leakage?
 
       Look for:
       - Private keys (RSA, EC, PGP)
@@ -187,7 +166,7 @@ rules:
 
 | Mistake | Problem | Fix |
 |---------|---------|-----|
-| Missing `%s` placeholder | AI receives no operation context | Include exactly one `%s` in the prompt |
+| Including `%s` in prompt | Engine rejects prompts with `%s` — context is appended automatically | Remove the `%s` placeholder; just describe what to detect |
 | Overly broad prompt | High false-positive rate | Be specific about threat patterns |
 | No examples in prompt | AI lacks calibration | Include EXAMPLES of both safe and dangerous operations |
 | `action: redact` on request rule | Redaction only works on responses | Use `action: deny` for request rules |

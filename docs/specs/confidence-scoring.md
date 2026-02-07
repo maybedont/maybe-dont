@@ -172,7 +172,7 @@ These suffixes are appended by the engine, not written by the rule author. The J
 
 #### Migration of existing rules
 
-All shipped default rules in `ai_request_rules.yaml` and `ai_response_rules.yaml` will have their response format boilerplate removed. The `%s` placeholder and analytical content remain unchanged. For example:
+All shipped default rules in `ai_request_rules.yaml` and `ai_response_rules.yaml` will have their response format boilerplate removed. The `%s` placeholder is also removed — the engine appends operation context automatically at runtime with a context-appropriate label (`Tool call:`, `CLI command:`, or `Response content:`). Prompts containing `%s` are rejected at load time. For example:
 
 **Before:**
 ```yaml
@@ -188,10 +188,9 @@ prompt: |-
 prompt: |-
   ANALYZE: Does this operation delete multiple files...
   ...
-  Tool call: %s
 ```
 
-The engine appends the response format instruction automatically.
+The engine appends both the operation context and the response format instruction automatically.
 
 #### Backward compatibility for user-authored rules
 
@@ -391,7 +390,7 @@ CEL results always set `Confidence: 1.0`. AI results set it from the parsed resp
 
 ### 9. Prompt Construction Changes
 
-**Current flow** (`ai_engine.go`):
+**Previous flow** (`ai_engine.go`):
 ```go
 toolCallStr := fmt.Sprintf("Tool: %s\nArguments: %v", req.Params.Name, req.Params.Arguments)
 result, err := e.providerClient.Generate(ctx, AIRequest{
@@ -400,23 +399,20 @@ result, err := e.providerClient.Generate(ctx, AIRequest{
 })
 ```
 
-**New flow**:
+**Current flow (implemented)**:
 ```go
-toolCallStr := fmt.Sprintf("Tool: %s\nArguments: %v", req.Params.Name, req.Params.Arguments)
+operationStr := formatOperationForAI(req)
 
-// Expand the user's prompt template with the tool call
-userPrompt := fmt.Sprintf(p.Prompt, toolCallStr)
+// Engine appends operation context with a context-appropriate label
+userPrompt := p.Prompt + "\n\nTool call:\n" + operationStr
 
-// Append the centralized response format instruction (owned by the engine)
-userPrompt += "\n\n" + aiRequestResponseFormatInstruction
-
-result, err := e.providerClient.Generate(ctx, AIRequest{
+result, err := e.providerClient.Generate(policyCtx, AIRequest{
     UserPrompt:     userPrompt,
     ResponseSchema: GenerateSchema[AIResponse](),
 })
 ```
 
-The response engine (`ai_response_engine.go`) follows the same pattern with `aiResponseResponseFormatInstruction` and `GenerateSchema[AIResponseEvaluation]()`.
+For CLI commands, the label is `CLI command:` instead of `Tool call:`. The response engine (`ai_response_engine.go`) follows the same pattern with `Response content:` as the label and `GenerateSchema[AIResponseEvaluation]()`.
 
 Both instruction constants are package-level:
 
@@ -507,7 +503,8 @@ All shipped rules in `internal/config/defaults/ai_request_rules.yaml` and `ai_re
 
 1. **Remove response format boilerplate**: Delete the `Return ONLY JSON...` line from every rule prompt.
 2. **Remove example JSON responses from prompts**: The EXAMPLES sections currently include the response JSON (e.g., `-> { "allowed": true, "message": "..." }`). These should be simplified to just the classification (e.g., `-> SAFE: Not a deletion operation` or `-> DANGEROUS: Wildcard deletion detected`).
-3. **No confidence_threshold per rule** (for defaults): The shipped rules should rely on the global threshold. Per-rule overrides are for user customization.
+3. **Remove `%s` placeholder**: The `Tool call: %s` and `Response content: %s` lines are removed — the engine appends operation context automatically at runtime. Prompts containing `%s` are rejected at load time.
+4. **No confidence_threshold per rule** (for defaults): The shipped rules should rely on the global threshold. Per-rule overrides are for user customization.
 
 **Example migration**:
 
@@ -533,8 +530,6 @@ prompt: |-
   EXAMPLES:
   - kubectl get po -> SAFE: Not a deletion operation
   - kubectl delete po --all -> DANGEROUS: Wildcard deletion of all pods
-
-  Tool call: %s
 ```
 
 ### 13. Policy File Versioning
@@ -1063,11 +1058,12 @@ This section explains in detail why the `Return ONLY JSON...` instruction in eve
 
 The gateway's AI provider implementation sends the expected response format as a **machine-enforced JSON schema** alongside the prompt — not embedded within it. This is a distinct API parameter that the AI provider uses to constrain the model's output at the decoding level.
 
-**What happens today in `ai_engine.go:230`:**
+**What happens in `ai_engine.go`:**
 
 ```go
+userPrompt := p.Prompt + "\n\nTool call:\n" + operationStr  // Engine appends context
 result, err := e.providerClient.Generate(policyCtx, AIRequest{
-    UserPrompt:     fmt.Sprintf(p.Prompt, operationStr),    // The rule prompt
+    UserPrompt:     userPrompt,                              // The rule prompt + context
     ResponseSchema: GenerateSchema[AIResponse](),            // Schema sent separately
     Parameters:     e.cfg.Validation.AI.Parameters,
 })
@@ -1209,8 +1205,6 @@ prompt: |-
   - "Contact John at john@example.com" → PII DETECTED: Email address found, redact to "[PII_REDACTED]"
   - "The server returned 200 OK" → SAFE: No PII detected
   - "User SSN: 123-45-6789" → PII DETECTED: Social security number found
-
-  Response content: %s
 ```
 
 **What changed:**

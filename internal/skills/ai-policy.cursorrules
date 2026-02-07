@@ -14,7 +14,7 @@ The AI response format is enforced automatically by the gateway engine via JSON 
 
 ## Rules
 
-1. ALWAYS include exactly one `%s` placeholder in every prompt — it is replaced with the operation context
+1. The engine automatically appends operation context to your prompt at runtime — do NOT include `%s` in prompts (prompts containing `%s` are rejected at load time)
 2. Structure prompts with clear sections: ANALYZE, Look for, EXAMPLES
 3. Include both positive (safe) and negative (dangerous) examples in every prompt
 4. Keep each rule focused on one concern — do not combine multiple threat types
@@ -33,9 +33,7 @@ rules:
     message: "User-facing message"
     mode: audit_only                    # Optional: log without blocking
     prompt: |-
-      ANALYZE the following operation:
-
-      %s
+      ANALYZE: Does this operation involve dangerous patterns?
 
       Look for:
       - Specific dangerous patterns
@@ -44,6 +42,13 @@ rules:
       - Safe operation → SAFE: Explanation
       - Dangerous operation → DANGEROUS: Explanation
 ```
+
+## Operation Context
+
+The engine appends operation context to your prompt automatically:
+- MCP tool calls: `Tool call:` + JSON representation
+- CLI commands: `CLI command:` + JSON representation
+- Responses: `Response content:` + formatted response text
 
 ## AI Response Format
 
@@ -67,9 +72,7 @@ Response validation (with redaction):
   action: deny
   message: "Mass deletion requires approval"
   prompt: |-
-    ANALYZE the following operation for mass deletion risk:
-
-    %s
+    ANALYZE: Does this operation involve mass deletion risk?
 
     Look for:
     - Recursive or wildcard deletion patterns
@@ -86,9 +89,7 @@ Response validation (with redaction):
   action: redact
   message: "Credentials redacted"
   prompt: |-
-    ANALYZE the following tool response for leaked credentials:
-
-    %s
+    ANALYZE: Does this tool response contain leaked credentials?
 
     Look for: API keys, tokens, passwords, private keys
 

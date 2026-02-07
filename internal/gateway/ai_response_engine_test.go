@@ -155,7 +155,7 @@ func TestAIResponsePolicyEngine_RedactDecisionLogic(t *testing.T) {
 			err = engine.LoadPolicies([]config.AIResponsePolicy{
 				{
 					Name:   "test-policy",
-					Prompt: "Check: %s",
+					Prompt: "Check this response for security risks",
 					Action: tt.ruleAction,
 				},
 			}, "")
@@ -262,12 +262,12 @@ func TestAIResponsePolicyEngine_MixedActionAggregation(t *testing.T) {
 			err = engine.LoadPolicies([]config.AIResponsePolicy{
 				{
 					Name:   "test-redact-rule",
-					Prompt: "Redact check: %s",
+					Prompt: "Redact check for sensitive data",
 					Action: config.PolicyActionRedact,
 				},
 				{
 					Name:   "test-deny-rule",
-					Prompt: "Deny check: %s",
+					Prompt: "Deny check for dangerous content",
 					Action: config.PolicyActionDeny,
 				},
 			}, "")

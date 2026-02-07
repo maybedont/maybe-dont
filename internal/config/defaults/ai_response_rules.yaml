@@ -20,7 +20,6 @@ rules:
       - "The server returned 200 OK" → SAFE: No PII detected
       - "User SSN: 123-45-6789" → PII DETECTED: Social security number found
 
-      Response content: %s
     message: PII detected and redacted from response
 
   # Example: Detect credential leakage in responses
@@ -52,7 +51,6 @@ rules:
       - "Using endpoint ${API_URL}" → SAFE: Environment variable reference, not a value
       - "-----BEGIN RSA PRIVATE KEY-----" → DANGEROUS: Private key material
 
-      Response content: %s
     message: Credential leakage detected in response
 
   # Example: Detect and redact internal system paths
@@ -78,7 +76,6 @@ rules:
       - "Query returned 42 results" → SAFE: No sensitive paths detected
       - "Error at staging-db-01.corp.internal:5432" → PATHS DETECTED: Internal hostname exposed
 
-      Response content: %s
     message: Internal paths redacted from response
 
   # Example: Detect sensitive business data
@@ -109,5 +106,4 @@ rules:
       - "Customer: Jane Doe, email: jane@company.com, revenue: $45,000" → DANGEROUS: Individual customer record with PII
       - "System health: all services operational" → SAFE: General status information
 
-      Response content: %s
     message: Sensitive business data detected in response

@@ -121,7 +121,7 @@ func TestCursorFormat(t *testing.T) {
 	}{
 		{"cli", "cli", "# Maybe Don't CLI Proxy Rules", "## Rules", "--dry-run"},
 		{"cel-policy", "cel-policy", "# CEL Policy Authoring Rules", "## Rules", "mcp_expression"},
-		{"ai-policy", "ai-policy", "# AI Policy Authoring Rules", "## Rules", "%s"},
+		{"ai-policy", "ai-policy", "# AI Policy Authoring Rules", "## Rules", "redacted_content"},
 		{"test-case", "test-case", "# Policy Test Case Authoring Rules", "## Rules", "case_id"},
 	}
 
@@ -147,7 +147,7 @@ func TestCopilotFormat(t *testing.T) {
 	}{
 		{"cli", "cli", "# Maybe Don't CLI Proxy Instructions", true, "## Handling Denials"},
 		{"cel-policy", "cel-policy", "# CEL Policy Authoring Instructions", true, "mcp_expression"},
-		{"ai-policy", "ai-policy", "# AI Policy Authoring Instructions", true, "%s"},
+		{"ai-policy", "ai-policy", "# AI Policy Authoring Instructions", true, "redacted_content"},
 		{"test-case", "test-case", "# Policy Test Case Authoring Instructions", true, "case_id"},
 	}
 

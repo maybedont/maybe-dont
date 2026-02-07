@@ -76,13 +76,13 @@ func TestAsyncValidation_AllAuditOnlyReturnsImmediately(t *testing.T) {
 	policies := []config.AIPolicy{
 		{
 			Name:   "audit_policy_1",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			Mode:   config.PolicyModeAuditOnly,
 		},
 		{
 			Name:   "audit_policy_2",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			Mode:   config.PolicyModeAuditOnly,
 		},
@@ -135,7 +135,7 @@ func TestAsyncValidation_EnabledPoliciesBlock(t *testing.T) {
 	policies := []config.AIPolicy{
 		{
 			Name:   "enabled_policy",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			// Mode not set - can block
 		},
@@ -183,13 +183,13 @@ func TestAsyncValidation_MixedModePolicies(t *testing.T) {
 	policies := []config.AIPolicy{
 		{
 			Name:   "enabled_policy",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			// Mode not set - can block
 		},
 		{
 			Name:   "audit_only_policy",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			Mode:   config.PolicyModeAuditOnly,
 		},
@@ -279,7 +279,7 @@ func TestAsyncValidation_ValidationChainPropagatesAsync(t *testing.T) {
 	policies := []config.AIPolicy{
 		{
 			Name:   "audit_policy",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			Mode:   config.PolicyModeAuditOnly,
 		},
@@ -320,7 +320,7 @@ func TestAsyncCompletion_ChannelDeliversCorrectResults(t *testing.T) {
 	policies := []config.AIPolicy{
 		{
 			Name:   "audit_security_policy",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			Mode:   config.PolicyModeAuditOnly,
 		},
@@ -366,7 +366,7 @@ func TestAsyncValidation_ResponseEngine_AllAuditOnly(t *testing.T) {
 	policies := []config.AIResponsePolicy{
 		{
 			Name:   "audit_response_policy",
-			Prompt: "Check response: %s",
+			Prompt: "Check this response for security risks",
 			Action: config.PolicyActionDeny,
 			Mode:   config.PolicyModeAuditOnly,
 		},
@@ -432,7 +432,7 @@ func TestAsyncValidation_FullChainWithCELAndAI(t *testing.T) {
 	err = aiEngine.LoadPolicies([]config.AIPolicy{
 		{
 			Name:   "audit_policy",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			Mode:   config.PolicyModeAuditOnly,
 		},
@@ -648,7 +648,7 @@ func TestAsyncValidation_AllAuditOnlyWritesAuditLog(t *testing.T) {
 	err = aiEngine.LoadPolicies([]config.AIPolicy{
 		{
 			Name:   "ai_audit_policy",
-			Prompt: "Check security: %s",
+			Prompt: "Check security of this operation",
 			Action: config.PolicyActionDeny,
 			Mode:   config.PolicyModeAuditOnly, // audit_only - should not block
 		},

@@ -1,7 +1,7 @@
 # AI Policy Authoring Instructions
 
 ## Overview
-AI policies use LLMs to validate MCP tool calls, CLI commands, and tool responses for security risks in the Maybe Don't gateway. Rules are defined in YAML with prompt templates that guide the AI's evaluation.
+AI policies use LLMs to validate MCP tool calls, CLI commands, and tool responses for security risks in the Maybe Don't gateway. Rules are defined in YAML with prompts that describe what to detect.
 
 ## Rule File Format
 
@@ -15,9 +15,7 @@ rules:
     message: "User-facing message"
     mode: audit_only                    # Optional: log without blocking
     prompt: |-
-      ANALYZE the following operation:
-
-      %s
+      ANALYZE: Does this operation involve dangerous patterns?
 
       Look for:
       - Dangerous patterns to detect
@@ -33,7 +31,7 @@ The AI response format is enforced automatically by the gateway engine via JSON 
 
 ## Important Rules
 
-- **Always** include exactly one `%s` placeholder in the prompt — it is replaced with the operation context
+- The engine automatically appends operation context to your prompt at runtime — **do not include `%s` in prompts** (prompts containing `%s` are rejected at load time)
 - Structure prompts with clear sections: ANALYZE, Look for, EXAMPLES
 - Include **both** safe and dangerous examples in every prompt
 - Keep each rule focused on **one** concern — do not combine unrelated threat types
@@ -42,12 +40,12 @@ The AI response format is enforced automatically by the gateway engine via JSON 
 - Use plain-text classification labels in examples (`→ SAFE:` / `→ DANGEROUS:`), not JSON
 - For redact rules, always specify replacement text (e.g., "replace with [PII_REDACTED]")
 
-## Prompt Substitution
+## Operation Context
 
-The `%s` placeholder receives:
-- **MCP tool calls**: `{"type": "mcp_tool", "name": "tool_name", "arguments": {...}}`
-- **CLI commands**: `{"type": "cli", "name": "command", "arguments": [...]}`
-- **Responses**: Formatted text with `IsError:`, `Content:`, `Meta:` sections
+The engine appends operation context to your prompt automatically with a context-appropriate label:
+- **MCP tool calls**: `Tool call:` + JSON `{"type": "mcp_tool", "name": "tool_name", "arguments": {...}}`
+- **CLI commands**: `CLI command:` + JSON `{"type": "cli", "name": "command", "arguments": [...]}`
+- **Responses**: `Response content:` + formatted text with `IsError:`, `Content:`, `Meta:` sections
 
 ## AI Response Format
 
@@ -80,9 +78,7 @@ Response validation with redaction:
   action: deny
   message: "Credential file access requires approval"
   prompt: |-
-    ANALYZE the following operation for credential file access:
-
-    %s
+    ANALYZE: Does this operation access credential files?
 
     Look for:
     - Reading .env, .credentials, .pem, .key files
@@ -99,9 +95,7 @@ Response validation with redaction:
   action: redact
   message: "PII redacted from response"
   prompt: |-
-    ANALYZE the following tool response for PII:
-
-    %s
+    ANALYZE: Does this tool response contain PII?
 
     Look for: email addresses, phone numbers, SSNs, credit card numbers
 
