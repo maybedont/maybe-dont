@@ -104,9 +104,12 @@ func NewCELPolicyEngine(ctx context.Context, logger *config.SessionLogger) (*CEL
 
 // LoadPolicies loads policies from configuration
 // topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
-func (e *CELPolicyEngine) LoadPolicies(policies []config.Policy, topLevelMode config.PolicyMode) error {
+func (e *CELPolicyEngine) LoadPolicies(policies []config.Policy, topLevelMode config.PolicyMode, includeDisabled ...bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	// Check if we should include disabled policies (default: false)
+	loadDisabled := len(includeDisabled) > 0 && includeDisabled[0]
 
 	// Track seen policy names to detect duplicates
 	seenNames := make(map[string]bool)
@@ -119,8 +122,8 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.Policy, topLevelMode co
 		}
 		seenNames[policy.Name] = true
 
-		// Skip disabled policies (enabled: false)
-		if !policy.IsEnabled() {
+		// Skip disabled policies (enabled: false) unless includeDisabled is set
+		if !policy.IsEnabled() && !loadDisabled {
 			e.logger.Debug(context.Background(), "Skipping disabled request policy",
 				zap.String("name", policy.Name),
 			)

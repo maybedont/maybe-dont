@@ -1,0 +1,63 @@
+# Test suite for the default shipped policies
+# This validates that the default CEL and AI policies work as expected
+version: "v1"
+bundle_id: default-policies
+description: "Test suite for shipped default policies"
+
+# Provider-level API keys - shared across all models for each provider
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+
+policies:
+  cel_request_rules: "../cel_request_rules.yaml"
+  ai_request_rules: "../ai_request_rules.yaml"
+  cel_response_rules: "../cel_response_rules.yaml"
+  ai_response_rules: "../ai_response_rules.yaml"
+
+acceptance:
+  min_match_rate: 1.0 # All tests must pass for default policies
+
+execution:
+  timeout_ms: 30000
+  retries: 2
+  retry_delay_ms: 1000
+
+engines:
+  cel:
+    enabled: true
+  ai:
+    enabled: true
+    model_matrix:
+      # OpenAI models - fast to slow, cheap to expensive
+      - provider: openai
+        model: gpt-5-mini # Fast and cost-effective
+        enabled: true
+      - provider: openai
+        model: gpt-5 # Balanced performance and quality
+        enabled: true
+      - provider: openai
+        model: gpt-5.2 # Flagship reasoning model, highest quality
+        enabled: true
+
+      # Anthropic models - fast to slow, cheap to expensive
+      # Using dated versions for reproducible test results
+      - provider: anthropic
+        model: claude-haiku-4-5-20251001 # Fast and cost-effective
+        enabled: true
+      - provider: anthropic
+        model: claude-sonnet-4-5-20250929 # Balanced performance and quality
+        enabled: true
+      - provider: anthropic
+        model: claude-opus-4-5-20251101 # High quality
+        enabled: true
+      - provider: anthropic
+        model: claude-opus-4-6 # Latest flagship, highest quality
+        enabled: true
+
+filters:
+  tags: []
+  exclude_tags: []
+  case_pattern: ""

@@ -277,15 +277,15 @@ func (p *AIPolicy) IsEnabled() bool {
 
 // ResponsePolicy represents a single deterministic response policy rule (uses CEL expressions internally)
 type ResponsePolicy struct {
-	Name                 string       `mapstructure:"name"`
-	Description          string       `mapstructure:"description"`
-	Expression           string       `mapstructure:"expression"`
-	Action               PolicyAction `mapstructure:"action"` // allow, deny, or redact
-	Message              string       `mapstructure:"message"`
-	RedactionPattern     string       `mapstructure:"redaction_pattern"`
-	RedactionReplacement string       `mapstructure:"redaction_replacement"`
-	Enabled              *bool        `mapstructure:"enabled"` // Whether this rule runs (default: true)
-	Mode                 PolicyMode   `mapstructure:"mode"`    // "audit_only" or empty (default: follows top-level)
+	Name                 string       `mapstructure:"name" yaml:"name"`
+	Description          string       `mapstructure:"description" yaml:"description"`
+	Expression           string       `mapstructure:"expression" yaml:"expression"`
+	Action               PolicyAction `mapstructure:"action" yaml:"action"` // allow, deny, or redact
+	Message              string       `mapstructure:"message" yaml:"message"`
+	RedactionPattern     string       `mapstructure:"redaction_pattern" yaml:"redaction_pattern"`
+	RedactionReplacement string       `mapstructure:"redaction_replacement" yaml:"redaction_replacement"`
+	Enabled              *bool        `mapstructure:"enabled" yaml:"enabled"` // Whether this rule runs (default: true)
+	Mode                 PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only" or empty (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)

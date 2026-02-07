@@ -239,6 +239,43 @@ func TestOpenAIProvider_Generate_WithResponseSchema(t *testing.T) {
 	assert.Equal(t, "json_schema", responseFormat["type"])
 }
 
+// TestOpenAIProvider_Generate_MaxTokensTranslation verifies that max_tokens is
+// translated to max_completion_tokens in the wire format for OpenAI.
+func TestOpenAIProvider_Generate_MaxTokensTranslation(t *testing.T) {
+	var receivedBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &receivedBody)
+
+		resp := map[string]any{
+			"id":      "chatcmpl-123",
+			"choices": []map[string]any{{"message": map[string]any{"content": `{}`}}},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{}
+	cfg.Validation.AI.Provider = "openai"
+	cfg.Validation.AI.Endpoint = server.URL
+	cfg.Validation.AI.APIKey = "test-key"
+	cfg.Validation.AI.Model = "test-model"
+	cfg.Validation.AI.Parameters = map[string]any{
+		"max_tokens": 4096,
+	}
+
+	client := NewAIProviderClient(cfg)
+
+	_, err := client.Generate(context.Background(), AIRequest{UserPrompt: "test"})
+
+	require.NoError(t, err)
+	// Should be translated to max_completion_tokens on the wire
+	assert.Equal(t, float64(4096), receivedBody["max_completion_tokens"])
+	// max_tokens should not be present
+	assert.Nil(t, receivedBody["max_tokens"], "max_tokens should be translated to max_completion_tokens")
+}
+
 // TestOpenAIProvider_Generate_CustomHeaders verifies custom headers are sent.
 func TestOpenAIProvider_Generate_CustomHeaders(t *testing.T) {
 	var receivedHeaders http.Header
@@ -610,4 +647,70 @@ func TestOpenAIProvider_ErrorNormalization(t *testing.T) {
 			assert.Equal(t, tt.expectedRetry, providerErr.Retryable)
 		})
 	}
+}
+
+// TestOpenAIProvider_EmptyContent verifies that an empty content string from the
+// model is classified as a no_response error rather than returning a misleading
+// empty result.
+func TestOpenAIProvider_EmptyContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"id": "chatcmpl-empty",
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"content": "",
+					},
+					"finish_reason": "stop",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{}
+	cfg.Validation.AI.Provider = "openai"
+	cfg.Validation.AI.Endpoint = server.URL
+	cfg.Validation.AI.APIKey = "test-key"
+	cfg.Validation.AI.Model = "test-model"
+
+	client := NewAIProviderClient(cfg)
+	_, err := client.Generate(context.Background(), AIRequest{UserPrompt: "test"})
+
+	require.Error(t, err)
+	var providerErr *AIProviderError
+	require.ErrorAs(t, err, &providerErr)
+	assert.Equal(t, ErrCategoryNoResponse, providerErr.Category)
+	assert.Contains(t, providerErr.Message, "empty response content")
+}
+
+// TestOpenAIProvider_TimeoutMessage verifies that timeout errors include the
+// provider name for easier troubleshooting.
+func TestOpenAIProvider_TimeoutMessage(t *testing.T) {
+	// Server that never responds
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5 * time.Second)
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{}
+	cfg.Validation.AI.Provider = "openai"
+	cfg.Validation.AI.Endpoint = server.URL
+	cfg.Validation.AI.APIKey = "test-key"
+	cfg.Validation.AI.Model = "test-model"
+
+	client := NewAIProviderClient(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := client.Generate(ctx, AIRequest{UserPrompt: "test"})
+
+	require.Error(t, err)
+	var providerErr *AIProviderError
+	require.ErrorAs(t, err, &providerErr)
+	assert.Equal(t, ErrCategoryTimeout, providerErr.Category)
+	assert.Contains(t, providerErr.Message, "OpenAI")
 }

@@ -1,0 +1,70 @@
+# Test cases for deny-github-delete-file CEL policy
+# This policy denies any call to github__delete_file tool
+
+# Test: Exact match should be denied
+- case_id: cel-req-001
+  title: "Block github__delete_file - exact tool name match"
+  tags: [cel, request, github, file-deletion]
+  phase: request
+  engine: cel
+  request:
+    tool_name: "github__delete_file"
+    arguments:
+      owner: "myorg"
+      repo: "myrepo"
+      path: "README.md"
+      branch: "main"
+      message: "Delete readme"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: deny-github-delete-file
+        decision: deny
+
+# Test: Allow similar but non-matching tool names
+- case_id: cel-req-002
+  title: "Allow github__create_file - not blocked by delete policy"
+  tags: [cel, request, github, file-creation, allow]
+  phase: request
+  engine: cel
+  request:
+    tool_name: "github__create_file"
+    arguments:
+      owner: "myorg"
+      repo: "myrepo"
+      path: "newfile.txt"
+      content: "Hello world"
+  expectations:
+    decision: allow
+
+# Test: Allow other github tools
+- case_id: cel-req-003
+  title: "Allow github__get_file_contents - read operations allowed"
+  tags: [cel, request, github, file-read, allow]
+  phase: request
+  engine: cel
+  request:
+    tool_name: "github__get_file_contents"
+    arguments:
+      owner: "myorg"
+      repo: "myrepo"
+      path: "config.yaml"
+  expectations:
+    decision: allow
+
+# Test: Allow update_file (different from delete)
+- case_id: cel-req-004
+  title: "Allow github__update_file - update is not delete"
+  tags: [cel, request, github, file-update, allow]
+  phase: request
+  engine: cel
+  request:
+    tool_name: "github__update_file"
+    arguments:
+      owner: "myorg"
+      repo: "myrepo"
+      path: "README.md"
+      content: "Updated content"
+      sha: "abc123"
+  expectations:
+    decision: allow

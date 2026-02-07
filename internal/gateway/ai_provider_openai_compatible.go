@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 )
@@ -125,13 +127,25 @@ func (p *openAICompatibleProvider) doGenerate(ctx context.Context, req AIRequest
 		}
 	}
 
+	// Parse rate limit headers (available even on error responses)
+	// Note: Not all OpenAI-compatible providers return these headers
+	rateLimitInfo := p.parseRateLimitHeaders(resp)
+
 	// Check for error response
 	if resp.StatusCode != http.StatusOK {
-		return AICompletionResult{}, resp.StatusCode, p.normalizeError(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)), resp.StatusCode)
+		result := AICompletionResult{RateLimitInfo: rateLimitInfo}
+		return result, resp.StatusCode, p.normalizeError(fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)), resp.StatusCode)
 	}
 
-	// Parse response
-	return p.parseResponse(respBody)
+	// Parse response body
+	result, statusCode, err := p.parseResponse(respBody)
+	if err != nil {
+		return result, statusCode, err
+	}
+
+	// Add rate limit info to successful result
+	result.RateLimitInfo = rateLimitInfo
+	return result, statusCode, nil
 }
 
 // buildRequestBody constructs the OpenAI-format chat completions request body.
@@ -193,6 +207,7 @@ func (p *openAICompatibleProvider) parseResponse(respBody []byte) (AICompletionR
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 
@@ -213,13 +228,70 @@ func (p *openAICompatibleProvider) parseResponse(respBody []byte) (AICompletionR
 		}
 	}
 
-	content := resp.Choices[0].Message.Content
+	choice := resp.Choices[0]
+	content := choice.Message.Content
+
+	if content == "" {
+		return AICompletionResult{}, 0, &AIProviderError{
+			Category:  ErrCategoryNoResponse,
+			Message:   "provider returned empty response content",
+			Retryable: false,
+		}
+	}
 
 	return AICompletionResult{
 		RawText:           content,
 		ParsedJSON:        json.RawMessage(content),
 		ProviderRequestID: resp.ID,
+		StopReason:        choice.FinishReason,
+		WasTruncated:      choice.FinishReason == "length",
 	}, http.StatusOK, nil
+}
+
+// parseRateLimitHeaders extracts rate limit information from response headers.
+// Uses OpenAI-format headers, though not all compatible providers return these.
+func (p *openAICompatibleProvider) parseRateLimitHeaders(resp *http.Response) *RateLimitInfo {
+	info := &RateLimitInfo{Provider: ProviderOpenAICompatible}
+
+	// Parse request limits (OpenAI format)
+	if v := resp.Header.Get("x-ratelimit-limit-requests"); v != "" {
+		info.RequestsLimit, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("x-ratelimit-remaining-requests"); v != "" {
+		info.RequestsRemaining, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("x-ratelimit-reset-requests"); v != "" {
+		info.RequestsReset = parseOpenAICompatibleResetTime(v)
+	}
+
+	// Parse token limits
+	if v := resp.Header.Get("x-ratelimit-limit-tokens"); v != "" {
+		info.TokensLimit, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("x-ratelimit-remaining-tokens"); v != "" {
+		info.TokensRemaining, _ = strconv.Atoi(v)
+	}
+	if v := resp.Header.Get("x-ratelimit-reset-tokens"); v != "" {
+		info.TokensReset = parseOpenAICompatibleResetTime(v)
+	}
+
+	// Parse retry-after header
+	if v := resp.Header.Get("retry-after"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil {
+			info.RetryAfter = time.Duration(secs) * time.Second
+		}
+	}
+
+	return info
+}
+
+// parseOpenAICompatibleResetTime parses reset time (duration format like "1m30s").
+func parseOpenAICompatibleResetTime(v string) time.Time {
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Now().Add(d)
 }
 
 // normalizeError converts HTTP errors to AIProviderError with appropriate categories.
@@ -228,7 +300,7 @@ func (p *openAICompatibleProvider) normalizeError(err error, statusCode int) *AI
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &AIProviderError{
 			Category:  ErrCategoryTimeout,
-			Message:   "request timed out",
+			Message:   "request to provider timed out",
 			Retryable: false,
 			Cause:     err,
 		}

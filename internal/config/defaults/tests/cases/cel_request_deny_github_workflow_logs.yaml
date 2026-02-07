@@ -1,0 +1,65 @@
+# Test cases for deny-github-delete-workflow-run-logs CEL policy
+# This policy denies any call to github__delete_workflow_run_logs tool
+
+# Test: Exact match should be denied
+- case_id: cel-req-010
+  title: "Block github__delete_workflow_run_logs - exact tool name match"
+  tags: [cel, request, github, workflow-logs]
+  phase: request
+  engine: cel
+  request:
+    tool_name: "github__delete_workflow_run_logs"
+    arguments:
+      owner: "myorg"
+      repo: "myrepo"
+      run_id: 12345
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: deny-github-delete-workflow-run-logs
+        decision: deny
+
+# Test: Allow getting workflow logs (read operation)
+- case_id: cel-req-011
+  title: "Allow github__get_workflow_run_logs - read operations allowed"
+  tags: [cel, request, github, workflow-logs, allow]
+  phase: request
+  engine: cel
+  request:
+    tool_name: "github__get_workflow_run_logs"
+    arguments:
+      owner: "myorg"
+      repo: "myrepo"
+      run_id: 12345
+  expectations:
+    decision: allow
+
+# Test: Allow listing workflow runs
+- case_id: cel-req-012
+  title: "Allow github__list_workflow_runs - list operations allowed"
+  tags: [cel, request, github, workflow, allow]
+  phase: request
+  engine: cel
+  request:
+    tool_name: "github__list_workflow_runs"
+    arguments:
+      owner: "myorg"
+      repo: "myrepo"
+      workflow_id: "ci.yml"
+  expectations:
+    decision: allow
+
+# Test: Allow re-running workflows
+- case_id: cel-req-013
+  title: "Allow github__rerun_workflow - rerun operations allowed"
+  tags: [cel, request, github, workflow, allow]
+  phase: request
+  engine: cel
+  request:
+    tool_name: "github__rerun_workflow"
+    arguments:
+      owner: "myorg"
+      repo: "myrepo"
+      run_id: 12345
+  expectations:
+    decision: allow
