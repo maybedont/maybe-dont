@@ -1,7 +1,7 @@
 # CEL Policy Authoring Instructions
 
 ## Purpose
-Author deterministic CEL (Common Expression Language) policy rules for the Maybe Don't gateway. CEL policies validate MCP tool calls, CLI commands, and tool responses using fast, compiled expressions.
+Author deterministic CEL (Common Expression Language) policy rules for Maybe Don't. CEL policies validate MCP tool calls, CLI commands, and tool responses using fast, compiled expressions.
 
 ## Rule File Structure
 

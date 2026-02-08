@@ -1,7 +1,7 @@
 # CEL Policy Authoring Instructions
 
 ## Overview
-CEL policies provide deterministic, fast validation for MCP tool calls, CLI commands, and tool responses in the Maybe Don't gateway. Rules are defined in YAML and evaluated using Google's Common Expression Language (CEL).
+CEL policies provide deterministic, fast validation for MCP tool calls, CLI commands, and tool responses in Maybe Don't. Rules are defined in YAML and evaluated using Google's Common Expression Language (CEL).
 
 ## Rule File Format
 

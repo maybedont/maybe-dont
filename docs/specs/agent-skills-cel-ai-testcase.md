@@ -24,7 +24,7 @@ These skills are served via `maybe-dont skill view <name>` and can be injected i
 ### CEL Policy Skill
 | File | Format |
 |------|--------|
-| `internal/skills/cel-policy.md` | Claude |
+| `internal/skills/cel-policy.claude.md` | Claude |
 | `internal/skills/cel-policy.cursorrules` | Cursor |
 | `internal/skills/cel-policy.copilot.md` | Copilot |
 | `internal/skills/cel-policy.generic.md` | Generic |
@@ -32,7 +32,7 @@ These skills are served via `maybe-dont skill view <name>` and can be injected i
 ### AI Policy Skill
 | File | Format |
 |------|--------|
-| `internal/skills/ai-policy.md` | Claude |
+| `internal/skills/ai-policy.claude.md` | Claude |
 | `internal/skills/ai-policy.cursorrules` | Cursor |
 | `internal/skills/ai-policy.copilot.md` | Copilot |
 | `internal/skills/ai-policy.generic.md` | Generic |
@@ -40,7 +40,7 @@ These skills are served via `maybe-dont skill view <name>` and can be injected i
 ### Test Case Skill
 | File | Format |
 |------|--------|
-| `internal/skills/test-case.md` | Claude |
+| `internal/skills/test-case.claude.md` | Claude |
 | `internal/skills/test-case.cursorrules` | Cursor |
 | `internal/skills/test-case.copilot.md` | Copilot |
 | `internal/skills/test-case.generic.md` | Generic |
@@ -96,11 +96,11 @@ Covers AI-powered policy rules for request and response validation:
 **Rule YAML structure:**
 - Fields: `name`, `description`, `enabled`, `action`, `message`, `mode`, `prompt`
 
-**Prompt template pattern:**
-- The `%s` placeholder is replaced with operation context
-- Request MCP: JSON `{"type": "mcp_tool", "name": "...", "arguments": {...}}`
-- Request CLI: JSON `{"type": "cli", "name": "...", "arguments": [...]}`
-- Response: formatted text with `IsError:`, `Content:`, `Meta:` sections
+**Operation context injection:**
+- The engine automatically appends operation context to prompts at runtime — do not include `%s` in prompts (rejected at load time)
+- MCP tool calls: appended as `Tool call:` + JSON `{"type": "mcp_tool", "name": "...", "arguments": {...}}`
+- CLI commands: appended as `CLI command:` + JSON `{"type": "cli", "name": "...", "arguments": [...]}`
+- Responses: appended as `Response content:` + formatted text with `IsError:`, `Content:`, `Meta:` sections
 
 **Expected AI response format:**
 - Request: `{"allowed": true/false, "message": "..."}`
@@ -112,11 +112,11 @@ Covers AI-powered policy rules for request and response validation:
 - ANALYZE / Look for / EXAMPLES structure
 - Include both safe and dangerous examples
 - One focused concern per rule
-- Always specify expected JSON response format
+- Do not include `%s` in prompts — engine appends operation context automatically
 
 **Complete examples:** request deny (mass deletion), response redact (credentials), response deny (sensitive data)
 
-**Common mistakes:** missing `%s`, overly broad prompts, no examples, combining concerns, vague response format
+**Common mistakes:** including `%s` in prompt (rejected at load time), overly broad prompts, no examples, combining concerns, including response format in prompt
 
 ### Test Case Skill Content
 
@@ -143,6 +143,8 @@ execution:
   timeout_ms: 30000
   retries: 2
   retry_delay_ms: 1000
+  # Proactive pacing - applied to every request regardless of API headers.
+  # The runner also adapts to 429 responses using retry-after headers.
   delay_between_requests_ms: 100
   rate_limit_buffer_ms: 5000
   rate_limits:

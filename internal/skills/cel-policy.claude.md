@@ -1,7 +1,7 @@
 # cel-policy-authoring
 
 ## Description
-Guide for authoring CEL (Common Expression Language) deterministic policy rules for the Maybe Don't gateway. Covers both request and response validation rules.
+Guide for authoring CEL (Common Expression Language) deterministic policy rules for Maybe Don't. Covers both request and response validation rules.
 
 ## Instructions
 
@@ -9,7 +9,7 @@ CEL policies provide fast, deterministic validation of MCP tool calls, CLI comma
 
 ### Rule YAML Structure
 
-Rules are stored in separate files referenced by the gateway configuration:
+Rules are stored in separate files referenced by the server configuration:
 - **Request rules**: `cel_request_rules.yaml` (when `request_validation.cel.enabled: true`)
 - **Response rules**: `cel_response_rules.yaml` (when `response_validation.cel.enabled: true`)
 
@@ -172,7 +172,7 @@ rules:
 
 ### Key Notes
 
-- CEL expressions compile at gateway startup; invalid expressions prevent startup
+- CEL expressions compile at startup; invalid expressions prevent startup
 - First enabled `deny` match short-circuits evaluation (subsequent rules are skipped)
 - Rules with only `mcp_expression` are skipped for CLI commands (and vice versa)
 - Redaction uses Go `regexp` syntax (not PCRE)

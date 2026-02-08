@@ -7,7 +7,7 @@ import (
 
 // Embedded skill content for each format
 //
-//go:embed cli.md
+//go:embed cli.claude.md
 var cliSkillClaude string
 
 //go:embed cli.cursorrules
@@ -19,7 +19,7 @@ var cliSkillCopilot string
 //go:embed cli.generic.md
 var cliSkillGeneric string
 
-//go:embed cel-policy.md
+//go:embed cel-policy.claude.md
 var celPolicySkillClaude string
 
 //go:embed cel-policy.cursorrules
@@ -31,7 +31,7 @@ var celPolicySkillCopilot string
 //go:embed cel-policy.generic.md
 var celPolicySkillGeneric string
 
-//go:embed ai-policy.md
+//go:embed ai-policy.claude.md
 var aiPolicySkillClaude string
 
 //go:embed ai-policy.cursorrules
@@ -43,7 +43,7 @@ var aiPolicySkillCopilot string
 //go:embed ai-policy.generic.md
 var aiPolicySkillGeneric string
 
-//go:embed test-case.md
+//go:embed test-case.claude.md
 var testCaseSkillClaude string
 
 //go:embed test-case.cursorrules

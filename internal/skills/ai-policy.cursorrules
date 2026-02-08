@@ -1,22 +1,23 @@
 # AI Policy Authoring Rules
 
-AI policies use LLMs to validate MCP tool calls, CLI commands, and tool responses for security risks in the Maybe Don't gateway.
+AI policies use LLMs to validate tool calls, CLI commands, and tool responses for security risks in Maybe Don't.
 
 ## Required File Format
 
-Rules are defined in YAML files loaded by the gateway:
+Rules are defined in YAML files loaded by the server:
 - Request rules: `ai_request_rules.yaml`
 - Response rules: `ai_response_rules.yaml`
 
-## Rules
+## Writing Effective Prompts
 
-1. ALWAYS include exactly one `%s` placeholder in every prompt — it is replaced with the operation context
-2. Structure prompts with clear sections: ANALYZE, Look for, EXAMPLES, response format
-3. Include both positive (safe) and negative (dangerous) examples in every prompt
-4. Keep each rule focused on one concern — do not combine multiple threat types
-5. `action: redact` is only valid for response rules, not request rules
-6. Always end prompts with the expected JSON response format
+1. Describe the specific security concern in an ANALYZE section
+2. List the exact patterns to detect in a "Look for" section
+3. Include both safe and dangerous examples to calibrate the AI's judgment
+4. Use plain-text classification labels in examples (`-> SAFE:` / `-> DANGEROUS:`)
+5. Keep each rule focused on one concern — separate rules for separate threats
+6. For redact rules, specify replacement text (e.g., "replace with [PII_REDACTED]")
 7. Use `mode: audit_only` to test rules without blocking, then remove it when confident
+8. `action: redact` is only valid for response rules, not request rules
 
 ## Rule Structure
 
@@ -28,22 +29,26 @@ rules:
     message: "User-facing message"
     mode: audit_only                    # Optional: log without blocking
     prompt: |-
-      ANALYZE the following operation:
-
-      %s
+      ANALYZE: Does this operation involve dangerous patterns?
 
       Look for:
       - Specific dangerous patterns
 
-      EXAMPLES of dangerous operations:
-      - Example 1
-      EXAMPLES of safe operations:
-      - Example 1
-
-      Respond with JSON: {"allowed": true/false, "message": "explanation"}
+      EXAMPLES:
+      - Safe operation -> SAFE: Explanation
+      - Dangerous operation -> DANGEROUS: Explanation
 ```
 
+## Operation Context
+
+The policy engine appends operation context to your prompt automatically:
+- Tool calls: `Tool call:` + JSON representation
+- CLI commands: `CLI command:` + JSON representation
+- Responses: `Response content:` + formatted response text
+
 ## AI Response Format
+
+The AI response format is enforced automatically at runtime. The server uses these structures:
 
 Request validation:
 ```json
@@ -63,31 +68,30 @@ Response validation (with redaction):
   action: deny
   message: "Mass deletion requires approval"
   prompt: |-
-    ANALYZE the following operation for mass deletion risk:
-
-    %s
+    ANALYZE: Does this operation involve mass deletion risk?
 
     Look for:
     - Recursive or wildcard deletion patterns
     - Operations targeting shared or production resources
 
-    EXAMPLES of dangerous: deleting all files, dropping tables
-    EXAMPLES of safe: removing a single temp file, cleaning drafts
-
-    Respond with JSON: {"allowed": true/false, "message": "explanation"}
+    EXAMPLES:
+    - Deleting all files recursively -> DANGEROUS: Mass file deletion
+    - Dropping database tables -> DANGEROUS: Irreversible data loss
+    - Removing a single temp file -> SAFE: Routine cleanup
+    - Cleaning up personal drafts -> SAFE: Non-destructive operation
 
 # Response: Redact credentials
 - name: redact-credentials
   action: redact
   message: "Credentials redacted"
   prompt: |-
-    ANALYZE the following tool response for leaked credentials:
-
-    %s
+    ANALYZE: Does this tool response contain leaked credentials?
 
     Look for: API keys, tokens, passwords, private keys
 
-    If found, provide sanitized version with [REDACTED] replacements.
+    If found, provide sanitized version with sensitive values replaced by [CREDENTIAL_REDACTED].
 
-    Respond with JSON: {"allowed": true/false, "message": "explanation", "redacted_content": "sanitized if needed"}
+    EXAMPLES:
+    - "Connected to db on port 5432" -> SAFE: No credentials
+    - "API_KEY=sk-proj-abc123" -> CREDENTIALS DETECTED: API key exposed
 ```

@@ -1,15 +1,15 @@
 # CLI Command Validation Instructions
 
 ## Purpose
-Route all CLI commands through the Maybe Don't security gateway for policy validation before execution.
+Route all CLI commands through Maybe Don't for policy validation before execution.
 
 ## Command Syntax
 ```
-maybe-dont cli -s <gateway-url> -- <command> [arguments...]
+maybe-dont cli -s <server-url> -- <command> [arguments...]
 ```
 
 **Required elements:**
-- `-s <gateway-url>`: The gateway server URL
+- `-s <server-url>`: The Maybe Don't server URL
 - `--`: Separator between cli flags and the command (REQUIRED)
 - `<command>`: The actual command to validate and execute
 

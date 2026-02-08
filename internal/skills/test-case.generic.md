@@ -1,7 +1,7 @@
 # Policy Test Case Authoring Instructions
 
 ## Purpose
-Write and configure policy test cases for the Maybe Don't gateway. The test framework validates CEL and AI policy rules by running structured test cases defined in YAML files.
+Write and configure policy test cases for Maybe Don't. The test framework validates CEL and AI policy rules by running structured test cases defined in YAML files.
 
 ## Directory Structure
 
@@ -66,6 +66,7 @@ acceptance:
 execution:
   timeout_ms: 30000
   retries: 2
+  # Proactive pacing (the runner also adapts to 429 responses via API headers)
   rate_limits:
     openai:
       requests_per_minute: 60

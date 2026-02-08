@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -123,6 +124,11 @@ func (e *AIPolicyEngine) LoadPolicies(policies []config.AIPolicy, topLevelMode c
 			zap.String("mode", string(effectiveMode)),
 		)
 
+		// Reject prompts containing %s — the engine appends operation context automatically
+		if strings.Contains(policy.Prompt, "%s") {
+			return fmt.Errorf("policy '%s' prompt must not contain %%s placeholder; the engine appends operation context automatically", policy.Name)
+		}
+
 		// Validate action, request validation can only be 'allow' or 'deny'
 		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny {
 			return fmt.Errorf("invalid action '%s' for policy %s: must be 'allow' or 'deny'", policy.Action, policy.Name)
@@ -226,10 +232,14 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 			policyCtx, cancel := context.WithTimeout(context.Background(), ruleTimeout)
 			defer cancel()
 
+			// Build the prompt by appending the tool call context.
+			// The engine owns context injection — policy authors write detection logic only.
+			userPrompt := p.Prompt + "\n\nTool call:\n" + operationStr
+
 			// Call the AI API using the provider-agnostic interface
 			result, err := e.providerClient.Generate(policyCtx, AIRequest{
 				Model:          e.cfg.Validation.AI.Model,
-				UserPrompt:     fmt.Sprintf(p.Prompt, operationStr),
+				UserPrompt:     userPrompt,
 				ResponseSchema: GenerateSchema[AIResponse](),
 				Parameters:     e.cfg.Validation.AI.Parameters,
 			})
@@ -747,10 +757,14 @@ func (e *AIPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValidat
 			policyCtx, cancel := context.WithTimeout(context.Background(), ruleTimeout)
 			defer cancel()
 
+			// Build the prompt by appending the CLI command context.
+			// The engine owns context injection — policy authors write detection logic only.
+			userPrompt := p.Prompt + "\n\nCLI command:\n" + operationStr
+
 			// Call the AI API using the provider-agnostic interface
 			result, err := e.providerClient.Generate(policyCtx, AIRequest{
 				Model:          e.cfg.Validation.AI.Model,
-				UserPrompt:     fmt.Sprintf(p.Prompt, operationStr),
+				UserPrompt:     userPrompt,
 				ResponseSchema: GenerateSchema[AIResponse](),
 				Parameters:     e.cfg.Validation.AI.Parameters,
 			})

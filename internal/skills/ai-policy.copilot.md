@@ -1,7 +1,7 @@
 # AI Policy Authoring Instructions
 
 ## Overview
-AI policies use LLMs to validate MCP tool calls, CLI commands, and tool responses for security risks in the Maybe Don't gateway. Rules are defined in YAML with prompt templates that guide the AI's evaluation.
+AI policies use LLMs to validate tool calls, CLI commands, and tool responses for security risks in Maybe Don't. Rules are defined in YAML with prompts that describe what to detect.
 
 ## Rule File Format
 
@@ -15,39 +15,37 @@ rules:
     message: "User-facing message"
     mode: audit_only                    # Optional: log without blocking
     prompt: |-
-      ANALYZE the following operation:
-
-      %s
+      ANALYZE: Does this operation involve dangerous patterns?
 
       Look for:
       - Dangerous patterns to detect
 
-      EXAMPLES of dangerous operations:
-      - Example 1
-      EXAMPLES of safe operations:
-      - Example 1
-
-      Respond with JSON: {"allowed": true/false, "message": "explanation"}
+      EXAMPLES:
+      - Safe operation example -> SAFE: Explanation
+      - Dangerous operation example -> DANGEROUS: Explanation
 ```
 
-## Important Rules
+## Writing Effective Prompts
 
-- **Always** include exactly one `%s` placeholder in the prompt — it is replaced with the operation context
-- Structure prompts with clear sections: ANALYZE, Look for, EXAMPLES, response format
-- Include **both** safe and dangerous examples in every prompt
-- Keep each rule focused on **one** concern — do not combine unrelated threat types
+- Describe the specific security concern in an ANALYZE section
+- List the exact patterns to detect in a "Look for" section
+- Include **both** safe and dangerous examples to calibrate the AI's judgment
+- Use plain-text classification labels in examples (`-> SAFE:` / `-> DANGEROUS:`)
+- Keep each rule focused on **one** concern — separate rules for separate threats
+- For redact rules, specify replacement text (e.g., "replace with [PII_REDACTED]")
+- Use `mode: audit_only` to test rules without blocking, then remove it when confident
 - `action: redact` is **only** valid for response rules
-- Always end prompts with the expected JSON response format
-- Use `mode: audit_only` to test rules without blocking
 
-## Prompt Substitution
+## Operation Context
 
-The `%s` placeholder receives:
-- **MCP tool calls**: `{"type": "mcp_tool", "name": "tool_name", "arguments": {...}}`
-- **CLI commands**: `{"type": "cli", "name": "command", "arguments": [...]}`
-- **Responses**: Formatted text with `IsError:`, `Content:`, `Meta:` sections
+The policy engine appends operation context to your prompt automatically with a context-appropriate label:
+- **Tool calls**: `Tool call:` + JSON `{"type": "mcp_tool", "name": "tool_name", "arguments": {...}}`
+- **CLI commands**: `CLI command:` + JSON `{"type": "cli", "name": "command", "arguments": [...]}`
+- **Responses**: `Response content:` + formatted text with `IsError:`, `Content:`, `Meta:` sections
 
 ## AI Response Format
+
+The AI response format is enforced automatically at runtime. The server uses these structures:
 
 Request validation:
 ```json
@@ -76,31 +74,30 @@ Response validation with redaction:
   action: deny
   message: "Credential file access requires approval"
   prompt: |-
-    ANALYZE the following operation for credential file access:
-
-    %s
+    ANALYZE: Does this operation access credential files?
 
     Look for:
     - Reading .env, .credentials, .pem, .key files
     - Accessing password stores or secret managers
 
-    EXAMPLES of dangerous: reading ~/.ssh/id_rsa, cat .env
-    EXAMPLES of safe: reading README.md, listing directory
-
-    Respond with JSON: {"allowed": true/false, "message": "explanation"}
+    EXAMPLES:
+    - Reading ~/.ssh/id_rsa -> DANGEROUS: SSH private key access
+    - cat .env -> DANGEROUS: Environment file with secrets
+    - Reading README.md -> SAFE: Documentation file
+    - Listing directory -> SAFE: Non-sensitive operation
 
 # Response: Redact PII
 - name: redact-pii
   action: redact
   message: "PII redacted from response"
   prompt: |-
-    ANALYZE the following tool response for PII:
-
-    %s
+    ANALYZE: Does this tool response contain PII?
 
     Look for: email addresses, phone numbers, SSNs, credit card numbers
 
-    If found, provide sanitized version with [REDACTED] replacements.
+    If found, provide sanitized version with sensitive data replaced by [PII_REDACTED].
 
-    Respond with JSON: {"allowed": true/false, "message": "explanation", "redacted_content": "sanitized if needed"}
+    EXAMPLES:
+    - "Contact john@example.com" -> PII DETECTED: Email address found
+    - "Server returned 200 OK" -> SAFE: No PII detected
 ```

@@ -1,7 +1,7 @@
 # AI Policy Authoring Instructions
 
 ## Purpose
-Author AI (LLM-powered) policy rules for the Maybe Don't gateway. AI policies evaluate MCP tool calls, CLI commands, and tool responses using large language models to detect security risks that are difficult to express as deterministic rules.
+Author AI (LLM-powered) policy rules for Maybe Don't. AI policies evaluate tool calls, CLI commands, and tool responses using large language models to detect security risks that are difficult to express as deterministic rules.
 
 ## Rule File Structure
 
@@ -16,39 +16,37 @@ rules:
     message: "User-facing message"
     mode: audit_only                    # Optional: log without blocking
     prompt: |-
-      ANALYZE the following operation:
-
-      %s
+      ANALYZE: Does this operation involve dangerous patterns?
 
       Look for:
       - Specific dangerous patterns
 
-      EXAMPLES of dangerous operations:
-      - Example 1
-      EXAMPLES of safe operations:
-      - Example 1
-
-      Respond with JSON: {"allowed": true/false, "message": "explanation"}
+      EXAMPLES:
+      - Safe operation -> SAFE: Explanation
+      - Dangerous operation -> DANGEROUS: Explanation
 ```
 
-## Behavior Guidelines
+## Writing Effective Prompts
 
-1. **Include exactly one `%s` placeholder** in every prompt — it is replaced with the operation context
-2. **Structure prompts clearly** with ANALYZE, Look for, EXAMPLES, and response format sections
-3. **Include both safe and dangerous examples** to calibrate the AI's judgment
-4. **One concern per rule** — do not combine unrelated threat types in a single prompt
-5. **`action: redact`** is only valid for response rules
-6. **Always specify the JSON format** the AI should return
+1. **Describe the threat clearly** in an ANALYZE section that frames the specific security concern
+2. **List specific patterns to detect** in a "Look for" section naming the exact behaviors that indicate risk
+3. **Include calibration examples** of both safe and dangerous operations to help the AI distinguish routine usage from genuine threats
+4. **Use plain-text classification labels** — write as `-> SAFE:` / `-> DANGEROUS:`
+5. **One concern per rule** — keep rules focused; separate credential detection from data exfiltration
+6. **Specify replacement text in redact rules** — e.g., "replace with [PII_REDACTED]"
 7. **Test with `mode: audit_only`** first, then remove it to enable blocking
+8. **`action: redact`** is only valid for response rules
 
-## Prompt Substitution
+## Operation Context
 
-The `%s` placeholder receives:
-- **MCP tool calls**: JSON `{"type": "mcp_tool", "name": "...", "arguments": {...}}`
-- **CLI commands**: JSON `{"type": "cli", "name": "...", "arguments": [...]}`
-- **Responses**: Formatted text with `IsError:`, `Content:`, `Meta:` sections
+The policy engine appends operation context to your prompt automatically with a context-appropriate label:
+- **Tool calls**: `Tool call:` + JSON `{"type": "mcp_tool", "name": "...", "arguments": {...}}`
+- **CLI commands**: `CLI command:` + JSON `{"type": "cli", "name": "...", "arguments": [...]}`
+- **Responses**: `Response content:` + formatted text with `IsError:`, `Content:`, `Meta:` sections
 
 ## AI Response Format
+
+The AI response format is enforced automatically at runtime. The server uses these structures:
 
 Request validation:
 ```json
@@ -72,31 +70,30 @@ Response validation (with optional redaction):
   action: deny
   message: "Mass deletion requires manual approval"
   prompt: |-
-    ANALYZE the following operation for mass deletion risk:
-
-    %s
+    ANALYZE: Does this operation involve mass deletion risk?
 
     Look for:
     - Recursive or wildcard deletion patterns
     - Operations targeting shared or production resources
 
-    EXAMPLES of dangerous: deleting all files recursively, dropping tables
-    EXAMPLES of safe: removing a single temp file, cleaning drafts
-
-    Respond with JSON: {"allowed": true/false, "message": "explanation"}
+    EXAMPLES:
+    - Deleting all files recursively -> DANGEROUS: Mass file deletion
+    - Dropping database tables -> DANGEROUS: Irreversible data loss
+    - Removing a single temp file -> SAFE: Routine cleanup
+    - Cleaning up personal drafts -> SAFE: Non-destructive operation
 
 # Response: Redact leaked credentials
 - name: redact-credentials
   action: redact
   message: "Credentials redacted from response"
   prompt: |-
-    ANALYZE the following tool response for leaked credentials:
-
-    %s
+    ANALYZE: Does this tool response contain leaked credentials?
 
     Look for: API keys, tokens, passwords, private keys, connection strings
 
-    If found, provide sanitized version with [REDACTED] replacements.
+    If found, provide sanitized version with sensitive values replaced by [CREDENTIAL_REDACTED].
 
-    Respond with JSON: {"allowed": true/false, "message": "explanation", "redacted_content": "sanitized if needed"}
+    EXAMPLES:
+    - "Connected to db on port 5432" -> SAFE: No credentials
+    - "API_KEY=sk-proj-abc123" -> CREDENTIALS DETECTED: API key exposed
 ```
