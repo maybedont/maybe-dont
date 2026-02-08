@@ -533,6 +533,8 @@ func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix strin
 					applyEnvironmentOverrides(field, fieldType.Type, fullPath, envPrefix)
 				} else if field.Kind() == reflect.Ptr && !field.IsNil() {
 					applyEnvironmentOverrides(field.Elem(), fieldType.Type.Elem(), fullPath, envPrefix)
+				} else if field.Kind() == reflect.Map && field.Type() == reflect.TypeOf(map[string]any{}) {
+					applyMapFromEnv(field, envKey)
 				}
 				continue
 			}
@@ -587,6 +589,52 @@ func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix strin
 		if !v.IsNil() {
 			applyEnvironmentOverrides(v.Elem(), t.Elem(), pathPrefix, envPrefix)
 		}
+	}
+}
+
+// applyMapFromEnv populates a map[string]any field from environment variables.
+// It scans for env vars with the given prefix (e.g., MAYBE_DONT_VALIDATION_AI_PARAMETERS_)
+// and inserts key-value pairs with auto-detected types (float64, bool, string).
+// All numeric values are stored as float64 for consistency with JSON/YAML unmarshaling
+// into map[string]any, which always uses float64 for numbers.
+func applyMapFromEnv(field reflect.Value, envKeyPrefix string) {
+	prefix := envKeyPrefix + "_"
+
+	for _, env := range os.Environ() {
+		idx := strings.Index(env, "=")
+		if idx <= 0 {
+			continue
+		}
+		key := env[:idx]
+		value := env[idx+1:]
+
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+
+		// Extract the map key name and convert to lowercase
+		mapKey := strings.ToLower(strings.TrimPrefix(key, prefix))
+		if mapKey == "" {
+			continue
+		}
+
+		// Initialize map if nil
+		if field.IsNil() {
+			field.Set(reflect.MakeMap(field.Type()))
+		}
+
+		// Auto-detect value type: try float64, bool, then fall back to string.
+		// All numbers become float64 to match JSON/YAML unmarshaling behavior.
+		var parsed any
+		if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
+			parsed = floatVal
+		} else if boolVal, err := strconv.ParseBool(value); err == nil {
+			parsed = boolVal
+		} else {
+			parsed = value
+		}
+
+		field.SetMapIndex(reflect.ValueOf(mapKey), reflect.ValueOf(parsed))
 	}
 }
 

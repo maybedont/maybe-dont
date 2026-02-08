@@ -90,6 +90,13 @@ response.meta                 # Response metadata
 | `deny`  | Yes | Yes | Block the operation |
 | `redact`| No  | Yes | Replace matched content using regex |
 
+### Writing Response Rules
+
+**Understanding `deny` vs `redact` on responses:**
+- **`deny`** means "don't show the response to the AI agent." Use sparingly — this is only meaningful for **read-only** operations (e.g., get, list, search) where withholding the result makes sense.
+- **`redact`** means "don't show parts of the response to the AI agent." This is generally preferred over `deny` for response rules.
+- **Avoid `deny` on mutating operations**: If the tool call or CLI command created, modified, or deleted something, the action has already completed. Denying the response hides the outcome from the AI agent without undoing the action, which is misleading — the agent won't know the operation succeeded.
+
 ### CEL Function Reference
 
 | Function | Example | Description |

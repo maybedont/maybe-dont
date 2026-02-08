@@ -85,6 +85,9 @@ type RunnerOptions struct {
 
 	// RetryFailed re-runs failed/errored tests even if cached (for checking transient issues)
 	RetryFailed bool
+
+	// SummaryOnly shows summary from cached state without running tests
+	SummaryOnly bool
 }
 
 // RunResult contains the overall result of a test suite run.

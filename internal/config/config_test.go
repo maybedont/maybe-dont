@@ -561,6 +561,86 @@ rules:
 		"API key should be loaded from MAYBE_DONT_VALIDATION_AI_API_KEY environment variable")
 }
 
+// TestApplyEnvironmentOverrides_MapStringAny verifies that map[string]any fields
+// (like validation.ai.parameters) can be populated via environment variables.
+// e.g., MAYBE_DONT_VALIDATION_AI_PARAMETERS_TEMPERATURE=0.5
+func TestApplyEnvironmentOverrides_MapStringAny(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVar   string
+		envValue string
+		expKey   string
+		expValue any
+	}{
+		{
+			name:     "float value",
+			envVar:   "MAYBE_DONT_VALIDATION_AI_PARAMETERS_TEMPERATURE",
+			envValue: "0.5",
+			expKey:   "temperature",
+			expValue: 0.5,
+		},
+		{
+			name:     "zero is float64 not int64",
+			envVar:   "MAYBE_DONT_VALIDATION_AI_PARAMETERS_TEMPERATURE",
+			envValue: "0",
+			expKey:   "temperature",
+			expValue: float64(0),
+		},
+		{
+			name:     "integer value parsed as float64",
+			envVar:   "MAYBE_DONT_VALIDATION_AI_PARAMETERS_MAX_TOKENS",
+			envValue: "4096",
+			expKey:   "max_tokens",
+			expValue: float64(4096),
+		},
+		{
+			name:     "boolean value",
+			envVar:   "MAYBE_DONT_VALIDATION_AI_PARAMETERS_STREAM",
+			envValue: "true",
+			expKey:   "stream",
+			expValue: true,
+		},
+		{
+			name:     "string value",
+			envVar:   "MAYBE_DONT_VALIDATION_AI_PARAMETERS_STOP",
+			envValue: "END",
+			expKey:   "stop",
+			expValue: "END",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.envVar, tt.envValue)
+
+			config := &Config{}
+			applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+			require.NotNil(t, config.Validation.AI.Parameters, "Parameters map should be initialized")
+			val, ok := config.Validation.AI.Parameters[tt.expKey]
+			require.True(t, ok, "Key %q should exist in parameters", tt.expKey)
+			require.Equal(t, tt.expValue, val, "Value for key %q should match", tt.expKey)
+		})
+	}
+}
+
+// TestApplyEnvironmentOverrides_MapOverridesYAMLDefault verifies that an env var
+// overrides a parameter value set in the YAML config (e.g., default temperature).
+func TestApplyEnvironmentOverrides_MapOverridesYAMLDefault(t *testing.T) {
+	t.Setenv("MAYBE_DONT_VALIDATION_AI_PARAMETERS_TEMPERATURE", "0.7")
+
+	// Start with a config that has a default temperature (as shipped in defaults)
+	config := &Config{}
+	config.Validation.AI.Parameters = map[string]any{
+		"temperature": 0.0,
+	}
+
+	applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+	require.Equal(t, 0.7, config.Validation.AI.Parameters["temperature"],
+		"Env var should override YAML default temperature")
+}
+
 // TestApplyEnvironmentOverrides_AllConfigFields uses reflection to discover all settable
 // fields in the Config struct and verifies that each can be set via environment variables.
 // This ensures that any new fields added to Config are automatically tested.

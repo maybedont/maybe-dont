@@ -127,6 +127,11 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 		}()
 	}
 
+	// Summary-only mode: show cached results without running tests
+	if r.opts.SummaryOnly {
+		return r.runSummaryOnly()
+	}
+
 	// Phase 4: Execute tests
 	result, err := r.executeTests(ctx)
 	if err != nil {
@@ -147,6 +152,108 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 	}
 
 	return result, nil
+}
+
+// runSummaryOnly prints summary information from cached state without running tests.
+// Displays model comparison table, policy coverage, and state file metadata.
+func (r *Runner) runSummaryOnly() (*RunResult, error) {
+	// Load model summaries from cached state
+	cachedSummaries := r.stateManager.GetModelSummaries(r.policyHashes)
+
+	if len(cachedSummaries) == 0 {
+		lastUpdated := r.stateManager.GetLastUpdated()
+		if r.stateManager.HasResults() {
+			fmt.Printf("No cached results match current policies (state file last updated: %s).\n",
+				lastUpdated.Format("2006-01-02 15:04:05"))
+			fmt.Println("Policies have changed since last run. Re-run tests with --incremental or --full.")
+		} else {
+			fmt.Println("No cached results found. Run tests with --incremental or --full first.")
+		}
+		return &RunResult{ThresholdsMet: true}, nil
+	}
+
+	// Count total cached test cases (unique content hashes with matching policy hashes)
+	totalCached := 0
+	for _, summary := range cachedSummaries {
+		if summary.TestCount > totalCached {
+			totalCached = summary.TestCount
+		}
+	}
+
+	// Build model comparison entries from cached summaries
+	var entries []ModelComparisonEntry
+	for modelKey, summary := range cachedSummaries {
+		evaluated := summary.Passed + summary.Failed + summary.Errored
+		entry := ModelComparisonEntry{
+			Model:     modelKey,
+			Passed:    summary.Passed,
+			Failed:    summary.Failed,
+			Errored:   summary.Errored,
+			TotalMs:   summary.TotalMs,
+			FromCache: true,
+		}
+		if evaluated > 0 {
+			entry.MatchRate = float64(summary.Passed) / float64(evaluated)
+			entry.AvgMs = summary.TotalMs / int64(evaluated)
+		}
+		entries = append(entries, entry)
+	}
+
+	// Sort: CEL first, then by match rate descending, then by name
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Model == "cel" {
+			return true
+		}
+		if entries[j].Model == "cel" {
+			return false
+		}
+		if entries[i].MatchRate != entries[j].MatchRate {
+			return entries[i].MatchRate > entries[j].MatchRate
+		}
+		return entries[i].Model < entries[j].Model
+	})
+
+	// Generate coverage report
+	coverage, err := r.generateCoverageReport()
+	if err != nil {
+		coverage = nil
+	}
+
+	// Print header
+	fmt.Printf("Policy Test Suite: %s (from cached state)\n", r.suite.BundleID)
+	fmt.Printf("──────────────────────────────────────────────────\n")
+	fmt.Printf("Last updated: %s\n", r.stateManager.GetLastUpdated().Format("2006-01-02 15:04:05"))
+	fmt.Printf("Cached results: %d test cases\n", totalCached)
+
+	// Print model comparison table
+	fmt.Print(formatModelComparison(entries))
+
+	// Print coverage section
+	if coverage != nil {
+		coveragePercent := 0.0
+		if coverage.TotalPolicies > 0 {
+			coveragePercent = float64(coverage.PoliciesWithTests) / float64(coverage.TotalPolicies) * 100
+		}
+		fmt.Printf("\nPolicy coverage: %d/%d (%.0f%%)\n",
+			coverage.PoliciesWithTests, coverage.TotalPolicies, coveragePercent)
+
+		if len(coverage.PoliciesWithoutTests) > 0 {
+			fmt.Printf("  Missing tests (%d):\n", len(coverage.PoliciesWithoutTests))
+			for _, p := range coverage.PoliciesWithoutTests {
+				fmt.Printf("    - %s: %s\n", p.Engine, p.Name)
+			}
+		}
+
+		if len(coverage.DisabledSkipped) > 0 {
+			fmt.Printf("  Disabled (not tested): %d — use --include-disabled to include\n",
+				len(coverage.DisabledSkipped))
+			for _, p := range coverage.DisabledSkipped {
+				fmt.Printf("    - %s: %s\n", p.Engine, p.Name)
+			}
+		}
+	}
+
+	return &RunResult{ThresholdsMet: true}, nil
 }
 
 // loadSuite loads and validates suite.yaml
@@ -1025,6 +1132,11 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, models []
 
 	var allResults []TestResult
 
+	// Interleave models by provider to spread rate limit pressure across vendors
+	if len(models) > 1 {
+		models = interleaveByProvider(models)
+	}
+
 	// Run tests against each model (or just the selected one)
 	for _, model := range models {
 		modelKey := ModelKey(model.Provider, model.Model)
@@ -1181,6 +1293,47 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, models []
 	}
 
 	return allResults, nil
+}
+
+// interleaveByProvider reorders models to spread requests across providers,
+// reducing rate limit pressure on any single vendor. Models are round-robin
+// picked from provider groups, preserving order within each group.
+//
+// Example: [A1, A2, A3, B1, B2, C1] → [A1, B1, C1, A2, B2, A3]
+func interleaveByProvider(models []ModelConfig) []ModelConfig {
+	// Group models by provider, preserving order within each group
+	type providerGroup struct {
+		provider string
+		models   []ModelConfig
+	}
+
+	var groups []providerGroup
+	seen := make(map[string]int) // provider -> index in groups
+
+	for _, m := range models {
+		idx, ok := seen[m.Provider]
+		if !ok {
+			idx = len(groups)
+			seen[m.Provider] = idx
+			groups = append(groups, providerGroup{provider: m.Provider})
+		}
+		groups[idx].models = append(groups[idx].models, m)
+	}
+
+	// Round-robin pick from each group
+	result := make([]ModelConfig, 0, len(models))
+	indices := make([]int, len(groups))
+
+	for len(result) < len(models) {
+		for g := range groups {
+			if indices[g] < len(groups[g].models) {
+				result = append(result, groups[g].models[indices[g]])
+				indices[g]++
+			}
+		}
+	}
+
+	return result
 }
 
 // getModelsToTest returns the models to test against based on CLI options.

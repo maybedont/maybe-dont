@@ -338,6 +338,21 @@ func (sm *StateManager) GetCachedDuration(contentHash string, policyHashes []str
 	return modelResult.DurationMs
 }
 
+// GetLastUpdated returns the last updated timestamp from the state file.
+func (sm *StateManager) GetLastUpdated() time.Time {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	return sm.state.LastUpdated
+}
+
+// HasResults returns true if the state file contains any cached test results,
+// regardless of whether their policy hashes match current policies.
+func (sm *StateManager) HasResults() bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	return len(sm.state.Results) > 0
+}
+
 // CachedModelSummary aggregates test results for a single model from cached state.
 type CachedModelSummary struct {
 	Passed    int

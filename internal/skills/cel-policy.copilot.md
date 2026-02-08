@@ -58,8 +58,8 @@ rules:
 
 ### Response Rules
 - `allow` — Pass through response unchanged
-- `deny` — Block the response
-- `redact` — Replace matched content using `redaction_pattern` and `redaction_replacement`
+- `deny` — Don't show the response to the AI agent. Use sparingly — only meaningful for **read-only** operations (get, list) where withholding the result makes sense. For mutating operations (create, modify, delete), the action has already completed; denying the response hides the outcome without undoing it.
+- `redact` — Don't show parts of the response to the AI agent. Replace matched content using `redaction_pattern` and `redaction_replacement`. Generally preferred over `deny` for response rules.
 
 ## Examples
 

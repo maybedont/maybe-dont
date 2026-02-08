@@ -80,6 +80,10 @@ Covers both request and response CEL policies, including:
 
 **Actions:** `allow`, `deny`, `redact` (response only)
 
+**Response rule guidance:**
+- Response `deny` means "don't show the response to the AI agent." Use sparingly — only meaningful for read-only operations (e.g., get, list) where withholding the result makes sense. For mutating operations (create, modify, delete), the action has already completed; denying the response hides the outcome without undoing the action, which is misleading.
+- Response `redact` means "don't show parts of the response to the AI agent." Generally preferred over `deny` for response rules.
+
 **CEL function reference table:**
 - `has()`, `get()`, `.contains()`, `.startsWith()`, `.endsWith()`, `.matches()`, `.size()`, `.exists()`, `.all()`, `in`
 
@@ -107,6 +111,11 @@ Covers AI-powered policy rules for request and response validation:
 - Response: `{"allowed": true/false, "message": "...", "redacted_content": "..."}`
 
 **Actions:** `deny` (request + response), `redact` (response only)
+
+**Response rule guidance:**
+- AI response rules can be slow because the tool/CLI response content is not known ahead of time and may be large, requiring the LLM to process significant payloads.
+- Response `deny` means "don't show the response to the AI agent." Use sparingly — only meaningful for read-only operations (e.g., get, list) where withholding the result makes sense. For mutating operations (create, modify, delete), the action has already completed; denying the response hides the outcome without undoing the action, which is misleading.
+- Response `redact` means "don't show parts of the response to the AI agent." Generally preferred over `deny` for response rules.
 
 **Prompt engineering best practices:**
 - ANALYZE / Look for / EXAMPLES structure
