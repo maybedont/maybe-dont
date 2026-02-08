@@ -42,6 +42,7 @@ var (
 	incremental       bool
 	full              bool
 	retryFailed       bool
+	summaryOnly       bool
 )
 
 // defaultStateFilePath returns the default path for the policy test state file.
@@ -154,6 +155,7 @@ func init() {
 	testPoliciesCmd.Flags().BoolVar(&full, "full", false, "Run all tests, persist results to state file")
 	testPoliciesCmd.Flags().StringVar(&stateFile, "state-file", "", "Override state file location (use with --incremental or --full)")
 	testPoliciesCmd.Flags().BoolVar(&retryFailed, "retry-failed", false, "Re-run failed/errored tests even if cached (for checking transient issues)")
+	testPoliciesCmd.Flags().BoolVar(&summaryOnly, "summary-only", false, "Show summary from cached state without running tests")
 }
 
 func runTestPolicies(cmd *cobra.Command, args []string) error {
@@ -174,6 +176,14 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 
 	if wait && !useState {
 		return fmt.Errorf("--wait requires --incremental or --full")
+	}
+
+	if summaryOnly && !useState {
+		return fmt.Errorf("--summary-only requires --incremental or --full (needs a state file to read from)")
+	}
+
+	if summaryOnly && validateOnly {
+		return fmt.Errorf("cannot use both --summary-only and --validate-only")
 	}
 
 	// Resolve state file path
@@ -215,6 +225,7 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 		StateFile:         resolvedStateFile,
 		Force:             full,        // --full means "force" re-run all tests
 		RetryFailed:       retryFailed, // --retry-failed re-runs failed/errored tests
+		SummaryOnly:       summaryOnly,
 	}
 
 	// Create and run the test suite runner
