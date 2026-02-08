@@ -237,27 +237,31 @@ func (r *AITestRunner) ExecuteTests(ctx context.Context, cases []TestCase, onSta
 			onProgress(result)
 		}
 
-		// Check if we hit a rate limit - stop testing this model
+		// Check if we hit a rate limit - stop testing this model.
+		// Create skipped results for remaining cases (for JSON output and summary stats)
+		// but print a single consolidated message instead of per-test output.
 		if result.Error != nil && result.Error.Type == "rate_limited" {
-			// Mark remaining cases as rate limited (starting from next case in the input slice)
+			var skippedCount int
 			for j := i + 1; j < len(cases); j++ {
 				remaining := cases[j]
 				if remaining.Engine != "ai" && remaining.Engine != "both" {
 					continue
 				}
+				skippedCount++
 				skippedResult := TestResult{
 					CaseID: remaining.CaseID,
 					Title:  remaining.Title,
 					Status: "skipped",
 					Error: &TestError{
 						Type:    "rate_limited",
-						Message: "Skipped due to earlier rate limit from provider",
+						Message: "Skipped due to rate limit",
 					},
 				}
 				results = append(results, skippedResult)
-				if onProgress != nil {
-					onProgress(skippedResult)
-				}
+			}
+			if onProgress != nil && skippedCount > 0 {
+				fmt.Printf("\n    Skipping remaining %d of %d tests for this model due to rate limit.\n", skippedCount, len(cases))
+				fmt.Printf("    Use --wait to pause and resume after rate limits, or --max-tests to limit tests per invocation.\n\n")
 			}
 			break
 		}
