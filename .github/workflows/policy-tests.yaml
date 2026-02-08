@@ -18,7 +18,7 @@
 #   - Content hashes ensure test case changes trigger re-runs
 #
 # Model matrix is defined in suite.yaml, not hardcoded here.
-# Tests run serially to avoid rate limiting issues.
+# AI tests use --wait to pause and resume on rate limits instead of aborting.
 
 name: policy tests
 
@@ -185,6 +185,7 @@ jobs:
             MODEL_FLAG="--matrix"
           fi
 
+          set +e
           ./maybe-dont test policies \
             --suite-dir ${{ env.SUITE_DIR }} \
             --engine ai \
@@ -192,9 +193,20 @@ jobs:
             $DISABLED_FLAG \
             $TAGS_FLAG \
             --full \
+            --wait \
             --state-file .ai-test-state.json \
             --format json \
             --output ai-results.json
+          EXIT_CODE=$?
+          set -e
+
+          # Exit code 5 means --max-tests limit reached with more tests remaining.
+          # Not a failure - just an incomplete run.
+          if [ "$EXIT_CODE" -eq 5 ]; then
+            echo "::notice::More tests remain (exit code 5). Results so far have been saved to the state file."
+          elif [ "$EXIT_CODE" -ne 0 ]; then
+            exit $EXIT_CODE
+          fi
 
       - name: Upload AI results
         uses: actions/upload-artifact@v4
