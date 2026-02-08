@@ -68,6 +68,8 @@ rules:
         - read_file path=".env" -> DANGEROUS: Credential file access
         - read_file path="config.txt" -> SAFE: Normal file access
 
+    # Before enabling this rule, update the approved URL list in the prompt
+    # with your organization's domains (e.g., replace *.company.com).
     - name: "Check external network access"
       description: "Prevent HTTP requests to external domains"
       enabled: false
