@@ -168,7 +168,7 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cannot use both --model and --matrix; --model selects a single model, --matrix runs all enabled models")
 	}
 
-	useState := incremental || full
+	useState := incremental || full || summaryOnly
 
 	if stateFile != "" && !useState {
 		return fmt.Errorf("--state-file requires --incremental or --full")
@@ -176,10 +176,6 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 
 	if wait && !useState {
 		return fmt.Errorf("--wait requires --incremental or --full")
-	}
-
-	if summaryOnly && !useState {
-		return fmt.Errorf("--summary-only requires --incremental or --full (needs a state file to read from)")
 	}
 
 	if summaryOnly && validateOnly {

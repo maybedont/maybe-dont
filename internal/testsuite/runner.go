@@ -161,7 +161,14 @@ func (r *Runner) runSummaryOnly() (*RunResult, error) {
 	cachedSummaries := r.stateManager.GetModelSummaries(r.policyHashes)
 
 	if len(cachedSummaries) == 0 {
-		fmt.Println("No cached results found. Run tests with --incremental or --full first.")
+		lastUpdated := r.stateManager.GetLastUpdated()
+		if r.stateManager.HasResults() {
+			fmt.Printf("No cached results match current policies (state file last updated: %s).\n",
+				lastUpdated.Format("2006-01-02 15:04:05"))
+			fmt.Println("Policies have changed since last run. Re-run tests with --incremental or --full.")
+		} else {
+			fmt.Println("No cached results found. Run tests with --incremental or --full first.")
+		}
 		return &RunResult{ThresholdsMet: true}, nil
 	}
 
