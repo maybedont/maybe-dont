@@ -211,6 +211,23 @@ The existing truth-table inversion logic is unchanged:
 | allow | true | allow |
 | allow | false | deny |
 
+#### The `action: allow` gate pattern
+
+Most rules use `action: deny` — describe what's dangerous, deny when found. The engine also supports `action: allow`, which acts as a **required gate**: describe what's acceptable, deny when the AI says the operation doesn't match.
+
+Both action types produce the same truth table (the `allowed` boolean drives the result identically), but the prompt framing is inverted:
+
+- **Deny rule**: "Is this operation dangerous?" — AI says `allowed: false` -> deny
+- **Allow rule (gate)**: "Does this operation meet requirements X?" — AI says `allowed: false` -> deny
+
+Gate rules are feasible for **narrow, well-defined acceptance criteria**:
+- "Only allow read-only operations" (small surface area, clear boundary)
+- "Only allow operations targeting the staging environment" (specific, verifiable condition)
+
+Gate rules are **not recommended for broad acceptance patterns** because they are prone to false positives. The AI must confirm an operation matches a potentially broad set of legitimate uses, and anything it doesn't recognize gets denied. Novel but legitimate operations get caught, and the prompt must exhaustively describe what "good" looks like — which is significantly harder than describing specific threats.
+
+The default rules and skill documentation use `action: deny` exclusively. The gate pattern is not documented in the skills to avoid encouraging a pattern that most users would struggle with.
+
 #### Confidence threshold application
 
 The confidence threshold is applied **only when the AI's decision would cause the rule to fire** — that is, only when the result would be a blocking action:
