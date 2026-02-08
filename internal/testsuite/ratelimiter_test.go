@@ -72,6 +72,69 @@ func TestRateLimiter_WaitBeforeRequest(t *testing.T) {
 		assert.Contains(t, err.Error(), "stopped due to rate limiting")
 	})
 
+	t.Run("adapts to learned limits from API headers", func(t *testing.T) {
+		// Verifies that when API response headers report a lower request limit
+		// than configured, WaitBeforeRequest uses the provider's actual limit
+		// to avoid repeatedly hitting 429s.
+		rl := NewRateLimiter(RateLimiterConfig{
+			ProviderLimits: map[string]ProviderRateLimit{
+				"openai": {RequestsPerMinute: 100}, // High configured limit
+			},
+			WaitOnLimit: false,
+		})
+
+		ctx := context.Background()
+
+		// Simulate learning a lower limit from API response headers
+		rl.UpdateFromResponse(&gateway.RateLimitInfo{
+			Provider:          "openai",
+			RequestsLimit:     3, // Provider only allows 3 RPM
+			RequestsRemaining: 2,
+		})
+
+		// First 3 requests should succeed (up to learned limit)
+		for i := 0; i < 3; i++ {
+			require.NoError(t, rl.WaitBeforeRequest(ctx, "openai"))
+			rl.RecordRequest("openai")
+		}
+
+		// Fourth request should fail — learned limit of 3 applies, not configured 100
+		err := rl.WaitBeforeRequest(ctx, "openai")
+		assert.Error(t, err)
+		assert.True(t, rl.IsProviderStopped("openai"))
+	})
+
+	t.Run("ignores learned limits higher than configured", func(t *testing.T) {
+		// Configured limit should still apply when the provider reports
+		// a higher limit than what the user configured.
+		rl := NewRateLimiter(RateLimiterConfig{
+			ProviderLimits: map[string]ProviderRateLimit{
+				"openai": {RequestsPerMinute: 2},
+			},
+			WaitOnLimit: false,
+		})
+
+		ctx := context.Background()
+
+		// Provider says 1000 RPM — but we configured 2
+		rl.UpdateFromResponse(&gateway.RateLimitInfo{
+			Provider:          "openai",
+			RequestsLimit:     1000,
+			RequestsRemaining: 999,
+		})
+
+		// First 2 should succeed (configured limit)
+		require.NoError(t, rl.WaitBeforeRequest(ctx, "openai"))
+		rl.RecordRequest("openai")
+		require.NoError(t, rl.WaitBeforeRequest(ctx, "openai"))
+		rl.RecordRequest("openai")
+
+		// Third should fail — configured limit of 2 still applies
+		err := rl.WaitBeforeRequest(ctx, "openai")
+		assert.Error(t, err)
+		assert.True(t, rl.IsProviderStopped("openai"))
+	})
+
 	t.Run("stops provider when limit reached without wait", func(t *testing.T) {
 		rl := NewRateLimiter(RateLimiterConfig{
 			ProviderLimits: map[string]ProviderRateLimit{

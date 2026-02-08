@@ -245,6 +245,13 @@ func (rl *RateLimiter) WaitBeforeRequest(ctx context.Context, provider string) e
 		limit = l
 	}
 
+	// Adapt to learned limits from API response headers.
+	// If the provider reports a lower request limit than configured, use the
+	// provider's limit to avoid repeatedly hitting 429s.
+	if learned := rl.learnedLimits[provider]; learned != nil && learned.RequestsLimit > 0 && learned.RequestsLimit < limit {
+		limit = learned.RequestsLimit
+	}
+
 	// Clean old requests (older than 1 minute)
 	now := time.Now()
 	cutoff := now.Add(-time.Minute)
