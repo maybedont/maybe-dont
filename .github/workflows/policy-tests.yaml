@@ -1,0 +1,414 @@
+# Policy Tests
+#
+# Runs policy regression tests against CEL and AI validation engines.
+# See docs/specs/policy-test-suite.md for full specification.
+#
+# Triggers:
+#   - PR to main when policy files change (CEL blocking, AI non-blocking)
+#   - Push to main (runs AI tests and commits updated state file)
+#   - Manual dispatch with configurable options (CEL and/or AI tests)
+#
+# AI tests run on PRs with continue-on-error so failures are visible
+# but don't block merges. CEL tests are always blocking.
+#
+# State Persistence:
+#   - AI test results are cached in .ai-test-state.json (committed to main)
+#   - PRs read state from main but don't commit changes
+#   - On merge to main, updated state is committed back
+#   - Content hashes ensure test case changes trigger re-runs
+#
+# Model matrix is defined in suite.yaml, not hardcoded here.
+# Tests run serially to avoid rate limiting issues.
+
+name: policy tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/config/defaults/**/*.yaml'
+      - 'internal/config/defaults/tests/**'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/config/defaults/**/*.yaml'
+      - 'internal/config/defaults/tests/**'
+  workflow_dispatch:
+    inputs:
+      suite_dir:
+        description: 'Suite directory'
+        type: string
+        default: 'internal/config/defaults/tests'
+      engine:
+        description: 'Engine to test'
+        type: choice
+        options: ['all', 'cel', 'ai']
+        default: 'all'
+      model:
+        description: 'Specific model (e.g., openai:gpt-5-mini) - overrides matrix'
+        type: string
+        required: false
+      tags:
+        description: 'Tags to filter (comma-separated)'
+        type: string
+        required: false
+      include_disabled:
+        description: 'Include disabled policies'
+        type: boolean
+        default: false
+
+env:
+  SUITE_DIR: ${{ github.event.inputs.suite_dir || 'internal/config/defaults/tests' }}
+
+# Serialize workflow runs to prevent race conditions when committing state file
+concurrency:
+  group: policy-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Suite Configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: make build
+
+      - name: Validate suite
+        run: |
+          ./maybe-dont test policies \
+            --suite-dir ${{ env.SUITE_DIR }} \
+            --validate-only
+
+  test-cel:
+    name: CEL Policy Tests
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event.inputs.engine != 'ai'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: make build
+
+      - name: Run CEL tests
+        run: |
+          DISABLED_FLAG=""
+          if [ "${{ github.event.inputs.include_disabled }}" == "true" ]; then
+            DISABLED_FLAG="--include-disabled"
+          fi
+
+          TAGS_FLAG=""
+          if [ -n "${{ github.event.inputs.tags }}" ]; then
+            TAGS_FLAG="--tags ${{ github.event.inputs.tags }}"
+          fi
+
+          ./maybe-dont test policies \
+            --suite-dir ${{ env.SUITE_DIR }} \
+            --engine cel \
+            $DISABLED_FLAG \
+            $TAGS_FLAG \
+            --format json \
+            --output cel-results.json
+
+      - name: Upload CEL results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cel-test-results
+          path: cel-results.json
+
+  test-ai:
+    name: AI Policy Tests
+    runs-on: ubuntu-latest
+    needs: validate
+    continue-on-error: true
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.engine != 'cel')
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: Check API keys
+        id: check-keys
+        run: |
+          if [ -z "$OPENAI_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::No AI provider API keys configured. Set OPENAI_API_KEY and/or ANTHROPIC_API_KEY repository secrets to enable AI policy tests."
+            echo "keys_available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "keys_available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check-keys.outputs.keys_available == 'true'
+
+      - name: Set up Go
+        if: steps.check-keys.outputs.keys_available == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        if: steps.check-keys.outputs.keys_available == 'true'
+        run: make build
+
+      - name: Run AI tests
+        if: steps.check-keys.outputs.keys_available == 'true'
+        run: |
+          DISABLED_FLAG=""
+          if [ "${{ github.event.inputs.include_disabled }}" == "true" ]; then
+            DISABLED_FLAG="--include-disabled"
+          fi
+
+          TAGS_FLAG=""
+          if [ -n "${{ github.event.inputs.tags }}" ]; then
+            TAGS_FLAG="--tags ${{ github.event.inputs.tags }}"
+          fi
+
+          # Use specific model if provided, otherwise run full matrix from suite.yaml
+          if [ -n "${{ github.event.inputs.model }}" ]; then
+            MODEL_FLAG="--model ${{ github.event.inputs.model }}"
+          else
+            MODEL_FLAG="--matrix"
+          fi
+
+          ./maybe-dont test policies \
+            --suite-dir ${{ env.SUITE_DIR }} \
+            --engine ai \
+            $MODEL_FLAG \
+            $DISABLED_FLAG \
+            $TAGS_FLAG \
+            --full \
+            --state-file .ai-test-state.json \
+            --format json \
+            --output ai-results.json
+
+      - name: Upload AI results
+        uses: actions/upload-artifact@v4
+        if: always() && steps.check-keys.outputs.keys_available == 'true'
+        with:
+          name: ai-test-results
+          path: ai-results.json
+
+      # Commit updated state file back to main branch
+      # Only runs on push to main (not PRs or manual dispatch from other branches)
+      - name: Commit state file
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.check-keys.outputs.keys_available == 'true'
+        run: |
+          # Check if state file has changes
+          if git diff --quiet .ai-test-state.json 2>/dev/null; then
+            echo "No changes to state file"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .ai-test-state.json
+          git commit -m "chore: update AI test state file [skip ci]"
+          git push
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-cel, test-ai]
+    if: always()
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          path: results
+
+      - name: Generate summary
+        run: |
+          # --- Results by Engine ---
+          echo "## Policy Test Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          has_results=false
+          overall_status="pass"
+          cel_blocking_fail=false
+
+          echo "### Results by Engine" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Engine | Tests | Passed | Failed | Errored | Match Rate | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|--------|--------|---------|------------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          for dir in results/*/; do
+            [ -d "$dir" ] || continue
+            for file in "$dir"*.json; do
+              [ -f "$file" ] || continue
+              has_results=true
+              name=$(basename "$file" .json)
+
+              # Aggregate across all models in the file
+              tests=$(jq '[.results_by_model[].summary.total_cases] | add // 0' "$file")
+              passed=$(jq '[.results_by_model[].summary.passed] | add // 0' "$file")
+              failed=$(jq '[.results_by_model[].summary.failed] | add // 0' "$file")
+              errored=$(jq '[.results_by_model[].summary.errored] | add // 0' "$file")
+              match_rate=$(jq '[.results_by_model[].summary.match_rate] | if length > 0 then (add / length * 100) else 0 end | . * 10 | round / 10' "$file")
+
+              if [ "$failed" -gt 0 ] || [ "$errored" -gt 0 ]; then
+                status=":x: Failed"
+                if [[ "$name" == cel-* ]]; then
+                  cel_blocking_fail=true
+                fi
+              else
+                status=":white_check_mark: Passed"
+              fi
+
+              echo "| $name | $tests | $passed | $failed | $errored | ${match_rate}% | $status |" >> "$GITHUB_STEP_SUMMARY"
+            done
+          done
+
+          if [ "$has_results" = false ]; then
+            echo "| _(no results)_ | - | - | - | - | - | :grey_question: |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- Model Comparison (only when multiple models exist) ---
+          for dir in results/*/; do
+            [ -d "$dir" ] || continue
+            for file in "$dir"*.json; do
+              [ -f "$file" ] || continue
+              model_count=$(jq '.results_by_model | length' "$file")
+              if [ "$model_count" -gt 1 ]; then
+                name=$(basename "$file" .json)
+                echo "### Model Comparison ($name)" >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo "| Model | Passed | Failed | Errored | Match Rate | Avg (ms) | Total (ms) |" >> "$GITHUB_STEP_SUMMARY"
+                echo "|-------|--------|--------|---------|------------|----------|------------|" >> "$GITHUB_STEP_SUMMARY"
+
+                jq -r '.results_by_model[] |
+                  "\(.model.provider):\(.model.model) | \(.summary.passed) | \(.summary.failed) | \(.summary.errored) | \(.summary.match_rate * 100 | . * 10 | round / 10)% | \(if .summary.total_cases > 0 then (.summary.total_elapsed_ms / .summary.total_cases | round) else 0 end) | \(.summary.total_elapsed_ms)"' "$file" |
+                while IFS='|' read -r model passed failed errored match_rate avg_ms total_ms; do
+                  echo "| $model |$passed |$failed |$errored |$match_rate |$avg_ms |$total_ms |" >> "$GITHUB_STEP_SUMMARY"
+                done
+
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done
+          done
+
+          # --- Slowest Policies (top 5) ---
+          # Collect per-policy timings across all result files
+          slowest=$(
+            for dir in results/*/; do
+              [ -d "$dir" ] || continue
+              for file in "$dir"*.json; do
+                [ -f "$file" ] || continue
+                jq -r '
+                  .results_by_model[] |
+                  .model as $m |
+                  .results[] |
+                  .actual.policies_executed[]? |
+                  "\(.policy_name)\t\($m.provider):\($m.model)\t\(.elapsed_ms)"
+                ' "$file" 2>/dev/null
+              done
+            done | sort -t$'\t' -k3 -nr | head -5
+          )
+
+          if [ -n "$slowest" ]; then
+            echo "### Slowest Policies (top 5)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Policy | Model | Time (ms) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|--------|-------|-----------|" >> "$GITHUB_STEP_SUMMARY"
+            echo "$slowest" | while IFS=$'\t' read -r policy model ms; do
+              echo "| $policy | $model | $ms |" >> "$GITHUB_STEP_SUMMARY"
+            done
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # --- Policy Coverage ---
+          for dir in results/*/; do
+            [ -d "$dir" ] || continue
+            for file in "$dir"*.json; do
+              [ -f "$file" ] || continue
+              has_coverage=$(jq 'has("coverage") and .coverage != null' "$file")
+              if [ "$has_coverage" = "true" ]; then
+                name=$(basename "$file" .json)
+                total=$(jq '.coverage.total_policies' "$file")
+                covered=$(jq '.coverage.policies_with_tests' "$file")
+                uncovered_count=$(jq '.coverage.policies_without_tests | length' "$file")
+
+                echo "### Policy Coverage ($name)" >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo "**$covered / $total** policies have test coverage" >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+
+                if [ "$uncovered_count" -gt 0 ]; then
+                  echo "<details><summary>$uncovered_count uncovered policies</summary>" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  jq -r '.coverage.policies_without_tests[] | "- \(.name) (\(.engine))"' "$file" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                fi
+              fi
+            done
+          done
+
+          # --- Thresholds ---
+          for dir in results/*/; do
+            [ -d "$dir" ] || continue
+            for file in "$dir"*.json; do
+              [ -f "$file" ] || continue
+              has_summary=$(jq 'has("overall_summary") and .overall_summary != null' "$file")
+              if [ "$has_summary" = "true" ]; then
+                thresholds_met=$(jq '.overall_summary.thresholds_met' "$file")
+                min_required=$(jq '.overall_summary.min_match_rate_required * 100 | . * 10 | round / 10' "$file")
+                worst=$(jq '.overall_summary.worst_match_rate * 100 | . * 10 | round / 10' "$file")
+                name=$(basename "$file" .json)
+
+                if [ "$thresholds_met" = "true" ]; then
+                  echo ":white_check_mark: **Thresholds met** ($name): worst match rate ${worst}% >= required ${min_required}%" >> "$GITHUB_STEP_SUMMARY"
+                else
+                  echo ":x: **Thresholds not met** ($name): worst match rate ${worst}% < required ${min_required}%" >> "$GITHUB_STEP_SUMMARY"
+                fi
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done
+          done
+
+          # --- Status Banner ---
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$cel_blocking_fail" = true ]; then
+            echo ":rotating_light: **CEL tests failed — this is a blocking failure.**" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$has_results" = false ]; then
+            echo ":grey_question: **No test results found.** Check that the test jobs completed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Check if AI tests had failures (non-blocking)
+            ai_failed=false
+            for dir in results/*/; do
+              [ -d "$dir" ] || continue
+              for file in "$dir"ai-*.json; do
+                [ -f "$file" ] || continue
+                f=$(jq '[.results_by_model[].summary.failed] | add // 0' "$file")
+                e=$(jq '[.results_by_model[].summary.errored] | add // 0' "$file")
+                if [ "$f" -gt 0 ] || [ "$e" -gt 0 ]; then
+                  ai_failed=true
+                fi
+              done
+            done
+
+            if [ "$ai_failed" = true ]; then
+              echo ":warning: **AI tests have failures (non-blocking).** Review results for details." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo ":tada: **All tests passed!**" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi

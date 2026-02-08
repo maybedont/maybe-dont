@@ -32,6 +32,7 @@ Each spec should have a `## Status` section near the top with one of these value
 
 | Spec | Description |
 |------|-------------|
+| [prompt-injection-considerations](prompt-injection-considerations.md) | Prompt injection threat model, product positioning, and optimization strategies |
 | [api-token-obfuscation](api-token-obfuscation.md) | Obfuscate sensitive tokens in logs and audit entries |
 | [confidence-scoring](confidence-scoring.md) | Confidence scoring for AI policy responses with configurable thresholds |
 | [audit-report-timeout-optimization](audit-report-timeout-optimization.md) | Optimize audit report generation timeouts |

@@ -383,16 +383,18 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				Results:      auditResults,
 			}
 
-			completionChan <- AsyncCompletion{
-				AIDetails:    aiDetails,
-				EvaluationMs: evaluationMs,
-			}
-
+			// Log before signaling completion on the channel so all work
+			// (including logging) is finished before the consumer proceeds.
 			e.logger.Debug(asyncCtx, "Tool call evaluation complete (async)",
 				zap.Bool("allowed", true),
 				zap.Int64("blocked_ms", int64(0)),
 				zap.Int64("evaluation_ms", evaluationMs),
 			)
+
+			completionChan <- AsyncCompletion{
+				AIDetails:    aiDetails,
+				EvaluationMs: evaluationMs,
+			}
 		}()
 
 		// Return immediately with allow decision and async completion channel
