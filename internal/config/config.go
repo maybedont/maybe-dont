@@ -594,7 +594,9 @@ func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix strin
 
 // applyMapFromEnv populates a map[string]any field from environment variables.
 // It scans for env vars with the given prefix (e.g., MAYBE_DONT_VALIDATION_AI_PARAMETERS_)
-// and inserts key-value pairs with auto-detected types (float, int, bool, string).
+// and inserts key-value pairs with auto-detected types (float64, bool, string).
+// All numeric values are stored as float64 for consistency with JSON/YAML unmarshaling
+// into map[string]any, which always uses float64 for numbers.
 func applyMapFromEnv(field reflect.Value, envKeyPrefix string) {
 	prefix := envKeyPrefix + "_"
 
@@ -621,15 +623,11 @@ func applyMapFromEnv(field reflect.Value, envKeyPrefix string) {
 			field.Set(reflect.MakeMap(field.Type()))
 		}
 
-		// Auto-detect value type: try float, int, bool, then fall back to string
+		// Auto-detect value type: try float64, bool, then fall back to string.
+		// All numbers become float64 to match JSON/YAML unmarshaling behavior.
 		var parsed any
 		if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
-			// Check if it's actually an integer (no decimal point in original)
-			if intVal, intErr := strconv.ParseInt(value, 10, 64); intErr == nil {
-				parsed = intVal
-			} else {
-				parsed = floatVal
-			}
+			parsed = floatVal
 		} else if boolVal, err := strconv.ParseBool(value); err == nil {
 			parsed = boolVal
 		} else {

@@ -225,7 +225,7 @@ When adding new configuration fields:
 - **Sensible defaults**: Provide reasonable defaults to minimize required user configuration
 - **Environment variable support**: Ensure the field can be overridden via environment variable (follows `MAYBE_DONT_` prefix pattern)
 - **Test coverage**: Add tests to verify the config value is loaded correctly and can be overridden via environment variable
-- **Keep example config in sync**: When adding or changing defaults in `internal/config/config.go`, update `config/maybe-dont.yaml` to reflect the actual defaults. The shipped config file should represent what you'd get if you omitted the config file entirely.
+- **Keep default config in sync**: When adding or changing defaults in `internal/config/config.go`, update `internal/config/defaults/maybe-dont.yaml` to match. This file is embedded in the binary and written out on first startup.
 
 ### Logging Conventions
 **Log level guidelines:**

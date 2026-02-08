@@ -580,11 +580,11 @@ func TestApplyEnvironmentOverrides_MapStringAny(t *testing.T) {
 			expValue: 0.5,
 		},
 		{
-			name:     "integer value",
+			name:     "integer value parsed as float64",
 			envVar:   "MAYBE_DONT_VALIDATION_AI_PARAMETERS_MAX_TOKENS",
 			envValue: "4096",
 			expKey:   "max_tokens",
-			expValue: int64(4096),
+			expValue: float64(4096),
 		},
 		{
 			name:     "boolean value",
