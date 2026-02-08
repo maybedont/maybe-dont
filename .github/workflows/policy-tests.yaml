@@ -65,6 +65,10 @@ on:
         description: 'Force re-run all tests (ignore state file cache)'
         type: boolean
         default: false
+      retry_failed:
+        description: 'Re-run failed/errored tests even if cached'
+        type: boolean
+        default: false
       include_disabled:
         description: 'Include disabled policies'
         type: boolean
@@ -223,6 +227,11 @@ jobs:
             RUN_MODE="--full"
           fi
 
+          RETRY_FLAG=""
+          if [ "${{ github.event.inputs.retry_failed }}" == "true" ]; then
+            RETRY_FLAG="--retry-failed"
+          fi
+
           set +e
           ./maybe-dont test policies \
             --suite-dir ${{ env.SUITE_DIR }} \
@@ -231,6 +240,7 @@ jobs:
             $DISABLED_FLAG \
             $TAGS_FLAG \
             $RUN_MODE \
+            $RETRY_FLAG \
             --wait \
             --state-file .ai-test-state.json \
             --format json \
