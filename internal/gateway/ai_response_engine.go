@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +77,11 @@ func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy
 			zap.String("action", string(policy.Action)),
 			zap.String("mode", string(effectiveMode)),
 		)
+
+		// Reject prompts containing %s — the engine appends response content automatically
+		if strings.Contains(policy.Prompt, "%s") {
+			return fmt.Errorf("policy '%s' prompt must not contain %%s placeholder; the engine appends response content automatically", policy.Name)
+		}
 
 		// Validate action, a response policy can be 'allow', 'deny' or 'redact'
 		if policy.Action != config.PolicyActionAllow && policy.Action != config.PolicyActionDeny && policy.Action != config.PolicyActionRedact {
@@ -216,10 +222,14 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 			policyCtx, cancel := context.WithTimeout(context.Background(), ruleTimeout)
 			defer cancel()
 
+			// Build the prompt by appending the response content.
+			// The engine owns context injection — policy authors write detection logic only.
+			userPrompt := p.Prompt + "\n\nResponse content:\n" + responseStr
+
 			// Call the AI API using the provider-agnostic interface
 			result, err := e.providerClient.Generate(policyCtx, AIRequest{
 				Model:          e.cfg.Validation.AI.Model,
-				UserPrompt:     fmt.Sprintf(p.Prompt, responseStr),
+				UserPrompt:     userPrompt,
 				ResponseSchema: GenerateSchema[AIResponseEvaluation](),
 				Parameters:     e.cfg.Validation.AI.Parameters,
 			})
@@ -253,11 +263,18 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				return
 			}
 
+			// Determine the result based on rule action type.
+			// Redact rules never produce "deny" — the only meaningful signal is whether
+			// redacted_content was provided. For deny/allow rules, use the allowed field.
 			var resultStr string
-			if !evaluation.Allowed {
+			if p.Action == config.PolicyActionRedact {
+				if evaluation.RedactedContent != "" {
+					resultStr = "redact"
+				} else {
+					resultStr = "allow"
+				}
+			} else if !evaluation.Allowed {
 				resultStr = "deny"
-			} else if p.Action == config.PolicyActionRedact && evaluation.RedactedContent != "" {
-				resultStr = "redact"
 			} else {
 				resultStr = "allow"
 			}

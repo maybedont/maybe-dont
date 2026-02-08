@@ -1,6 +1,6 @@
 # Policy Test Case Authoring Rules
 
-Policy test cases validate CEL and AI rules in the Maybe Don't gateway. Tests are organized in a suite directory with `suite.yaml` and test case files in `cases/`.
+Policy test cases validate CEL and AI rules in Maybe Don't. Tests are organized in a suite directory with `suite.yaml` and test case files in `cases/`.
 
 ## Required Structure
 

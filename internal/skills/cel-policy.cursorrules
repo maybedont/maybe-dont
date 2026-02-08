@@ -1,10 +1,10 @@
 # CEL Policy Authoring Rules
 
-CEL policies provide deterministic validation for MCP tool calls, CLI commands, and tool responses in the Maybe Don't gateway.
+CEL policies provide deterministic validation for MCP tool calls, CLI commands, and tool responses in Maybe Don't.
 
 ## Required Command Format
 
-Rules are defined in YAML files loaded by the gateway:
+Rules are defined in YAML files loaded by the server:
 - Request rules: `cel_request_rules.yaml`
 - Response rules: `cel_response_rules.yaml`
 

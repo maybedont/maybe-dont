@@ -26,7 +26,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			{
 				Name:        "block_destructive_ops",
 				Description: "Block destructive operations",
-				Prompt:      "Check if this is destructive: %s",
+				Prompt:      "Check if this is destructive",
 				Action:      config.PolicyActionDeny,
 				Message:     "Blocked",
 				// Mode not set - defaults to "" (can block)
@@ -34,7 +34,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			{
 				Name:        "require_valid_repo",
 				Description: "Require valid repo",
-				Prompt:      "Check repo: %s",
+				Prompt:      "Check repo access",
 				Action:      config.PolicyActionAllow,
 				Message:     "Repo required",
 				// Mode not set - defaults to "" (can block)
@@ -55,13 +55,13 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "enabled_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				// Mode not set - defaults to "" (can block)
 			},
 			{
 				Name:    "disabled_policy",
-				Prompt:  "Check: %s",
+				Prompt:  "Check this operation for security risks",
 				Action:  config.PolicyActionDeny,
 				Enabled: &disabledBool, // Explicitly disabled
 			},
@@ -81,7 +81,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "policy_without_mode",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				// Mode not set, should use default
 			},
@@ -102,7 +102,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "audit_only_override",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				Mode:   config.PolicyModeAuditOnly, // Policy explicitly sets audit_only
 			},
@@ -115,6 +115,24 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		assert.Equal(t, config.PolicyModeAuditOnly, engine.policies[0].Mode)
 	})
 
+	t.Run("rejects_prompt_with_percent_s_placeholder", func(t *testing.T) {
+		engine := createTestAIPolicyEngine(0)
+		err := InitAIPolicyEngine(sessionLogger, engine)
+		require.NoError(t, err)
+
+		policies := []config.AIPolicy{
+			{
+				Name:   "legacy_prompt",
+				Prompt: "Check if this operation is dangerous: %s",
+				Action: config.PolicyActionDeny,
+			},
+		}
+
+		err = engine.LoadPolicies(policies, "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not contain %s placeholder")
+	})
+
 	t.Run("rejects_invalid_action", func(t *testing.T) {
 		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
@@ -123,7 +141,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "invalid_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyAction("invalid"),
 				// Mode not set
 			},
@@ -142,7 +160,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "deny_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				// Mode not set
 			},
@@ -162,7 +180,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "allow_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionAllow,
 				// Mode not set
 			},
@@ -182,7 +200,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "audit_only_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				Mode:   config.PolicyModeAuditOnly,
 			},
@@ -249,13 +267,13 @@ func TestAIPolicyEngine_CountEnabledPolicies(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "audit_policy_1",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				Mode:   config.PolicyModeAuditOnly,
 			},
 			{
 				Name:   "audit_policy_2",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				Mode:   config.PolicyModeAuditOnly,
 			},
@@ -278,13 +296,13 @@ func TestAIPolicyEngine_CountEnabledPolicies(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "enabled_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				// Mode not set - can block
 			},
 			{
 				Name:   "audit_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				Mode:   config.PolicyModeAuditOnly,
 			},
@@ -582,7 +600,7 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "test_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				// Mode not set - can block
 			},
@@ -620,7 +638,7 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "audit_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				Mode:   config.PolicyModeAuditOnly,
 			},
@@ -1051,7 +1069,7 @@ func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
 			{
 				Name:        "audit_only_block",
 				Description: "Would block but in audit mode",
-				Prompt:      "Block everything: %s",
+				Prompt:      "Block everything",
 				Action:      config.PolicyActionDeny,
 				Message:     "Would have blocked",
 				Mode:        config.PolicyModeAuditOnly,
@@ -1076,13 +1094,13 @@ func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
 		policies := []config.AIPolicy{
 			{
 				Name:   "audit_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				Mode:   config.PolicyModeAuditOnly,
 			},
 			{
 				Name:   "enabled_policy",
-				Prompt: "Check: %s",
+				Prompt: "Check this operation for security risks",
 				Action: config.PolicyActionDeny,
 				// Mode not set - can block
 			},
@@ -1390,7 +1408,7 @@ func TestAIPolicyEngine_EvaluateCLICommand_RequiresBudget(t *testing.T) {
 	policies := []config.AIPolicy{
 		{
 			Name:   "test_policy",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			// Mode not set - can block
 		},
@@ -1424,7 +1442,7 @@ func TestAIPolicyEngine_EvaluateCLICommand_AuditOnlyReturnsImmediately(t *testin
 	policies := []config.AIPolicy{
 		{
 			Name:   "audit_policy",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			Mode:   config.PolicyModeAuditOnly,
 		},
@@ -1468,7 +1486,7 @@ func TestAIPolicyEngine_EvaluateCLICommand_ExhaustedBudget(t *testing.T) {
 	policies := []config.AIPolicy{
 		{
 			Name:   "test_policy",
-			Prompt: "Check: %s",
+			Prompt: "Check this operation for security risks",
 			Action: config.PolicyActionDeny,
 			// Mode not set - can block
 		},

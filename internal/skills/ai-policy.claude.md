@@ -1,15 +1,15 @@
 # ai-policy-authoring
 
 ## Description
-Guide for authoring AI (LLM-powered) policy rules for the Maybe Don't gateway. Covers request validation, response validation, and response redaction.
+Guide for authoring AI (LLM-powered) policy rules for Maybe Don't. Covers request validation, response validation, and response redaction.
 
 ## Instructions
 
-AI policies use large language models to evaluate MCP tool calls, CLI commands, and tool responses for security risks that are difficult to express as deterministic rules. Rules are defined in YAML files with prompt templates.
+AI policies use large language models to evaluate tool calls, CLI commands, and tool responses for security risks that are difficult to express as deterministic rules. Rules are defined in YAML files with prompts that describe what to detect.
 
 ### Rule YAML Structure
 
-Rules are stored in separate files referenced by the gateway configuration:
+Rules are stored in separate files referenced by the server configuration:
 - **Request rules**: `ai_request_rules.yaml` (when `request_validation.ai.enabled: true`)
 - **Response rules**: `ai_response_rules.yaml` (when `response_validation.ai.enabled: true`)
 
@@ -25,47 +25,47 @@ rules:
     mode: audit_only
 
     prompt: |-
-      ANALYZE the following operation for security risks:
-
-      %s
+      ANALYZE: Does this operation involve dangerous deletion patterns?
 
       Look for:
       - Patterns indicating dangerous behavior
       - Attempts to access sensitive resources
 
-      EXAMPLES of dangerous operations:
-      - Deleting production databases
-      - Accessing credential files
-
-      EXAMPLES of safe operations:
-      - Reading documentation
-      - Listing directory contents
-
-      Respond with JSON: {"allowed": true/false, "message": "explanation"}
+      EXAMPLES:
+      - Reading documentation -> SAFE: Normal read operation
+      - Deleting production databases -> DANGEROUS: Destructive operation on production data
 ```
 
-### Prompt Template
+### Writing Effective Prompts
 
-The `%s` placeholder in the prompt is replaced with the operation being validated:
+The prompt is the core of each AI policy rule. Focus on clearly describing the security concern and providing calibration examples.
 
-**For request validation (MCP tool calls):**
-```json
-{"type": "mcp_tool", "name": "github__delete_repo", "arguments": {"owner": "org", "repo": "prod-db"}}
-```
+1. **Describe the threat clearly**: Start with an ANALYZE section that frames the specific security concern
+2. **List specific patterns to detect**: Use a "Look for" section naming the exact behaviors or patterns that indicate risk
+3. **Include calibration examples**: Provide EXAMPLES of both safe and dangerous operations so the AI can distinguish routine usage from genuine threats
+4. **Use plain-text classification labels**: Write examples as `input -> LABEL: reasoning` (e.g., `-> SAFE: Routine cleanup`)
+5. **Keep each rule focused on one concern**: A rule about credential detection should not also check for data exfiltration — create separate rules for separate concerns
+6. **Specify replacement text in redact rules**: Tell the AI what placeholder to use (e.g., "replace with [PII_REDACTED]") and use distinct placeholders for different redaction types (e.g., `[PII_REDACTED]`, `[CREDENTIAL_REDACTED]`)
+7. **Test with `mode: audit_only`**: Start in audit mode to observe rule behavior, then remove the mode to enable blocking
 
-**For request validation (CLI commands):**
-```json
-{"type": "cli", "name": "rm", "arguments": ["-rf", "/etc"]}
-```
+### Operation Context
 
-**For response validation:**
-```
-IsError: false
-Content:
-  [text] File contents: root:x:0:0:root:/root:/bin/bash...
-```
+The policy engine automatically appends the operation being evaluated to the end of your prompt at runtime. The context is labeled appropriately:
 
-### Expected AI Response Format
+- **Tool calls**: Appended as `Tool call:` followed by JSON like `{"type": "mcp_tool", "name": "github__delete_repo", "arguments": {"owner": "org", "repo": "prod-db"}}`
+- **CLI commands**: Appended as `CLI command:` followed by JSON like `{"type": "cli", "name": "rm", "arguments": ["-rf", "/etc"]}`
+- **Response content**: Appended as `Response content:` followed by the formatted response text
+
+### Actions
+
+| Action  | Request Rules | Response Rules | Behavior |
+|---------|:---:|:---:|----------|
+| `deny`  | Yes | Yes | Block if AI returns `allowed: false` |
+| `redact`| No  | Yes | Replace content with `redacted_content` from AI response |
+
+### AI Response Format
+
+The AI response format is enforced automatically at runtime. The server uses these structures:
 
 **Request validation:**
 ```json
@@ -86,13 +86,6 @@ Content:
 
 The `redacted_content` field is only used when `action: redact` and the AI determines content should be sanitized.
 
-### Actions
-
-| Action  | Request Rules | Response Rules | Behavior |
-|---------|:---:|:---:|----------|
-| `deny`  | Yes | Yes | Block if AI returns `allowed: false` |
-| `redact`| No  | Yes | Replace content with `redacted_content` from AI response |
-
 ### Writing Response Rules
 
 **Performance**: AI response rules can be slow because the tool or CLI response content is not known ahead of time and may be large, requiring the LLM to process significant payloads. Consider this latency impact when enabling AI response validation.
@@ -101,16 +94,6 @@ The `redacted_content` field is only used when `action: redact` and the AI deter
 - **`deny`** means "don't show the response to the AI agent." Use sparingly — this is only meaningful for **read-only** operations (e.g., get, list, search) where withholding the result makes sense.
 - **`redact`** means "don't show parts of the response to the AI agent." This is generally preferred over `deny` for response rules.
 - **Avoid `deny` on mutating operations**: If the tool call or CLI command created, modified, or deleted something, the action has already completed. Denying the response hides the outcome from the AI agent without undoing the action, which is misleading — the agent won't know the operation succeeded.
-
-### Prompt Engineering Best Practices
-
-1. **Structure prompts clearly**: Use sections like ANALYZE, Look for, EXAMPLES
-2. **Include both positive and negative examples**: Show what should be allowed AND denied
-3. **Be specific about the threat model**: Name the exact patterns to detect
-4. **Keep prompts focused**: One rule per concern (don't combine credential detection with data exfiltration)
-5. **Use the `%s` placeholder exactly once**: It must appear in every prompt
-6. **Specify the response format**: Always end with the expected JSON format
-
 ### Examples
 
 #### Request Rule: Detect mass deletion attempts
@@ -122,26 +105,19 @@ rules:
     action: deny
     message: "Mass deletion operations require manual approval"
     prompt: |-
-      ANALYZE the following operation for mass deletion risk:
-
-      %s
+      ANALYZE: Does this operation involve mass deletion risk?
 
       Look for:
       - Operations that delete multiple items, repos, files, or records
       - Wildcard or recursive deletion patterns
       - Operations targeting production or shared resources
 
-      EXAMPLES of dangerous operations:
-      - Deleting all files in a directory recursively
-      - Dropping a database table
-      - Removing all members from a team
-
-      EXAMPLES of safe operations:
-      - Deleting a single temporary file
-      - Removing one outdated branch
-      - Cleaning up a personal draft
-
-      Respond with JSON: {"allowed": true/false, "message": "brief explanation"}
+      EXAMPLES:
+      - Deleting all files in a directory recursively -> DANGEROUS: Recursive mass deletion
+      - Dropping a database table -> DANGEROUS: Irreversible data loss
+      - Removing all members from a team -> DANGEROUS: Mass permission change
+      - Deleting a single temporary file -> SAFE: Single file cleanup
+      - Removing one outdated branch -> SAFE: Routine maintenance
 ```
 
 #### Response Rule: Redact credentials from output
@@ -153,9 +129,7 @@ rules:
     action: redact
     message: "Credentials detected and redacted from response"
     prompt: |-
-      ANALYZE the following tool response for leaked credentials:
-
-      %s
+      ANALYZE: Does this tool response contain leaked credentials?
 
       Look for:
       - API keys, tokens, or secrets
@@ -164,12 +138,11 @@ rules:
       - AWS access keys, GitHub tokens, etc.
 
       If credentials are found, provide a redacted version with sensitive
-      values replaced by [REDACTED].
+      values replaced by [CREDENTIAL_REDACTED].
 
-      If no credentials are found, mark as allowed.
-
-      Respond with JSON:
-      {"allowed": true/false, "message": "explanation", "redacted_content": "sanitized version if needed"}
+      EXAMPLES:
+      - "Connected to db on port 5432" -> SAFE: No credentials
+      - "API_KEY=sk-proj-abc123" -> CREDENTIALS DETECTED: API key exposed
 ```
 
 #### Response Rule: Deny on sensitive read-only data
@@ -183,29 +156,28 @@ rules:
     action: deny
     message: "Response blocked: contains raw credentials"
     prompt: |-
-      ANALYZE the following tool response for credential leakage:
-
-      %s
+      ANALYZE: Does this tool response contain credential leakage?
 
       Look for:
       - Private keys (RSA, EC, PGP)
       - Database connection strings with embedded passwords
       - Cloud provider credentials (AWS, GCP, Azure)
 
-      Respond with JSON: {"allowed": true/false, "message": "explanation"}
+      EXAMPLES:
+      - "Server uptime: 42 days" -> SAFE: No credentials
+      - "-----BEGIN RSA PRIVATE KEY-----" -> DANGEROUS: Private key material
 ```
 
 ### Common Mistakes
 
 | Mistake | Problem | Fix |
 |---------|---------|-----|
-| Missing `%s` placeholder | AI receives no operation context | Include exactly one `%s` in the prompt |
 | Overly broad prompt | High false-positive rate | Be specific about threat patterns |
 | No examples in prompt | AI lacks calibration | Include EXAMPLES of both safe and dangerous operations |
 | `action: redact` on request rule | Redaction only works on responses | Use `action: deny` for request rules |
 | `action: deny` on response for mutating ops | Action already completed; hiding the result is misleading | Use `redact` instead, or restrict `deny` to read-only operations |
-| Vague response format | AI returns unparseable responses | Always specify the exact JSON format expected |
 | Combining multiple concerns | Hard to tune and debug | One focused concern per rule |
+| No replacement text in redact rules | AI uses inconsistent placeholders | Specify explicit replacement text (e.g., "replace with [PII_REDACTED]") |
 
 ### Configuration
 
@@ -222,7 +194,7 @@ validation:
 
 ### Key Notes
 
-- AI rules run in parallel goroutines with per-rule timeout (`max_rule_evaluation_ms`, default: 45s)
+- AI rules run in parallel with per-rule timeout (`max_rule_evaluation_ms`, default: 45s)
 - Total blocking budget across all validation phases is `max_blocking_ms` (default: 90s)
 - When all rules are `audit_only`, request returns immediately (fail-open) and audit continues async
 - First enabled `deny` match short-circuits evaluation

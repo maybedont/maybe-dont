@@ -1,20 +1,20 @@
 # maybe-dont-cli
 
 ## Description
-Routes all CLI commands through the Maybe Don't security gateway for validation before execution.
+Routes all CLI commands through Maybe Don't for validation before execution.
 
 ## Instructions
 
 All shell/CLI commands must be executed through the Maybe Don't CLI proxy:
 
 ```bash
-maybe-dont cli -s <gateway-url> -- <command> [args...]
+maybe-dont cli -s <server-url> -- <command> [args...]
 ```
 
 ### Required Setup
 
-1. Ensure the Maybe Don't gateway is running and accessible
-2. Set the gateway URL via the `-s` flag or configure it in your environment
+1. Ensure Maybe Don't is running and accessible
+2. Set the server URL via the `-s` flag or configure it in your environment
 
 ### Client Identification (Optional)
 
@@ -51,4 +51,4 @@ If a command is denied by policy:
 
 - The `--` separator is REQUIRED between cli flags and the command
 - Commands are validated against security policies before execution
-- If the gateway is unreachable, commands will execute with a warning (fail-open)
+- If the server is unreachable, commands will execute with a warning (fail-open)

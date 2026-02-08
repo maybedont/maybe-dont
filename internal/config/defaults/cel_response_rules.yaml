@@ -1,5 +1,4 @@
-# Example CEL response policy rules
-# These rules validate and filter tool call responses
+# Example CEL response rules
 
 rules:
   # Example: Redact sensitive file content

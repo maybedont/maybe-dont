@@ -1,16 +1,16 @@
 # Maybe Don't CLI Proxy Rules
 
-All CLI commands that interact with external services must be routed through the Maybe Don't security gateway for validation.
+All CLI commands that interact with external services must be routed through Maybe Don't for validation.
 
 ## Required Command Format
 
 ```bash
-maybe-dont cli -s <gateway-url> -- <command> [args...]
+maybe-dont cli -s <server-url> -- <command> [args...]
 ```
 
 ## Rules
 
-1. ALWAYS prefix CLI commands with `maybe-dont cli -s <gateway-url> --`
+1. ALWAYS prefix CLI commands with `maybe-dont cli -s <server-url> --`
 2. The `--` separator is REQUIRED between cli flags and the command
 3. If a command is denied, explain the denial reason and suggest alternatives
 4. Do NOT attempt to bypass validation or run commands directly

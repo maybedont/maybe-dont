@@ -1,7 +1,7 @@
 # Policy Test Case Authoring Instructions
 
 ## Overview
-Write test cases to validate CEL and AI policy rules in the Maybe Don't gateway. Tests are organized in a suite directory containing `suite.yaml` and a `cases/` subdirectory with test case YAML files.
+Write test cases to validate CEL and AI policy rules in Maybe Don't. Tests are organized in a suite directory containing `suite.yaml` and a `cases/` subdirectory with test case YAML files.
 
 ## Test Case Format
 
@@ -57,6 +57,7 @@ acceptance:
 execution:
   timeout_ms: 30000
   retries: 2
+  # Proactive pacing (the runner also adapts to 429 responses via API headers)
   rate_limits:
     openai:
       requests_per_minute: 60
