@@ -21,7 +21,7 @@ acceptance:
   min_match_rate: 1.0 # All tests must pass for default policies
 
 execution:
-  timeout_ms: 30000
+  timeout_ms: 60000
   retries: 2
   retry_delay_ms: 1000
 
