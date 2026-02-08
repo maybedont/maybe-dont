@@ -60,6 +60,8 @@ validation:
     endpoint: "https://api.openai.com/v1/chat/completions"
     model: "gpt-5"
     api_key: "${OPENAI_API_KEY}"  # Set via environment variable
+    parameters:
+      temperature: 0.0  # Deterministic output for consistent policy decisions
 
 # Request validation configuration
 request_validation:
