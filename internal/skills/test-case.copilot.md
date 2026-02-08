@@ -57,6 +57,7 @@ acceptance:
 execution:
   timeout_ms: 30000
   retries: 2
+  # Proactive pacing (the runner also adapts to 429 responses via API headers)
   rate_limits:
     openai:
       requests_per_minute: 60

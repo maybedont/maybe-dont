@@ -143,6 +143,8 @@ execution:
   timeout_ms: 30000
   retries: 2
   retry_delay_ms: 1000
+  # Proactive pacing - applied to every request regardless of API headers.
+  # The runner also adapts to 429 responses using retry-after headers.
   delay_between_requests_ms: 100
   rate_limit_buffer_ms: 5000
   rate_limits:

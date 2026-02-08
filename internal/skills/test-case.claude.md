@@ -39,6 +39,8 @@ execution:
   timeout_ms: 30000                     # Per-test timeout (default: 30000)
   retries: 2                            # Retry attempts on failure
   retry_delay_ms: 1000                  # Delay between retries
+  # Proactive pacing - applied to every request regardless of API headers.
+  # The runner also adapts to 429 responses using retry-after headers.
   delay_between_requests_ms: 100        # Min delay between consecutive requests
   rate_limit_buffer_ms: 5000            # Extra buffer near rate limit window
   rate_limits:                          # Per-provider rate limiting

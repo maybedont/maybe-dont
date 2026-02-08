@@ -1316,14 +1316,15 @@ execution:
   timeout_ms: 30000
   retries: 2
   retry_delay_ms: 1000
-  # NEW: Rate limiting (per-provider)
+  # Proactive pacing - applied to every request regardless of API headers.
+  # The runner also adapts to 429 responses using retry-after headers.
   rate_limits:
     openai:
       requests_per_minute: 60
     anthropic:
       requests_per_minute: 20
     default:
-      requests_per_minute: 30       # Fallback for unlisted providers
+      requests_per_minute: 30       # Used for unlisted providers
   delay_between_requests_ms: 100    # Minimum delay between consecutive requests
   rate_limit_buffer_ms: 5000        # Extra buffer when hitting rate limit window
 ```
@@ -2640,19 +2641,17 @@ execution:
   retries: 2
   retry_delay_ms: 1000
 
-  # Rate limiting - all optional with dynamic learning
+  # Proactive pacing - applied to every request regardless of API headers.
+  # The runner also adapts to 429 responses using retry-after headers.
   rate_limits:
-    # Only needed for providers that don't return headers
     custom_provider:
       requests_per_minute: 30
 
-    # Fallback for unknown providers (optional)
     default:
-      requests_per_minute: 30
+      requests_per_minute: 30       # Used for unlisted providers
 
-  # These still apply as minimums/buffers
-  delay_between_requests_ms: 100    # Minimum delay (even if headers say more is available)
-  rate_limit_buffer_ms: 5000        # Extra padding after rate limit wait
+  delay_between_requests_ms: 100    # Minimum delay between consecutive requests
+  rate_limit_buffer_ms: 5000        # Extra buffer when hitting rate limit window
 ```
 
 #### Model-Level max_tokens
