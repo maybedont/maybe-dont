@@ -1,5 +1,4 @@
-# Example AI response policy rules
-# These rules use AI to validate and filter tool call responses
+# Example AI response rules
 
 rules:
   # Example: Detect and redact PII in responses

@@ -1,7 +1,6 @@
+# Example AI request rules
+
 rules:
-    # =============================================================================
-    # TOP PRIORITY SECURITY RULES
-    # =============================================================================
     - name: "Check mass deletion operations"
       description: "Prevent deletion of multiple files, records, or use of dangerous deletion patterns"
       enabled: true

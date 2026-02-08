@@ -1,4 +1,4 @@
-# Example CEL policy rules
+# Example CEL request rules
 rules:
 - name: deny-github-delete-file
   description: Deny github delete file
