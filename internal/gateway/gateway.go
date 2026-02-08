@@ -557,6 +557,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	// Validate response through the response validation chain (timing is captured per-policy)
 	// Use validationCtx to share the blocking budget with response validation
 	// Skip validation for empty responses — there is nothing for the AI to evaluate.
+	// Guard condition mirrored in TestResponseValidationSkipsEmptyContent (response_validation_test.go)
 	if g.responseValidationChain != nil && len(result.Content) > 0 {
 		g.logger.Debug(ctx, "Starting response validation",
 			zap.String("session_id", sessionID),

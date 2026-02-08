@@ -9,7 +9,7 @@
 >
 > - **Accuracy**: All struct names and field names verified. `AIResponse`, `AIResponseEvaluation`, `aiRuleResult`, `ValidationResult`, `AuditAIRuleResult`, `AuditAIResult`, `AIPolicy`, `AIResponsePolicy` all match. `ActualResult` now has a placeholder `Confidence` field (always 1.0). `CachedResult` has `Confidence`.
 > - **CLI proxy**: Fully implemented (`internal/gateway/cli_validation.go`, routes in `server.go`). Section 16 updated.
-> - **Skills**: All skill files exist on main (`internal/skills/ai-policy.md`, `test-case.md`, `cel-policy.md` plus variants). Phase 4 targets are valid.
+> - **Skills**: All skill files exist on main (`internal/skills/ai-policy.claude.md`, `test-case.claude.md`, `cel-policy.claude.md` plus variants). Phase 4 targets are valid.
 > - **Policy versioning**: No versioning introduced for rule files. Spec proposal for optional `version: "1"` field still applies.
 > - **State files**: Schema version "v1" with no upgrade/migration logic. Backward compatibility confirmed — old files deserialize with zero-value defaults.
 > - **Default rules**: Still contain "Return ONLY JSON" boilerplate. Phase 2 migration still needed.
@@ -84,6 +84,12 @@ Confidence scoring is viable and likely valuable. The key is to treat scores as 
 Instead of a continuous 0.0-1.0 score, we considered asking the AI to return a categorical level (`high`, `medium`, `low`). This has fewer calibration concerns but sacrifices granularity for threshold tuning and makes audit analytics less useful (you cannot compute distributions or percentiles over categories). The continuous score with well-documented semantics is the better choice, and can always be bucketed into categories at the presentation layer.
 
 ## Design
+
+> **Note on Sections 2–9**: These sections were written during the original design phase when self-reported confidence scoring was the plan. After research (see Section 21), self-reported confidence was rejected as unreliable. Logprob-based confidence is a potential future route but is not currently planned. **What was actually implemented** from these sections:
+> - **Section 2**: The concept of removing redundant prompt boilerplate was implemented, but the engine-owned format suffix constants described here were NOT added. The engine relies purely on API-level schema enforcement (`GenerateSchema[T]()` with `strict: true`).
+> - **Section 3**: The decision logic truth table is accurate and unchanged. The `action: allow` gate pattern documentation is accurate.
+> - **Section 9**: The operation context injection (`Tool call:`, `CLI command:`, `Response content:` labels) was implemented. The `const` format suffix strings described here were NOT implemented.
+> - **Sections 4–8**: The confidence-related struct fields, config changes, and audit entry changes described here were NOT implemented. They are preserved for reference if logprob-based confidence is pursued in the future.
 
 ### 1. Design Decision: Additive Confidence vs. Response Format Replacement
 
@@ -431,22 +437,7 @@ result, err := e.providerClient.Generate(policyCtx, AIRequest{
 
 For CLI commands, the label is `CLI command:` instead of `Tool call:`. The response engine (`ai_response_engine.go`) follows the same pattern with `Response content:` as the label and `GenerateSchema[AIResponseEvaluation]()`.
 
-Both instruction constants are package-level:
-
-```go
-const aiRequestResponseFormatInstruction = `---
-Respond with a JSON object containing exactly these fields:
-- "allowed": true if the operation appears safe, false if it appears dangerous.
-- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your assessment. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
-- "message": A brief explanation of your reasoning.`
-
-const aiResponseResponseFormatInstruction = `---
-Respond with a JSON object containing exactly these fields:
-- "allowed": true if the response content is safe, false if it should be blocked or redacted.
-- "confidence": A number between 0.0 and 1.0 indicating how confident you are in your assessment. Use 1.0 for absolute certainty, 0.7+ for high confidence, 0.5 for uncertain, below 0.3 for very low confidence.
-- "message": A brief explanation of your reasoning.
-- "redacted_content": If sensitive content was found that should be sanitized, provide the redacted version. Otherwise leave empty.`
-```
+**Note (superseded):** An earlier revision of this section proposed package-level `const` prompt suffix strings (`aiRequestResponseFormatInstruction`, `aiResponseResponseFormatInstruction`) that the engine would append to every prompt. These were NOT implemented. The response format is enforced entirely by `GenerateSchema[T]()` with `strict: true` at the API level — no prompt-level format instruction is needed. See the worklist note: "No engine-owned prompt suffix — rely purely on API-level schema enforcement."
 
 ### 10. Test Suite Changes
 
@@ -499,7 +490,7 @@ The test suite's model matrix feature becomes the primary mechanism for validati
 
 Add a brief note explaining that CEL rules always produce confidence 1.0 since they are deterministic. No changes to the authoring guidance itself.
 
-#### `ai-policy-authoring` skill (`.claude/skills/` and `internal/skills/ai-policy.md`)
+#### `ai-policy-authoring` skill (`.claude/skills/` and `internal/skills/ai-policy.claude.md`)
 
 Major updates:
 1. **Remove response format from examples**: All example prompts should end at the analytical content. The response format instruction is injected by the engine.
@@ -508,7 +499,7 @@ Major updates:
 4. **Update the "Expected AI Response Format" section**: Show the format with the added `confidence` field.
 5. **Update Common Mistakes table**: Remove "Vague response format" (no longer relevant). Add "Specifying response format in prompt" as a mild anti-pattern (harmless but wasteful of tokens).
 
-#### `policy-test-case` skill (`internal/skills/test-case.md`)
+#### `policy-test-case` skill (`internal/skills/test-case.claude.md`)
 
 1. **Add `min_confidence` to field reference**: Document the optional field in expectations.
 2. **Add examples**: Show test cases with `min_confidence` assertions.
@@ -573,16 +564,17 @@ This does not need to gate the confidence scoring feature — it is a low-cost a
 
 ### 14. Backward Compatibility and Migration Strategy
 
-**User-authored rules do not need modification.** The engine changes are invisible to rule authors:
+**User-authored rules require one migration step.** The `%s` placeholder is rejected at load time — prompts containing `%s` will cause a startup error. This is a **breaking change** for users who wrote custom rules following previous documentation that instructed them to include `%s`.
 
 | Scenario | What happens | User action required |
 |----------|-------------|---------------------|
-| User rule with old response format boilerplate | Engine suffix adds `confidence` to the same `allowed`/`message` format. No conflict. | None (optional cleanup to save tokens) |
-| User rule without response format boilerplate | Engine appends instruction automatically | None |
+| User rule with `%s` placeholder | **Startup error** — `LoadPolicies` rejects the prompt | **Remove `%s`** from the prompt. The engine now appends operation context automatically. |
+| User rule with old response format boilerplate | Harmless — the schema enforces the format regardless. The old instruction is redundant but not rejected. | None (optional cleanup to save tokens) |
+| User rule without response format boilerplate | Engine handles format via schema enforcement | None |
 | User rule with `confidence_threshold` | Per-rule threshold applied | None (new opt-in feature) |
 | AI response missing `confidence` field | Engine defaults to confidence 1.0 (preserve existing behavior) | None |
 
-**Shipped default rules WILL be modified** to remove boilerplate and simplify examples. This is safe because defaults are embedded at compile time — users who have copied and modified them are already diverged.
+**Shipped default rules WILL be modified** to remove boilerplate, simplify examples, and remove `%s` placeholders. This is safe because defaults are embedded at compile time — users who have copied and modified them are already diverged and will need to remove `%s` from their copies.
 
 ### 15. Assumptions
 
@@ -863,7 +855,7 @@ Given this landscape, removing prompt-level format instructions is safe for all 
 2. Strip `Return ONLY JSON...` boilerplate and multi-line JSON format blocks from all shipped AI response rules (`internal/config/defaults/ai_response_rules.yaml`)
 3. Remove conditional field-mapping instructions from response rules (e.g., "If PII is found: Set allowed to true...") — the schema and engine handle field semantics
 4. Simplify EXAMPLES in shipped rules — replace JSON response examples (e.g., `→ { "allowed": true, "message": "..." }`) with plain-text classification labels (e.g., `→ SAFE: Not a deletion operation`). See Section 23 for detailed before/after examples including response validation rules.
-5. Update `ai-policy-authoring` skill (`internal/skills/ai-policy.md` and variants): remove response format from examples, add note that the response format is enforced by the API-level schema and should not be included in policy prompts. Document that redact rules should specify replacement text in the prompt (see Section 24 for details).
+5. Update `ai-policy-authoring` skill (`internal/skills/ai-policy.claude.md` and variants): remove response format from examples, add note that the response format is enforced by the API-level schema and should not be included in policy prompts. Document that redact rules should specify replacement text in the prompt (see Section 24 for details).
 6. Add optional `version: "1"` to shipped rule files (low-cost forward compatibility hook)
 
 **Fix redact rule decision logic (bug fix):**
@@ -982,7 +974,7 @@ The design for these features is preserved in Sections 3, 4, 6, and 10 of this s
 27. Update `policy-test-suite/README.md` to reference this spec for confidence-related design
 28. Update `runtime-action-interception-architecture.md` to reference this spec
 29. Update `cli-proxy-for-ai-agents.md` to reference this spec
-30. Update `policy-test-case` skill (`internal/skills/test-case.md`) if test suite confidence display is added
+30. Update `policy-test-case` skill (`internal/skills/test-case.claude.md`) if test suite confidence display is added
 31. Create documentation update checklist for `maybedont.ai/docs` (configuration reference, AI rule authoring guide)
 
 ## 21. Research Findings: Confidence Scoring Cost/Benefit Analysis
@@ -1119,17 +1111,9 @@ This instruction is telling the model to do something it is **already forced to 
 
 Removing this line from each rule saves ~23-50 tokens per rule (161-350 tokens across 7 default request rules) with zero behavioral change.
 
-### Why the Engine Suffix Is Still Useful
+### Why No Engine Suffix Was Implemented
 
-If the schema enforcement makes prompt-level format instructions redundant, why does Phase 1 propose an engine-owned suffix at all?
-
-Two reasons:
-
-1. **Not all providers support structured outputs.** Some OpenAI-compatible endpoints (local models, third-party proxies) may not implement `response_format.json_schema`. For these providers, the prompt suffix is the *only* guidance the model receives about response format. The engine suffix provides a safety net.
-
-2. **Semantic guidance beyond structure.** The schema enforces that `allowed` is a boolean and `message` is a string, but it doesn't explain what `allowed: true` *means*. The suffix provides semantics: "true if the operation appears safe, false if it appears dangerous." This helps the model understand the intent, especially for less capable models or providers without system prompt support.
-
-The key difference from today: the suffix is written once in the engine code and maintained by the gateway developers, not duplicated across every policy file and maintained (inconsistently) by policy authors.
+An earlier revision proposed engine-owned prompt suffix constants (see Section 9). After implementation, the decision was to rely purely on API-level schema enforcement (`GenerateSchema[T]()` with `strict: true`) without any prompt-level format instruction. The schema is sufficient because all production providers support structured outputs (see the provider support table in the Implementation Plan). For the `openai_compatible` provider, the existing comment already acknowledges that not all compatible endpoints support structured outputs — this is a pre-existing limitation, not one introduced by removing prompt boilerplate.
 
 ## 23. Migrating from JSON-Formatted Examples to Plain-Text Classification
 

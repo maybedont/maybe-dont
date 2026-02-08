@@ -21,7 +21,7 @@
   - Ensure redact rules specify replacement text in prompt (e.g., `[PII_REDACTED]`)
   - See spec Section 23 "Response Validation Rules" subsection for the `detect-pii-in-response` before/after
 
-- [x] **3. AI policy authoring skill** (`internal/skills/ai-policy.md` and any variants in `.claude/skills/`)
+- [x] **3. AI policy authoring skill** (`internal/skills/ai-policy.claude.md` and any variants in `.claude/skills/`)
   - Remove response format from example prompts
   - Add note: response format is enforced by the API-level schema, should not be in policy prompts
   - Add note: redact rules should specify replacement text (see spec Section 24)
@@ -83,8 +83,9 @@
     ```
   - To:
     ```go
-    if g.responseValidationChain != nil && result != nil && len(result.Content) > 0 {
+    if g.responseValidationChain != nil && len(result.Content) > 0 {
     ```
+  - Note: `result != nil` guard is omitted per fail-fast principle — `result` is guaranteed non-nil at this site (the preceding `CallTool` error check returns early on failure). A nil result would be a programming error that should panic, not be silently skipped.
   - Add DEBUG log when response validation is skipped due to empty content
 
 - [x] **11. Add test for empty response skip** (`internal/gateway/response_validation_test.go`)

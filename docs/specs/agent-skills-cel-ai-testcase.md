@@ -24,7 +24,7 @@ These skills are served via `maybe-dont skill view <name>` and can be injected i
 ### CEL Policy Skill
 | File | Format |
 |------|--------|
-| `internal/skills/cel-policy.md` | Claude |
+| `internal/skills/cel-policy.claude.md` | Claude |
 | `internal/skills/cel-policy.cursorrules` | Cursor |
 | `internal/skills/cel-policy.copilot.md` | Copilot |
 | `internal/skills/cel-policy.generic.md` | Generic |
@@ -32,7 +32,7 @@ These skills are served via `maybe-dont skill view <name>` and can be injected i
 ### AI Policy Skill
 | File | Format |
 |------|--------|
-| `internal/skills/ai-policy.md` | Claude |
+| `internal/skills/ai-policy.claude.md` | Claude |
 | `internal/skills/ai-policy.cursorrules` | Cursor |
 | `internal/skills/ai-policy.copilot.md` | Copilot |
 | `internal/skills/ai-policy.generic.md` | Generic |
@@ -40,7 +40,7 @@ These skills are served via `maybe-dont skill view <name>` and can be injected i
 ### Test Case Skill
 | File | Format |
 |------|--------|
-| `internal/skills/test-case.md` | Claude |
+| `internal/skills/test-case.claude.md` | Claude |
 | `internal/skills/test-case.cursorrules` | Cursor |
 | `internal/skills/test-case.copilot.md` | Copilot |
 | `internal/skills/test-case.generic.md` | Generic |

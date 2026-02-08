@@ -53,6 +53,33 @@ func TestAIResponsePolicyEngine_DuplicatePolicyNames(t *testing.T) {
 	assert.Contains(t, err.Error(), "duplicate policy name 'duplicate-name'")
 }
 
+// TestAIResponsePolicyEngine_RejectsPercentSPlaceholder verifies that LoadPolicies
+// rejects prompts containing %s, since the engine appends response content automatically.
+func TestAIResponsePolicyEngine_RejectsPercentSPlaceholder(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	engine := &AIResponsePolicyEngine{
+		cfg:                 createTestResponseConfig(),
+		maxRuleEvaluationMs: 30000,
+		providerClient:      NewMockAIProviderClient(),
+	}
+	err := InitAIResponsePolicyEngine(context.Background(), sessionLogger, engine)
+	require.NoError(t, err)
+
+	policies := []config.AIResponsePolicy{
+		{
+			Name:   "legacy-prompt",
+			Prompt: "Check this response for PII: %s",
+			Action: config.PolicyActionRedact,
+		},
+	}
+
+	err = engine.LoadPolicies(policies, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not contain %s placeholder")
+}
+
 // TestAIResponsePolicyEngine_RedactDecisionLogic verifies the decision logic for
 // redact vs deny rules. Redact rules should never produce "deny" — only the
 // presence of redacted_content determines whether the result is "redact" or "allow".

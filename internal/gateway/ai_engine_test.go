@@ -115,6 +115,24 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		assert.Equal(t, config.PolicyModeAuditOnly, engine.policies[0].Mode)
 	})
 
+	t.Run("rejects_prompt_with_percent_s_placeholder", func(t *testing.T) {
+		engine := createTestAIPolicyEngine(0)
+		err := InitAIPolicyEngine(sessionLogger, engine)
+		require.NoError(t, err)
+
+		policies := []config.AIPolicy{
+			{
+				Name:   "legacy_prompt",
+				Prompt: "Check if this operation is dangerous: %s",
+				Action: config.PolicyActionDeny,
+			},
+		}
+
+		err = engine.LoadPolicies(policies, "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must not contain %s placeholder")
+	})
+
 	t.Run("rejects_invalid_action", func(t *testing.T) {
 		engine := createTestAIPolicyEngine(0)
 		err := InitAIPolicyEngine(sessionLogger, engine)
