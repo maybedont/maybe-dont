@@ -1,7 +1,485 @@
 {
   "schema_version": "v1",
-  "product_version": "0.5.0",
+  "product_version": "dev",
   "suite_id": "default-policies",
-  "last_updated": null,
-  "results": {}
+  "last_updated": "2026-02-08T21:07:38Z",
+  "results": {
+    "sha256:4bc8357ad42a620a8a9ebbdddcdcbd9356f56b039645a1487013a9f13b227fe4": {
+      "case_id": "ai-req-045",
+      "policy_hashes": [
+        "sha256:31a442e1676c7ff8589162730ba28a537be3d13f91597c0688f58eb1ddfa054b",
+        "sha256:cfdbdf3d0ae22d264e1c02c29e13a74a9000117b3eaf547a900de1a5d62ce341",
+        "sha256:e0661f956f19cde1cd07e160caff2e7fa8a700e0bbcd5b26c029fad04429a3f4",
+        "sha256:e350717effcc1d07c06f07d36778c8c3839a0b6d156f09dd75183a28eca15a19"
+      ],
+      "models": {
+        "anthropic:claude-haiku-4-5-20251001": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 17869
+        },
+        "anthropic:claude-opus-4-5-20251101": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 20963
+        },
+        "anthropic:claude-opus-4-6": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 33304
+        },
+        "anthropic:claude-sonnet-4-5-20250929": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 25502
+        },
+        "openai:gpt-5": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 53907
+        },
+        "openai:gpt-5-mini": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 27141
+        },
+        "openai:gpt-5.2": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 11852
+        }
+      }
+    },
+    "sha256:7ba884974ff9d0f5dd69ca8a63731e74c26c2d8faec075824e6717eb76931c0f": {
+      "case_id": "ai-req-015",
+      "policy_hashes": [
+        "sha256:31a442e1676c7ff8589162730ba28a537be3d13f91597c0688f58eb1ddfa054b",
+        "sha256:cfdbdf3d0ae22d264e1c02c29e13a74a9000117b3eaf547a900de1a5d62ce341",
+        "sha256:e0661f956f19cde1cd07e160caff2e7fa8a700e0bbcd5b26c029fad04429a3f4",
+        "sha256:e350717effcc1d07c06f07d36778c8c3839a0b6d156f09dd75183a28eca15a19"
+      ],
+      "models": {
+        "anthropic:claude-haiku-4-5-20251001": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 12947
+        },
+        "anthropic:claude-opus-4-5-20251101": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 18066
+        },
+        "anthropic:claude-opus-4-6": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 23776
+        },
+        "anthropic:claude-sonnet-4-5-20250929": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 19701
+        },
+        "openai:gpt-5": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 41531
+        },
+        "openai:gpt-5-mini": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 20683
+        },
+        "openai:gpt-5.2": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 11980
+        }
+      }
+    },
+    "sha256:82cf0dd61b5ce58ff86d92539eaf74e272cee2cdbd0322bf240a927d5ccd1abe": {
+      "case_id": "ai-resp-014",
+      "policy_hashes": [
+        "sha256:31a442e1676c7ff8589162730ba28a537be3d13f91597c0688f58eb1ddfa054b",
+        "sha256:cfdbdf3d0ae22d264e1c02c29e13a74a9000117b3eaf547a900de1a5d62ce341",
+        "sha256:e0661f956f19cde1cd07e160caff2e7fa8a700e0bbcd5b26c029fad04429a3f4",
+        "sha256:e350717effcc1d07c06f07d36778c8c3839a0b6d156f09dd75183a28eca15a19"
+      ],
+      "models": {
+        "anthropic:claude-haiku-4-5-20251001": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 6554
+        },
+        "anthropic:claude-opus-4-5-20251101": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 9378
+        },
+        "anthropic:claude-opus-4-6": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 24226
+        },
+        "anthropic:claude-sonnet-4-5-20250929": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 22817
+        },
+        "openai:gpt-5": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 21123
+        },
+        "openai:gpt-5-mini": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 13463
+        },
+        "openai:gpt-5.2": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 4958
+        }
+      }
+    },
+    "sha256:94392073a240ac70549def3a10d161c75d35ffaa4674aeb607946be20d0d4883": {
+      "case_id": "ai-resp-025",
+      "policy_hashes": [
+        "sha256:31a442e1676c7ff8589162730ba28a537be3d13f91597c0688f58eb1ddfa054b",
+        "sha256:cfdbdf3d0ae22d264e1c02c29e13a74a9000117b3eaf547a900de1a5d62ce341",
+        "sha256:e0661f956f19cde1cd07e160caff2e7fa8a700e0bbcd5b26c029fad04429a3f4",
+        "sha256:e350717effcc1d07c06f07d36778c8c3839a0b6d156f09dd75183a28eca15a19"
+      ],
+      "models": {
+        "anthropic:claude-haiku-4-5-20251001": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 5305
+        },
+        "anthropic:claude-opus-4-5-20251101": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 8406
+        },
+        "anthropic:claude-opus-4-6": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 9710
+        },
+        "anthropic:claude-sonnet-4-5-20250929": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 9568
+        },
+        "openai:gpt-5": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 29403
+        },
+        "openai:gpt-5-mini": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 10169
+        },
+        "openai:gpt-5.2": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 4751
+        }
+      }
+    },
+    "sha256:9b7d141c3ef82b0972cbe3a40e2a09c986008de74fca307328ff19a20e99fbd0": {
+      "case_id": "ai-req-005",
+      "policy_hashes": [
+        "sha256:31a442e1676c7ff8589162730ba28a537be3d13f91597c0688f58eb1ddfa054b",
+        "sha256:cfdbdf3d0ae22d264e1c02c29e13a74a9000117b3eaf547a900de1a5d62ce341",
+        "sha256:e0661f956f19cde1cd07e160caff2e7fa8a700e0bbcd5b26c029fad04429a3f4",
+        "sha256:e350717effcc1d07c06f07d36778c8c3839a0b6d156f09dd75183a28eca15a19"
+      ],
+      "models": {
+        "anthropic:claude-haiku-4-5-20251001": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 13173
+        },
+        "anthropic:claude-opus-4-5-20251101": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 18773
+        },
+        "anthropic:claude-opus-4-6": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 24314
+        },
+        "anthropic:claude-sonnet-4-5-20250929": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 23857
+        },
+        "openai:gpt-5": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 45595
+        },
+        "openai:gpt-5-mini": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 27663
+        },
+        "openai:gpt-5.2": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 11544
+        }
+      }
+    },
+    "sha256:9d4f676af7452701fb0242c10242a9b8cd66916db50c0b2db5f139184a665354": {
+      "case_id": "ai-req-054",
+      "policy_hashes": [
+        "sha256:31a442e1676c7ff8589162730ba28a537be3d13f91597c0688f58eb1ddfa054b",
+        "sha256:cfdbdf3d0ae22d264e1c02c29e13a74a9000117b3eaf547a900de1a5d62ce341",
+        "sha256:e0661f956f19cde1cd07e160caff2e7fa8a700e0bbcd5b26c029fad04429a3f4",
+        "sha256:e350717effcc1d07c06f07d36778c8c3839a0b6d156f09dd75183a28eca15a19"
+      ],
+      "models": {
+        "anthropic:claude-haiku-4-5-20251001": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 13632
+        },
+        "anthropic:claude-opus-4-5-20251101": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 17834
+        },
+        "anthropic:claude-opus-4-6": {
+          "status": "errored",
+          "confidence": 0,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 47974
+        },
+        "anthropic:claude-sonnet-4-5-20250929": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 26924
+        },
+        "openai:gpt-5": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 58097
+        },
+        "openai:gpt-5-mini": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 24751
+        },
+        "openai:gpt-5.2": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 11306
+        }
+      }
+    },
+    "sha256:a28a42bcde85a9b115d49ce8d5b3438d7ee924ee4def642f0944227cbe343bf0": {
+      "case_id": "ai-req-024",
+      "policy_hashes": [
+        "sha256:31a442e1676c7ff8589162730ba28a537be3d13f91597c0688f58eb1ddfa054b",
+        "sha256:cfdbdf3d0ae22d264e1c02c29e13a74a9000117b3eaf547a900de1a5d62ce341",
+        "sha256:e0661f956f19cde1cd07e160caff2e7fa8a700e0bbcd5b26c029fad04429a3f4",
+        "sha256:e350717effcc1d07c06f07d36778c8c3839a0b6d156f09dd75183a28eca15a19"
+      ],
+      "models": {
+        "anthropic:claude-haiku-4-5-20251001": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 47558
+        },
+        "anthropic:claude-opus-4-5-20251101": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 24224
+        },
+        "anthropic:claude-opus-4-6": {
+          "status": "errored",
+          "confidence": 0,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 60211
+        },
+        "anthropic:claude-sonnet-4-5-20250929": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 22573
+        },
+        "openai:gpt-5": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 60736
+        },
+        "openai:gpt-5-mini": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 9729
+        },
+        "openai:gpt-5.2": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 11490
+        }
+      }
+    },
+    "sha256:b68967a545f9b8749686ee2969b60f3ec181007481f6d31ea22041ad5c2f39e8": {
+      "case_id": "ai-resp-005",
+      "policy_hashes": [
+        "sha256:31a442e1676c7ff8589162730ba28a537be3d13f91597c0688f58eb1ddfa054b",
+        "sha256:cfdbdf3d0ae22d264e1c02c29e13a74a9000117b3eaf547a900de1a5d62ce341",
+        "sha256:e0661f956f19cde1cd07e160caff2e7fa8a700e0bbcd5b26c029fad04429a3f4",
+        "sha256:e350717effcc1d07c06f07d36778c8c3839a0b6d156f09dd75183a28eca15a19"
+      ],
+      "models": {
+        "anthropic:claude-haiku-4-5-20251001": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 5512
+        },
+        "anthropic:claude-opus-4-5-20251101": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 11886
+        },
+        "anthropic:claude-opus-4-6": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 11052
+        },
+        "anthropic:claude-sonnet-4-5-20250929": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 12694
+        },
+        "openai:gpt-5": {
+          "status": "errored",
+          "confidence": 0,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 51020
+        },
+        "openai:gpt-5-mini": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 28138
+        },
+        "openai:gpt-5.2": {
+          "status": "failed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 4510
+        }
+      }
+    },
+    "sha256:d94ef8bb44e8cc53e3bcf6844035eb15b5659b2c54723ffe522ce6340c047739": {
+      "case_id": "ai-req-036",
+      "policy_hashes": [
+        "sha256:31a442e1676c7ff8589162730ba28a537be3d13f91597c0688f58eb1ddfa054b",
+        "sha256:cfdbdf3d0ae22d264e1c02c29e13a74a9000117b3eaf547a900de1a5d62ce341",
+        "sha256:e0661f956f19cde1cd07e160caff2e7fa8a700e0bbcd5b26c029fad04429a3f4",
+        "sha256:e350717effcc1d07c06f07d36778c8c3839a0b6d156f09dd75183a28eca15a19"
+      ],
+      "models": {
+        "anthropic:claude-haiku-4-5-20251001": {
+          "status": "errored",
+          "confidence": 0,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 12270
+        },
+        "anthropic:claude-opus-4-5-20251101": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 17648
+        },
+        "anthropic:claude-opus-4-6": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 39307
+        },
+        "anthropic:claude-sonnet-4-5-20250929": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 20076
+        },
+        "openai:gpt-5": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 29862
+        },
+        "openai:gpt-5-mini": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 25539
+        },
+        "openai:gpt-5.2": {
+          "status": "passed",
+          "confidence": 1,
+          "last_run": "2026-02-08T21:07:38Z",
+          "duration_ms": 11638
+        }
+      }
+    }
+  }
 }
