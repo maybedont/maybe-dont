@@ -205,8 +205,9 @@ jobs:
 
       # Commit updated state file back to main branch
       # Only runs on push to main (not PRs or manual dispatch from other branches)
+      # Uses always() so partial results are persisted even when tests fail (e.g. rate limited)
       - name: Commit state file
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.check-keys.outputs.keys_available == 'true'
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.check-keys.outputs.keys_available == 'true'
         run: |
           # Check if state file has changes
           if git diff --quiet .ai-test-state.json 2>/dev/null; then
