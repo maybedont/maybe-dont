@@ -53,6 +53,10 @@ on:
         description: 'Tags to filter (comma-separated)'
         type: string
         required: false
+      full:
+        description: 'Force re-run all tests (ignore state file cache)'
+        type: boolean
+        default: false
       include_disabled:
         description: 'Include disabled policies'
         type: boolean
@@ -186,6 +190,12 @@ jobs:
             MODEL_FLAG="--matrix"
           fi
 
+          # Default to incremental (skip cached passing tests). Use --full only when explicitly requested.
+          RUN_MODE="--incremental"
+          if [ "${{ github.event.inputs.full }}" == "true" ]; then
+            RUN_MODE="--full"
+          fi
+
           set +e
           ./maybe-dont test policies \
             --suite-dir ${{ env.SUITE_DIR }} \
@@ -193,7 +203,7 @@ jobs:
             $MODEL_FLAG \
             $DISABLED_FLAG \
             $TAGS_FLAG \
-            --full \
+            $RUN_MODE \
             --wait \
             --state-file .ai-test-state.json \
             --format json \
