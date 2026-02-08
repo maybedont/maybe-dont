@@ -171,13 +171,15 @@ jobs:
 
       - name: Restore state file from previous run
         if: steps.check-keys.outputs.keys_available == 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Download the most recent ai-test-state artifact from a previous workflow run.
+          # Download the most recent ai-test-state artifact from a main branch run.
+          # Filter to main branch only to prevent feature branch artifacts from polluting state.
           # This provides incremental test execution — only changed tests are re-run.
-          artifact_url=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=ai-test-state&per_page=1" \
-            --jq '.artifacts[0].archive_download_url // empty')
+          artifact_url=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=ai-test-state&per_page=5" \
+            --jq '[.artifacts[] | select(.workflow_run.head_branch == "main")][0].archive_download_url // empty')
           if [ -n "$artifact_url" ]; then
             gh api "$artifact_url" > state.zip && unzip -o state.zip && rm state.zip
             echo "Restored state file from previous run"
@@ -253,7 +255,7 @@ jobs:
 
       - name: Upload AI state file
         uses: actions/upload-artifact@v4
-        if: always() && steps.check-keys.outputs.keys_available == 'true'
+        if: always() && github.ref == 'refs/heads/main' && steps.check-keys.outputs.keys_available == 'true'
         with:
           name: ai-test-state
           path: .ai-test-state.json
