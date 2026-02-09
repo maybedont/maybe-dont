@@ -21,6 +21,7 @@ Each spec should have a `## Status` section near the top with one of these value
 |------|-------------|
 | [policy-test-suite](policy-test-suite.md) | CLI-based policy test harness with model matrix |
 | [xdg-base-directory-support](xdg-base-directory-support.md) | XDG Base Directory conventions for config/state files |
+| [test-pass-rate-history](test-pass-rate-history.md) | Rolling pass rate tracking, policy change markers, and stability reporting for the policy test suite |
 
 ### Ready for Implementation
 
@@ -32,7 +33,6 @@ Each spec should have a `## Status` section near the top with one of these value
 
 | Spec | Description |
 |------|-------------|
-| [test-pass-rate-history](test-pass-rate-history.md) | Rolling pass rate tracking, semantic hashing, and stability reporting for the policy test suite |
 | [prompt-injection-considerations](prompt-injection-considerations.md) | Prompt injection threat model, product positioning, and optimization strategies |
 | [api-token-obfuscation](api-token-obfuscation.md) | Obfuscate sensitive tokens in logs and audit entries |
 | [confidence-scoring](confidence-scoring.md) | Confidence scoring for AI policy responses with configurable thresholds |

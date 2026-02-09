@@ -29,6 +29,12 @@ type TestResult struct {
 	Failures    []string
 	Warnings    []string // Non-fatal issues (e.g., unexpected triggering policies in non-strict mode)
 	Error       *TestError
+
+	// Pass rate from history (populated when state manager is available and history has 2+ entries)
+	PassRate                    float64
+	PassRateRuns                int
+	PassRateSinceChange         float64
+	PassRateSinceChangeRuns     int
 }
 
 // ExpectedResult contains the expected outcomes from the test case.

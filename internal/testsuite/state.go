@@ -12,11 +12,15 @@ import (
 	"time"
 )
 
+// DefaultHistoryDepth is the default number of recent run outcomes to retain per test/model.
+const DefaultHistoryDepth = 20
+
 // StateFile represents the persisted test execution state.
 type StateFile struct {
 	SchemaVersion  string                     `json:"schema_version"`
 	ProductVersion string                     `json:"product_version"`
 	SuiteID        string                     `json:"suite_id"`
+	HistoryDepth   int                        `json:"history_depth"`
 	LastUpdated    time.Time                  `json:"last_updated"`
 	Results        map[string]*CachedTestCase `json:"results"`
 }
@@ -34,21 +38,40 @@ type CachedResult struct {
 	Confidence float64   `json:"confidence"`
 	LastRun    time.Time `json:"last_run"`
 	DurationMs int64     `json:"duration_ms"`
+
+	// Rolling history of recent runs (most recent first, capped at history_depth).
+	// History only records actual executions — skipped (cached) runs are not included.
+	History []RunOutcome `json:"history,omitempty"`
+}
+
+// RunOutcome records the outcome of a single test execution.
+type RunOutcome struct {
+	Status       string    `json:"status"`                  // "passed", "failed", "errored"
+	RunAt        time.Time `json:"run_at"`
+	DurationMs   int64     `json:"duration_ms"`
+	PolicyChange bool      `json:"policy_change,omitempty"` // true when policy hashes differ from previous run
 }
 
 // StateManager manages test execution state for incremental execution.
 type StateManager struct {
-	mu       sync.Mutex
-	filePath string
-	state    *StateFile
-	dirty    bool
+	mu           sync.Mutex
+	filePath     string
+	state        *StateFile
+	dirty        bool
+	historyDepth int // max history entries per test/model
 }
 
 // NewStateManager creates a new state manager for the given file path.
-// If the file exists, it loads the existing state.
-func NewStateManager(filePath string, suiteID string, productVersion string) (*StateManager, error) {
+// If the file exists, it loads the existing state. historyDepth controls
+// how many recent run outcomes are retained per test/model (0 uses DefaultHistoryDepth).
+func NewStateManager(filePath string, suiteID string, productVersion string, historyDepth int) (*StateManager, error) {
+	if historyDepth <= 0 {
+		historyDepth = DefaultHistoryDepth
+	}
+
 	sm := &StateManager{
-		filePath: filePath,
+		filePath:     filePath,
+		historyDepth: historyDepth,
 	}
 
 	// Try to load existing state
@@ -60,26 +83,34 @@ func NewStateManager(filePath string, suiteID string, productVersion string) (*S
 			if !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("failed to load state file %s: %w", filePath, err)
 			}
-			sm.state = &StateFile{
-				SchemaVersion:  "v1",
-				ProductVersion: productVersion,
-				SuiteID:        suiteID,
-				LastUpdated:    time.Now(),
-				Results:        make(map[string]*CachedTestCase),
-			}
+			sm.state = newStateFile(suiteID, productVersion, historyDepth)
 		}
 	} else {
 		// No state file - create in-memory only
-		sm.state = &StateFile{
-			SchemaVersion:  "v1",
-			ProductVersion: productVersion,
-			SuiteID:        suiteID,
-			LastUpdated:    time.Now(),
-			Results:        make(map[string]*CachedTestCase),
-		}
+		sm.state = newStateFile(suiteID, productVersion, historyDepth)
+	}
+
+	// Upgrade v1 state files: update schema version and persist history_depth.
+	// Existing cached results are preserved — History fields start nil and
+	// begin accumulating on next actual execution.
+	if sm.state.SchemaVersion == "v1" {
+		sm.state.SchemaVersion = "v2"
+		sm.state.HistoryDepth = historyDepth
+		sm.dirty = true
 	}
 
 	return sm, nil
+}
+
+func newStateFile(suiteID, productVersion string, historyDepth int) *StateFile {
+	return &StateFile{
+		SchemaVersion:  "v2",
+		ProductVersion: productVersion,
+		SuiteID:        suiteID,
+		HistoryDepth:   historyDepth,
+		LastUpdated:    time.Now(),
+		Results:        make(map[string]*CachedTestCase),
+	}
 }
 
 // load reads the state file from disk.
@@ -258,7 +289,9 @@ func hashesMatch(a, b []string) bool {
 	return true
 }
 
-// RecordResult records a test result in the state.
+// RecordResult records a test result in the state, appending to the rolling
+// history for pass rate tracking. Policy changes are detected by comparing
+// incoming hashes against stored hashes and marked in the history entry.
 func (sm *StateManager) RecordResult(contentHash, caseID string, policyHashes []string, modelKey string, result *CachedResult) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -272,12 +305,102 @@ func (sm *StateManager) RecordResult(contentHash, caseID string, policyHashes []
 		sm.state.Results[contentHash] = cached
 	}
 
-	// Always update policy hashes to current values. This fixes stale entries
-	// recorded before policy hashing was implemented (where PolicyHashes is nil)
-	// and ensures hashes stay current when policies change.
+	// Detect policy change by comparing incoming hashes against stored hashes.
+	// A change is only flagged when the entry already existed with non-nil hashes
+	// (first recording or legacy nil→computed is not a "change").
+	policyChanged := ok && cached.PolicyHashes != nil && !hashesMatch(cached.PolicyHashes, policyHashes)
+
+	existing := cached.Models[modelKey]
+
+	// Build history entry from this execution
+	outcome := RunOutcome{
+		Status:       result.Status,
+		RunAt:        result.LastRun,
+		DurationMs:   result.DurationMs,
+		PolicyChange: policyChanged,
+	}
+
+	// Preserve existing history, prepend new outcome
+	var history []RunOutcome
+	if existing != nil {
+		history = existing.History
+	}
+	history = append([]RunOutcome{outcome}, history...)
+
+	// Trim to configured depth. If history_depth was reduced since last run,
+	// skipped tests retain their old-depth histories until they naturally re-run;
+	// this is harmless since pass rate calculations use len(History).
+	if len(history) > sm.historyDepth {
+		history = history[:sm.historyDepth]
+	}
+
+	result.History = history
 	cached.PolicyHashes = policyHashes
 	cached.Models[modelKey] = result
 	sm.dirty = true
+}
+
+// PassRate computes the pass rate from a CachedResult's history.
+// Returns (rate, runCount). Rate is 0.0-1.0. runCount is the number
+// of history entries (may be less than history_depth if the test
+// hasn't run that many times yet). Returns (0, 0) if no history.
+func PassRate(cr *CachedResult) (float64, int) {
+	if len(cr.History) == 0 {
+		return 0, 0
+	}
+	passed := 0
+	for _, h := range cr.History {
+		if h.Status == "passed" {
+			passed++
+		}
+	}
+	return float64(passed) / float64(len(cr.History)), len(cr.History)
+}
+
+// PassRateSincePolicyChange computes the pass rate using only runs after
+// the most recent policy change marker. Returns (rate, runCount).
+// If no policy change marker exists in history, returns the full history rate.
+func PassRateSincePolicyChange(cr *CachedResult) (float64, int) {
+	if len(cr.History) == 0 {
+		return 0, 0
+	}
+	passed := 0
+	count := 0
+	for i, h := range cr.History {
+		count++
+		if h.Status == "passed" {
+			passed++
+		}
+		// Stop after processing the policy change entry (include it in the window).
+		// Skip the break when PolicyChange is on the very first entry (most recent run)
+		// because there's nothing newer to form a "since change" window — use full history.
+		if h.PolicyChange && i > 0 {
+			break
+		}
+	}
+	return float64(passed) / float64(count), count
+}
+
+// GetPassRate returns the pass rate for a cached test case/model combination.
+// Returns (rate, runCount, found). If no matching cached result exists,
+// found is false.
+func (sm *StateManager) GetPassRate(contentHash string, policyHashes []string, modelKey string) (float64, int, bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	cached, ok := sm.state.Results[contentHash]
+	if !ok {
+		return 0, 0, false
+	}
+	if !hashesMatch(cached.PolicyHashes, policyHashes) {
+		return 0, 0, false
+	}
+	modelResult, ok := cached.Models[modelKey]
+	if !ok {
+		return 0, 0, false
+	}
+	rate, count := PassRate(modelResult)
+	return rate, count, true
 }
 
 // PruneStaleHashes removes test case entries whose content hashes no longer exist
@@ -360,6 +483,12 @@ type CachedModelSummary struct {
 	Errored   int
 	TotalMs   int64
 	TestCount int
+
+	// Stability is the mean pass rate across tests with 3+ history entries (0.0-1.0)
+	Stability float64
+
+	// StabilityTests is the count of tests with 3+ history entries used to compute Stability
+	StabilityTests int
 }
 
 // GetModelSummaries aggregates test results per model from cached state.
@@ -370,6 +499,13 @@ func (sm *StateManager) GetModelSummaries(policyHashes []string) map[string]*Cac
 	defer sm.mu.Unlock()
 
 	summaries := make(map[string]*CachedModelSummary)
+
+	// Track per-model pass rates for stability calculation
+	type passRateAccum struct {
+		sumRates float64
+		count    int
+	}
+	stabilityAccum := make(map[string]*passRateAccum)
 
 	for _, cached := range sm.state.Results {
 		if !hashesMatch(cached.PolicyHashes, policyHashes) {
@@ -394,6 +530,26 @@ func (sm *StateManager) GetModelSummaries(policyHashes []string) map[string]*Cac
 			case "errored":
 				s.Errored++
 			}
+
+			// Accumulate pass rate for stability (only tests with 3+ history entries)
+			if len(result.History) >= 3 {
+				rate, _ := PassRate(result)
+				acc, ok := stabilityAccum[modelKey]
+				if !ok {
+					acc = &passRateAccum{}
+					stabilityAccum[modelKey] = acc
+				}
+				acc.sumRates += rate
+				acc.count++
+			}
+		}
+	}
+
+	// Compute stability as mean pass rate
+	for modelKey, acc := range stabilityAccum {
+		if s, ok := summaries[modelKey]; ok && acc.count > 0 {
+			s.Stability = acc.sumRates / float64(acc.count)
+			s.StabilityTests = acc.count
 		}
 	}
 

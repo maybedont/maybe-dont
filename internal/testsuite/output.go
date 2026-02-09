@@ -56,6 +56,12 @@ type JSONTestResult struct {
 	Actual    *JSONActual         `json:"actual,omitempty"`
 	Failures  []string            `json:"failures,omitempty"`
 	Error     *JSONError          `json:"error,omitempty"`
+
+	// Pass rate fields (present only when history has 2+ entries)
+	PassRate                     *float64 `json:"pass_rate,omitempty"`
+	PassRateRuns                 *int     `json:"pass_rate_runs,omitempty"`
+	PassRateSincePolicyChange    *float64 `json:"pass_rate_since_policy_change,omitempty"`
+	PassRateSinceChangeRuns      *int     `json:"pass_rate_since_policy_change_runs,omitempty"`
 }
 
 // JSONExpected contains expected outcomes.
@@ -95,13 +101,15 @@ type JSONError struct {
 
 // JSONModelSummary contains summary stats for a model.
 type JSONModelSummary struct {
-	TotalCases     int     `json:"total_cases"`
-	Passed         int     `json:"passed"`
-	Failed         int     `json:"failed"`
-	Errored        int     `json:"errored"`
-	Skipped        int     `json:"skipped"`
-	MatchRate      float64 `json:"match_rate"`
-	TotalElapsedMs int64   `json:"total_elapsed_ms"`
+	TotalCases     int      `json:"total_cases"`
+	Passed         int      `json:"passed"`
+	Failed         int      `json:"failed"`
+	Errored        int      `json:"errored"`
+	Skipped        int      `json:"skipped"`
+	MatchRate      float64  `json:"match_rate"`
+	TotalElapsedMs int64    `json:"total_elapsed_ms"`
+	Stability      *float64 `json:"stability,omitempty"`       // Mean pass rate across tests with 3+ history entries
+	StabilityTests *int     `json:"stability_tests,omitempty"` // Number of tests used for stability calculation
 }
 
 // JSONOverallSummary contains overall run summary.
@@ -136,7 +144,7 @@ type JSONPolicyCoverage struct {
 }
 
 // formatJSONOutput formats results as JSON.
-func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, coverage *CoverageReport) (string, error) {
+func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, coverage *CoverageReport, comparison []ModelComparisonEntry) (string, error) {
 	output := JSONOutput{
 		Suite: JSONSuiteInfo{
 			BundleID:     suite.BundleID,
@@ -227,6 +235,20 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 			}
 		}
 
+		// Populate pass rate fields when history data is available
+		if r.PassRateRuns >= 2 {
+			rate := r.PassRate
+			runs := r.PassRateRuns
+			jr.PassRate = &rate
+			jr.PassRateRuns = &runs
+			if r.PassRateSinceChangeRuns > 0 && r.PassRateSinceChangeRuns < r.PassRateRuns {
+				sinceRate := r.PassRateSinceChange
+				sinceRuns := r.PassRateSinceChangeRuns
+				jr.PassRateSincePolicyChange = &sinceRate
+				jr.PassRateSinceChangeRuns = &sinceRuns
+			}
+		}
+
 		b.results = append(b.results, jr)
 		b.totalMs += r.ElapsedMs
 
@@ -242,6 +264,12 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		case "skipped":
 			b.skipped++
 		}
+	}
+
+	// Build a lookup from comparison entries for stability data
+	comparisonByModel := make(map[string]ModelComparisonEntry)
+	for _, c := range comparison {
+		comparisonByModel[c.Model] = c
 	}
 
 	// Build ResultsByModel in insertion order and accumulate aggregate totals
@@ -264,18 +292,28 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		aggErrored += b.errored
 		aggSkipped += b.skipped
 
+		modelSummary := JSONModelSummary{
+			TotalCases:     total,
+			Passed:         b.passed,
+			Failed:         b.failed,
+			Errored:        b.errored,
+			Skipped:        b.skipped,
+			MatchRate:      matchRate,
+			TotalElapsedMs: b.totalMs,
+		}
+
+		// Add stability data from comparison entries
+		if c, ok := comparisonByModel[key]; ok && c.StabilityTests > 0 {
+			stab := c.Stability
+			stabTests := c.StabilityTests
+			modelSummary.Stability = &stab
+			modelSummary.StabilityTests = &stabTests
+		}
+
 		output.ResultsByModel = append(output.ResultsByModel, JSONModelResults{
 			Model:   b.info,
 			Results: b.results,
-			Summary: JSONModelSummary{
-				TotalCases:     total,
-				Passed:         b.passed,
-				Failed:         b.failed,
-				Errored:        b.errored,
-				Skipped:        b.skipped,
-				MatchRate:      matchRate,
-				TotalElapsedMs: b.totalMs,
-			},
+			Summary: modelSummary,
 		})
 	}
 
@@ -419,9 +457,6 @@ func formatJUnitOutput(suite *Suite, results []TestResult, summary *RunResult) (
 		Properties: []JUnitProperty{
 			{Name: "bundle_id", Value: suite.BundleID},
 			{Name: "version", Value: suite.Version},
-			{Name: "passed", Value: fmt.Sprintf("%d", summary.Passed)},
-			{Name: "failed", Value: fmt.Sprintf("%d", summary.Failed)},
-			{Name: "errored", Value: fmt.Sprintf("%d", summary.Errored)},
 			{Name: "match_rate", Value: fmt.Sprintf("%.4f", matchRate)},
 		},
 	}

@@ -116,7 +116,11 @@ func (r *Runner) Run(ctx context.Context) (*RunResult, error) {
 	// Initialize state manager for incremental execution
 	if r.opts.StateFile != "" {
 		var err error
-		r.stateManager, err = NewStateManager(r.opts.StateFile, r.suite.BundleID, "dev")
+		historyDepth := r.suite.Execution.HistoryDepth
+		if r.opts.HistoryDepth > 0 {
+			historyDepth = r.opts.HistoryDepth
+		}
+		r.stateManager, err = NewStateManager(r.opts.StateFile, r.suite.BundleID, "dev", historyDepth)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize state manager: %w", err)
 		}
@@ -185,12 +189,14 @@ func (r *Runner) runSummaryOnly() (*RunResult, error) {
 	for modelKey, summary := range cachedSummaries {
 		evaluated := summary.Passed + summary.Failed + summary.Errored
 		entry := ModelComparisonEntry{
-			Model:     modelKey,
-			Passed:    summary.Passed,
-			Failed:    summary.Failed,
-			Errored:   summary.Errored,
-			TotalMs:   summary.TotalMs,
-			FromCache: true,
+			Model:          modelKey,
+			Passed:         summary.Passed,
+			Failed:         summary.Failed,
+			Errored:        summary.Errored,
+			TotalMs:        summary.TotalMs,
+			Stability:      summary.Stability,
+			StabilityTests: summary.StabilityTests,
+			FromCache:      true,
 		}
 		if evaluated > 0 {
 			entry.MatchRate = float64(summary.Passed) / float64(evaluated)
@@ -1267,6 +1273,12 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, models []
 				}
 				r.stateManager.RecordResult(contentHash, result.CaseID, r.policyHashes, modelKey, cachedResult)
 
+				// Populate pass rate on result for reporting (only when history has 2+ entries)
+				if len(cachedResult.History) >= 2 {
+					result.PassRate, result.PassRateRuns = PassRate(cachedResult)
+					result.PassRateSinceChange, result.PassRateSinceChangeRuns = PassRateSincePolicyChange(cachedResult)
+				}
+
 				// Save state after each test (incremental)
 				if err := r.stateManager.Save(); err != nil {
 					// Log but don't fail - state persistence is best-effort
@@ -1684,7 +1696,7 @@ func (r *Runner) outputResults(results []TestResult, summary *RunResult, already
 				return fmt.Errorf("failed to format JUnit output: %w", err)
 			}
 		default: // json is default for file output
-			fileOutput, err = formatJSONOutput(r.suite, results, summary, coverage)
+			fileOutput, err = formatJSONOutput(r.suite, results, summary, coverage, comparison)
 			if err != nil {
 				return fmt.Errorf("failed to format JSON output: %w", err)
 			}
@@ -2009,6 +2021,20 @@ func formatSingleTestResult(tr TestResult) string {
 		}
 	}
 
+	// Helper: format pass rate line (only shown when history has 2+ entries)
+	formatPassRate := func() {
+		if tr.PassRateRuns < 2 {
+			return
+		}
+		line := fmt.Sprintf("    pass rate: %.0f%% (last %d runs)", tr.PassRate*100, tr.PassRateRuns)
+		// Show "since policy change" window when it differs from the full history
+		if tr.PassRateSinceChangeRuns > 0 && tr.PassRateSinceChangeRuns < tr.PassRateRuns {
+			line += fmt.Sprintf(", %.0f%% since last policy change (%d runs)",
+				tr.PassRateSinceChange*100, tr.PassRateSinceChangeRuns)
+		}
+		sb.WriteString(line + "\n")
+	}
+
 	switch tr.Status {
 	case "passed":
 		icon := colorize(ansiBoldGreen, "✓")
@@ -2020,6 +2046,7 @@ func formatSingleTestResult(tr TestResult) string {
 		sb.WriteString(formatPhaseLine())
 		sb.WriteString(formatDecisionLine())
 		sb.WriteString(formatPolicies(tr.Actual.PoliciesExecuted, tr.Actual.Decision, expectedNames))
+		formatPassRate()
 		formatWarnings()
 		// Show redacted content on success for redaction tests
 		if tr.Expected.RedactedContent != "" || tr.Actual.RedactedContent != "" {
@@ -2056,6 +2083,7 @@ func formatSingleTestResult(tr TestResult) string {
 			display := strings.ReplaceAll(f, "►", colorize(ansiBoldYellow, "►"))
 			sb.WriteString(fmt.Sprintf("    FAILED: %s\n", display))
 		}
+		formatPassRate()
 	case "errored":
 		icon := colorize(ansiBoldYellow, "⚠")
 		sb.WriteString(fmt.Sprintf("%s %s%s%s\n", icon, numberPrefix, tr.CaseID, engineInfo))
@@ -2084,6 +2112,7 @@ func formatSingleTestResult(tr TestResult) string {
 				}
 			}
 		}
+		formatPassRate()
 	case "skipped":
 		icon := colorize(ansiDim, "○")
 		sb.WriteString(fmt.Sprintf("%s %s%s%s (skipped)\n", icon, numberPrefix, tr.CaseID, engineInfo))
@@ -2137,6 +2166,10 @@ func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, c
 		sb.WriteString(fmt.Sprintf("Thresholds: FAILED (min_match_rate: %.1f%% required, got %.1f%%)\n",
 			suite.Acceptance.MinMatchRate*100, summary.MatchRate*100))
 	}
+
+	// Stability section — report flaky tests (pass rate below threshold with 3+ history entries)
+	stabilityThreshold := suite.Acceptance.GetStabilityThreshold()
+	sb.WriteString(formatStabilitySection(results, stabilityThreshold))
 
 	// Retry hint when there are failures (including cached failures, which are now in Failed count)
 	if summary.Failed > 0 || summary.Errored > 0 {
@@ -2248,6 +2281,68 @@ func formatSlowestPolicies(results []TestResult) string {
 	return sb.String()
 }
 
+// formatStabilitySection builds the stability summary showing flaky tests.
+// Only includes tests with 3+ history entries (sufficient data for meaningful rates).
+// Returns empty string if no tests have history data.
+func formatStabilitySection(results []TestResult, threshold float64) string {
+	// Group flaky tests by case ID (a test may appear for multiple models)
+	type flakyEntry struct {
+		caseID string
+		models []string // "model: rate%" entries
+	}
+
+	flakyMap := make(map[string]*flakyEntry)
+	flakyOrder := []string{} // preserve first-seen order
+	testsWithHistory := 0
+	flakyCount := 0
+
+	for _, tr := range results {
+		if tr.PassRateRuns < 3 {
+			continue
+		}
+		testsWithHistory++
+
+		if tr.PassRate < threshold {
+			flakyCount++
+			entry, ok := flakyMap[tr.CaseID]
+			if !ok {
+				entry = &flakyEntry{caseID: tr.CaseID}
+				flakyMap[tr.CaseID] = entry
+				flakyOrder = append(flakyOrder, tr.CaseID)
+			}
+			modelLabel := tr.Model
+			if modelLabel == "" {
+				modelLabel = tr.Engine
+			}
+			entry.models = append(entry.models, fmt.Sprintf("%.0f%% (%s)", tr.PassRate*100, modelLabel))
+		}
+	}
+
+	if testsWithHistory == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString(formatSectionHeader("Stability"))
+
+	if flakyCount == 0 {
+		sb.WriteString(fmt.Sprintf("All %d tests stable (>%.0f%% pass rate)\n", testsWithHistory, threshold*100))
+	} else {
+		stableCount := testsWithHistory - flakyCount
+		sb.WriteString(fmt.Sprintf("Flaky tests (pass rate <%.0f%%):\n", threshold*100))
+		for _, caseID := range flakyOrder {
+			entry := flakyMap[caseID]
+			sb.WriteString(fmt.Sprintf("  %s %s: %s\n",
+				colorize(ansiBoldYellow, "⚠"), entry.caseID, strings.Join(entry.models, ", ")))
+		}
+		sb.WriteString(fmt.Sprintf("Stable tests: %d/%d (%.0f%%)\n",
+			stableCount, testsWithHistory,
+			float64(stableCount)/float64(testsWithHistory)*100))
+	}
+
+	return sb.String()
+}
+
 // formatTextOutput formats results as human-readable text.
 func formatTextOutput(suite *Suite, results []TestResult, summary *RunResult, coverage *CoverageReport, comparison []ModelComparisonEntry) string {
 	var sb strings.Builder
@@ -2332,38 +2427,48 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 		entries = append(entries, entry)
 	}
 
-	// Add current run's AI model entries
+	// Get cached summaries (includes stability data from history)
+	var cachedSummaries map[string]*CachedModelSummary
+	if r.stateManager != nil {
+		cachedSummaries = r.stateManager.GetModelSummaries(r.policyHashes)
+	}
+
+	// Add current run's AI model entries, enriching with stability from cached state
 	for _, entry := range aiStats {
 		evaluated := entry.Passed + entry.Failed + entry.Errored
 		if evaluated > 0 {
 			entry.MatchRate = float64(entry.Passed) / float64(evaluated)
 			entry.AvgMs = entry.TotalMs / int64(evaluated)
 		}
+		// Pull stability from cached summaries (computed from history)
+		if cs, ok := cachedSummaries[entry.Model]; ok {
+			entry.Stability = cs.Stability
+			entry.StabilityTests = cs.StabilityTests
+		}
 		entries = append(entries, *entry)
 	}
 
 	// Augment with historical models from state that didn't run in this invocation
-	if r.stateManager != nil {
-		cachedSummaries := r.stateManager.GetModelSummaries(r.policyHashes)
-		for modelKey, summary := range cachedSummaries {
+	for modelKey, summary := range cachedSummaries {
 			if aiStats[modelKey] != nil {
 				continue // Already have current-run data for this model
 			}
 			evaluated := summary.Passed + summary.Failed + summary.Errored
 			entry := ModelComparisonEntry{
-				Model:     modelKey,
-				Passed:    summary.Passed,
-				Failed:    summary.Failed,
-				Errored:   summary.Errored,
-				TotalMs:   summary.TotalMs,
-				FromCache: true,
+				Model:          modelKey,
+				Passed:         summary.Passed,
+				Failed:         summary.Failed,
+				Errored:        summary.Errored,
+				TotalMs:        summary.TotalMs,
+				Stability:      summary.Stability,
+				StabilityTests: summary.StabilityTests,
+				FromCache:      true,
 			}
 			if evaluated > 0 {
 				entry.MatchRate = float64(summary.Passed) / float64(evaluated)
 				entry.AvgMs = summary.TotalMs / int64(evaluated)
 			}
 			entries = append(entries, entry)
-		}
 	}
 
 	if len(entries) == 0 {
@@ -2402,10 +2507,24 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 		}
 	}
 
-	// Fixed column widths: "  Pass  Fail  Err  Match%   Avg ms    Total"
-	// Build header to measure total width
-	header := fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %7s  %6s",
-		maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total")
+	// Check if any entry has stability data (show Stab% column only when there's history)
+	hasStability := false
+	for _, e := range entries {
+		if e.StabilityTests > 0 {
+			hasStability = true
+			break
+		}
+	}
+
+	// Build header based on whether stability data is available
+	var header string
+	if hasStability {
+		header = fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %7s  %6s  %5s",
+			maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total", "Stab%")
+	} else {
+		header = fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %7s  %6s",
+			maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total")
+	}
 	tableWidth := len(header)
 
 	var sb strings.Builder
@@ -2417,9 +2536,7 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 	}
 	prefix := "\n── " + label + " "
 	remaining := tableWidth - utf8.RuneCountInString(prefix) + 1 // +1 for leading \n
-	if remaining < 2 {
-		remaining = 2
-	}
+	remaining = max(remaining, 2)
 	sb.WriteString(prefix + strings.Repeat("─", remaining) + "\n")
 
 	// Header row
@@ -2431,11 +2548,24 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 		avgStr := formatDurationMs(e.AvgMs)
 		totalStr := formatDurationSec(e.TotalMs)
 
-		row := fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %7s  %6s",
-			maxModelLen, e.Model,
-			e.Passed, e.Failed, e.Errored,
-			e.MatchRate*100,
-			avgStr, totalStr)
+		var row string
+		if hasStability {
+			stabStr := "  —"
+			if e.StabilityTests > 0 {
+				stabStr = fmt.Sprintf("%4.0f%%", e.Stability*100)
+			}
+			row = fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %7s  %6s  %5s",
+				maxModelLen, e.Model,
+				e.Passed, e.Failed, e.Errored,
+				e.MatchRate*100,
+				avgStr, totalStr, stabStr)
+		} else {
+			row = fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %7s  %6s",
+				maxModelLen, e.Model,
+				e.Passed, e.Failed, e.Errored,
+				e.MatchRate*100,
+				avgStr, totalStr)
+		}
 
 		if e.FromCache {
 			hasFromCache = true
