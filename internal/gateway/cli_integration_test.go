@@ -1,0 +1,432 @@
+package gateway
+
+import (
+	"context"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/maybedont/maybe-dont/internal/cliproxy"
+	"github.com/maybedont/maybe-dont/internal/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zaptest"
+)
+
+// cliIntegrationStack holds all wired components for a single integration test.
+type cliIntegrationStack struct {
+	server      *httptest.Server
+	client      *cliproxy.Client
+	auditWriter *mockAuditWriter
+}
+
+// setupCLIIntegrationTest creates a fully wired test stack:
+// CELPolicyEngine → CLIValidationHandler → httptest.Server → cliproxy.Client.
+// The caller must call cleanup() when done.
+func setupCLIIntegrationTest(t *testing.T, policies []config.Policy, topLevelMode config.PolicyMode, validateCommands []string) *cliIntegrationStack {
+	t.Helper()
+
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	// Create and load CEL engine with real policies
+	celEngine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
+	require.NoError(t, err)
+
+	err = celEngine.LoadPolicies(policies, topLevelMode)
+	require.NoError(t, err)
+
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:               true,
+		ValidateCommands:      validateCommands,
+		Logger:                sessionLogger,
+		Version:               "test-1.0.0",
+		AuditWriter:           auditWriter,
+		CELEngine:             celEngine,
+		IncludeArgumentValues: true,
+	})
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	client := cliproxy.NewClient(cliproxy.ClientConfig{
+		ServerURL: server.URL,
+		ClientID:  "integration-test-client",
+	})
+
+	return &cliIntegrationStack{
+		server:      server,
+		client:      client,
+		auditWriter: auditWriter,
+	}
+}
+
+// TestCLIValidation_Integration exercises the full round-trip:
+// cliproxy.Client → real HTTP → CLIValidationHandler → real CELPolicyEngine → response.
+// Each subtest gets a fresh stack to avoid cross-contamination.
+func TestCLIValidation_Integration(t *testing.T) {
+	tests := []struct {
+		name             string
+		policies         []config.Policy
+		topLevelMode     config.PolicyMode
+		validateCommands []string
+		request          cliproxy.ValidationRequest
+		// Expected response fields
+		wantAllowed            bool
+		wantValidationRequired bool
+		wantResultCount        int
+		wantResultAction       string // action of first result, if any
+		wantResultPolicyName   string // policy name of first result, if any
+		wantMessageContains    string
+	}{
+		{
+			name: "no matching policy allows command",
+			policies: []config.Policy{
+				{
+					Name:          "deny-rm",
+					CLIExpression: `cli.command == "rm"`,
+					Action:        config.PolicyActionDeny,
+					Message:       "rm is blocked",
+				},
+			},
+			validateCommands: []string{"*"},
+			request: cliproxy.ValidationRequest{
+				Command:   "gh",
+				Arguments: []string{"pr", "list"},
+			},
+			wantAllowed:            true,
+			wantValidationRequired: true,
+			wantResultCount:        0,
+		},
+		{
+			name: "deny policy match blocks command",
+			policies: []config.Policy{
+				{
+					Name:          "deny-rm",
+					CLIExpression: `cli.command == "rm"`,
+					Action:        config.PolicyActionDeny,
+					Message:       "rm is blocked",
+				},
+			},
+			validateCommands: []string{"*"},
+			request: cliproxy.ValidationRequest{
+				Command:   "rm",
+				Arguments: []string{"-rf", "/important"},
+			},
+			wantAllowed:            false,
+			wantValidationRequired: true,
+			wantResultCount:        1,
+			wantResultAction:       "deny",
+			wantResultPolicyName:   "deny-rm",
+			wantMessageContains:    "rm is blocked",
+		},
+		{
+			name: "explicit allow rule matches",
+			policies: []config.Policy{
+				{
+					Name:          "allow-kubectl-get",
+					CLIExpression: `cli.command == "kubectl" && cli.arguments.size() > 0 && cli.arguments[0] == "get"`,
+					Action:        config.PolicyActionAllow,
+					Message:       "kubectl get is safe",
+				},
+			},
+			validateCommands: []string{"*"},
+			request: cliproxy.ValidationRequest{
+				Command:   "kubectl",
+				Arguments: []string{"get", "pods"},
+			},
+			wantAllowed:            true,
+			wantValidationRequired: true,
+			wantResultCount:        1,
+			wantResultAction:       "allow",
+			wantResultPolicyName:   "allow-kubectl-get",
+		},
+		{
+			name: "command not in validate_commands skips validation",
+			policies: []config.Policy{
+				{
+					Name:          "deny-everything",
+					CLIExpression: `true`,
+					Action:        config.PolicyActionDeny,
+					Message:       "should never fire",
+				},
+			},
+			validateCommands: []string{"gh", "aws"},
+			request: cliproxy.ValidationRequest{
+				Command:   "cat",
+				Arguments: []string{"README.md"},
+			},
+			wantAllowed:            true,
+			wantValidationRequired: false,
+			wantResultCount:        0,
+		},
+		{
+			name: "multiple policies partial match - allow rule matches",
+			policies: []config.Policy{
+				{
+					Name:          "allow-gh-repo",
+					CLIExpression: `cli.command == "gh" && cli.arguments.size() > 0 && cli.arguments[0] == "repo"`,
+					Action:        config.PolicyActionAllow,
+					Message:       "repo operations allowed",
+				},
+				{
+					Name:          "deny-gh-delete",
+					CLIExpression: `cli.command == "gh" && cli.arguments.size() >= 2 && cli.arguments[1] == "delete"`,
+					Action:        config.PolicyActionDeny,
+					Message:       "delete operations blocked",
+				},
+			},
+			validateCommands: []string{"*"},
+			request: cliproxy.ValidationRequest{
+				Command:   "gh",
+				Arguments: []string{"repo", "list"},
+			},
+			wantAllowed:            true,
+			wantValidationRequired: true,
+			wantResultCount:        1,
+			wantResultAction:       "allow",
+			wantResultPolicyName:   "allow-gh-repo",
+		},
+		{
+			name: "deny takes precedence when both match",
+			policies: []config.Policy{
+				{
+					Name:          "allow-gh-repo",
+					CLIExpression: `cli.command == "gh" && cli.arguments.size() > 0 && cli.arguments[0] == "repo"`,
+					Action:        config.PolicyActionAllow,
+					Message:       "repo operations allowed",
+				},
+				{
+					Name:          "deny-gh-delete",
+					CLIExpression: `cli.command == "gh" && cli.arguments.size() >= 2 && cli.arguments[1] == "delete"`,
+					Action:        config.PolicyActionDeny,
+					Message:       "delete operations blocked",
+				},
+			},
+			validateCommands: []string{"*"},
+			request: cliproxy.ValidationRequest{
+				Command:   "gh",
+				Arguments: []string{"repo", "delete", "myrepo"},
+			},
+			wantAllowed:            false,
+			wantValidationRequired: true,
+			wantResultCount:        2, // Both allow-gh-repo and deny-gh-delete match
+			wantMessageContains:    "delete operations blocked",
+		},
+		{
+			name: "top-level audit_only mode allows despite deny match",
+			policies: []config.Policy{
+				{
+					Name:          "deny-rm",
+					CLIExpression: `cli.command == "rm"`,
+					Action:        config.PolicyActionDeny,
+					Message:       "rm would be blocked",
+				},
+			},
+			topLevelMode:     config.PolicyModeAuditOnly,
+			validateCommands: []string{"*"},
+			request: cliproxy.ValidationRequest{
+				Command:   "rm",
+				Arguments: []string{"-rf", "/"},
+			},
+			wantAllowed:            true,
+			wantValidationRequired: true,
+			// Audit-only deny still produces a result in the results list
+			wantResultCount: 1,
+			wantResultAction:     "deny",
+			wantResultPolicyName: "deny-rm",
+		},
+		{
+			name: "per-rule audit_only allows despite deny match",
+			policies: []config.Policy{
+				{
+					Name:          "deny-rm-audit",
+					CLIExpression: `cli.command == "rm"`,
+					Action:        config.PolicyActionDeny,
+					Message:       "rm would be blocked (audit)",
+					Mode:          config.PolicyModeAuditOnly,
+				},
+			},
+			validateCommands: []string{"*"},
+			request: cliproxy.ValidationRequest{
+				Command:   "rm",
+				Arguments: []string{"-rf", "/"},
+			},
+			wantAllowed:            true,
+			wantValidationRequired: true,
+			wantResultCount:        1,
+			wantResultAction:       "deny",
+			wantResultPolicyName:   "deny-rm-audit",
+		},
+		{
+			name: "client info in CEL expression - hostname match denies",
+			policies: []config.Policy{
+				{
+					Name:          "deny-production-host",
+					CLIExpression: `cli.client_info.hostname == "production-server"`,
+					Action:        config.PolicyActionDeny,
+					Message:       "commands blocked on production hosts",
+				},
+			},
+			validateCommands: []string{"*"},
+			request: cliproxy.ValidationRequest{
+				Command:   "rm",
+				Arguments: []string{"-rf", "/tmp/cache"},
+				ClientInfo: &cliproxy.ClientInfo{
+					Hostname: "production-server",
+				},
+			},
+			wantAllowed:            false,
+			wantValidationRequired: true,
+			wantResultCount:        1,
+			wantResultAction:       "deny",
+			wantResultPolicyName:   "deny-production-host",
+			wantMessageContains:    "commands blocked on production hosts",
+		},
+		{
+			name: "client info in CEL expression - hostname no match allows",
+			policies: []config.Policy{
+				{
+					Name:          "deny-production-host",
+					CLIExpression: `cli.client_info.hostname == "production-server"`,
+					Action:        config.PolicyActionDeny,
+					Message:       "commands blocked on production hosts",
+				},
+			},
+			validateCommands: []string{"*"},
+			request: cliproxy.ValidationRequest{
+				Command:   "rm",
+				Arguments: []string{"-rf", "/tmp/cache"},
+				ClientInfo: &cliproxy.ClientInfo{
+					Hostname: "dev-workstation",
+				},
+			},
+			wantAllowed:            true,
+			wantValidationRequired: true,
+			wantResultCount:        0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stack := setupCLIIntegrationTest(t, tt.policies, tt.topLevelMode, tt.validateCommands)
+
+			resp, err := stack.client.Validate(context.Background(), tt.request)
+			require.NoError(t, err)
+
+			// Core assertions
+			assert.Equal(t, tt.wantAllowed, resp.Allowed, "Allowed mismatch")
+			assert.Equal(t, tt.wantValidationRequired, resp.ValidationRequired, "ValidationRequired mismatch")
+			assert.Len(t, resp.Results, tt.wantResultCount, "Results count mismatch")
+
+			// Result detail assertions
+			if tt.wantResultCount > 0 && len(resp.Results) > 0 {
+				firstResult := resp.Results[0]
+				if tt.wantResultAction != "" {
+					assert.Equal(t, tt.wantResultAction, firstResult.Action, "Result action mismatch")
+				}
+				if tt.wantResultPolicyName != "" {
+					assert.Equal(t, tt.wantResultPolicyName, firstResult.PolicyName, "Result policy name mismatch")
+				}
+				assert.Equal(t, "cel", firstResult.PolicyType, "All policies in this test are CEL")
+			}
+
+			if tt.wantMessageContains != "" {
+				assert.Contains(t, resp.Message, tt.wantMessageContains, "Message mismatch")
+			}
+
+			// Cross-boundary assertions that validate serialization round-trip
+			assert.NotEmpty(t, resp.RequestID, "RequestID should always be populated")
+			assert.Equal(t, "test-1.0.0", resp.ServerVersion, "ServerVersion should be echoed")
+		})
+	}
+}
+
+// TestCLIValidation_Integration_ClientVersionEchoed verifies the cross-boundary
+// serialization of client_info.cli_version from cliproxy types through gateway types
+// and back.
+func TestCLIValidation_Integration_ClientVersionEchoed(t *testing.T) {
+	stack := setupCLIIntegrationTest(t, nil, "", []string{"*"})
+
+	resp, err := stack.client.Validate(context.Background(), cliproxy.ValidationRequest{
+		Command:   "echo",
+		Arguments: []string{"hello"},
+		ClientInfo: &cliproxy.ClientInfo{
+			CLIVersion: "2.5.0",
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "2.5.0", resp.ClientVersion, "ClientVersion should be echoed from request")
+}
+
+// TestCLIValidation_Integration_AuditEntry verifies the audit entry is fully
+// populated through the integration flow including CLI info, upstream request
+// metadata, validation details, and timing.
+func TestCLIValidation_Integration_AuditEntry(t *testing.T) {
+	policies := []config.Policy{
+		{
+			Name:          "deny-sudo",
+			CLIExpression: `cli.command == "sudo"`,
+			Action:        config.PolicyActionDeny,
+			Message:       "sudo is blocked",
+		},
+	}
+
+	stack := setupCLIIntegrationTest(t, policies, "", []string{"*"})
+
+	resp, err := stack.client.Validate(context.Background(), cliproxy.ValidationRequest{
+		Command:          "sudo",
+		Arguments:        []string{"rm", "-rf", "/"},
+		WorkingDirectory: "/home/user/project",
+		ClientInfo: &cliproxy.ClientInfo{
+			Hostname:   "dev-workstation",
+			Username:   "developer",
+			OS:         "linux",
+			Arch:       "amd64",
+			Shell:      "/bin/bash",
+			CLIVersion: "1.3.0",
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Allowed, "sudo should be denied")
+
+	// Verify audit entry
+	entries := stack.auditWriter.getEntries()
+	require.Len(t, entries, 1, "Expected exactly one audit entry")
+	entry := entries[0]
+
+	// CLI info
+	require.NotNil(t, entry.CLI, "CLI should be populated")
+	assert.Nil(t, entry.Tool, "Tool should be nil for CLI validations")
+	assert.Equal(t, "sudo", entry.CLI.Command)
+	assert.Equal(t, []string{"rm", "-rf", "/"}, entry.CLI.Arguments)
+	assert.Equal(t, "/home/user/project", entry.CLI.WorkingDirectory)
+
+	// Client info
+	require.NotNil(t, entry.CLI.ClientInfo)
+	assert.Equal(t, "dev-workstation", entry.CLI.ClientInfo.Hostname)
+	assert.Equal(t, "developer", entry.CLI.ClientInfo.Username)
+	assert.Equal(t, "linux", entry.CLI.ClientInfo.OS)
+	assert.Equal(t, "amd64", entry.CLI.ClientInfo.Arch)
+	assert.Equal(t, "/bin/bash", entry.CLI.ClientInfo.Shell)
+	assert.Equal(t, "1.3.0", entry.CLI.ClientInfo.CLIVersion)
+
+	// Upstream request info
+	assert.NotEmpty(t, entry.UpstreamRequest.RequestID, "RequestID should be generated")
+	assert.Equal(t, "integration-test-client", entry.UpstreamRequest.ClientID, "ClientID from X-Maybe-Dont-Client-ID header")
+
+	// Action and timing
+	assert.Equal(t, "deny", entry.Action)
+	assert.NotEmpty(t, entry.ValidationStarted)
+	assert.NotEmpty(t, entry.CreatedAt)
+	assert.GreaterOrEqual(t, entry.DurationMs, int64(0))
+
+	// Validation details (CEL deciding rule)
+	require.NotNil(t, entry.RequestValidation, "RequestValidation should be populated for policy-evaluated requests")
+	require.NotNil(t, entry.RequestValidation.CEL, "CEL details should be populated")
+	assert.Equal(t, "deny", entry.RequestValidation.CEL.Action)
+	assert.Equal(t, "deny-sudo", entry.RequestValidation.CEL.DecidingRule)
+	assert.Equal(t, "sudo is blocked", entry.RequestValidation.CEL.Reason)
+}
