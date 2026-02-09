@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io"
 	"os"
 	"reflect"
 	"strconv"
@@ -3084,5 +3085,75 @@ rules:
 	require.Empty(t, policies[3].Expression)
 	require.Equal(t, `request.method == "tools/call"`, policies[3].MCPExpression)
 	require.Equal(t, `cli.command != ""`, policies[3].CLIExpression)
+}
+
+// TestLoadConfig_DeprecationWarningAppearsOnce verifies that when validation.ai.provider is not set,
+// the deprecation warning is emitted exactly once during LoadConfig. LoadConfig validates internally
+// via validateConfigWithOptions; callers should NOT call ValidateConfig separately, as that would
+// produce duplicate warnings and discard context (configFileFound, loadErrors).
+func TestLoadConfig_DeprecationWarningAppearsOnce(t *testing.T) {
+	viper.Reset()
+
+	tmpDir := t.TempDir()
+
+	// Config with AI validation enabled and provider deliberately unset to trigger the warning.
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: true
+    rules_file: ai_request_rules.yaml
+
+validation:
+  ai:
+    endpoint: https://api.openai.com/v1
+    model: gpt-4
+    api_key: test-key
+`
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	rulesContent := `
+rules:
+  - name: test-rule
+    description: Test rule
+    prompt: Test prompt
+    message: Test message
+`
+	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0644)
+	require.NoError(t, err)
+
+	// Capture stderr to count deprecation warnings
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() {
+		os.Stderr = origStderr
+		w.Close()
+		r.Close()
+	}()
+
+	_, err = LoadConfig(tmpDir, "")
+	require.NoError(t, err)
+
+	w.Close()
+	os.Stderr = origStderr
+
+	captured, err := io.ReadAll(r)
+	require.NoError(t, err)
+	r.Close()
+	output := string(captured)
+
+	deprecationMsg := "DEPRECATION: validation.ai.provider not set"
+	count := strings.Count(output, deprecationMsg)
+	require.Equal(t, 1, count,
+		"deprecation warning should appear exactly once, got %d in output: %q", count, output)
 }
 
