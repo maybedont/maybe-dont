@@ -12,11 +12,9 @@ Today, the state file stores a single result per (test_case, model) — the late
 
 1. **Track pass rate over time** — Store the last N run outcomes per (test_case, model) in the state file, enabling pass rate calculation (e.g., "85% over last 20 runs").
 
-2. **Survive cosmetic edits** — Use semantic hashing for test cases and policies so that comments, whitespace, titles, notes, and other non-behavioral fields don't invalidate cached history.
+2. **Preserve history across policy changes** — When a policy changes, don't discard existing history. Instead, mark a boundary in the history so reporting can show both the blended rate and the rate since the last change.
 
-3. **Preserve history across policy changes** — When a policy changes meaningfully, don't discard existing history. Instead, mark a boundary in the history so reporting can show both the blended rate and the rate since the last change.
-
-4. **Surface stability in reporting** — Add pass rate to individual test output, a "flaky tests" summary section, and a stability column in the model comparison table.
+3. **Surface stability in reporting** — Add pass rate to individual test output, a "flaky tests" summary section, and a stability column in the model comparison table. The stability threshold is configurable.
 
 ## Non-Goals
 
@@ -25,6 +23,10 @@ Today, the state file stores a single result per (test_case, model) — the late
 2. **Per-run snapshots** — We don't store full run metadata (who triggered it, CI run ID, etc.). The history is a sequence of outcomes, not a run audit trail.
 
 3. **Automatic flaky test remediation** — We surface the data; the user decides what to do about it.
+
+4. **Semantic hashing** — Using canonical hashes of only behavior-affecting fields (to survive cosmetic edits like comment/title changes) was considered and deferred. The benefit is narrow (cosmetic edits to existing tests are rare), the ongoing maintenance burden is real (every new field requires behavioral vs. cosmetic classification), and the cost asymmetry favors the safe default: a false re-run costs one API call (~$0.01-0.10), while a false cache hit from a wrong field classification produces silently stale results. Raw-byte hashing catches all changes, which is always safe. If cosmetic-edit cache invalidation becomes a measured pain point, semantic hashing can be tackled as a focused follow-up spec.
+
+5. **Per-rule policy hashing** — Currently, policy hashes are computed per-file. Changing one rule in a file with 10 rules invalidates all tests touching that file. Per-rule hashing would be more precise but adds significant complexity (mapping which rules a test exercises is not straightforward for AI rules). Defer unless "unnecessary re-runs after single-rule edits" becomes a measured problem.
 
 ## Design
 
@@ -124,9 +126,11 @@ execution:
 
 Also support a `--history-depth` CLI flag for override. The `StateManager` receives this value at construction time.
 
+**Note on depth changes**: If `history_depth` is reduced (e.g., from 20 to 10), newly-run tests are trimmed immediately. Skipped tests (cache hits) retain their old-depth histories until they naturally re-run. This is harmless — the extra entries are just ignored by pass rate calculations until they age out — but is worth a comment in the code.
+
 #### Pass rate calculation
 
-Add a method to `StateManager` (or as a standalone utility):
+Add standalone utility functions:
 
 ```go
 // PassRate computes the pass rate from a CachedResult's history.
@@ -157,7 +161,7 @@ func PassRateSincePolicyChange(cr *CachedResult) (float64, int) {
     count := 0
     for _, h := range cr.History {
         if h.PolicyChange && count > 0 {
-            break // stop at the policy change boundary (but include the change run itself)
+            break // stop at the policy change boundary
         }
         count++
         if h.Status == "passed" {
@@ -168,121 +172,7 @@ func PassRateSincePolicyChange(cr *CachedResult) (float64, int) {
 }
 ```
 
-### 2. Semantic Hashing for Test Cases
-
-Replace raw-byte hashing with a canonical hash of only behavior-affecting fields.
-
-#### Meaningful fields (included in hash)
-
-| Field | Rationale |
-|-------|-----------|
-| `case_id` | Identity |
-| `phase` | Determines which engine/phase runs |
-| `engine` | Determines which engine runs |
-| `request.tool_name` | The actual request being validated |
-| `request.arguments` | The actual request data |
-| `response` (if present) | For response validation tests |
-| `expectations.decision` | What we're checking |
-| `expectations.policies` | Which policies should trigger |
-| `expectations.redacted_content` | For redact tests |
-
-#### Non-meaningful fields (excluded from hash)
-
-| Field | Rationale |
-|-------|-----------|
-| `title` | Display label, documentation |
-| `tags` | Affects filtering, not test behavior |
-| `notes` | Documentation |
-| YAML comments | Documentation |
-| Whitespace | Formatting |
-
-#### Implementation
-
-```go
-// semanticTestCaseHash contains only the fields that affect test behavior.
-type semanticTestCaseHash struct {
-    CaseID       string              `json:"case_id"`
-    Phase        string              `json:"phase"`
-    Engine       string              `json:"engine"`
-    Request      RequestConfig       `json:"request"`
-    Response     *ResponseConfig     `json:"response,omitempty"`
-    Expectations ExpectationsConfig  `json:"expectations"`
-}
-
-// ComputeSemanticHash computes a content hash from only the behavior-affecting
-// fields of a test case. Changes to title, tags, notes, comments, and whitespace
-// do not affect the hash.
-func ComputeSemanticHash(tc *TestCase) string {
-    canonical := semanticTestCaseHash{
-        CaseID:       tc.CaseID,
-        Phase:        tc.Phase,
-        Engine:       tc.Engine,
-        Request:      tc.Request,
-        Response:     tc.Response,
-        Expectations: tc.Expectations,
-    }
-    data, _ := json.Marshal(canonical) // Go's json.Marshal produces deterministic output for structs
-    hash := sha256.Sum256(data)
-    return "sha256:" + hex.EncodeToString(hash[:])
-}
-```
-
-`ComputeContentHash(rawBytes)` is retained for backward compatibility but no longer used as the primary key for test case state. The call site in `discoverTestCases` switches to `ComputeSemanticHash(parsedTestCase)`.
-
-### 3. Semantic Hashing for Policies
-
-Replace raw-byte policy hashing with a canonical hash of only evaluation-affecting fields.
-
-#### Policy types and their meaningful fields
-
-**AI policies** (`gateway.AIPolicy`, `gateway.AIResponsePolicy`):
-
-| Included | Excluded |
-|----------|----------|
-| `action` (deny/allow/redact) | `name` |
-| `prompt` (trimmed leading/trailing whitespace) | `description` |
-| | `message` |
-| | `enabled` |
-| | `mode` |
-
-**CEL policies** (`gateway.CELPolicy`):
-
-| Included | Excluded |
-|----------|----------|
-| `action` (deny/allow) | `name` |
-| `mcp_expression` (trimmed) | `description` |
-| `cli_expression` (trimmed) | `message` |
-| | `mode` |
-
-#### Implementation
-
-Policy files contain a YAML list of rules under a `rules:` key. The hashing implementation:
-
-1. Parse the YAML file into the appropriate policy struct list.
-2. For each rule, extract only the meaningful fields into a canonical struct.
-3. Sort by a deterministic key (the trimmed prompt/expression content, since `name` is excluded).
-4. Marshal to JSON and hash.
-
-```go
-// semanticAIPolicyHash contains only fields that affect AI policy evaluation.
-type semanticAIPolicyHash struct {
-    Action string `json:"action"`
-    Prompt string `json:"prompt"` // strings.TrimSpace applied
-}
-
-// semanticCELPolicyHash contains only fields that affect CEL policy evaluation.
-type semanticCELPolicyHash struct {
-    Action        string `json:"action"`
-    MCPExpression string `json:"mcp_expression"` // strings.TrimSpace applied
-    CLIExpression string `json:"cli_expression"` // strings.TrimSpace applied
-}
-```
-
-The existing `hashPolicyPath` function is updated to parse YAML, extract canonical fields, and hash the canonical representation rather than raw bytes.
-
-**Note on whitespace trimming**: Only leading and trailing whitespace on the `prompt`/expression string values is trimmed (`strings.TrimSpace`). Internal whitespace within prompts is preserved byte-for-byte since it can affect AI model interpretation.
-
-### 4. State File Schema Migration
+### 2. State File Schema Migration
 
 #### Schema version bump
 
@@ -303,19 +193,17 @@ The state file `schema_version` changes from `"v1"` to `"v2"`. New field `histor
 
 When `NewStateManager` loads a `v1` file:
 - It reads successfully (all v1 fields are a subset of v2).
-- All existing entries have `History: nil` which is fine — they just have no history yet.
-- However, **all test case keys will miss** on the first run because the keys change from raw-byte hashes to semantic hashes. This means:
-  - Every test re-runs on the first execution after upgrading (one-time cost).
-  - `PruneStaleHashes` removes all v1-keyed entries at the end of the run.
-  - History begins accumulating from this point forward.
+- All existing entries have `History: nil` — they begin accumulating history from their next actual execution.
+- **No cache invalidation occurs.** Since we retain raw-byte hashing, all existing content hash keys and policy hash keys remain valid. Existing cached results continue to be used for cache skip decisions. History simply starts empty and fills up over subsequent runs.
+- The schema version is updated to `v2` on the next save.
 
-This is an acceptable one-time migration cost. There is no existing history to preserve (that's the feature we're adding), and the v1 cache entries would only save one run of re-execution.
+This is a fully non-destructive upgrade — no re-runs required.
 
 #### CI state artifact
 
-The GitHub Actions workflow (`policy-tests.yaml`) needs no changes. The artifact is downloaded, the state file loads (v1 entries miss, tests re-run), new v2 state is saved, and the artifact is re-uploaded. After one run, CI is fully on v2.
+The GitHub Actions workflow (`policy-tests.yaml`) needs no changes. The artifact is downloaded, the v1 state loads and works immediately with v2 code, history starts accumulating, and the updated v2 state is re-uploaded.
 
-### 5. Reporting Enhancements
+### 3. Reporting Enhancements
 
 #### Individual test output (streaming)
 
@@ -351,7 +239,15 @@ Flaky tests (pass rate < 90%):
 Stable tests: 43/45 (96%)
 ```
 
-The 90% threshold is a reasonable default. Tests below this threshold are flagged. If all tests are above 90%, the section shows:
+The stability threshold defaults to 90% and is configurable in `suite.yaml`:
+
+```yaml
+acceptance:
+  min_match_rate: 0.85
+  stability_threshold: 0.90  # pass rate below this flags a test as flaky
+```
+
+If all tests are above the threshold:
 
 ```
 ── Stability ──────────────────────────────────────
@@ -384,11 +280,7 @@ Add fields to the per-test result and per-model summary in the JSON output:
     "pass_rate": 0.85,
     "pass_rate_runs": 20,
     "pass_rate_since_policy_change": 1.0,
-    "pass_rate_since_policy_change_runs": 5,
-    "history": [
-      {"status": "passed", "run_at": "2026-02-09T...", "duration_ms": 2300},
-      {"status": "failed", "run_at": "2026-02-08T...", "duration_ms": 1900, "policy_change": true}
-    ]
+    "pass_rate_since_policy_change_runs": 5
   }],
   "model_summaries": {
     "openai:gpt-5": {
@@ -400,7 +292,13 @@ Add fields to the per-test result and per-model summary in the JSON output:
 }
 ```
 
-### 6. ShouldSkip and History Interaction
+History entries are not included in JSON output — they are an internal state concern. Pass rate and run count are the derived metrics that consumers need.
+
+#### JUnit XML
+
+Pass rate is not included in JUnit XML output. JUnit consumers (CI dashboards) don't have standard support for custom metrics, and adding `<property>` elements provides little value to existing tooling.
+
+### 4. ShouldSkip and History Interaction
 
 The `ShouldSkip` logic remains unchanged. It checks whether the current content hash + policy hashes + model key match a cached entry. If they match and the cached status is "passed" (or any status when `retryFailed=false`), the test is skipped.
 
@@ -408,7 +306,7 @@ When a test IS skipped (cache hit), its existing history is not modified. Histor
 
 This means: if a test is cached as "passed" and gets skipped for 10 runs, then re-runs and fails, the history shows `[F, P]` — not `[F, P, P, P, P, P, P, P, P, P, P]` with phantom "passed" entries from skipped runs. The history reflects actual executions only.
 
-### 7. Summary-Only Mode
+### 5. Summary-Only Mode
 
 The existing `--summary-only` flag shows summary from cached state without running tests. This mode will now also show:
 - Pass rates for each test (from cached history)
@@ -435,17 +333,10 @@ This is well within reason for a JSON file read/written on each test. No separat
 5. Add `PassRate()` and `PassRateSincePolicyChange()` utility functions
 6. Bump schema version to `v2`, handle `v1` loading
 7. Add `history_depth` to `ExecutionConfig` and CLI flag
-8. Tests for all new state behavior
+8. Add `stability_threshold` to `AcceptanceConfig`
+9. Tests for all new state behavior
 
-### Phase 2: Semantic hashing
-1. Implement `ComputeSemanticHash` for test cases
-2. Implement semantic policy hashing (`ComputeSemanticPolicyHash`)
-3. Update `discoverTestCases` to use semantic hashing
-4. Update `computePolicyHashes` / `hashPolicyPath` to use semantic hashing
-5. Retain `ComputeContentHash` for any non-test-case uses
-6. Tests for hash stability (same semantic content = same hash regardless of formatting)
-
-### Phase 3: Reporting enhancements
+### Phase 2: Reporting enhancements
 1. Add pass rate to individual test streaming output
 2. Add stability summary section to `formatTextSummary`
 3. Add stability column to `formatModelComparison`
@@ -453,15 +344,7 @@ This is well within reason for a JSON file read/written on each test. No separat
 5. Update `--summary-only` to include stability data
 6. Tests for reporting output
 
-### Phase 4: Documentation and cleanup
+### Phase 3: Documentation and cleanup
 1. Update CLAUDE.md testing section with history/stability references
 2. Update existing policy-test-suite spec to reference this spec
-3. Verify CI workflow works with v2 state (one-time migration run)
-
-## Open Questions
-
-1. **Stability threshold**: 90% is proposed as the default threshold for flagging flaky tests. Should this be configurable in `suite.yaml`?
-
-2. **History in JUnit XML**: JUnit doesn't have a standard field for pass rate. Should we encode it as a property/attribute, or leave it out of JUnit output?
-
-3. **Policy hash granularity**: Currently, policy hashes are computed per-file (one hash per YAML file). With semantic hashing, should we hash per-rule instead? Per-rule hashing would mean changing one rule in a file with 10 rules doesn't invalidate history for tests that only exercise the other 9 rules. This is more precise but adds complexity to the hash matching logic. Recommend deferring to a follow-up if needed.
+3. Verify CI workflow works with v2 state (non-destructive upgrade)
