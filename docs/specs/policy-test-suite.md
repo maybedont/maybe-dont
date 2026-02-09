@@ -124,18 +124,15 @@ Response policies have different valid actions depending on whether the tool cal
 maybe-dont test policies --suite-dir <path> [options]
 ```
 
-**Note on CLI evolution:** As the CLI expands with additional subcommands (`test`, `cli`, etc.), we may restructure to require explicit subcommands for all operations, similar to `gh`:
+**Note on CLI structure:** The CLI uses explicit subcommands for all operations:
 
 ```bash
-# Current: server starts with 'start'
-maybe-dont start
-
-# Future consideration: explicit 'mcp' subcommand
-maybe-dont mcp start
+# Gateway server
+maybe-dont gateway start
 
 # Other subcommands
 maybe-dont test policies ...
-maybe-dont cli validate ...
+maybe-dont cli ...
 ```
 
 This would provide clearer separation of concerns and room for growth. The `test policies` command structure is designed to be forward-compatible with this pattern.

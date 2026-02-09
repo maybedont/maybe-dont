@@ -11,7 +11,7 @@ var defaultsCmd = &cobra.Command{
 	Use:   "defaults",
 	Short: "Manage default configuration files",
 	Long:  `Commands for working with embedded default configuration files.`,
-	// Skip parent's PersistentPreRunE - these commands don't need config loaded
+	// Skip gateway's PersistentPreRunE - these commands don't need config loaded
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		return nil
 	},
@@ -34,7 +34,7 @@ Use this to:
 - Inspect what the current version ships with
 
 Example upgrade workflow:
-  maybe-dont defaults export --output-dir ./new-defaults
+  maybe-dont gateway defaults export --output-dir ./new-defaults
   diff ./new-defaults/cel_request_rules.yaml ~/.config/maybe-dont/cel_request_rules.yaml`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if exportOutputDir == "" {
@@ -57,5 +57,5 @@ func init() {
 	_ = defaultsExportCmd.MarkFlagRequired("output-dir")
 
 	defaultsCmd.AddCommand(defaultsExportCmd)
-	rootCmd.AddCommand(defaultsCmd)
+	gatewayCmd.AddCommand(defaultsCmd)
 }

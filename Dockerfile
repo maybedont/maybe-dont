@@ -21,4 +21,4 @@ USER maybedont
 WORKDIR /home/maybedont
 
 ENTRYPOINT ["/home/maybedont/maybe-dont"]
-CMD ["start"]
+CMD ["gateway", "start"]

@@ -19,10 +19,6 @@ the Maybe Don't CLI proxy.
 
 Skills are markdown files embedded in the binary that can be deployed to
 your project or user configuration for various AI coding assistants.`,
-	// Skip parent's PersistentPreRunE - these commands don't need config loaded
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		return nil
-	},
 }
 
 var skillListCmd = &cobra.Command{

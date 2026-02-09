@@ -10,7 +10,7 @@ import (
 
 func TestDefaultsExportCommand_RequiresOutputDir(t *testing.T) {
 	// Test that the command fails when --output-dir is not provided
-	rootCmd.SetArgs([]string{"defaults", "export"})
+	rootCmd.SetArgs([]string{"gateway", "defaults", "export"})
 	err := rootCmd.Execute()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "output-dir")
@@ -20,7 +20,7 @@ func TestDefaultsExportCommand_CreatesFiles(t *testing.T) {
 	// Test that the command creates all expected files
 	tmpDir := t.TempDir()
 
-	rootCmd.SetArgs([]string{"defaults", "export", "--output-dir", tmpDir})
+	rootCmd.SetArgs([]string{"gateway", "defaults", "export", "--output-dir", tmpDir})
 	err := rootCmd.Execute()
 	require.NoError(t, err)
 
@@ -52,7 +52,7 @@ func TestDefaultsExportCommand_OverwritesExisting(t *testing.T) {
 	require.NoError(t, err)
 
 	// Run defaults export
-	rootCmd.SetArgs([]string{"defaults", "export", "--output-dir", tmpDir})
+	rootCmd.SetArgs([]string{"gateway", "defaults", "export", "--output-dir", tmpDir})
 	err = rootCmd.Execute()
 	require.NoError(t, err)
 

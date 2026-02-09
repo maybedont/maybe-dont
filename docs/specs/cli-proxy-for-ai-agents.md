@@ -764,7 +764,8 @@ internal/
     ...
 cmd/
   root.go
-  start.go               # `maybe-dont start` - imports gateway
+  gateway.go             # `maybe-dont gateway` - parent for gateway commands
+  start.go               # `maybe-dont gateway start` - imports gateway
   version.go
   cli.go                 # `maybe-dont cli` - imports cliproxy only
   skill.go               # `maybe-dont skill` - skill management

@@ -3136,19 +3136,19 @@ rules:
 	os.Stderr = w
 	defer func() {
 		os.Stderr = origStderr
-		w.Close()
-		r.Close()
+		_ = w.Close()
+		_ = r.Close()
 	}()
 
 	_, err = LoadConfig(tmpDir, "")
 	require.NoError(t, err)
 
-	w.Close()
+	_ = w.Close()
 	os.Stderr = origStderr
 
 	captured, err := io.ReadAll(r)
 	require.NoError(t, err)
-	r.Close()
+	_ = r.Close()
 	output := string(captured)
 
 	deprecationMsg := "DEPRECATION: validation.ai.provider not set"

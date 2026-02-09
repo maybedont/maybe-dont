@@ -82,5 +82,5 @@ The server will listen for MCP client connections and forward them to the config
 }
 
 func init() {
-	rootCmd.AddCommand(startCmd)
+	gatewayCmd.AddCommand(startCmd)
 }
