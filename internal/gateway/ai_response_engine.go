@@ -580,7 +580,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 		evaluationMs = time.Since(phaseStart).Milliseconds()
 	}
 
-	if redactedContent != nil {
+	if redactedContent != nil && finalAction == "redact" {
 		results.RedactedContent = redactedContent
 	}
 
