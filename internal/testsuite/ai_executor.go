@@ -769,6 +769,9 @@ func stripMarkdownCodeFence(text string) string {
 
 // buildRequestContext builds a string representation of the request for AI evaluation.
 // Matches the production engine format (ai_engine.go): "Tool call:\n" + JSON Operation.
+// TODO(phase3): Support CLI commands. RequestConfig needs CLICmd/Arguments fields,
+// and this function should use OperationTypeCLI with "CLI command:\n" prefix when
+// the test case targets CLI validation.
 func buildRequestContext(req RequestConfig) string {
 	op := gateway.Operation{
 		Type:      gateway.OperationTypeMCP,
@@ -796,6 +799,8 @@ func buildResponseContext(_ RequestConfig, resp *ResponseConfig) string {
 			case "text":
 				formatted += fmt.Sprintf("  [%d] Text: %s\n", i, c.Text)
 			case "image":
+				// TODO(phase3): Match production format exactly: "Image (MIME: %s, Data length: %d bytes)".
+				// Requires extending ContentItem with MIMEType and Data fields.
 				formatted += fmt.Sprintf("  [%d] Image (type: image)\n", i)
 			default:
 				formatted += fmt.Sprintf("  [%d] %s: %s\n", i, c.Type, c.Text)

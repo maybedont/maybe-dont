@@ -579,19 +579,24 @@ Embed policy descriptions and request descriptions into a shared vector space. U
    - 3 allow cases (env var references, clean text, placeholder values)
 
 2. **Add CLI test cases:**
-   - 5 deny cases: `gh repo delete`, `aws ec2 terminate-instances`, `kubectl delete --all`, `rm -rf /`, `git push --force`
+   - Requires extending `RequestConfig` with CLI command fields and updating `buildRequestContext` to use `OperationTypeCLI` (see TODO in ai_executor.go)
+   - 5 deny cases: `gh repo delete owner/repo`, `aws ec2 terminate-instances --instance-ids i-1234`, `kubectl delete --all`, `rm -rf /`, `git push --force origin main`
    - 5 allow cases: `gh pr list`, `aws s3 ls`, `kubectl get pods`, `ls -la`, `git status`
 
-3. **Add more benign (false positive) test cases:**
-   - Target: 50:50 deny:allow ratio per policy (currently ~65:35)
+3. **Add allow cases for policies with zero or insufficient negative tests:**
+   - **"Check command execution tools" has 0 allow cases** — add: `git status`, `npm run build`, `make test`, `docker ps` (common dev tools that are NOT on the dangerous list)
+   - **`block-credential-exposure` (CEL response) has no dedicated tests** — add: 3 deny cases (password=, api_key=, secret= patterns), 3 allow cases (env var references, clean text, placeholder values)
+
+4. **Add more benign (false positive) test cases:**
+   - Target: 50:50 deny:allow ratio per policy (currently ~60:40)
    - Focus on borderline scenarios that are benign but look suspicious
    - Examples: reading ~/.gitconfig, `npm run build`, writing to /usr/local/share/doc/, reading a 50MB file
 
-4. **Add multi-policy validation test cases:**
+5. **Add multi-policy validation test cases:**
    - Intentionally multi-risk scenarios with expected matches from 2-3 policies
    - Example: `rm -rf /etc/ssh/` → expected: mass deletion deny + system directory deny + credential access deny
 
-5. **Tag all new test cases consistently:**
+6. **Tag all new test cases consistently:**
    - Add `false-positive` tag for benign scenario tests
    - Add `multi-policy` tag for intentional multi-match tests
    - Add `cli` tag for CLI-specific tests
