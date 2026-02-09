@@ -511,7 +511,6 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 		index     int
 		result    aiPolicyResult
 		err       error
-		isDeny    bool
 		action    string
 		reasoning string
 	}
@@ -543,7 +542,6 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 			resultChan <- policyEvalResult{
 				index:     idx,
 				result:    pr,
-				isDeny:    decision != "allow",
 				action:    decision,
 				reasoning: aiResp.Message,
 			}
@@ -566,17 +564,23 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 		return nil, firstErr
 	}
 
-	// Build final result - collect all policy results and determine overall decision
+	// Build final result - collect all policy results and determine overall decision.
+	// Priority: deny > redact > allow (matches production ai_response_engine.go)
 	finalResult := &aiEvalResult{
 		decision: "allow",
 	}
 
 	for _, res := range results {
 		finalResult.policyResults = append(finalResult.policyResults, res.result)
-		// If any policy denies, the overall decision is deny
-		if res.isDeny {
-			finalResult.decision = res.action
+		switch res.action {
+		case "deny":
+			finalResult.decision = "deny"
 			finalResult.reasoning = res.reasoning
+		case "redact":
+			if finalResult.decision != "deny" {
+				finalResult.decision = "redact"
+				finalResult.reasoning = res.reasoning
+			}
 		}
 	}
 
@@ -586,7 +590,7 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 // callAIProvider handles rate limiting, auto-scaling max_tokens, and provider calls.
 // The schema parameter enables structured output matching the production engine.
 // Returns the raw completion result for the caller to parse into the appropriate type.
-func (r *AITestRunner) callAIProvider(ctx context.Context, prompt, context_ string, schema any) (gateway.AICompletionResult, error) {
+func (r *AITestRunner) callAIProvider(ctx context.Context, prompt, promptContext string, schema any) (gateway.AICompletionResult, error) {
 	// Apply rate limiting before making the API call.
 	// Note: This uses the parent context without test timeout, so rate limit waits
 	// (which can be 60s+) don't cause test timeout errors.
@@ -607,7 +611,7 @@ func (r *AITestRunner) callAIProvider(ctx context.Context, prompt, context_ stri
 	// Build the prompt using the same format as the production engine.
 	// No system prompt — the production engine doesn't use one, so the test executor
 	// shouldn't either. This ensures test results predict production behavior.
-	userPrompt := prompt + "\n\n" + context_
+	userPrompt := prompt + "\n\n" + promptContext
 
 	// Determine initial max_tokens based on provider.
 	// Anthropic counts reserved max_tokens against rate limits, so start small and scale up.

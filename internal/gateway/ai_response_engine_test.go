@@ -409,3 +409,87 @@ func TestAIResponsePolicyEngine_DenyTrumpsRedact_DeterministicOrdering(t *testin
 	assert.Nil(t, results.RedactedContent,
 		"RedactedContent must be nil when deny fires — deny takes priority over redact")
 }
+
+// TestDetermineResponseDecision tests the extracted decision function directly,
+// covering the full matrix of action type, allowed flag, and redacted_content presence.
+// This complements TestAIResponsePolicyEngine_RedactDecisionLogic which tests through the full engine.
+func TestDetermineResponseDecision(t *testing.T) {
+	tests := []struct {
+		name            string
+		action          config.PolicyAction
+		allowed         bool
+		redactedContent string
+		expected        string
+	}{
+		{
+			name:            "redact rule with content present → redact",
+			action:          config.PolicyActionRedact,
+			allowed:         true,
+			redactedContent: "sanitized content",
+			expected:        "redact",
+		},
+		{
+			name:            "redact rule with empty content → allow (nothing to redact)",
+			action:          config.PolicyActionRedact,
+			allowed:         true,
+			redactedContent: "",
+			expected:        "allow",
+		},
+		{
+			name:            "redact rule, allowed=false, content present → redact (allowed irrelevant for redact)",
+			action:          config.PolicyActionRedact,
+			allowed:         false,
+			redactedContent: "redacted version",
+			expected:        "redact",
+		},
+		{
+			name:            "redact rule, allowed=false, empty content → allow (redact never denies)",
+			action:          config.PolicyActionRedact,
+			allowed:         false,
+			redactedContent: "",
+			expected:        "allow",
+		},
+		{
+			name:            "deny rule, allowed=false → deny",
+			action:          config.PolicyActionDeny,
+			allowed:         false,
+			redactedContent: "",
+			expected:        "deny",
+		},
+		{
+			name:            "deny rule, allowed=false, content present → deny (ignores redacted_content)",
+			action:          config.PolicyActionDeny,
+			allowed:         false,
+			redactedContent: "hallucinated",
+			expected:        "deny",
+		},
+		{
+			name:            "deny rule, allowed=true → allow",
+			action:          config.PolicyActionDeny,
+			allowed:         true,
+			redactedContent: "",
+			expected:        "allow",
+		},
+		{
+			name:            "allow rule, allowed=true → allow",
+			action:          config.PolicyActionAllow,
+			allowed:         true,
+			redactedContent: "",
+			expected:        "allow",
+		},
+		{
+			name:            "allow rule, allowed=false → deny",
+			action:          config.PolicyActionAllow,
+			allowed:         false,
+			redactedContent: "",
+			expected:        "deny",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := DetermineResponseDecision(tt.action, tt.allowed, tt.redactedContent)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
