@@ -148,7 +148,7 @@ Add a CLI subcommand to extract embedded defaults to a specified directory. This
 
 ```bash
 # Export all defaults to a directory
-maybe-dont defaults export --output-dir ./my-defaults
+maybe-dont gateway defaults export --output-dir ./my-defaults
 
 # Output:
 # Writing maybe-dont.yaml to ./my-defaults/maybe-dont.yaml
@@ -163,7 +163,7 @@ This command always writes files (overwrites if they exist in the output directo
 **Upgrade workflow**:
 ```bash
 # Get the new defaults from upgraded binary
-maybe-dont defaults export --output-dir ./new-defaults
+maybe-dont gateway defaults export --output-dir ./new-defaults
 
 # Compare with your current config
 diff ./new-defaults/cel_request_rules.yaml ~/.config/maybe-dont/cel_request_rules.yaml

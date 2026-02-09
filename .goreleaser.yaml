@@ -66,7 +66,7 @@ archives:
     wrap_in_directory: true
     # Binary is self-contained with embedded defaults - config files are
     # generated on first run via XDG Base Directory conventions.
-    # Use 'maybe-dont defaults export' to extract defaults for customization.
+    # Use 'maybe-dont gateway defaults export' to extract defaults for customization.
     files:
       - README.md
       - LICENSE

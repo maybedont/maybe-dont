@@ -18,7 +18,7 @@ var configInfoCmd = &cobra.Command{
 	Use:   "info",
 	Short: "Show resolved configuration paths",
 	Long:  `Display the resolved configuration and log directory paths based on current settings.`,
-	// Skip mcp's PersistentPreRunE - we only need to resolve paths, not load full config
+	// Skip gateway's PersistentPreRunE - we only need to resolve paths, not load full config
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		return nil
 	},
