@@ -1,5 +1,7 @@
 package testsuite
 
+import "strings"
+
 // Default rate limiting values
 const (
 	DefaultRequestsPerMinute      = 30   // Default requests per minute for unlisted providers
@@ -124,6 +126,17 @@ type RunResult struct {
 
 	// MoreTestsRemain indicates --max-tests was used and more tests remain
 	MoreTestsRemain bool
+}
+
+// effectiveStatus returns the policy-quality status for a test result.
+// For cached results, this returns the original status from the prior run
+// (e.g., "passed" instead of "skipped") so that summary statistics reflect
+// cumulative policy quality rather than just what was evaluated in this run.
+func effectiveStatus(tr TestResult) string {
+	if tr.Status == "skipped" && tr.Error != nil && tr.Error.Type == "cached" {
+		return strings.TrimPrefix(tr.Error.Message, "cached ")
+	}
+	return tr.Status
 }
 
 // ModelComparisonEntry holds per-model summary stats for the cross-model comparison table.

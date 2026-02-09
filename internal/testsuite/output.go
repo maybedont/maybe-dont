@@ -105,8 +105,17 @@ type JSONModelSummary struct {
 }
 
 // JSONOverallSummary contains overall run summary.
+// Aggregate counts use the policy-quality view: cached results are counted
+// by their original status (e.g., "cached passed" → "passed"), so these
+// numbers reflect cumulative policy quality across all runs.
 type JSONOverallSummary struct {
 	ModelsTested         int     `json:"models_tested"`
+	TotalCases           int     `json:"total_cases"`
+	Passed               int     `json:"passed"`
+	Failed               int     `json:"failed"`
+	Errored              int     `json:"errored"`
+	Skipped              int     `json:"skipped"`
+	MatchRate            float64 `json:"match_rate"`
 	ThresholdsMet        bool    `json:"thresholds_met"`
 	MinMatchRateRequired float64 `json:"min_match_rate_required"`
 	WorstMatchRate       float64 `json:"worst_match_rate"`
@@ -221,7 +230,9 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		b.results = append(b.results, jr)
 		b.totalMs += r.ElapsedMs
 
-		switch r.Status {
+		// Use effective status so cached results count toward policy quality
+		// (e.g., "cached passed" → "passed")
+		switch effectiveStatus(r) {
 		case "passed":
 			b.passed++
 		case "failed":
@@ -233,8 +244,9 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		}
 	}
 
-	// Build ResultsByModel in insertion order
+	// Build ResultsByModel in insertion order and accumulate aggregate totals
 	worstMatchRate := 1.0
+	var aggPassed, aggFailed, aggErrored, aggSkipped int
 	for _, key := range bucketOrder {
 		b := buckets[key]
 		total := b.passed + b.failed + b.errored + b.skipped
@@ -246,6 +258,11 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		if matchRate < worstMatchRate {
 			worstMatchRate = matchRate
 		}
+
+		aggPassed += b.passed
+		aggFailed += b.failed
+		aggErrored += b.errored
+		aggSkipped += b.skipped
 
 		output.ResultsByModel = append(output.ResultsByModel, JSONModelResults{
 			Model:   b.info,
@@ -267,8 +284,21 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		minMatchRate = 1.0
 	}
 
+	aggTotal := aggPassed + aggFailed + aggErrored + aggSkipped
+	aggEvaluated := aggTotal - aggSkipped
+	aggMatchRate := 0.0
+	if aggEvaluated > 0 {
+		aggMatchRate = float64(aggPassed) / float64(aggEvaluated)
+	}
+
 	output.OverallSummary = JSONOverallSummary{
 		ModelsTested:         len(bucketOrder),
+		TotalCases:           aggTotal,
+		Passed:               aggPassed,
+		Failed:               aggFailed,
+		Errored:              aggErrored,
+		Skipped:              aggSkipped,
+		MatchRate:            aggMatchRate,
 		ThresholdsMet:        summary.ThresholdsMet,
 		MinMatchRateRequired: minMatchRate,
 		WorstMatchRate:       worstMatchRate,

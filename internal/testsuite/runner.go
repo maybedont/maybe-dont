@@ -1584,13 +1584,26 @@ func hasAnyTag(tcTags, excluded []string) bool {
 }
 
 // calculateResults calculates summary statistics from test results.
+// Cached results are counted by their original status (e.g., "cached passed" → "passed")
+// so that summary statistics reflect cumulative policy quality across all runs.
 func (r *Runner) calculateResults(results []TestResult) *RunResult {
 	result := &RunResult{
 		TotalCases: len(results),
 	}
 
 	for _, tr := range results {
-		switch tr.Status {
+		// Track cache/rate-limit metadata before resolving effective status
+		if tr.Status == "skipped" && tr.Error != nil {
+			switch tr.Error.Type {
+			case "cached":
+				result.SkippedCached++
+			case "rate_limited":
+				result.RateLimited++
+			}
+		}
+
+		// Use effective status so cached results count toward policy quality
+		switch effectiveStatus(tr) {
 		case "passed":
 			result.Passed++
 		case "failed":
@@ -1599,19 +1612,12 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 			result.Errored++
 		case "skipped":
 			result.Skipped++
-			// Check if this was cached or rate limited
-			if tr.Error != nil {
-				switch tr.Error.Type {
-				case "cached":
-					result.SkippedCached++
-				case "rate_limited":
-					result.RateLimited++
-				}
-			}
 		}
 	}
 
 	// Calculate match rate (passed / (total - skipped))
+	// Skipped here only includes genuinely unevaluated tests (rate limited, etc.),
+	// not cached results which are already counted in passed/failed.
 	evaluated := result.TotalCases - result.Skipped
 	if evaluated > 0 {
 		result.MatchRate = float64(result.Passed) / float64(evaluated)
@@ -2096,13 +2102,20 @@ func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, c
 	var sb strings.Builder
 
 	sb.WriteString(formatSectionHeader("Summary"))
-	sb.WriteString(fmt.Sprintf("Results: %d passed, %d failed, %d errored, %d skipped (%d total)\n",
-		summary.Passed, summary.Failed, summary.Errored, summary.Skipped, summary.TotalCases))
 
-	// Count cached pass/fail from individual results (derived at render time,
-	// not stored in RunResult, to avoid denormalization that could drift).
-	var cachedPassed, cachedFailed int
+	// Build the results line. Cached results are already included in passed/failed/errored
+	// counts (policy quality view). Only genuinely unevaluated tests appear as "skipped".
+	if summary.Skipped > 0 {
+		sb.WriteString(fmt.Sprintf("Results: %d passed, %d failed, %d errored, %d skipped (%d total)\n",
+			summary.Passed, summary.Failed, summary.Errored, summary.Skipped, summary.TotalCases))
+	} else {
+		sb.WriteString(fmt.Sprintf("Results: %d passed, %d failed, %d errored (%d total)\n",
+			summary.Passed, summary.Failed, summary.Errored, summary.TotalCases))
+	}
+
+	// Show cached breakdown as informational context (how many came from prior runs)
 	if summary.SkippedCached > 0 {
+		var cachedPassed, cachedFailed int
 		for _, tr := range results {
 			if tr.Status == "skipped" && tr.Error != nil && tr.Error.Type == "cached" {
 				if tr.Error.Message == "cached passed" {
@@ -2112,7 +2125,7 @@ func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, c
 				}
 			}
 		}
-		sb.WriteString(fmt.Sprintf("Cached:  %d skipped (%d passed, %d failed in last run)\n",
+		sb.WriteString(fmt.Sprintf("Cached:  %d from previous run (%d passed, %d failed)\n",
 			summary.SkippedCached, cachedPassed, cachedFailed))
 	}
 
@@ -2125,11 +2138,9 @@ func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, c
 			suite.Acceptance.MinMatchRate*100, summary.MatchRate*100))
 	}
 
-	// Retry hint when there are failures or cached failures
+	// Retry hint when there are failures (including cached failures, which are now in Failed count)
 	if summary.Failed > 0 || summary.Errored > 0 {
 		sb.WriteString("\nTo retry failed/errored tests: --retry-failed\n")
-	} else if cachedFailed > 0 {
-		sb.WriteString("\nTo retry previously failed tests: --retry-failed\n")
 	}
 
 	// Policy coverage section
@@ -2271,13 +2282,7 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 			aiStats[tr.Model] = entry
 		}
 
-		// For cached-skipped tests, count by their original status
-		status := tr.Status
-		if status == "skipped" && tr.Error != nil && tr.Error.Type == "cached" {
-			status = strings.TrimPrefix(tr.Error.Message, "cached ")
-		}
-
-		switch status {
+		switch effectiveStatus(tr) {
 		case "passed":
 			entry.Passed++
 		case "failed":

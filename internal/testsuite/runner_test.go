@@ -1,6 +1,7 @@
 package testsuite
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1158,22 +1159,27 @@ func TestFormatTextSummary(t *testing.T) {
 			})
 		}
 
+		// In the policy quality view, cached results are included in passed/failed counts:
+		// 3 fresh passed + 8 cached passed = 11 passed
+		// 1 fresh failed + 2 cached failed = 3 failed
+		// Skipped = 0 (cached tests are not "skipped" anymore)
 		summary := &RunResult{
 			TotalCases:    15,
-			Passed:        3,
-			Failed:        1,
-			Skipped:       10,
+			Passed:        11,
+			Failed:        3,
+			Errored:       1,
 			SkippedCached: 10,
-			MatchRate:     0.75,
+			MatchRate:     float64(11) / float64(15),
 			ThresholdsMet: false,
 		}
 
 		output := formatTextSummary(suite, summary, results, nil, nil)
-		assert.Contains(t, output, "Cached:  10 skipped (8 passed, 2 failed in last run)")
+		assert.Contains(t, output, "Cached:  10 from previous run (8 passed, 2 failed)")
+		assert.Contains(t, output, "11 passed, 3 failed, 1 errored")
 		assert.Contains(t, output, "--retry-failed")
 	})
 
-	t.Run("retry hint for cached failures only", func(t *testing.T) {
+	t.Run("retry hint for cached failures in failed count", func(t *testing.T) {
 		// Build results with 5 cached-passed and 2 cached-failed
 		var results []TestResult
 		for i := 0; i < 5; i++ {
@@ -1189,19 +1195,114 @@ func TestFormatTextSummary(t *testing.T) {
 			})
 		}
 
+		// Cached failures are now in Failed count, so retry hint comes from Failed > 0
 		summary := &RunResult{
 			TotalCases:    10,
-			Passed:        3,
-			Skipped:       7,
+			Passed:        8,
+			Failed:        2,
 			SkippedCached: 7,
-			MatchRate:     1.0,
+			MatchRate:     0.8,
 			ThresholdsMet: true,
 		}
 
 		output := formatTextSummary(suite, summary, results, nil, nil)
-		assert.Contains(t, output, "Cached:  7 skipped (5 passed, 2 failed in last run)")
-		assert.Contains(t, output, "retry previously failed tests: --retry-failed")
+		assert.Contains(t, output, "Cached:  7 from previous run (5 passed, 2 failed)")
+		assert.Contains(t, output, "--retry-failed")
 	})
+}
+
+// TestCalculateResults_CachedResultsCountAsOriginalStatus verifies that cached results
+// are counted by their original status (passed/failed) rather than as "skipped",
+// producing summary stats that reflect cumulative policy quality.
+func TestCalculateResults_CachedResultsCountAsOriginalStatus(t *testing.T) {
+	runner := &Runner{
+		suite: &Suite{
+			Acceptance: AcceptanceConfig{MinMatchRate: 0.8},
+		},
+	}
+
+	results := []TestResult{
+		{Status: "passed"},
+		{Status: "passed"},
+		{Status: "failed"},
+		// Cached results — should count as their original status
+		{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
+		{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
+		{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
+		{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached failed"}},
+		// Rate-limited — genuinely skipped
+		{Status: "skipped", Error: &TestError{Type: "rate_limited", Message: "rate limited"}},
+	}
+
+	summary := runner.calculateResults(results)
+
+	assert.Equal(t, 8, summary.TotalCases)
+	assert.Equal(t, 5, summary.Passed, "should include 2 fresh + 3 cached passed")
+	assert.Equal(t, 2, summary.Failed, "should include 1 fresh + 1 cached failed")
+	assert.Equal(t, 0, summary.Errored)
+	assert.Equal(t, 1, summary.Skipped, "only rate-limited should be skipped")
+	assert.Equal(t, 4, summary.SkippedCached, "track cached count for info display")
+	assert.Equal(t, 1, summary.RateLimited)
+	// Match rate = 5 / (8 - 1) = 5/7 ≈ 0.714
+	assert.InDelta(t, float64(5)/float64(7), summary.MatchRate, 0.001)
+	assert.False(t, summary.ThresholdsMet, "71.4% < 80% threshold")
+}
+
+// TestFormatJSONOutput_OverallSummaryAggregates verifies that the JSON output's
+// overall_summary contains pre-computed aggregate totals that match the policy
+// quality view (cached results counted by original status).
+func TestFormatJSONOutput_OverallSummaryAggregates(t *testing.T) {
+	suite := &Suite{
+		BundleID: "test",
+		Version:  "v1",
+		Acceptance: AcceptanceConfig{
+			MinMatchRate: 0.8,
+		},
+	}
+
+	results := []TestResult{
+		// Model A: 2 fresh passed, 1 failed, 2 cached passed
+		{Engine: "ai", Model: "openai:gpt-5", Status: "passed"},
+		{Engine: "ai", Model: "openai:gpt-5", Status: "passed"},
+		{Engine: "ai", Model: "openai:gpt-5", Status: "failed"},
+		{Engine: "ai", Model: "openai:gpt-5", Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
+		{Engine: "ai", Model: "openai:gpt-5", Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
+		// Model B: 1 fresh passed, 1 cached failed
+		{Engine: "ai", Model: "anthropic:haiku", Status: "passed"},
+		{Engine: "ai", Model: "anthropic:haiku", Status: "skipped", Error: &TestError{Type: "cached", Message: "cached failed"}},
+	}
+
+	summary := &RunResult{ThresholdsMet: false}
+	jsonStr, err := formatJSONOutput(suite, results, summary, nil)
+	require.NoError(t, err)
+
+	var output JSONOutput
+	err = json.Unmarshal([]byte(jsonStr), &output)
+	require.NoError(t, err)
+
+	// Check overall summary aggregates
+	assert.Equal(t, 2, output.OverallSummary.ModelsTested)
+	assert.Equal(t, 7, output.OverallSummary.TotalCases)
+	assert.Equal(t, 5, output.OverallSummary.Passed, "3 fresh + 2 cached passed")
+	assert.Equal(t, 2, output.OverallSummary.Failed, "1 fresh + 1 cached failed")
+	assert.Equal(t, 0, output.OverallSummary.Errored)
+	assert.Equal(t, 0, output.OverallSummary.Skipped)
+	assert.InDelta(t, float64(5)/float64(7), output.OverallSummary.MatchRate, 0.001)
+
+	// Check per-model summaries also use effective status
+	require.Len(t, output.ResultsByModel, 2)
+	modelA := output.ResultsByModel[0].Summary
+	assert.Equal(t, 5, modelA.TotalCases)
+	assert.Equal(t, 4, modelA.Passed, "2 fresh + 2 cached passed")
+	assert.Equal(t, 1, modelA.Failed)
+	assert.Equal(t, 0, modelA.Skipped)
+	assert.InDelta(t, float64(4)/float64(5), modelA.MatchRate, 0.001)
+
+	modelB := output.ResultsByModel[1].Summary
+	assert.Equal(t, 2, modelB.TotalCases)
+	assert.Equal(t, 1, modelB.Passed)
+	assert.Equal(t, 1, modelB.Failed, "cached failed counts as failed")
+	assert.InDelta(t, 0.5, modelB.MatchRate, 0.001)
 }
 
 // TestFormatModelComparison verifies the cross-model comparison table rendering.
