@@ -93,9 +93,9 @@ func WriteDefaultsIfMissing(configDir string) ([]string, error) {
 }
 
 // DumpDefaults writes all embedded default files to the specified directory.
-// Unlike WriteDefaultsIfMissing, this WILL overwrite existing files.
+// By default, existing files are skipped (no-clobber). Set force=true to overwrite.
 // This is used by the 'defaults export' command for users to get fresh defaults.
-func DumpDefaults(outputDir string) error {
+func DumpDefaults(outputDir string, force bool) error {
 	// Ensure output directory exists
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
@@ -106,12 +106,23 @@ func DumpDefaults(outputDir string) error {
 	for _, d := range defaults {
 		path := filepath.Join(outputDir, d.Filename)
 
-		// Write file (overwrite if exists)
+		// Check if file already exists
+		if !force {
+			if _, err := os.Stat(path); err == nil {
+				fmt.Printf("Skipped %s (already exists, use --force to overwrite)\n", path)
+				continue
+			}
+		}
+
 		if err := os.WriteFile(path, d.Content, 0600); err != nil {
 			return fmt.Errorf("failed to write %s: %w", d.Filename, err)
 		}
 
-		fmt.Printf("Writing %s to %s\n", d.Filename, path)
+		if force {
+			fmt.Printf("Overwrote %s\n", path)
+		} else {
+			fmt.Printf("Created %s\n", path)
+		}
 	}
 
 	return nil

@@ -17,20 +17,21 @@ var defaultsCmd = &cobra.Command{
 	},
 }
 
-var exportOutputDir string
+var (
+	exportOutputDir string
+	exportForce     bool
+)
 
 var defaultsExportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "Extract embedded default configuration files",
 	Long: `Extract all embedded default configuration files to a directory.
 
-This command writes all default config and rule files to the specified
-output directory. Unlike the automatic first-run behavior, this command
-WILL overwrite existing files.
+By default, existing files are not overwritten. Use --force to overwrite.
 
 Use this to:
 - Get fresh defaults after upgrading to compare with your customized files
-- Recover defaults if you want to start over
+- Recover missing rule files without affecting your existing config
 - Inspect what the current version ships with
 
 Example upgrade workflow:
@@ -41,12 +42,10 @@ Example upgrade workflow:
 			return fmt.Errorf("--output-dir is required")
 		}
 
-		fmt.Printf("Extracting default configuration files to %s\n", exportOutputDir)
-		if err := config.DumpDefaults(exportOutputDir); err != nil {
+		if err := config.DumpDefaults(exportOutputDir, exportForce); err != nil {
 			return fmt.Errorf("failed to export defaults: %w", err)
 		}
 
-		fmt.Println("Done.")
 		return nil
 	},
 }
@@ -55,6 +54,8 @@ func init() {
 	defaultsExportCmd.Flags().StringVarP(&exportOutputDir, "output-dir", "o", "",
 		"Directory to write default files to (required)")
 	_ = defaultsExportCmd.MarkFlagRequired("output-dir")
+	defaultsExportCmd.Flags().BoolVarP(&exportForce, "force", "f", false,
+		"Overwrite existing files")
 
 	defaultsCmd.AddCommand(defaultsExportCmd)
 	gatewayCmd.AddCommand(defaultsCmd)
