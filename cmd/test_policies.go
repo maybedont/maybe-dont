@@ -43,6 +43,7 @@ var (
 	full              bool
 	retryFailed       bool
 	summaryOnly       bool
+	historyDepth      int
 )
 
 // defaultStateFilePath returns the default path for the policy test state file.
@@ -156,6 +157,7 @@ func init() {
 	testPoliciesCmd.Flags().StringVar(&stateFile, "state-file", "", "Override state file location (use with --incremental or --full)")
 	testPoliciesCmd.Flags().BoolVar(&retryFailed, "retry-failed", false, "Re-run failed/errored tests even if cached (for checking transient issues)")
 	testPoliciesCmd.Flags().BoolVar(&summaryOnly, "summary-only", false, "Show summary from cached state without running tests")
+	testPoliciesCmd.Flags().IntVar(&historyDepth, "history-depth", 0, "Override history depth for pass rate tracking (default: from suite.yaml or 20)")
 }
 
 func runTestPolicies(cmd *cobra.Command, args []string) error {
@@ -222,6 +224,7 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 		Force:             full,        // --full means "force" re-run all tests
 		RetryFailed:       retryFailed, // --retry-failed re-runs failed/errored tests
 		SummaryOnly:       summaryOnly,
+		HistoryDepth:      historyDepth,
 	}
 
 	// Create and run the test suite runner

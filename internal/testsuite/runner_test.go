@@ -1226,7 +1226,7 @@ func TestFormatTextSummary(t *testing.T) {
 			Passed:        11,
 			Failed:        3,
 			Errored:       1,
-			CachedCount: 10,
+			CachedCount:   10,
 			MatchRate:     float64(11) / float64(15),
 			ThresholdsMet: false,
 		}
@@ -1258,7 +1258,7 @@ func TestFormatTextSummary(t *testing.T) {
 			TotalCases:    10,
 			Passed:        8,
 			Failed:        2,
-			CachedCount: 7,
+			CachedCount:   7,
 			MatchRate:     0.8,
 			ThresholdsMet: true,
 		}
@@ -1333,7 +1333,7 @@ func TestFormatJSONOutput_OverallSummaryAggregates(t *testing.T) {
 	}
 
 	summary := &RunResult{ThresholdsMet: false}
-	jsonStr, err := formatJSONOutput(suite, results, summary, nil)
+	jsonStr, err := formatJSONOutput(suite, results, summary, nil, nil)
 	require.NoError(t, err)
 
 	var output JSONOutput
@@ -1424,16 +1424,17 @@ func TestFormatJUnitOutput_CachedResultsAndProperties(t *testing.T) {
 	assert.Equal(t, 1, ts.Errors)
 	assert.Equal(t, 1, ts.Skipped)
 
-	// Verify aggregate properties are present
+	// Verify properties: bundle_id, version, match_rate (passed/failed/errored removed
+	// because they duplicate the standard tests/failures/errors XML attributes)
 	propMap := make(map[string]string)
 	for _, p := range ts.Properties {
 		propMap[p.Name] = p.Value
 	}
 	assert.Equal(t, "test", propMap["bundle_id"])
-	assert.Equal(t, "2", propMap["passed"])
-	assert.Equal(t, "2", propMap["failed"])
-	assert.Equal(t, "1", propMap["errored"])
 	assert.Contains(t, propMap["match_rate"], "0.4") // 2/5 = 0.4
+	assert.NotContains(t, propMap, "passed", "passed property should not be in JUnit output (duplicates standard attribute)")
+	assert.NotContains(t, propMap, "failed", "failed property should not be in JUnit output (duplicates standard attribute)")
+	assert.NotContains(t, propMap, "errored", "errored property should not be in JUnit output (duplicates standard attribute)")
 
 	// Verify individual test case elements match effective status
 	require.Len(t, ts.TestCases, 6)
@@ -1545,7 +1546,7 @@ func TestFormatModelComparison(t *testing.T) {
 func TestBuildModelComparison(t *testing.T) {
 	t.Run("derives AI stats from results not state", func(t *testing.T) {
 		// Set up state with stale data (fewer results than current run)
-		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+		sm, _ := NewStateManager("", "test-suite", "1.0.0", 0)
 		policyHashes := []string{"sha256:policy1"}
 		sm.RecordResult("sha256:test1", "case-1", policyHashes, "openai:gpt-5", &CachedResult{
 			Status: "passed", DurationMs: 100,
@@ -1572,7 +1573,7 @@ func TestBuildModelComparison(t *testing.T) {
 	})
 
 	t.Run("augments with historical models from state", func(t *testing.T) {
-		sm, _ := NewStateManager("", "test-suite", "1.0.0")
+		sm, _ := NewStateManager("", "test-suite", "1.0.0", 0)
 		policyHashes := []string{"sha256:policy1"}
 		// Historical model not in current run
 		sm.RecordResult("sha256:test1", "case-1", policyHashes, "anthropic:claude", &CachedResult{
@@ -1693,10 +1694,10 @@ func TestBuildModelComparison(t *testing.T) {
 // 3. Returns empty if neither configured
 func TestSuite_ResolveAPIKey(t *testing.T) {
 	tests := []struct {
-		name      string
-		suite     Suite
-		model     ModelConfig
-		wantKey   string
+		name    string
+		suite   Suite
+		model   ModelConfig
+		wantKey string
 	}{
 		{
 			name: "model-level api_key takes precedence",
@@ -1809,11 +1810,11 @@ func TestSuite_ResolveEndpoint(t *testing.T) {
 // intermediate counts at each filter stage.
 func TestFilterTestCases_Stats(t *testing.T) {
 	tests := []struct {
-		name         string
-		cases        []TestCase
-		opts         RunnerOptions
-		wantCount    int
-		wantStats    FilterStats
+		name      string
+		cases     []TestCase
+		opts      RunnerOptions
+		wantCount int
+		wantStats FilterStats
 	}{
 		{
 			name: "no filters returns all cases",
@@ -2043,4 +2044,275 @@ func TestFormatTestNumberPrefix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFormatSingleTestResult_PassRate verifies that pass rate is shown in
+// individual test output when history has 2+ entries.
+func TestFormatSingleTestResult_PassRate(t *testing.T) {
+	origColor := colorEnabled
+	colorEnabled = false
+	defer func() { colorEnabled = origColor }()
+
+	t.Run("no pass rate shown when runs < 2", func(t *testing.T) {
+		tr := TestResult{
+			CaseID:       "test-001",
+			Engine:       "ai",
+			Model:        "openai:gpt-5",
+			Status:       "passed",
+			PassRateRuns: 1,
+			PassRate:     1.0,
+			Expected:     ExpectedResult{Decision: "deny"},
+			Actual:       ActualResult{Decision: "deny"},
+		}
+		output := formatSingleTestResult(tr)
+		assert.NotContains(t, output, "pass rate")
+	})
+
+	t.Run("shows pass rate when runs >= 2", func(t *testing.T) {
+		tr := TestResult{
+			CaseID:       "test-001",
+			Engine:       "ai",
+			Model:        "openai:gpt-5",
+			Status:       "passed",
+			PassRate:     0.85,
+			PassRateRuns: 20,
+			Expected:     ExpectedResult{Decision: "deny"},
+			Actual:       ActualResult{Decision: "deny"},
+		}
+		output := formatSingleTestResult(tr)
+		assert.Contains(t, output, "pass rate: 85% (last 20 runs)")
+	})
+
+	t.Run("shows policy change window when it differs", func(t *testing.T) {
+		tr := TestResult{
+			CaseID:                  "test-001",
+			Engine:                  "ai",
+			Model:                   "openai:gpt-5",
+			Status:                  "failed",
+			PassRate:                0.74,
+			PassRateRuns:            20,
+			PassRateSinceChange:     0.80,
+			PassRateSinceChangeRuns: 5,
+			Expected:                ExpectedResult{Decision: "deny"},
+			Actual:                  ActualResult{Decision: "allow"},
+			Failures:                []string{"wrong decision"},
+		}
+		output := formatSingleTestResult(tr)
+		assert.Contains(t, output, "pass rate: 74% (last 20 runs)")
+		assert.Contains(t, output, "80% since last policy change (5 runs)")
+	})
+
+	t.Run("omits policy change window when runs equal total", func(t *testing.T) {
+		tr := TestResult{
+			CaseID:                  "test-001",
+			Engine:                  "ai",
+			Model:                   "openai:gpt-5",
+			Status:                  "passed",
+			PassRate:                0.90,
+			PassRateRuns:            10,
+			PassRateSinceChange:     0.90,
+			PassRateSinceChangeRuns: 10,
+			Expected:                ExpectedResult{Decision: "deny"},
+			Actual:                  ActualResult{Decision: "deny"},
+		}
+		output := formatSingleTestResult(tr)
+		assert.Contains(t, output, "pass rate: 90% (last 10 runs)")
+		assert.NotContains(t, output, "since last policy change")
+	})
+}
+
+// TestFormatStabilitySection verifies the stability summary output.
+func TestFormatStabilitySection(t *testing.T) {
+	origColor := colorEnabled
+	colorEnabled = false
+	defer func() { colorEnabled = origColor }()
+
+	t.Run("empty when no tests have history", func(t *testing.T) {
+		results := []TestResult{
+			{CaseID: "test-1", PassRateRuns: 1}, // insufficient history
+		}
+		output := formatStabilitySection(results, 0.90)
+		assert.Empty(t, output)
+	})
+
+	t.Run("all stable", func(t *testing.T) {
+		results := []TestResult{
+			{CaseID: "test-1", PassRate: 0.95, PassRateRuns: 5, Engine: "ai", Model: "gpt-5"},
+			{CaseID: "test-2", PassRate: 1.0, PassRateRuns: 10, Engine: "ai", Model: "gpt-5"},
+		}
+		output := formatStabilitySection(results, 0.90)
+		assert.Contains(t, output, "All 2 tests stable")
+		assert.Contains(t, output, ">90%")
+	})
+
+	t.Run("flaky tests listed", func(t *testing.T) {
+		results := []TestResult{
+			{CaseID: "test-stable", PassRate: 0.95, PassRateRuns: 5, Engine: "ai", Model: "gpt-5"},
+			{CaseID: "test-flaky", PassRate: 0.74, PassRateRuns: 20, Engine: "ai", Model: "openai:gpt-5"},
+			{CaseID: "test-flaky", PassRate: 0.60, PassRateRuns: 10, Engine: "ai", Model: "anthropic:claude"},
+		}
+		output := formatStabilitySection(results, 0.90)
+		assert.Contains(t, output, "Flaky tests")
+		assert.Contains(t, output, "test-flaky")
+		assert.Contains(t, output, "74% (openai:gpt-5)")
+		assert.Contains(t, output, "60% (anthropic:claude)")
+		assert.Contains(t, output, "Stable tests: 1/3")
+	})
+}
+
+// TestFormatModelComparison_StabilityColumn verifies that the Stab% column
+// appears only when stability data is available.
+func TestFormatModelComparison_StabilityColumn(t *testing.T) {
+	origColor := colorEnabled
+	colorEnabled = false
+	defer func() { colorEnabled = origColor }()
+
+	t.Run("no stab column without stability data", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "openai:gpt-5", Passed: 8, Failed: 2, MatchRate: 0.8},
+		}
+		output := formatModelComparison(entries)
+		assert.NotContains(t, output, "Stab%")
+	})
+
+	t.Run("stab column shown when stability data present", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "openai:gpt-5", Passed: 8, Failed: 2, MatchRate: 0.8, Stability: 0.96, StabilityTests: 10},
+			{Model: "anthropic:claude", Passed: 7, Failed: 3, MatchRate: 0.7, Stability: 0.87, StabilityTests: 8},
+		}
+		output := formatModelComparison(entries)
+		assert.Contains(t, output, "Stab%")
+		assert.Contains(t, output, "96%")
+		assert.Contains(t, output, "87%")
+	})
+
+	t.Run("dash for models without stability", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "openai:gpt-5", Passed: 8, MatchRate: 0.8, Stability: 0.96, StabilityTests: 10},
+			{Model: "cel", Passed: 10, MatchRate: 1.0}, // no stability for CEL
+		}
+		output := formatModelComparison(entries)
+		assert.Contains(t, output, "Stab%")
+		assert.Contains(t, output, "—") // dash for CEL
+	})
+}
+
+// TestJSONOutput_PassRateFields verifies that pass rate fields appear in JSON output.
+func TestJSONOutput_PassRateFields(t *testing.T) {
+	suite := &Suite{
+		BundleID: "test",
+		Version:  "v1",
+		Acceptance: AcceptanceConfig{
+			MinMatchRate: 0.8,
+		},
+	}
+
+	results := []TestResult{
+		{
+			CaseID:                  "test-with-history",
+			Engine:                  "ai",
+			Model:                   "openai:gpt-5",
+			Status:                  "passed",
+			PassRate:                0.85,
+			PassRateRuns:            20,
+			PassRateSinceChange:     1.0,
+			PassRateSinceChangeRuns: 5,
+			Expected:                ExpectedResult{Decision: "deny"},
+			Actual:                  ActualResult{Decision: "deny"},
+		},
+		{
+			CaseID:       "test-no-history",
+			Engine:       "ai",
+			Model:        "openai:gpt-5",
+			Status:       "passed",
+			PassRateRuns: 0, // no history
+			Expected:     ExpectedResult{Decision: "allow"},
+			Actual:       ActualResult{Decision: "allow"},
+		},
+	}
+
+	summary := &RunResult{TotalCases: 2, Passed: 2, ThresholdsMet: true}
+
+	jsonStr, err := formatJSONOutput(suite, results, summary, nil, nil)
+	require.NoError(t, err)
+
+	var output JSONOutput
+	err = json.Unmarshal([]byte(jsonStr), &output)
+	require.NoError(t, err)
+
+	require.Len(t, output.ResultsByModel, 1)
+	modelResults := output.ResultsByModel[0].Results
+
+	// Test with history should have pass_rate fields
+	withHistory := modelResults[0]
+	require.NotNil(t, withHistory.PassRate)
+	assert.InDelta(t, 0.85, *withHistory.PassRate, 0.001)
+	require.NotNil(t, withHistory.PassRateRuns)
+	assert.Equal(t, 20, *withHistory.PassRateRuns)
+	require.NotNil(t, withHistory.PassRateSincePolicyChange)
+	assert.InDelta(t, 1.0, *withHistory.PassRateSincePolicyChange, 0.001)
+
+	// Test without history should not have pass_rate fields
+	noHistory := modelResults[1]
+	assert.Nil(t, noHistory.PassRate)
+	assert.Nil(t, noHistory.PassRateRuns)
+}
+
+// TestValidateSuiteSchema_StabilityThreshold verifies that the suite schema
+// validation rejects out-of-range stability_threshold values.
+func TestValidateSuiteSchema_StabilityThreshold(t *testing.T) {
+	validSuite := func() *Suite {
+		return &Suite{
+			Version:  "v1",
+			BundleID: "test",
+			Policies: PoliciesConfig{CELRequestRules: "rules.yaml"},
+			Acceptance: AcceptanceConfig{
+				MinMatchRate: 0.85,
+			},
+		}
+	}
+
+	t.Run("nil threshold is valid (uses default)", func(t *testing.T) {
+		r := &Runner{}
+		suite := validSuite()
+		assert.NoError(t, r.validateSuiteSchema(suite))
+	})
+
+	t.Run("valid threshold accepted", func(t *testing.T) {
+		r := &Runner{}
+		suite := validSuite()
+		threshold := 0.75
+		suite.Acceptance.StabilityThreshold = &threshold
+		assert.NoError(t, r.validateSuiteSchema(suite))
+	})
+
+	t.Run("threshold above 1.0 rejected", func(t *testing.T) {
+		r := &Runner{}
+		suite := validSuite()
+		threshold := 1.5
+		suite.Acceptance.StabilityThreshold = &threshold
+		err := r.validateSuiteSchema(suite)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "stability_threshold must be between 0.0 and 1.0")
+	})
+
+	t.Run("negative threshold rejected", func(t *testing.T) {
+		r := &Runner{}
+		suite := validSuite()
+		threshold := -0.1
+		suite.Acceptance.StabilityThreshold = &threshold
+		err := r.validateSuiteSchema(suite)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "stability_threshold must be between 0.0 and 1.0")
+	})
+
+	t.Run("boundary values accepted", func(t *testing.T) {
+		r := &Runner{}
+		for _, val := range []float64{0.0, 1.0} {
+			suite := validSuite()
+			threshold := val
+			suite.Acceptance.StabilityThreshold = &threshold
+			assert.NoError(t, r.validateSuiteSchema(suite), "threshold=%f should be valid", val)
+		}
+	})
 }
