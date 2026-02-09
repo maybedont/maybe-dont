@@ -9,7 +9,6 @@ permissions:
   contents: write
   id-token: write
   packages: write
-  pull-requests: write
 
 jobs:
   release:
@@ -41,13 +40,27 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Generate a short-lived token for cross-repo operations.
+      # The GitHub App must have contents:write and be installed on
+      # maybedont/releases and maybedont/homebrew-tap.
+      - name: Generate release token
+        id: release-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: maybedont
+          repositories: releases,homebrew-tap
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser-pro
           version: latest
           args: release --clean ${{ env.flags }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # App token for publishing to maybedont/releases and pushing
+          # the Homebrew formula to maybedont/homebrew-tap. Docker push
+          # uses docker login credentials (set above), not this token.
+          GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           METRICS_API_TOKEN: ${{ secrets.METRICS_API_TOKEN }}
