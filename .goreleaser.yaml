@@ -123,7 +123,7 @@ brews:
       # Uses GITHUB_TOKEN by default (set to GitHub App token in CI).
       # Explicit token only needed if brew tap requires a different token.
     homepage: "https://maybedont.ai"
-    description: "Security gateway for AI agents and MCP servers"
+    description: "Guardrails for agentic AI"
     license: "Proprietary"
     install: |
       bin.install "maybe-dont"
