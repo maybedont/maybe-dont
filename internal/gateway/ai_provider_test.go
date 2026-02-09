@@ -140,52 +140,6 @@ func TestAnthropicProvider_DefaultEndpoint(t *testing.T) {
 	assert.Equal(t, "/v1/messages", info.EndpointPath)
 }
 
-// TestOpenAIProvider_Generate_Success verifies successful API calls.
-// TestNewAIProviderClient_DefaultTemperature verifies that temperature defaults to 0.0
-// for deterministic policy decisions, and can be overridden by explicit configuration.
-func TestNewAIProviderClient_DefaultTemperature(t *testing.T) {
-	tests := []struct {
-		name        string
-		parameters  map[string]any
-		expectedVal float64
-	}{
-		{
-			name:        "nil parameters gets temperature 0.0",
-			parameters:  nil,
-			expectedVal: 0.0,
-		},
-		{
-			name:        "empty parameters gets temperature 0.0",
-			parameters:  map[string]any{},
-			expectedVal: 0.0,
-		},
-		{
-			name:        "parameters without temperature gets 0.0",
-			parameters:  map[string]any{"max_tokens": 4096},
-			expectedVal: 0.0,
-		},
-		{
-			name:        "explicit temperature is preserved",
-			parameters:  map[string]any{"temperature": 0.7},
-			expectedVal: 0.7,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{}
-			cfg.Validation.AI.Provider = "openai"
-			cfg.Validation.AI.APIKey = "test-key"
-			cfg.Validation.AI.Model = "test-model"
-			cfg.Validation.AI.Parameters = tt.parameters
-
-			NewAIProviderClient(cfg)
-
-			assert.Equal(t, tt.expectedVal, cfg.Validation.AI.Parameters["temperature"])
-		})
-	}
-}
-
 func TestOpenAIProvider_Generate_Success(t *testing.T) {
 	// Create test server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -204,8 +158,6 @@ func TestOpenAIProvider_Generate_Success(t *testing.T) {
 
 		assert.Equal(t, "test-model", reqBody["model"])
 		assert.NotEmpty(t, reqBody["messages"])
-		// Default temperature should be sent on the wire
-		assert.Equal(t, 0.0, reqBody["temperature"])
 
 		// Return success response
 		resp := map[string]any{

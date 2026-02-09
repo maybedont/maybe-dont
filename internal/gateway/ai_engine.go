@@ -261,9 +261,12 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				return
 			}
 
-			// Parse the response as JSON
+			// Parse the response as JSON.
+			// Sanitize first: AI models may produce invalid escape sequences
+			// (e.g., C:\Windows → \W) when echoing text from policy prompts.
+			sanitized := SanitizeJSONEscapes(result.ParsedJSON)
 			var aiResp AIResponse
-			if err := json.Unmarshal(result.ParsedJSON, &aiResp); err != nil {
+			if err := json.Unmarshal(sanitized, &aiResp); err != nil {
 				resultChan <- aiRuleResult{
 					rule:         p.Name,
 					action:       p.Action,
@@ -786,9 +789,12 @@ func (e *AIPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValidat
 				return
 			}
 
-			// Parse the response as JSON
+			// Parse the response as JSON.
+			// Sanitize first: AI models may produce invalid escape sequences
+			// (e.g., C:\Windows → \W) when echoing text from policy prompts.
+			sanitized := SanitizeJSONEscapes(result.ParsedJSON)
 			var aiResp AIResponse
-			if err := json.Unmarshal(result.ParsedJSON, &aiResp); err != nil {
+			if err := json.Unmarshal(sanitized, &aiResp); err != nil {
 				resultChan <- aiRuleResult{
 					rule:         p.Name,
 					action:       p.Action,
