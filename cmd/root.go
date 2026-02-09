@@ -87,10 +87,6 @@ logging, and gives you visibility into what AI agents are doing with your tools.
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 
-		if err := config.ValidateConfig(cfg); err != nil {
-			return fmt.Errorf("invalid config: %w", err)
-		}
-
 		// Print log directory if file-based logging is configured
 		if cfg.Logger.Path != "" && cfg.Logger.Path != "stdout" && cfg.Logger.Path != "stderr" {
 			fmt.Printf("Logging to %s\n", ResolvedLogDir)
