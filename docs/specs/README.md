@@ -28,6 +28,7 @@ Each spec should have a `## Status` section near the top with one of these value
 | Spec | Description |
 |------|-------------|
 | [ai-validation-provider-agnostic](ai-validation-provider-agnostic.md) | Multi-provider AI validation (OpenAI, Anthropic, OpenAI-compatible) |
+| [policy-evaluation-improvements](policy-evaluation-improvements.md) | Analysis of policy/test suite efficacy and phased improvement plan (Phases 1-2 complete, Phases 3-5 remaining) |
 
 ### Draft
 

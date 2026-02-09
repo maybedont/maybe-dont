@@ -511,42 +511,38 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 		index     int
 		result    aiPolicyResult
 		err       error
-		isDeny    bool
 		action    string
 		reasoning string
 	}
 	resultChan := make(chan policyEvalResult, len(enabledPolicies))
 
-	// Evaluate all policies in parallel
+	// Evaluate all policies in parallel using the response-specific evaluation path.
+	// This uses AIResponseEvaluation (with redacted_content) and structured output,
+	// matching the production response engine's schema and decision logic.
 	for i, policy := range enabledPolicies {
 		go func(idx int, p config.AIResponsePolicy) {
 			policyStart := time.Now()
 
-			aiResp, err := r.evaluatePolicy(ctx, p.Prompt, respContext)
+			aiResp, err := r.evaluateResponsePolicy(ctx, p.Prompt, respContext)
 			if err != nil {
 				resultChan <- policyEvalResult{index: idx, err: err}
 				return
 			}
 
+			// Use the shared decision function — single source of truth with production.
+			decision := gateway.DetermineResponseDecision(p.Action, aiResp.Allowed, aiResp.RedactedContent)
+
 			pr := aiPolicyResult{
 				policyName: p.Name,
+				decision:   decision,
 				reasoning:  aiResp.Message,
 				elapsedMs:  time.Since(policyStart).Milliseconds(),
-			}
-
-			var isDeny bool
-			if aiResp.Allowed {
-				pr.decision = "allow"
-			} else {
-				pr.decision = string(p.Action)
-				isDeny = true
 			}
 
 			resultChan <- policyEvalResult{
 				index:     idx,
 				result:    pr,
-				isDeny:    isDeny,
-				action:    string(p.Action),
+				action:    decision,
 				reasoning: aiResp.Message,
 			}
 		}(i, policy)
@@ -568,34 +564,40 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 		return nil, firstErr
 	}
 
-	// Build final result - collect all policy results and determine overall decision
+	// Build final result - collect all policy results and determine overall decision.
+	// Priority: deny > redact > allow (matches production ai_response_engine.go)
 	finalResult := &aiEvalResult{
 		decision: "allow",
 	}
 
 	for _, res := range results {
 		finalResult.policyResults = append(finalResult.policyResults, res.result)
-		// If any policy denies, the overall decision is deny
-		if res.isDeny {
-			finalResult.decision = res.action
+		switch res.action {
+		case "deny":
+			finalResult.decision = "deny"
 			finalResult.reasoning = res.reasoning
+		case "redact":
+			if finalResult.decision != "deny" {
+				finalResult.decision = "redact"
+				finalResult.reasoning = res.reasoning
+			}
 		}
 	}
 
 	return finalResult, nil
 }
 
-// evaluatePolicy calls the AI provider with a policy prompt and request context.
-// Implements auto-scaling max_tokens for Anthropic rate limit optimization.
-// The timeout is applied per API call, not to the entire operation including rate limit waits.
-func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContext string) (*gateway.AIResponse, error) {
+// callAIProvider handles rate limiting, auto-scaling max_tokens, and provider calls.
+// The schema parameter enables structured output matching the production engine.
+// Returns the raw completion result for the caller to parse into the appropriate type.
+func (r *AITestRunner) callAIProvider(ctx context.Context, prompt, promptContext string, schema any) (gateway.AICompletionResult, error) {
 	// Apply rate limiting before making the API call.
 	// Note: This uses the parent context without test timeout, so rate limit waits
 	// (which can be 60s+) don't cause test timeout errors.
 	// WaitBeforeRequest acquires a semaphore if the provider is in sequential mode.
 	if r.rateLimiter != nil {
 		if err := r.rateLimiter.WaitBeforeRequest(ctx, r.model.Provider); err != nil {
-			return nil, &gateway.AIProviderError{
+			return gateway.AICompletionResult{}, &gateway.AIProviderError{
 				Category:  "rate_limited",
 				Message:   err.Error(),
 				Retryable: false,
@@ -606,10 +608,10 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 		defer r.rateLimiter.ReleaseSequentialSlot(r.model.Provider)
 	}
 
-	// Build the full prompt
-	systemPrompt := "You are a security policy evaluator. Analyze the request and determine if it should be allowed or denied based on the policy. Respond with JSON: {\"allowed\": true/false, \"message\": \"explanation\"}"
-
-	userPrompt := fmt.Sprintf("Policy:\n%s\n\nRequest to evaluate:\n%s", prompt, requestContext)
+	// Build the prompt using the same format as the production engine.
+	// No system prompt — the production engine doesn't use one, so the test executor
+	// shouldn't either. This ensures test results predict production behavior.
+	userPrompt := prompt + "\n\n" + promptContext
 
 	// Determine initial max_tokens based on provider.
 	// Anthropic counts reserved max_tokens against rate limits, so start small and scale up.
@@ -633,15 +635,20 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 
 	// Auto-scaling loop: try with increasing max_tokens on truncation
 	for attempt := 0; attempt < MaxScalingAttempts; attempt++ {
-		// Create AI request with current max_tokens
+		// Create AI request with current max_tokens.
+		// Default temperature to 0.0 to match production (deterministic responses)
+		// unless the model config explicitly sets a value.
 		params := copyParams(r.model.Parameters)
 		params["max_tokens"] = maxTokens
+		if _, ok := params["temperature"]; !ok {
+			params["temperature"] = 0.0
+		}
 
 		aiReq := gateway.AIRequest{
-			Model:        r.model.Model,
-			SystemPrompt: systemPrompt,
-			UserPrompt:   userPrompt,
-			Parameters:   params,
+			Model:          r.model.Model,
+			UserPrompt:     userPrompt,
+			ResponseSchema: schema,
+			Parameters:     params,
 		}
 
 		// Create a fresh timeout context for this API call.
@@ -668,10 +675,10 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 				// Handle 429 with rate limit info from response.
 				// Note: This uses the parent context, so the wait doesn't timeout.
 				if r.rateLimiter != nil {
-					return nil, r.rateLimiter.Handle429WithInfo(ctx, r.model.Provider, result.RateLimitInfo)
+					return gateway.AICompletionResult{}, r.rateLimiter.Handle429WithInfo(ctx, r.model.Provider, result.RateLimitInfo)
 				}
 			}
-			return nil, err
+			return gateway.AICompletionResult{}, err
 		}
 
 		// Check if response was truncated
@@ -688,30 +695,54 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 		maxTokens = nextMaxTokens
 	}
 
-	// Parse response - try JSON first, then raw text.
-	// Sanitize invalid escape sequences that AI models may produce
-	// (e.g., C:\Windows → \W) when echoing text from policy prompts.
-	var aiResp gateway.AIResponse
+	return result, nil
+}
+
+// parseAIResult parses a provider completion result into the target type.
+// Handles structured output (ParsedJSON), raw text with markdown fences, and
+// sanitizes invalid escape sequences that AI models may produce.
+func parseAIResult[T any](result gateway.AICompletionResult) (*T, error) {
+	var parsed T
 	if len(result.ParsedJSON) > 0 {
 		sanitized := gateway.SanitizeJSONEscapes(result.ParsedJSON)
-		if err := json.Unmarshal(sanitized, &aiResp); err != nil {
+		if err := json.Unmarshal(sanitized, &parsed); err != nil {
 			// Try parsing from raw text (with markdown stripping)
 			cleaned := stripMarkdownCodeFence(result.RawText)
-			if err := json.Unmarshal(gateway.SanitizeJSONEscapes([]byte(cleaned)), &aiResp); err != nil {
+			if err := json.Unmarshal(gateway.SanitizeJSONEscapes([]byte(cleaned)), &parsed); err != nil {
 				return nil, fmt.Errorf("failed to parse AI response: %w", err)
 			}
 		}
 	} else if result.RawText != "" {
 		// Strip markdown code fences if present
 		cleaned := stripMarkdownCodeFence(result.RawText)
-		if err := json.Unmarshal(gateway.SanitizeJSONEscapes([]byte(cleaned)), &aiResp); err != nil {
+		if err := json.Unmarshal(gateway.SanitizeJSONEscapes([]byte(cleaned)), &parsed); err != nil {
 			return nil, fmt.Errorf("failed to parse AI response from raw text: %w", err)
 		}
 	} else {
 		return nil, fmt.Errorf("empty AI response")
 	}
+	return &parsed, nil
+}
 
-	return &aiResp, nil
+// evaluatePolicy calls the AI provider for request policy evaluation.
+// Uses the AIResponse schema (allowed + message) matching the production request engine.
+func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContext string) (*gateway.AIResponse, error) {
+	result, err := r.callAIProvider(ctx, prompt, requestContext, gateway.GenerateSchema[gateway.AIResponse]())
+	if err != nil {
+		return nil, err
+	}
+	return parseAIResult[gateway.AIResponse](result)
+}
+
+// evaluateResponsePolicy calls the AI provider for response policy evaluation.
+// Uses the AIResponseEvaluation schema (allowed + message + redacted_content)
+// matching the production response engine.
+func (r *AITestRunner) evaluateResponsePolicy(ctx context.Context, prompt, responseContext string) (*gateway.AIResponseEvaluation, error) {
+	result, err := r.callAIProvider(ctx, prompt, responseContext, gateway.GenerateSchema[gateway.AIResponseEvaluation]())
+	if err != nil {
+		return nil, err
+	}
+	return parseAIResult[gateway.AIResponseEvaluation](result)
 }
 
 // copyParams creates a shallow copy of the parameters map.
@@ -767,21 +798,47 @@ func stripMarkdownCodeFence(text string) string {
 }
 
 // buildRequestContext builds a string representation of the request for AI evaluation.
+// Matches the production engine format (ai_engine.go): "Tool call:\n" + JSON Operation.
+// TODO(phase3): Support CLI commands. RequestConfig needs CLICmd/Arguments fields,
+// and this function should use OperationTypeCLI with "CLI command:\n" prefix when
+// the test case targets CLI validation.
 func buildRequestContext(req RequestConfig) string {
-	return fmt.Sprintf("Tool: %s\nArguments: %v", req.ToolName, req.Arguments)
+	op := gateway.Operation{
+		Type:      gateway.OperationTypeMCP,
+		Name:      req.ToolName,
+		Arguments: req.Arguments,
+	}
+	jsonBytes, err := json.MarshalIndent(op, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("Tool call:\nType: %s\nName: %s\nArguments: %v", op.Type, op.Name, op.Arguments)
+	}
+	return "Tool call:\n" + string(jsonBytes)
 }
 
-// buildResponseContext builds a string representation of request+response for AI evaluation.
-func buildResponseContext(req RequestConfig, resp *ResponseConfig) string {
-	var respText string
+// buildResponseContext builds a string representation of the response for AI evaluation.
+// Matches the production engine format (ai_response_engine.go): "Response content:\n" + formatted response.
+// The production engine uses formatResponseForAI which outputs "IsError: ...\nContent:\n  [0] Text: ..."
+func buildResponseContext(_ RequestConfig, resp *ResponseConfig) string {
+	// Build the response string matching production's formatResponseForAI format
+	formatted := "IsError: false\n"
+
 	if resp != nil && len(resp.Content) > 0 {
-		for _, c := range resp.Content {
-			if c.Type == "text" {
-				respText += c.Text
+		formatted += "Content:\n"
+		for i, c := range resp.Content {
+			switch c.Type {
+			case "text":
+				formatted += fmt.Sprintf("  [%d] Text: %s\n", i, c.Text)
+			case "image":
+				// TODO(phase3): Match production format exactly: "Image (MIME: %s, Data length: %d bytes)".
+				// Requires extending ContentItem with MIMEType and Data fields.
+				formatted += fmt.Sprintf("  [%d] Image (type: image)\n", i)
+			default:
+				formatted += fmt.Sprintf("  [%d] %s: %s\n", i, c.Type, c.Text)
 			}
 		}
 	}
-	return fmt.Sprintf("Tool: %s\nArguments: %v\nResponse: %s", req.ToolName, req.Arguments, respText)
+
+	return "Response content:\n" + formatted
 }
 
 // isRetryableError checks if an error is transient and can be retried.

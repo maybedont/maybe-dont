@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/maybedont/maybe-dont/internal/config"
@@ -320,6 +321,175 @@ func TestAIResponsePolicyEngine_MixedActionAggregation(t *testing.T) {
 				assert.Nil(t, results.RedactedContent,
 					"Expected no redacted content: %s", tt.description)
 			}
+		})
+	}
+}
+
+// TestAIResponsePolicyEngine_DenyTrumpsRedact_DeterministicOrdering verifies that a deny
+// decision suppresses redacted content even when the redact result arrives first.
+//
+// This is a regression test for a race condition: both rules evaluate concurrently, and if
+// the redact goroutine completes before the deny goroutine, the engine must still discard
+// the redacted content because deny takes priority. Without the finalAction guard on
+// RedactedContent assignment, this test fails deterministically.
+func TestAIResponsePolicyEngine_DenyTrumpsRedact_DeterministicOrdering(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	// Channel that gates the deny response — keeps it blocked until we release it.
+	denyGate := make(chan struct{})
+
+	mockClient := NewMockAIProviderClient()
+	mockClient.SetGenerateFunc(func(_ context.Context, req AIRequest) (AICompletionResult, error) {
+		var resp AIResponseEvaluation
+
+		if strings.Contains(req.UserPrompt, "Redact check") {
+			// Redact rule returns immediately with redacted content.
+			resp = AIResponseEvaluation{
+				Allowed:         true,
+				Message:         "redacted sensitive data",
+				RedactedContent: "sanitized content",
+			}
+		} else {
+			// Deny rule blocks until the gate opens, guaranteeing redact is processed first.
+			<-denyGate
+			resp = AIResponseEvaluation{
+				Allowed: false,
+				Message: "content denied",
+			}
+		}
+
+		respJSON, _ := json.Marshal(resp)
+		return AICompletionResult{
+			RawText:    string(respJSON),
+			ParsedJSON: json.RawMessage(respJSON),
+		}, nil
+	})
+
+	engine := &AIResponsePolicyEngine{
+		cfg:                 createTestResponseConfig(),
+		maxRuleEvaluationMs: 30000,
+		providerClient:      mockClient,
+	}
+	err := InitAIResponsePolicyEngine(context.Background(), sessionLogger, engine)
+	require.NoError(t, err)
+
+	err = engine.LoadPolicies([]config.AIResponsePolicy{
+		{
+			Name:   "test-redact-rule",
+			Prompt: "Redact check for sensitive data",
+			Action: config.PolicyActionRedact,
+		},
+		{
+			Name:   "test-deny-rule",
+			Prompt: "Deny check for dangerous content",
+			Action: config.PolicyActionDeny,
+		},
+	}, "")
+	require.NoError(t, err)
+
+	req := createTestToolRequest("test_tool")
+	toolResult := &mcp.CallToolResult{
+		Content: []mcp.Content{
+			mcp.TextContent{Type: "text", Text: "Test response content"},
+		},
+	}
+
+	// Release the deny gate after a short delay so the redact result is guaranteed
+	// to be processed first by the aggregation loop.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(denyGate)
+	}()
+
+	results, err := engine.EvaluateResponse(context.Background(), req, toolResult, nil)
+	require.NoError(t, err)
+
+	assert.False(t, results.Allowed, "Deny should block the response")
+	assert.Nil(t, results.RedactedContent,
+		"RedactedContent must be nil when deny fires — deny takes priority over redact")
+}
+
+// TestDetermineResponseDecision tests the extracted decision function directly,
+// covering the full matrix of action type, allowed flag, and redacted_content presence.
+// This complements TestAIResponsePolicyEngine_RedactDecisionLogic which tests through the full engine.
+func TestDetermineResponseDecision(t *testing.T) {
+	tests := []struct {
+		name            string
+		action          config.PolicyAction
+		allowed         bool
+		redactedContent string
+		expected        string
+	}{
+		{
+			name:            "redact rule with content present → redact",
+			action:          config.PolicyActionRedact,
+			allowed:         true,
+			redactedContent: "sanitized content",
+			expected:        "redact",
+		},
+		{
+			name:            "redact rule with empty content → allow (nothing to redact)",
+			action:          config.PolicyActionRedact,
+			allowed:         true,
+			redactedContent: "",
+			expected:        "allow",
+		},
+		{
+			name:            "redact rule, allowed=false, content present → redact (allowed irrelevant for redact)",
+			action:          config.PolicyActionRedact,
+			allowed:         false,
+			redactedContent: "redacted version",
+			expected:        "redact",
+		},
+		{
+			name:            "redact rule, allowed=false, empty content → allow (redact never denies)",
+			action:          config.PolicyActionRedact,
+			allowed:         false,
+			redactedContent: "",
+			expected:        "allow",
+		},
+		{
+			name:            "deny rule, allowed=false → deny",
+			action:          config.PolicyActionDeny,
+			allowed:         false,
+			redactedContent: "",
+			expected:        "deny",
+		},
+		{
+			name:            "deny rule, allowed=false, content present → deny (ignores redacted_content)",
+			action:          config.PolicyActionDeny,
+			allowed:         false,
+			redactedContent: "hallucinated",
+			expected:        "deny",
+		},
+		{
+			name:            "deny rule, allowed=true → allow",
+			action:          config.PolicyActionDeny,
+			allowed:         true,
+			redactedContent: "",
+			expected:        "allow",
+		},
+		{
+			name:            "allow rule, allowed=true → allow",
+			action:          config.PolicyActionAllow,
+			allowed:         true,
+			redactedContent: "",
+			expected:        "allow",
+		},
+		{
+			name:            "allow rule, allowed=false → deny",
+			action:          config.PolicyActionAllow,
+			allowed:         false,
+			redactedContent: "",
+			expected:        "deny",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := DetermineResponseDecision(tt.action, tt.allowed, tt.redactedContent)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
