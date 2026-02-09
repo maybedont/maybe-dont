@@ -158,8 +158,8 @@ func TestWriteDefaultsIfMissing_NonWritableDirectory(t *testing.T) {
 	require.Empty(t, created, "Should not have created any files")
 }
 
-func TestDumpDefaults_OverwritesExisting(t *testing.T) {
-	// Test that DumpDefaults overwrites existing files (unlike WriteDefaultsIfMissing)
+func TestDumpDefaults_SkipsExistingByDefault(t *testing.T) {
+	// Test that DumpDefaults does not overwrite existing files when force=false
 	tmpDir := t.TempDir()
 
 	// Create an existing config file with custom content
@@ -168,14 +168,41 @@ func TestDumpDefaults_OverwritesExisting(t *testing.T) {
 	err := os.WriteFile(existingPath, []byte(existingContent), 0600)
 	require.NoError(t, err)
 
-	// Run DumpDefaults
-	err = DumpDefaults(tmpDir)
+	// Run DumpDefaults without force
+	err = DumpDefaults(tmpDir, false)
+	require.NoError(t, err)
+
+	// Existing file should be preserved
+	content, err := os.ReadFile(existingPath)
+	require.NoError(t, err)
+	require.Equal(t, existingContent, string(content), "Existing file should not be overwritten")
+
+	// Other default files (that didn't exist) should be created
+	for _, filename := range []string{"cel_request_rules.yaml", "ai_request_rules.yaml", "cel_response_rules.yaml", "ai_response_rules.yaml"} {
+		path := filepath.Join(tmpDir, filename)
+		_, err := os.Stat(path)
+		require.NoError(t, err, "File %s should have been created", filename)
+	}
+}
+
+func TestDumpDefaults_OverwritesWithForce(t *testing.T) {
+	// Test that DumpDefaults overwrites existing files when force=true
+	tmpDir := t.TempDir()
+
+	// Create an existing config file with custom content
+	existingContent := "# My custom configuration\n"
+	existingPath := filepath.Join(tmpDir, "maybe-dont.yaml")
+	err := os.WriteFile(existingPath, []byte(existingContent), 0600)
+	require.NoError(t, err)
+
+	// Run DumpDefaults with force
+	err = DumpDefaults(tmpDir, true)
 	require.NoError(t, err)
 
 	// Content should be overwritten with default
 	content, err := os.ReadFile(existingPath)
 	require.NoError(t, err)
-	require.NotEqual(t, existingContent, string(content), "DumpDefaults should overwrite existing files")
+	require.NotEqual(t, existingContent, string(content), "DumpDefaults with force should overwrite existing files")
 	require.Contains(t, string(content), "Maybe Don't AI Configuration",
 		"Should contain default config content")
 }
@@ -185,7 +212,7 @@ func TestDumpDefaults_CreatesDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputDir := filepath.Join(tmpDir, "nested", "output", "dir")
 
-	err := DumpDefaults(outputDir)
+	err := DumpDefaults(outputDir, false)
 	require.NoError(t, err)
 
 	// Verify directory was created

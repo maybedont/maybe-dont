@@ -636,11 +636,12 @@ func (r *AITestRunner) callAIProvider(ctx context.Context, prompt, promptContext
 	// Auto-scaling loop: try with increasing max_tokens on truncation
 	for attempt := 0; attempt < MaxScalingAttempts; attempt++ {
 		// Create AI request with current max_tokens.
-		// Default temperature to 0.0 to match production (deterministic responses)
-		// unless the model config explicitly sets a value.
+		// Only auto-inject temperature for Anthropic models (which support temperature=0
+		// for deterministic output). OpenAI models like gpt-5-mini do not support
+		// temperature=0 and should use their default.
 		params := copyParams(r.model.Parameters)
 		params["max_tokens"] = maxTokens
-		if _, ok := params["temperature"]; !ok {
+		if _, ok := params["temperature"]; !ok && r.model.Provider == "anthropic" {
 			params["temperature"] = 0.0
 		}
 

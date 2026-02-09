@@ -3157,3 +3157,145 @@ rules:
 		"deprecation warning should appear exactly once, got %d in output: %q", count, output)
 }
 
+// TestLoadConfig_ProviderSetExplicitly verifies that when validation.ai.provider is explicitly
+// set in the YAML config, no deprecation warning is emitted.
+func TestLoadConfig_ProviderSetExplicitly(t *testing.T) {
+	viper.Reset()
+
+	tmpDir := t.TempDir()
+
+	// Config with provider explicitly set — should produce no deprecation warning
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: true
+    rules_file: ai_request_rules.yaml
+
+validation:
+  ai:
+    provider: openai
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    model: "gpt-5.2"
+    api_key: test-key
+`
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	rulesContent := `
+rules:
+  - name: test-rule
+    description: Test rule
+    prompt: Test prompt
+    message: Test message
+`
+	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0644)
+	require.NoError(t, err)
+
+	// Capture stderr to check for deprecation warnings
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() {
+		os.Stderr = origStderr
+		w.Close()
+		r.Close()
+	}()
+
+	cfg, err := LoadConfig(tmpDir, "")
+	require.NoError(t, err)
+	require.Equal(t, "openai", cfg.Validation.AI.Provider, "Provider should be 'openai' from YAML")
+
+	w.Close()
+	os.Stderr = origStderr
+
+	captured, err := io.ReadAll(r)
+	require.NoError(t, err)
+	r.Close()
+	output := string(captured)
+
+	require.NotContains(t, output, "DEPRECATION",
+		"No deprecation warning should appear when provider is explicitly set, but got: %q", output)
+}
+
+// TestLoadConfig_ProviderFromYAMLWithAPIKeyFromEnv verifies that setting api_key via environment
+// variable does not clobber the provider field set in YAML. This reproduces a scenario where
+// viper's AutomaticEnv may interfere with sibling fields in nested structs.
+func TestLoadConfig_ProviderFromYAMLWithAPIKeyFromEnv(t *testing.T) {
+	viper.Reset()
+
+	tmpDir := t.TempDir()
+
+	// Config with provider set in YAML but api_key NOT set (will come from env var)
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: true
+    rules_file: ai_request_rules.yaml
+
+validation:
+  ai:
+    provider: openai
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    model: "gpt-5.2"
+`
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	rulesContent := `
+rules:
+  - name: test-rule
+    description: Test rule
+    prompt: Test prompt
+    message: Test message
+`
+	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0644)
+	require.NoError(t, err)
+
+	// Set api_key via env var (like the user does)
+	t.Setenv("MAYBE_DONT_VALIDATION_AI_API_KEY", "sk-test-key-from-env")
+
+	// Capture stderr to check for deprecation warnings
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() {
+		os.Stderr = origStderr
+		w.Close()
+		r.Close()
+	}()
+
+	cfg, err := LoadConfig(tmpDir, "")
+	require.NoError(t, err)
+	require.Equal(t, "openai", cfg.Validation.AI.Provider,
+		"Provider should be 'openai' from YAML even when api_key is set via env var")
+	require.Equal(t, "sk-test-key-from-env", cfg.Validation.AI.APIKey,
+		"API key should come from env var")
+
+	w.Close()
+	os.Stderr = origStderr
+
+	captured, err := io.ReadAll(r)
+	require.NoError(t, err)
+	r.Close()
+	output := string(captured)
+
+	require.NotContains(t, output, "DEPRECATION",
+		"No deprecation warning should appear when provider is explicitly set, but got: %q", output)
+}
+
