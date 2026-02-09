@@ -304,12 +304,12 @@ jobs:
               has_results=true
               name=$(basename "$file" .json)
 
-              # Aggregate across all models in the file
-              tests=$(jq '[.results_by_model[].summary.total_cases] | add // 0' "$file")
-              passed=$(jq '[.results_by_model[].summary.passed] | add // 0' "$file")
-              failed=$(jq '[.results_by_model[].summary.failed] | add // 0' "$file")
-              errored=$(jq '[.results_by_model[].summary.errored] | add // 0' "$file")
-              match_rate=$(jq '[.results_by_model[].summary.match_rate] | if length > 0 then (add / length * 100) else 0 end | . * 10 | round / 10' "$file")
+              # Read pre-computed aggregate totals from overall_summary (no recalculation)
+              tests=$(jq '.overall_summary.total_cases' "$file")
+              passed=$(jq '.overall_summary.passed' "$file")
+              failed=$(jq '.overall_summary.failed' "$file")
+              errored=$(jq '.overall_summary.errored' "$file")
+              match_rate=$(jq '.overall_summary.match_rate * 100 | . * 10 | round / 10' "$file")
 
               if [ "$failed" -gt 0 ] || [ "$errored" -gt 0 ]; then
                 status=":x: Failed"
@@ -449,8 +449,8 @@ jobs:
               [ -d "$dir" ] || continue
               for file in "$dir"ai-*.json; do
                 [ -f "$file" ] || continue
-                f=$(jq '[.results_by_model[].summary.failed] | add // 0' "$file")
-                e=$(jq '[.results_by_model[].summary.errored] | add // 0' "$file")
+                f=$(jq '.overall_summary.failed' "$file")
+                e=$(jq '.overall_summary.errored' "$file")
                 if [ "$f" -gt 0 ] || [ "$e" -gt 0 ]; then
                   ai_failed=true
                 fi

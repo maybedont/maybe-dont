@@ -1,5 +1,14 @@
 # $schema https://goreleaser.com/static/schema-pro.json
 version: 2
+project_name: maybe-dont
+
+# Publish binary releases to the public maybedont/releases repo.
+# Docker images are still pushed to ghcr.io/maybedont/maybe-dont via
+# docker login (independent of this token).
+release:
+  github:
+    owner: maybedont
+    name: releases
 
 before:
   hooks:
@@ -105,3 +114,18 @@ docker_manifests:
     image_templates:
       - "ghcr.io/maybedont/maybe-dont:latest-amd64"
       - "ghcr.io/maybedont/maybe-dont:latest-arm64"
+
+brews:
+  - name: maybe-dont
+    repository:
+      owner: maybedont
+      name: homebrew-tap
+      # Uses GITHUB_TOKEN by default (set to GitHub App token in CI).
+      # Explicit token only needed if brew tap requires a different token.
+    homepage: "https://maybedont.ai"
+    description: "Guardrails for agentic AI"
+    license: "Proprietary"
+    install: |
+      bin.install "maybe-dont"
+    test: |
+      system "#{bin}/maybe-dont", "version"

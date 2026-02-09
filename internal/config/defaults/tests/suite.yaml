@@ -44,18 +44,27 @@ engines:
 
       # Anthropic models - fast to slow, cheap to expensive
       # Using dated versions for reproducible test results
+      # temperature: 0.0 for deterministic output (supported by Anthropic models)
       - provider: anthropic
         model: claude-haiku-4-5-20251001 # Fast and cost-effective
         enabled: true
+        parameters:
+          temperature: 0.0
       - provider: anthropic
         model: claude-sonnet-4-5-20250929 # Balanced performance and quality
         enabled: true
+        parameters:
+          temperature: 0.0
       - provider: anthropic
         model: claude-opus-4-5-20251101 # High quality
         enabled: true
+        parameters:
+          temperature: 0.0
       - provider: anthropic
         model: claude-opus-4-6 # Latest flagship, highest quality
         enabled: true
+        parameters:
+          temperature: 0.0
 
       # Google Gemini (via OpenAI-compatible endpoint)
       # export GEMINI_API_KEY=<your key> then set enabled: true
