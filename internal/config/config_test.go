@@ -3134,6 +3134,11 @@ rules:
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	os.Stderr = w
+	defer func() {
+		os.Stderr = origStderr
+		w.Close()
+		r.Close()
+	}()
 
 	_, err = LoadConfig(tmpDir, "")
 	require.NoError(t, err)
