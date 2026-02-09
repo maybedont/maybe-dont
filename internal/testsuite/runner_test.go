@@ -1226,7 +1226,7 @@ func TestFormatTextSummary(t *testing.T) {
 			Passed:        11,
 			Failed:        3,
 			Errored:       1,
-			CachedCount: 10,
+			CachedCount:   10,
 			MatchRate:     float64(11) / float64(15),
 			ThresholdsMet: false,
 		}
@@ -1258,7 +1258,7 @@ func TestFormatTextSummary(t *testing.T) {
 			TotalCases:    10,
 			Passed:        8,
 			Failed:        2,
-			CachedCount: 7,
+			CachedCount:   7,
 			MatchRate:     0.8,
 			ThresholdsMet: true,
 		}
@@ -1694,10 +1694,10 @@ func TestBuildModelComparison(t *testing.T) {
 // 3. Returns empty if neither configured
 func TestSuite_ResolveAPIKey(t *testing.T) {
 	tests := []struct {
-		name      string
-		suite     Suite
-		model     ModelConfig
-		wantKey   string
+		name    string
+		suite   Suite
+		model   ModelConfig
+		wantKey string
 	}{
 		{
 			name: "model-level api_key takes precedence",
@@ -1810,11 +1810,11 @@ func TestSuite_ResolveEndpoint(t *testing.T) {
 // intermediate counts at each filter stage.
 func TestFilterTestCases_Stats(t *testing.T) {
 	tests := []struct {
-		name         string
-		cases        []TestCase
-		opts         RunnerOptions
-		wantCount    int
-		wantStats    FilterStats
+		name      string
+		cases     []TestCase
+		opts      RunnerOptions
+		wantCount int
+		wantStats FilterStats
 	}{
 		{
 			name: "no filters returns all cases",
@@ -2209,16 +2209,16 @@ func TestJSONOutput_PassRateFields(t *testing.T) {
 
 	results := []TestResult{
 		{
-			CaseID:              "test-with-history",
-			Engine:              "ai",
-			Model:               "openai:gpt-5",
-			Status:              "passed",
-			PassRate:            0.85,
-			PassRateRuns:        20,
-			PassRateSinceChange: 1.0,
+			CaseID:                  "test-with-history",
+			Engine:                  "ai",
+			Model:                   "openai:gpt-5",
+			Status:                  "passed",
+			PassRate:                0.85,
+			PassRateRuns:            20,
+			PassRateSinceChange:     1.0,
 			PassRateSinceChangeRuns: 5,
-			Expected:            ExpectedResult{Decision: "deny"},
-			Actual:              ActualResult{Decision: "deny"},
+			Expected:                ExpectedResult{Decision: "deny"},
+			Actual:                  ActualResult{Decision: "deny"},
 		},
 		{
 			CaseID:       "test-no-history",
@@ -2256,4 +2256,63 @@ func TestJSONOutput_PassRateFields(t *testing.T) {
 	noHistory := modelResults[1]
 	assert.Nil(t, noHistory.PassRate)
 	assert.Nil(t, noHistory.PassRateRuns)
+}
+
+// TestValidateSuiteSchema_StabilityThreshold verifies that the suite schema
+// validation rejects out-of-range stability_threshold values.
+func TestValidateSuiteSchema_StabilityThreshold(t *testing.T) {
+	validSuite := func() *Suite {
+		return &Suite{
+			Version:  "v1",
+			BundleID: "test",
+			Policies: PoliciesConfig{CELRequestRules: "rules.yaml"},
+			Acceptance: AcceptanceConfig{
+				MinMatchRate: 0.85,
+			},
+		}
+	}
+
+	t.Run("nil threshold is valid (uses default)", func(t *testing.T) {
+		r := &Runner{}
+		suite := validSuite()
+		assert.NoError(t, r.validateSuiteSchema(suite))
+	})
+
+	t.Run("valid threshold accepted", func(t *testing.T) {
+		r := &Runner{}
+		suite := validSuite()
+		threshold := 0.75
+		suite.Acceptance.StabilityThreshold = &threshold
+		assert.NoError(t, r.validateSuiteSchema(suite))
+	})
+
+	t.Run("threshold above 1.0 rejected", func(t *testing.T) {
+		r := &Runner{}
+		suite := validSuite()
+		threshold := 1.5
+		suite.Acceptance.StabilityThreshold = &threshold
+		err := r.validateSuiteSchema(suite)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "stability_threshold must be between 0.0 and 1.0")
+	})
+
+	t.Run("negative threshold rejected", func(t *testing.T) {
+		r := &Runner{}
+		suite := validSuite()
+		threshold := -0.1
+		suite.Acceptance.StabilityThreshold = &threshold
+		err := r.validateSuiteSchema(suite)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "stability_threshold must be between 0.0 and 1.0")
+	})
+
+	t.Run("boundary values accepted", func(t *testing.T) {
+		r := &Runner{}
+		for _, val := range []float64{0.0, 1.0} {
+			suite := validSuite()
+			threshold := val
+			suite.Acceptance.StabilityThreshold = &threshold
+			assert.NoError(t, r.validateSuiteSchema(suite), "threshold=%f should be valid", val)
+		}
+	})
 }

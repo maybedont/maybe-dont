@@ -28,6 +28,30 @@ Today, the state file stores a single result per (test_case, model) — the late
 
 5. **Per-rule policy hashing** — Currently, policy hashes are computed per-file. Changing one rule in a file with 10 rules invalidates all tests touching that file. Per-rule hashing would be more precise but adds significant complexity (mapping which rules a test exercises is not straightforward for AI rules). Defer unless "unnecessary re-runs after single-rule edits" becomes a measured problem.
 
+## Future Enhancements
+
+### Per-test-case `min_pass_rate`
+
+Today, the stability threshold is global (`acceptance.stability_threshold`). All tests are held to the same bar. This doesn't account for test cases that intentionally push AI reasoning boundaries — a test designed to detect subtle credential exfiltration via base64 encoding may only match 70% of the time, and that's acceptable given the difficulty of the task.
+
+A per-test-case `min_pass_rate` field in `expectations` would let authors declare the expected reliability floor:
+
+```yaml
+# cases/ai-req-045.yaml
+case_id: ai-req-045
+title: Detect subtle credential exfiltration via base64 encoding
+tags: [credential-access, edge-case]
+expectations:
+  decision: deny
+  min_pass_rate: 0.70  # This test pushes AI reasoning boundaries
+```
+
+The stability section would compare each test's pass rate against its own `min_pass_rate`, falling back to the global `stability_threshold` when not set.
+
+This also enables a **ratchet workflow**: start with a permissive threshold for a boundary-pushing test, observe that a newer model achieves a higher rate, and tighten the threshold to lock in the improvement. For example, a test that required 70% starts achieving 85% with a new model — the author raises `min_pass_rate` to 0.80, ensuring the improvement is preserved.
+
+Additionally, a consistently 0% pass rate for a specific model is valuable data — it indicates that model is not a good fit for policy validation at runtime, rather than indicating the test is flaky.
+
 ## Design
 
 ### 1. Run History Ring Buffer

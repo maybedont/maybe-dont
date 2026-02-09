@@ -864,11 +864,11 @@ func TestPassRateSincePolicyChange(t *testing.T) {
 	t.Run("stops at policy change boundary", func(t *testing.T) {
 		cr := &CachedResult{
 			History: []RunOutcome{
-				{Status: "passed"},                       // after change
-				{Status: "passed"},                       // after change
-				{Status: "failed", PolicyChange: true},   // the change run itself
-				{Status: "failed"},                       // before change (should not be included)
-				{Status: "failed"},                       // before change
+				{Status: "passed"},                     // after change
+				{Status: "passed"},                     // after change
+				{Status: "failed", PolicyChange: true}, // the change run itself
+				{Status: "failed"},                     // before change (should not be included)
+				{Status: "failed"},                     // before change
 			},
 		}
 		rate, runs := PassRateSincePolicyChange(cr)
@@ -985,38 +985,64 @@ func TestV1StateUpgrade(t *testing.T) {
 	require.Len(t, result.History, 1, "first recording after v1 upgrade should create history")
 }
 
-// TestGetPassRate verifies the StateManager.GetPassRate lookup method.
-func TestGetPassRate(t *testing.T) {
-	sm, _ := NewStateManager("", "test-suite", "1.0.0", 0)
-	hashes := []string{"sha256:pol1"}
+// TestGetCachedPassRates verifies that GetCachedPassRates returns pass rate
+// data for cached test/model combinations with sufficient history.
+func TestGetCachedPassRates(t *testing.T) {
+	t.Run("returns entries with 2+ history", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0", 0)
+		hashes := []string{"sha256:pol1"}
 
-	// Build history: 3 passed, 1 failed
-	for _, status := range []string{"passed", "failed", "passed", "passed"} {
-		sm.RecordResult("sha256:test1", "case-1", hashes, "openai:gpt-5", &CachedResult{
-			Status: status, LastRun: time.Now(), DurationMs: 100,
+		// Build 3-entry history for case-1/gpt-5 (2 passed, 1 failed)
+		for _, status := range []string{"passed", "failed", "passed"} {
+			sm.RecordResult("sha256:test1", "case-1", hashes, "openai:gpt-5", &CachedResult{
+				Status: status, LastRun: time.Now(), DurationMs: 100,
+			})
+		}
+		// Build 1-entry history for case-2 (insufficient)
+		sm.RecordResult("sha256:test2", "case-2", hashes, "openai:gpt-5", &CachedResult{
+			Status: "passed", LastRun: time.Now(), DurationMs: 100,
 		})
-	}
 
-	t.Run("returns rate for matching entry", func(t *testing.T) {
-		rate, runs, found := sm.GetPassRate("sha256:test1", hashes, "openai:gpt-5")
-		assert.True(t, found)
-		assert.InDelta(t, 0.75, rate, 0.001)
-		assert.Equal(t, 4, runs)
+		rates := sm.GetCachedPassRates(hashes)
+		require.Len(t, rates, 1, "only entries with 2+ history should be returned")
+		assert.Equal(t, "case-1", rates[0].CaseID)
+		assert.Equal(t, "openai:gpt-5", rates[0].Model)
+		assert.InDelta(t, 2.0/3.0, rates[0].PassRate, 0.001)
+		assert.Equal(t, 3, rates[0].PassRateRuns)
 	})
 
-	t.Run("returns false for unknown content hash", func(t *testing.T) {
-		_, _, found := sm.GetPassRate("sha256:unknown", hashes, "openai:gpt-5")
-		assert.False(t, found)
+	t.Run("excludes mismatched policy hashes", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0", 0)
+
+		for _, status := range []string{"passed", "failed"} {
+			sm.RecordResult("sha256:test1", "case-1", []string{"sha256:old"}, "openai:gpt-5", &CachedResult{
+				Status: status, LastRun: time.Now(), DurationMs: 100,
+			})
+		}
+
+		rates := sm.GetCachedPassRates([]string{"sha256:new"})
+		assert.Empty(t, rates)
 	})
 
-	t.Run("returns false for mismatched policy hashes", func(t *testing.T) {
-		_, _, found := sm.GetPassRate("sha256:test1", []string{"sha256:other"}, "openai:gpt-5")
-		assert.False(t, found)
-	})
+	t.Run("includes policy change rate data", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0", 0)
+		hashesV1 := []string{"sha256:pol1"}
+		hashesV2 := []string{"sha256:pol2"}
 
-	t.Run("returns false for unknown model", func(t *testing.T) {
-		_, _, found := sm.GetPassRate("sha256:test1", hashes, "anthropic:claude")
-		assert.False(t, found)
+		// Record with v1 policy
+		sm.RecordResult("sha256:test1", "case-1", hashesV1, "openai:gpt-5", &CachedResult{
+			Status: "failed", LastRun: time.Now(), DurationMs: 100,
+		})
+		// Record with v2 policy (changed)
+		sm.RecordResult("sha256:test1", "case-1", hashesV2, "openai:gpt-5", &CachedResult{
+			Status: "passed", LastRun: time.Now(), DurationMs: 100,
+		})
+
+		rates := sm.GetCachedPassRates(hashesV2)
+		require.Len(t, rates, 1)
+		assert.Equal(t, 2, rates[0].PassRateRuns)
+		// Since-change window should cover the policy change entry and the run after
+		assert.True(t, rates[0].PassRateSinceChangeRuns > 0)
 	})
 }
 

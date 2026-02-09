@@ -24,16 +24,16 @@ func createTestLogger() *config.SessionLogger {
 
 // Runner executes a test suite against policies.
 type Runner struct {
-	opts            RunnerOptions
-	suite           *Suite
-	testCases       []TestCase
-	testCaseHashes  map[string]string // case_id -> content hash
-	testCaseFiles   map[string]string // case_id -> file path
-	policyHashes    []string          // SHA256 hashes of all loaded policies
-	suiteDir        string
-	logger          *config.SessionLogger
-	rateLimiter     *RateLimiter
-	stateManager    *StateManager
+	opts           RunnerOptions
+	suite          *Suite
+	testCases      []TestCase
+	testCaseHashes map[string]string // case_id -> content hash
+	testCaseFiles  map[string]string // case_id -> file path
+	policyHashes   []string          // SHA256 hashes of all loaded policies
+	suiteDir       string
+	logger         *config.SessionLogger
+	rateLimiter    *RateLimiter
+	stateManager   *StateManager
 }
 
 // NewRunner creates a new test suite runner with the given options.
@@ -234,6 +234,24 @@ func (r *Runner) runSummaryOnly() (*RunResult, error) {
 	// Print model comparison table
 	fmt.Print(formatModelComparison(entries))
 
+	// Print stability section from cached history
+	cachedRates := r.stateManager.GetCachedPassRates(r.policyHashes)
+	if len(cachedRates) > 0 {
+		var stabilityResults []TestResult
+		for _, cr := range cachedRates {
+			stabilityResults = append(stabilityResults, TestResult{
+				CaseID:                  cr.CaseID,
+				Model:                   cr.Model,
+				PassRate:                cr.PassRate,
+				PassRateRuns:            cr.PassRateRuns,
+				PassRateSinceChange:     cr.PassRateSinceChange,
+				PassRateSinceChangeRuns: cr.PassRateSinceChangeRuns,
+			})
+		}
+		stabilityThreshold := r.suite.Acceptance.GetStabilityThreshold()
+		fmt.Print(formatStabilitySection(stabilityResults, stabilityThreshold))
+	}
+
 	// Print coverage section
 	if coverage != nil {
 		coveragePercent := 0.0
@@ -316,6 +334,12 @@ func (r *Runner) validateSuiteSchema(suite *Suite) error {
 	if suite.Acceptance.MinMatchRate < 0 || suite.Acceptance.MinMatchRate > 1 {
 		errors = append(errors, fmt.Sprintf("acceptance.min_match_rate must be between 0.0 and 1.0, got %f", suite.Acceptance.MinMatchRate))
 	}
+	if suite.Acceptance.StabilityThreshold != nil {
+		st := *suite.Acceptance.StabilityThreshold
+		if st < 0 || st > 1 {
+			errors = append(errors, fmt.Sprintf("acceptance.stability_threshold must be between 0.0 and 1.0, got %f", st))
+		}
+	}
 
 	// If AI engine is enabled, model_matrix must have at least one entry
 	if suite.Engines.AI.Enabled && len(suite.Engines.AI.ModelMatrix) == 0 {
@@ -388,7 +412,7 @@ func (r *Runner) discoverTestCases() error {
 	}
 
 	// Parse each test case file
-	seenIDs := make(map[string]string) // case_id -> file path
+	seenIDs := make(map[string]string)        // case_id -> file path
 	testCaseHashes := make(map[string]string) // case_id -> content hash
 	testCaseFiles := make(map[string]string)  // case_id -> file path
 	var testCases []TestCase
@@ -1724,11 +1748,11 @@ func formatEngineInfo(engine, model string) string {
 
 // ANSI color/style codes for terminal output.
 const (
-	ansiReset     = "\033[0m"
-	ansiBoldRed   = "\033[1;31m"
-	ansiBoldGreen = "\033[1;32m"
+	ansiReset      = "\033[0m"
+	ansiBoldRed    = "\033[1;31m"
+	ansiBoldGreen  = "\033[1;32m"
 	ansiBoldYellow = "\033[1;33m"
-	ansiDim       = "\033[2m"
+	ansiDim        = "\033[2m"
 )
 
 // colorEnabled controls whether ANSI color codes are emitted in text output.
@@ -2450,25 +2474,25 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 
 	// Augment with historical models from state that didn't run in this invocation
 	for modelKey, summary := range cachedSummaries {
-			if aiStats[modelKey] != nil {
-				continue // Already have current-run data for this model
-			}
-			evaluated := summary.Passed + summary.Failed + summary.Errored
-			entry := ModelComparisonEntry{
-				Model:          modelKey,
-				Passed:         summary.Passed,
-				Failed:         summary.Failed,
-				Errored:        summary.Errored,
-				TotalMs:        summary.TotalMs,
-				Stability:      summary.Stability,
-				StabilityTests: summary.StabilityTests,
-				FromCache:      true,
-			}
-			if evaluated > 0 {
-				entry.MatchRate = float64(summary.Passed) / float64(evaluated)
-				entry.AvgMs = summary.TotalMs / int64(evaluated)
-			}
-			entries = append(entries, entry)
+		if aiStats[modelKey] != nil {
+			continue // Already have current-run data for this model
+		}
+		evaluated := summary.Passed + summary.Failed + summary.Errored
+		entry := ModelComparisonEntry{
+			Model:          modelKey,
+			Passed:         summary.Passed,
+			Failed:         summary.Failed,
+			Errored:        summary.Errored,
+			TotalMs:        summary.TotalMs,
+			Stability:      summary.Stability,
+			StabilityTests: summary.StabilityTests,
+			FromCache:      true,
+		}
+		if evaluated > 0 {
+			entry.MatchRate = float64(summary.Passed) / float64(evaluated)
+			entry.AvgMs = summary.TotalMs / int64(evaluated)
+		}
+		entries = append(entries, entry)
 	}
 
 	if len(entries) == 0 {

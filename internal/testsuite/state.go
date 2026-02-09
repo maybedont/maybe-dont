@@ -27,9 +27,9 @@ type StateFile struct {
 
 // CachedTestCase stores the cached result for a single test case.
 type CachedTestCase struct {
-	CaseID       string                    `json:"case_id"`
-	PolicyHashes []string                  `json:"policy_hashes"`
-	Models       map[string]*CachedResult  `json:"models"`
+	CaseID       string                   `json:"case_id"`
+	PolicyHashes []string                 `json:"policy_hashes"`
+	Models       map[string]*CachedResult `json:"models"`
 }
 
 // CachedResult stores the cached result for a single model run.
@@ -46,7 +46,7 @@ type CachedResult struct {
 
 // RunOutcome records the outcome of a single test execution.
 type RunOutcome struct {
-	Status       string    `json:"status"`                  // "passed", "failed", "errored"
+	Status       string    `json:"status"` // "passed", "failed", "errored"
 	RunAt        time.Time `json:"run_at"`
 	DurationMs   int64     `json:"duration_ms"`
 	PolicyChange bool      `json:"policy_change,omitempty"` // true when policy hashes differ from previous run
@@ -357,9 +357,12 @@ func PassRate(cr *CachedResult) (float64, int) {
 	return float64(passed) / float64(len(cr.History)), len(cr.History)
 }
 
-// PassRateSincePolicyChange computes the pass rate using only runs after
-// the most recent policy change marker. Returns (rate, runCount).
-// If no policy change marker exists in history, returns the full history rate.
+// PassRateSincePolicyChange computes the pass rate using only runs in the
+// current policy window. The window starts at the most recent PolicyChange
+// marker and includes all newer entries. If PolicyChange is on the newest
+// entry (index 0), there are no post-change runs to isolate, so the full
+// history rate is returned — callers should compare run counts to detect
+// this case and suppress redundant output (see formatPassRate in runner.go).
 func PassRateSincePolicyChange(cr *CachedResult) (float64, int) {
 	if len(cr.History) == 0 {
 		return 0, 0
@@ -381,26 +384,46 @@ func PassRateSincePolicyChange(cr *CachedResult) (float64, int) {
 	return float64(passed) / float64(count), count
 }
 
-// GetPassRate returns the pass rate for a cached test case/model combination.
-// Returns (rate, runCount, found). If no matching cached result exists,
-// found is false.
-func (sm *StateManager) GetPassRate(contentHash string, policyHashes []string, modelKey string) (float64, int, bool) {
+// CachedTestPassRate holds pass rate data for a single (test case, model) combination,
+// derived from cached history. Used to build stability reporting in summary-only mode.
+type CachedTestPassRate struct {
+	CaseID                  string
+	Model                   string
+	PassRate                float64
+	PassRateRuns            int
+	PassRateSinceChange     float64
+	PassRateSinceChangeRuns int
+}
+
+// GetCachedPassRates returns pass rate data for all (test case, model) combinations
+// in cached state that match the given policy hashes. Only includes entries with
+// 2+ history entries (sufficient data for meaningful rates).
+func (sm *StateManager) GetCachedPassRates(policyHashes []string) []CachedTestPassRate {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	cached, ok := sm.state.Results[contentHash]
-	if !ok {
-		return 0, 0, false
+	var results []CachedTestPassRate
+	for _, cached := range sm.state.Results {
+		if !hashesMatch(cached.PolicyHashes, policyHashes) {
+			continue
+		}
+		for modelKey, result := range cached.Models {
+			if len(result.History) < 2 {
+				continue
+			}
+			rate, runs := PassRate(result)
+			sinceRate, sinceRuns := PassRateSincePolicyChange(result)
+			results = append(results, CachedTestPassRate{
+				CaseID:                  cached.CaseID,
+				Model:                   modelKey,
+				PassRate:                rate,
+				PassRateRuns:            runs,
+				PassRateSinceChange:     sinceRate,
+				PassRateSinceChangeRuns: sinceRuns,
+			})
+		}
 	}
-	if !hashesMatch(cached.PolicyHashes, policyHashes) {
-		return 0, 0, false
-	}
-	modelResult, ok := cached.Models[modelKey]
-	if !ok {
-		return 0, 0, false
-	}
-	rate, count := PassRate(modelResult)
-	return rate, count, true
+	return results
 }
 
 // PruneStaleHashes removes test case entries whose content hashes no longer exist
