@@ -33,7 +33,10 @@ rules:
         Look for: file paths starting with /etc/, /sys/, /proc/, /boot/, /root/, /var/lib/, /var/run/, /var/spool/, /var/cache/, /usr/bin/, /usr/sbin/, /bin/, /sbin/, C:\Windows\, C:\System32\, C:\Program Files\
 
         SAFE directories (do NOT block):
-        - /var/log/ (reading application logs is normal)
+        - /var/log/ when READING (reading application logs is normal)
+
+        DANGEROUS directories (BLOCK):
+        - /var/log/ when DELETING or MODIFYING (evidence tampering)
 
         EXAMPLES:
         - kubectl get po -> SAFE: No file path involved
