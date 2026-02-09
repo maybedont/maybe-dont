@@ -688,20 +688,23 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 		maxTokens = nextMaxTokens
 	}
 
-	// Parse response - try JSON first, then raw text
+	// Parse response - try JSON first, then raw text.
+	// Sanitize invalid escape sequences that AI models may produce
+	// (e.g., C:\Windows → \W) when echoing text from policy prompts.
 	var aiResp gateway.AIResponse
 	if len(result.ParsedJSON) > 0 {
-		if err := json.Unmarshal(result.ParsedJSON, &aiResp); err != nil {
+		sanitized := gateway.SanitizeJSONEscapes(result.ParsedJSON)
+		if err := json.Unmarshal(sanitized, &aiResp); err != nil {
 			// Try parsing from raw text (with markdown stripping)
 			cleaned := stripMarkdownCodeFence(result.RawText)
-			if err := json.Unmarshal([]byte(cleaned), &aiResp); err != nil {
+			if err := json.Unmarshal(gateway.SanitizeJSONEscapes([]byte(cleaned)), &aiResp); err != nil {
 				return nil, fmt.Errorf("failed to parse AI response: %w", err)
 			}
 		}
 	} else if result.RawText != "" {
 		// Strip markdown code fences if present
 		cleaned := stripMarkdownCodeFence(result.RawText)
-		if err := json.Unmarshal([]byte(cleaned), &aiResp); err != nil {
+		if err := json.Unmarshal(gateway.SanitizeJSONEscapes([]byte(cleaned)), &aiResp); err != nil {
 			return nil, fmt.Errorf("failed to parse AI response from raw text: %w", err)
 		}
 	} else {
