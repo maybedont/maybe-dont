@@ -238,10 +238,11 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 	for _, key := range bucketOrder {
 		b := buckets[key]
 		total := b.passed + b.failed + b.errored + b.skipped
-		evaluated := total - b.skipped
+		// Match rate excludes errored tests — errors are infrastructure issues, not policy failures
+		decided := b.passed + b.failed
 		matchRate := 0.0
-		if evaluated > 0 {
-			matchRate = float64(b.passed) / float64(evaluated)
+		if decided > 0 {
+			matchRate = float64(b.passed) / float64(decided)
 		}
 		if matchRate < worstMatchRate {
 			worstMatchRate = matchRate

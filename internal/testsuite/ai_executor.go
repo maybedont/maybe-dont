@@ -606,10 +606,10 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 		defer r.rateLimiter.ReleaseSequentialSlot(r.model.Provider)
 	}
 
-	// Build the full prompt
-	systemPrompt := "You are a security policy evaluator. Analyze the request and determine if it should be allowed or denied based on the policy. Respond with JSON: {\"allowed\": true/false, \"message\": \"explanation\"}"
-
-	userPrompt := fmt.Sprintf("Policy:\n%s\n\nRequest to evaluate:\n%s", prompt, requestContext)
+	// Build the prompt using the same format as the production engine (ai_engine.go).
+	// No system prompt — the production engine doesn't use one, so the test executor
+	// shouldn't either. This ensures test results predict production behavior.
+	userPrompt := prompt + "\n\n" + requestContext
 
 	// Determine initial max_tokens based on provider.
 	// Anthropic counts reserved max_tokens against rate limits, so start small and scale up.
@@ -633,15 +633,19 @@ func (r *AITestRunner) evaluatePolicy(ctx context.Context, prompt, requestContex
 
 	// Auto-scaling loop: try with increasing max_tokens on truncation
 	for attempt := 0; attempt < MaxScalingAttempts; attempt++ {
-		// Create AI request with current max_tokens
+		// Create AI request with current max_tokens.
+		// Default temperature to 0.0 to match production (deterministic responses)
+		// unless the model config explicitly sets a value.
 		params := copyParams(r.model.Parameters)
 		params["max_tokens"] = maxTokens
+		if _, ok := params["temperature"]; !ok {
+			params["temperature"] = 0.0
+		}
 
 		aiReq := gateway.AIRequest{
-			Model:        r.model.Model,
-			SystemPrompt: systemPrompt,
-			UserPrompt:   userPrompt,
-			Parameters:   params,
+			Model:      r.model.Model,
+			UserPrompt: userPrompt,
+			Parameters: params,
 		}
 
 		// Create a fresh timeout context for this API call.
@@ -764,21 +768,42 @@ func stripMarkdownCodeFence(text string) string {
 }
 
 // buildRequestContext builds a string representation of the request for AI evaluation.
+// Matches the production engine format (ai_engine.go): "Tool call:\n" + JSON Operation.
 func buildRequestContext(req RequestConfig) string {
-	return fmt.Sprintf("Tool: %s\nArguments: %v", req.ToolName, req.Arguments)
+	op := gateway.Operation{
+		Type:      gateway.OperationTypeMCP,
+		Name:      req.ToolName,
+		Arguments: req.Arguments,
+	}
+	jsonBytes, err := json.MarshalIndent(op, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("Tool call:\nType: %s\nName: %s\nArguments: %v", op.Type, op.Name, op.Arguments)
+	}
+	return "Tool call:\n" + string(jsonBytes)
 }
 
-// buildResponseContext builds a string representation of request+response for AI evaluation.
-func buildResponseContext(req RequestConfig, resp *ResponseConfig) string {
-	var respText string
+// buildResponseContext builds a string representation of the response for AI evaluation.
+// Matches the production engine format (ai_response_engine.go): "Response content:\n" + formatted response.
+// The production engine uses formatResponseForAI which outputs "IsError: ...\nContent:\n  [0] Text: ..."
+func buildResponseContext(_ RequestConfig, resp *ResponseConfig) string {
+	// Build the response string matching production's formatResponseForAI format
+	formatted := "IsError: false\n"
+
 	if resp != nil && len(resp.Content) > 0 {
-		for _, c := range resp.Content {
-			if c.Type == "text" {
-				respText += c.Text
+		formatted += "Content:\n"
+		for i, c := range resp.Content {
+			switch c.Type {
+			case "text":
+				formatted += fmt.Sprintf("  [%d] Text: %s\n", i, c.Text)
+			case "image":
+				formatted += fmt.Sprintf("  [%d] Image (type: image)\n", i)
+			default:
+				formatted += fmt.Sprintf("  [%d] %s: %s\n", i, c.Type, c.Text)
 			}
 		}
 	}
-	return fmt.Sprintf("Tool: %s\nArguments: %v\nResponse: %s", req.ToolName, req.Arguments, respText)
+
+	return "Response content:\n" + formatted
 }
 
 // isRetryableError checks if an error is transient and can be retried.

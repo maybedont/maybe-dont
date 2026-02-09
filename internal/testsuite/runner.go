@@ -192,8 +192,12 @@ func (r *Runner) runSummaryOnly() (*RunResult, error) {
 			TotalMs:   summary.TotalMs,
 			FromCache: true,
 		}
+		// Match rate excludes errored tests — errors are infrastructure issues, not policy failures
+		decided := summary.Passed + summary.Failed
+		if decided > 0 {
+			entry.MatchRate = float64(summary.Passed) / float64(decided)
+		}
 		if evaluated > 0 {
-			entry.MatchRate = float64(summary.Passed) / float64(evaluated)
 			entry.AvgMs = summary.TotalMs / int64(evaluated)
 		}
 		entries = append(entries, entry)
@@ -1611,10 +1615,11 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 		}
 	}
 
-	// Calculate match rate (passed / (total - skipped))
-	evaluated := result.TotalCases - result.Skipped
-	if evaluated > 0 {
-		result.MatchRate = float64(result.Passed) / float64(evaluated)
+	// Calculate match rate: passed / (passed + failed), excluding errors and skipped.
+	// Errors are infrastructure issues (timeouts, rate limits), not policy accuracy failures.
+	decided := result.Passed + result.Failed
+	if decided > 0 {
+		result.MatchRate = float64(result.Passed) / float64(decided)
 	}
 
 	// Check threshold
@@ -2320,8 +2325,12 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 			Errored: celErrored,
 			TotalMs: celTotalMs,
 		}
+		// Match rate excludes errored tests — errors are infrastructure issues, not policy failures
+		celDecided := celPassed + celFailed
+		if celDecided > 0 {
+			entry.MatchRate = float64(celPassed) / float64(celDecided)
+		}
 		if evaluated > 0 {
-			entry.MatchRate = float64(celPassed) / float64(evaluated)
 			entry.AvgMs = celTotalMs / int64(evaluated)
 		}
 		entries = append(entries, entry)
@@ -2330,8 +2339,12 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 	// Add current run's AI model entries
 	for _, entry := range aiStats {
 		evaluated := entry.Passed + entry.Failed + entry.Errored
+		// Match rate excludes errored tests — errors are infrastructure issues, not policy failures
+		decided := entry.Passed + entry.Failed
+		if decided > 0 {
+			entry.MatchRate = float64(entry.Passed) / float64(decided)
+		}
 		if evaluated > 0 {
-			entry.MatchRate = float64(entry.Passed) / float64(evaluated)
 			entry.AvgMs = entry.TotalMs / int64(evaluated)
 		}
 		entries = append(entries, *entry)
@@ -2353,8 +2366,12 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 				TotalMs:   summary.TotalMs,
 				FromCache: true,
 			}
+			// Match rate excludes errored tests — errors are infrastructure issues, not policy failures
+			decided := summary.Passed + summary.Failed
+			if decided > 0 {
+				entry.MatchRate = float64(summary.Passed) / float64(decided)
+			}
 			if evaluated > 0 {
-				entry.MatchRate = float64(summary.Passed) / float64(evaluated)
 				entry.AvgMs = summary.TotalMs / int64(evaluated)
 			}
 			entries = append(entries, entry)
