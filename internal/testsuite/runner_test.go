@@ -1302,9 +1302,9 @@ func TestCalculateResults_CachedResultsCountAsOriginalStatus(t *testing.T) {
 	assert.Equal(t, 1, summary.Skipped, "only rate-limited should be skipped")
 	assert.Equal(t, 5, summary.CachedCount, "track cached count for info display")
 	assert.Equal(t, 1, summary.RateLimited)
-	// Match rate = 5 / (9 - 1) = 5/8 = 0.625
-	assert.InDelta(t, float64(5)/float64(8), summary.MatchRate, 0.001)
-	assert.False(t, summary.ThresholdsMet, "62.5% < 80% threshold")
+	// Match rate = 5 / (5 + 2) = 5/7 ≈ 0.714 (errors excluded from denominator)
+	assert.InDelta(t, float64(5)/float64(7), summary.MatchRate, 0.001)
+	assert.False(t, summary.ThresholdsMet, "71.4% < 80% threshold")
 }
 
 // TestFormatJSONOutput_OverallSummaryAggregates verifies that the JSON output's
@@ -1347,8 +1347,8 @@ func TestFormatJSONOutput_OverallSummaryAggregates(t *testing.T) {
 	assert.Equal(t, 2, output.OverallSummary.Failed, "1 fresh + 1 cached failed")
 	assert.Equal(t, 1, output.OverallSummary.Errored, "1 cached errored")
 	assert.Equal(t, 0, output.OverallSummary.Skipped)
-	// Match rate = 5 / (8 - 0) = 5/8 = 0.625
-	assert.InDelta(t, float64(5)/float64(8), output.OverallSummary.MatchRate, 0.001)
+	// Match rate = 5 / (5 + 2) = 5/7 ≈ 0.714 (errors excluded from denominator)
+	assert.InDelta(t, float64(5)/float64(7), output.OverallSummary.MatchRate, 0.001)
 
 	// Check per-model summaries also use effective status
 	require.Len(t, output.ResultsByModel, 2)
@@ -1358,8 +1358,8 @@ func TestFormatJSONOutput_OverallSummaryAggregates(t *testing.T) {
 	assert.Equal(t, 1, modelA.Failed)
 	assert.Equal(t, 1, modelA.Errored, "cached errored counts as errored")
 	assert.Equal(t, 0, modelA.Skipped)
-	// Match rate = 4 / (6 - 0) = 4/6 ≈ 0.667
-	assert.InDelta(t, float64(4)/float64(6), modelA.MatchRate, 0.001)
+	// Match rate = 4 / (4 + 1) = 4/5 = 0.8 (errors excluded from denominator)
+	assert.InDelta(t, float64(4)/float64(5), modelA.MatchRate, 0.001)
 
 	modelB := output.ResultsByModel[1].Summary
 	assert.Equal(t, 2, modelB.TotalCases)
