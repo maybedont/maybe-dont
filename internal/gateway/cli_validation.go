@@ -247,8 +247,11 @@ func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Attach request ID to context so downstream loggers (CEL engine, AI engine) include it
+	reqCtx := context.WithValue(r.Context(), config.RequestIDKey, ctx.RequestID)
+
 	// Command requires validation - evaluate policies
-	validationResults := h.evaluatePolicies(r.Context(), &req)
+	validationResults := h.evaluatePolicies(reqCtx, &req)
 
 	// Build response from validation results
 	resp := CLIValidationResponse{
