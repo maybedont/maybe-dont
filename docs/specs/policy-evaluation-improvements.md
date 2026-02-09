@@ -539,36 +539,38 @@ Embed policy descriptions and request descriptions into a shared vector space. U
 
 **Estimated impact:** Match rate improves from 44-68% to 65-85% across models.
 
-### Phase 2: Policy Prompt Refinement (Targeted → +10-15% match rate)
+### Phase 2: Test Executor Alignment and Policy Review (Targeted)
 
-**Goal:** Reduce policy overlap through scope boundary language.
+**Goal:** Ensure test executor matches production behavior for response policies, and review policy prompts for clarity.
 
-1. **Add scope boundaries to all AI request policies:**
+**Completed work:**
 
-   ```
-   # Add to the end of each policy prompt:
+1. **Shared response decision logic (prevents test/production drift):**
+   - Extracted `DetermineResponseDecision()` function in `ai_response_engine.go` — single source of truth for mapping (rule action, model allowed, redacted_content) → final decision
+   - Both production engine and test executor call this function, eliminating the risk of logic drift
 
-   SCOPE: This policy ONLY evaluates [specific concern].
-   Do NOT evaluate [list of other concerns] — other policies handle those.
-   ```
+2. **Fixed test executor response policy evaluation:**
+   - **Schema alignment**: Response policies now use `AIResponseEvaluation` schema (with `redacted_content` field) instead of the request-only `AIResponse` schema. This matches production's `ai_response_engine.go`.
+   - **Structured output**: Added `ResponseSchema` to all AI provider calls (both request and response policies), matching how the production engine communicates with models.
+   - **Refactored for separation**: Extracted `callAIProvider()` (shared rate limiting, auto-scaling, timeouts) and generic `parseAIResult[T]()` (shared JSON parsing). Request and response evaluation paths now use separate type-safe methods (`evaluatePolicy` and `evaluateResponsePolicy`) while sharing all infrastructure code.
 
-   Specific additions:
-   - **Mass deletion**: "SCOPE: ONLY evaluate bulk/mass deletion patterns. Do NOT evaluate the tool name safety, file path location, or credential exposure."
-   - **System directory**: "SCOPE: ONLY evaluate whether the file path targets a dangerous system directory. Do NOT evaluate what the operation does to the file or what content it contains."
-   - **Command execution**: "SCOPE: ONLY evaluate whether the tool name indicates direct command/shell execution. Do NOT evaluate what the command does (deletion patterns, file paths, etc.)."
-   - **Credential access**: "SCOPE: ONLY evaluate whether the file path or name suggests credential content. Do NOT evaluate the tool name, system directory, or executable concerns."
-   - **Executable creation**: "SCOPE: ONLY evaluate whether the output file is an executable or persistence mechanism (.sh, .exe, cron, systemd). Do NOT evaluate the file path for system directory access."
-   - **Large file ops**: "SCOPE: ONLY evaluate file size/volume. Do NOT evaluate the file path, content type, or tool name."
+3. **Policy prompt review — no changes needed:**
+   - Reviewed all 6 AI request policies and 3 AI response policies for positive scope clarity
+   - All policies are well-focused on their specific concern through their existing "ANALYZE:" and "Look for:" language
+   - The `redact-internal-paths` prompt was initially flagged as needing a fix for "action confusion" (deny vs redact), but investigation revealed the issue was in the test executor, not the prompt — the test executor was using the wrong schema (missing `redacted_content`) and wrong decision logic. The code fixes above resolve this.
 
-2. **Fix action confusion in redact-internal-paths:**
-   - Add to prompt: "When internal paths are found, respond with allowed: false. The gateway will handle the redaction action."
-   - This resolves the deny-vs-redact confusion
+**Deferred — scope boundary language:**
 
-3. **Add scope boundaries to AI response policies:**
-   - **Credential leakage**: "SCOPE: ONLY evaluate for actual credentials, API keys, and secrets. Do NOT flag business data, PII, or internal paths."
-   - **Business data**: "SCOPE: ONLY evaluate for sensitive business information (revenue, customer data, salaries). Do NOT flag credentials, paths, or PII."
+The original plan called for adding explicit "SCOPE: Do NOT evaluate X, Y, Z" boundaries to each policy. After review, this approach was deferred due to significant risks:
 
-**Estimated impact:** Match rate improves from 65-85% to 80-95% across models.
+- **Policy coupling**: Each policy would need to reference concerns handled by other policies, creating maintenance burden when policies are added/removed
+- **Customer impact**: Policy authors would need to understand the full policy corpus to write effective scope boundaries — this conflicts with the goal that policies should be self-contained
+- **Security risk**: Telling a model "Do NOT evaluate file path location" in a mass-deletion policy could cause it to miss real threats if a customer doesn't have a separate system-directory policy enabled
+- **Fragility**: Every policy addition/removal would require auditing scope boundaries across all existing policies
+
+This idea may be revisited after post-Phase-1/Phase-2 test results reveal whether cross-triggering remains a significant accuracy issue. If needed, a lighter approach (tightening positive scope rather than adding negative exclusions) should be preferred.
+
+**Estimated impact:** Primarily improves accuracy for response policies (redact behavior) and ensures test results are predictive of production behavior. Cross-policy overlap improvements will be measured after running the full test suite.
 
 ### Phase 3: Test Coverage Expansion (Comprehensive)
 
