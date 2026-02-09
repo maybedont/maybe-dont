@@ -401,6 +401,13 @@ func formatJUnitOutput(suite *Suite, results []TestResult, summary *RunResult) (
 		Time:     totalTime,
 	}
 
+	// Compute aggregate match rate for properties
+	evaluated := summary.TotalCases - summary.Skipped
+	matchRate := 0.0
+	if evaluated > 0 {
+		matchRate = float64(summary.Passed) / float64(evaluated)
+	}
+
 	// Create a single test suite (for now - will expand for model matrix)
 	ts := JUnitTestSuite{
 		Name:     fmt.Sprintf("policies/%s", suite.BundleID),
@@ -412,6 +419,10 @@ func formatJUnitOutput(suite *Suite, results []TestResult, summary *RunResult) (
 		Properties: []JUnitProperty{
 			{Name: "bundle_id", Value: suite.BundleID},
 			{Name: "version", Value: suite.Version},
+			{Name: "passed", Value: fmt.Sprintf("%d", summary.Passed)},
+			{Name: "failed", Value: fmt.Sprintf("%d", summary.Failed)},
+			{Name: "errored", Value: fmt.Sprintf("%d", summary.Errored)},
+			{Name: "match_rate", Value: fmt.Sprintf("%.4f", matchRate)},
 		},
 	}
 
@@ -422,41 +433,59 @@ func formatJUnitOutput(suite *Suite, results []TestResult, summary *RunResult) (
 			Time:      float64(r.ElapsedMs) / 1000.0,
 		}
 
-		switch r.Status {
-		case "failed":
-			var failureContent strings.Builder
-			failureContent.WriteString(fmt.Sprintf("Expected: %s\n", r.Expected.Decision))
-			failureContent.WriteString(fmt.Sprintf("Actual: %s\n", r.Actual.Decision))
-			if len(r.Actual.PoliciesExecuted) > 0 {
-				failureContent.WriteString("\nPolicy results:\n")
-				for _, p := range r.Actual.PoliciesExecuted {
-					failureContent.WriteString(fmt.Sprintf("  - %s: %s (%dms)\n", p.PolicyName, p.Decision, p.ElapsedMs))
-				}
-			}
-			for _, f := range r.Failures {
-				failureContent.WriteString(fmt.Sprintf("\n%s", f))
-			}
+		// Use effective status so cached results are classified by their
+		// original outcome (e.g., "cached failed" → failure element).
+		isCached := r.Status == "skipped" && r.Error != nil && r.Error.Type == "cached"
 
-			tc.Failure = &JUnitFailure{
-				Message: fmt.Sprintf("Expected '%s', actual '%s'", r.Expected.Decision, r.Actual.Decision),
-				Type:    "AssertionError",
-				Content: failureContent.String(),
+		switch effectiveStatus(r) {
+		case "failed":
+			if isCached {
+				tc.Failure = &JUnitFailure{
+					Message: "Failed in previous run (cached result)",
+					Type:    "CachedFailure",
+				}
+			} else {
+				var failureContent strings.Builder
+				failureContent.WriteString(fmt.Sprintf("Expected: %s\n", r.Expected.Decision))
+				failureContent.WriteString(fmt.Sprintf("Actual: %s\n", r.Actual.Decision))
+				if len(r.Actual.PoliciesExecuted) > 0 {
+					failureContent.WriteString("\nPolicy results:\n")
+					for _, p := range r.Actual.PoliciesExecuted {
+						failureContent.WriteString(fmt.Sprintf("  - %s: %s (%dms)\n", p.PolicyName, p.Decision, p.ElapsedMs))
+					}
+				}
+				for _, f := range r.Failures {
+					failureContent.WriteString(fmt.Sprintf("\n%s", f))
+				}
+
+				tc.Failure = &JUnitFailure{
+					Message: fmt.Sprintf("Expected '%s', actual '%s'", r.Expected.Decision, r.Actual.Decision),
+					Type:    "AssertionError",
+					Content: failureContent.String(),
+				}
 			}
 
 		case "errored":
-			var errorContent strings.Builder
-			if r.Error != nil {
-				errorContent.WriteString(fmt.Sprintf("Type: %s\n", r.Error.Type))
-				errorContent.WriteString(fmt.Sprintf("Message: %s\n", r.Error.Message))
-				if r.Error.Details != "" {
-					errorContent.WriteString(fmt.Sprintf("Details: %s\n", r.Error.Details))
+			if isCached {
+				tc.Error = &JUnitError{
+					Message: "Errored in previous run (cached result)",
+					Type:    "CachedError",
 				}
-			}
+			} else {
+				var errorContent strings.Builder
+				if r.Error != nil {
+					errorContent.WriteString(fmt.Sprintf("Type: %s\n", r.Error.Type))
+					errorContent.WriteString(fmt.Sprintf("Message: %s\n", r.Error.Message))
+					if r.Error.Details != "" {
+						errorContent.WriteString(fmt.Sprintf("Details: %s\n", r.Error.Details))
+					}
+				}
 
-			tc.Error = &JUnitError{
-				Message: r.Error.Message,
-				Type:    r.Error.Type,
-				Content: errorContent.String(),
+				tc.Error = &JUnitError{
+					Message: r.Error.Message,
+					Type:    r.Error.Type,
+					Content: errorContent.String(),
+				}
 			}
 
 		case "skipped":

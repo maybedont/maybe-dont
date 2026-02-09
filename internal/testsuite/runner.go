@@ -1596,7 +1596,7 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 		if tr.Status == "skipped" && tr.Error != nil {
 			switch tr.Error.Type {
 			case "cached":
-				result.SkippedCached++
+				result.CachedCount++
 			case "rate_limited":
 				result.RateLimited++
 			}
@@ -2114,7 +2114,7 @@ func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, c
 	}
 
 	// Show cached breakdown as informational context (how many came from prior runs)
-	if summary.SkippedCached > 0 {
+	if summary.CachedCount > 0 {
 		var cachedPassed, cachedFailed int
 		for _, tr := range results {
 			if tr.Status == "skipped" && tr.Error != nil && tr.Error.Type == "cached" {
@@ -2126,7 +2126,7 @@ func formatTextSummary(suite *Suite, summary *RunResult, results []TestResult, c
 			}
 		}
 		sb.WriteString(fmt.Sprintf("Cached:  %d from previous run (%d passed, %d failed)\n",
-			summary.SkippedCached, cachedPassed, cachedFailed))
+			summary.CachedCount, cachedPassed, cachedFailed))
 	}
 
 	sb.WriteString(fmt.Sprintf("Match rate: %.1f%%\n", summary.MatchRate*100))

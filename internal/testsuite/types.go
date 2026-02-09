@@ -112,8 +112,8 @@ type RunResult struct {
 	// Skipped is the count of skipped test cases
 	Skipped int
 
-	// SkippedCached is the count of tests skipped due to valid cached results
-	SkippedCached int
+	// CachedCount is the number of results sourced from cache (counted by original status above)
+	CachedCount int
 
 	// RateLimited is the count of tests skipped due to rate limiting
 	RateLimited int

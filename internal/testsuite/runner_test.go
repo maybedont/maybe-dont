@@ -2,6 +2,7 @@ package testsuite
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,63 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestEffectiveStatus verifies that effectiveStatus correctly resolves cached
+// results to their original status while leaving non-cached results unchanged.
+func TestEffectiveStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		result TestResult
+		want   string
+	}{
+		{
+			name:   "fresh passed",
+			result: TestResult{Status: "passed"},
+			want:   "passed",
+		},
+		{
+			name:   "fresh failed",
+			result: TestResult{Status: "failed"},
+			want:   "failed",
+		},
+		{
+			name:   "fresh errored",
+			result: TestResult{Status: "errored"},
+			want:   "errored",
+		},
+		{
+			name:   "fresh skipped (no error)",
+			result: TestResult{Status: "skipped"},
+			want:   "skipped",
+		},
+		{
+			name:   "rate-limited skipped stays skipped",
+			result: TestResult{Status: "skipped", Error: &TestError{Type: "rate_limited", Message: "rate limited"}},
+			want:   "skipped",
+		},
+		{
+			name:   "cached passed resolves to passed",
+			result: TestResult{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
+			want:   "passed",
+		},
+		{
+			name:   "cached failed resolves to failed",
+			result: TestResult{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached failed"}},
+			want:   "failed",
+		},
+		{
+			name:   "cached errored resolves to errored",
+			result: TestResult{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached errored"}},
+			want:   "errored",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, effectiveStatus(tt.result))
+		})
+	}
+}
 
 func TestSplitTags(t *testing.T) {
 	tests := []struct {
@@ -1168,7 +1226,7 @@ func TestFormatTextSummary(t *testing.T) {
 			Passed:        11,
 			Failed:        3,
 			Errored:       1,
-			SkippedCached: 10,
+			CachedCount: 10,
 			MatchRate:     float64(11) / float64(15),
 			ThresholdsMet: false,
 		}
@@ -1200,7 +1258,7 @@ func TestFormatTextSummary(t *testing.T) {
 			TotalCases:    10,
 			Passed:        8,
 			Failed:        2,
-			SkippedCached: 7,
+			CachedCount: 7,
 			MatchRate:     0.8,
 			ThresholdsMet: true,
 		}
@@ -1230,22 +1288,23 @@ func TestCalculateResults_CachedResultsCountAsOriginalStatus(t *testing.T) {
 		{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
 		{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
 		{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached failed"}},
+		{Status: "skipped", Error: &TestError{Type: "cached", Message: "cached errored"}},
 		// Rate-limited — genuinely skipped
 		{Status: "skipped", Error: &TestError{Type: "rate_limited", Message: "rate limited"}},
 	}
 
 	summary := runner.calculateResults(results)
 
-	assert.Equal(t, 8, summary.TotalCases)
+	assert.Equal(t, 9, summary.TotalCases)
 	assert.Equal(t, 5, summary.Passed, "should include 2 fresh + 3 cached passed")
 	assert.Equal(t, 2, summary.Failed, "should include 1 fresh + 1 cached failed")
-	assert.Equal(t, 0, summary.Errored)
+	assert.Equal(t, 1, summary.Errored, "should include 1 cached errored")
 	assert.Equal(t, 1, summary.Skipped, "only rate-limited should be skipped")
-	assert.Equal(t, 4, summary.SkippedCached, "track cached count for info display")
+	assert.Equal(t, 5, summary.CachedCount, "track cached count for info display")
 	assert.Equal(t, 1, summary.RateLimited)
-	// Match rate = 5 / (8 - 1) = 5/7 ≈ 0.714
-	assert.InDelta(t, float64(5)/float64(7), summary.MatchRate, 0.001)
-	assert.False(t, summary.ThresholdsMet, "71.4% < 80% threshold")
+	// Match rate = 5 / (9 - 1) = 5/8 = 0.625
+	assert.InDelta(t, float64(5)/float64(8), summary.MatchRate, 0.001)
+	assert.False(t, summary.ThresholdsMet, "62.5% < 80% threshold")
 }
 
 // TestFormatJSONOutput_OverallSummaryAggregates verifies that the JSON output's
@@ -1261,12 +1320,13 @@ func TestFormatJSONOutput_OverallSummaryAggregates(t *testing.T) {
 	}
 
 	results := []TestResult{
-		// Model A: 2 fresh passed, 1 failed, 2 cached passed
+		// Model A: 2 fresh passed, 1 failed, 2 cached passed, 1 cached errored
 		{Engine: "ai", Model: "openai:gpt-5", Status: "passed"},
 		{Engine: "ai", Model: "openai:gpt-5", Status: "passed"},
 		{Engine: "ai", Model: "openai:gpt-5", Status: "failed"},
 		{Engine: "ai", Model: "openai:gpt-5", Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
 		{Engine: "ai", Model: "openai:gpt-5", Status: "skipped", Error: &TestError{Type: "cached", Message: "cached passed"}},
+		{Engine: "ai", Model: "openai:gpt-5", Status: "skipped", Error: &TestError{Type: "cached", Message: "cached errored"}},
 		// Model B: 1 fresh passed, 1 cached failed
 		{Engine: "ai", Model: "anthropic:haiku", Status: "passed"},
 		{Engine: "ai", Model: "anthropic:haiku", Status: "skipped", Error: &TestError{Type: "cached", Message: "cached failed"}},
@@ -1282,27 +1342,133 @@ func TestFormatJSONOutput_OverallSummaryAggregates(t *testing.T) {
 
 	// Check overall summary aggregates
 	assert.Equal(t, 2, output.OverallSummary.ModelsTested)
-	assert.Equal(t, 7, output.OverallSummary.TotalCases)
+	assert.Equal(t, 8, output.OverallSummary.TotalCases)
 	assert.Equal(t, 5, output.OverallSummary.Passed, "3 fresh + 2 cached passed")
 	assert.Equal(t, 2, output.OverallSummary.Failed, "1 fresh + 1 cached failed")
-	assert.Equal(t, 0, output.OverallSummary.Errored)
+	assert.Equal(t, 1, output.OverallSummary.Errored, "1 cached errored")
 	assert.Equal(t, 0, output.OverallSummary.Skipped)
-	assert.InDelta(t, float64(5)/float64(7), output.OverallSummary.MatchRate, 0.001)
+	// Match rate = 5 / (8 - 0) = 5/8 = 0.625
+	assert.InDelta(t, float64(5)/float64(8), output.OverallSummary.MatchRate, 0.001)
 
 	// Check per-model summaries also use effective status
 	require.Len(t, output.ResultsByModel, 2)
 	modelA := output.ResultsByModel[0].Summary
-	assert.Equal(t, 5, modelA.TotalCases)
+	assert.Equal(t, 6, modelA.TotalCases)
 	assert.Equal(t, 4, modelA.Passed, "2 fresh + 2 cached passed")
 	assert.Equal(t, 1, modelA.Failed)
+	assert.Equal(t, 1, modelA.Errored, "cached errored counts as errored")
 	assert.Equal(t, 0, modelA.Skipped)
-	assert.InDelta(t, float64(4)/float64(5), modelA.MatchRate, 0.001)
+	// Match rate = 4 / (6 - 0) = 4/6 ≈ 0.667
+	assert.InDelta(t, float64(4)/float64(6), modelA.MatchRate, 0.001)
 
 	modelB := output.ResultsByModel[1].Summary
 	assert.Equal(t, 2, modelB.TotalCases)
 	assert.Equal(t, 1, modelB.Passed)
 	assert.Equal(t, 1, modelB.Failed, "cached failed counts as failed")
 	assert.InDelta(t, 0.5, modelB.MatchRate, 0.001)
+}
+
+// TestFormatJUnitOutput_CachedResultsAndProperties verifies that JUnit output
+// classifies cached results by their original status and includes aggregate
+// summary properties matching the policy quality view.
+func TestFormatJUnitOutput_CachedResultsAndProperties(t *testing.T) {
+	suite := &Suite{
+		BundleID: "test",
+		Version:  "v1",
+		Acceptance: AcceptanceConfig{
+			MinMatchRate: 0.8,
+		},
+	}
+
+	results := []TestResult{
+		// Fresh results
+		{CaseID: "fresh-pass", Status: "passed", Expected: ExpectedResult{Decision: "allow"}},
+		{CaseID: "fresh-fail", Status: "failed", Expected: ExpectedResult{Decision: "deny"},
+			Actual: ActualResult{Decision: "allow"}, Failures: []string{"wrong decision"}},
+		// Cached results — should render as their original status, not <skipped>
+		{CaseID: "cached-pass", Status: "skipped", Expected: ExpectedResult{Decision: "allow"},
+			Error: &TestError{Type: "cached", Message: "cached passed"}},
+		{CaseID: "cached-fail", Status: "skipped", Expected: ExpectedResult{Decision: "deny"},
+			Error: &TestError{Type: "cached", Message: "cached failed"}},
+		{CaseID: "cached-err", Status: "skipped", Expected: ExpectedResult{Decision: "allow"},
+			Error: &TestError{Type: "cached", Message: "cached errored"}},
+		// Rate-limited — genuinely skipped
+		{CaseID: "rate-limited", Status: "skipped", Expected: ExpectedResult{Decision: "allow"},
+			Error: &TestError{Type: "rate_limited", Message: "rate limited"}},
+	}
+
+	// Summary uses policy quality view: cached results counted by original status
+	summary := &RunResult{
+		TotalCases:  6,
+		Passed:      2, // 1 fresh + 1 cached
+		Failed:      2, // 1 fresh + 1 cached
+		Errored:     1, // 1 cached
+		Skipped:     1, // only rate-limited
+		CachedCount: 3,
+	}
+
+	xmlStr, err := formatJUnitOutput(suite, results, summary)
+	require.NoError(t, err)
+
+	// Parse the XML to verify structure
+	var testSuites JUnitTestSuites
+	err = xml.Unmarshal([]byte(xmlStr), &testSuites)
+	require.NoError(t, err)
+
+	require.Len(t, testSuites.TestSuite, 1)
+	ts := testSuites.TestSuite[0]
+
+	// Suite-level counts match policy quality view
+	assert.Equal(t, 6, ts.Tests)
+	assert.Equal(t, 2, ts.Failures)
+	assert.Equal(t, 1, ts.Errors)
+	assert.Equal(t, 1, ts.Skipped)
+
+	// Verify aggregate properties are present
+	propMap := make(map[string]string)
+	for _, p := range ts.Properties {
+		propMap[p.Name] = p.Value
+	}
+	assert.Equal(t, "test", propMap["bundle_id"])
+	assert.Equal(t, "2", propMap["passed"])
+	assert.Equal(t, "2", propMap["failed"])
+	assert.Equal(t, "1", propMap["errored"])
+	assert.Contains(t, propMap["match_rate"], "0.4") // 2/5 = 0.4
+
+	// Verify individual test case elements match effective status
+	require.Len(t, ts.TestCases, 6)
+	caseMap := make(map[string]JUnitTestCase)
+	for _, tc := range ts.TestCases {
+		caseMap[tc.Name] = tc
+	}
+
+	// Fresh pass: no failure/error/skipped elements
+	assert.Nil(t, caseMap["fresh-pass"].Failure)
+	assert.Nil(t, caseMap["fresh-pass"].Error)
+	assert.Nil(t, caseMap["fresh-pass"].Skipped)
+
+	// Fresh fail: has failure element with actual details
+	assert.NotNil(t, caseMap["fresh-fail"].Failure)
+	assert.Contains(t, caseMap["fresh-fail"].Failure.Message, "Expected 'deny', actual 'allow'")
+
+	// Cached pass: no elements (it's a pass)
+	assert.Nil(t, caseMap["cached-pass"].Failure)
+	assert.Nil(t, caseMap["cached-pass"].Error)
+	assert.Nil(t, caseMap["cached-pass"].Skipped)
+
+	// Cached fail: has failure element indicating cached origin
+	assert.NotNil(t, caseMap["cached-fail"].Failure)
+	assert.Equal(t, "CachedFailure", caseMap["cached-fail"].Failure.Type)
+	assert.Contains(t, caseMap["cached-fail"].Failure.Message, "previous run")
+
+	// Cached errored: has error element indicating cached origin
+	assert.NotNil(t, caseMap["cached-err"].Error)
+	assert.Equal(t, "CachedError", caseMap["cached-err"].Error.Type)
+	assert.Contains(t, caseMap["cached-err"].Error.Message, "previous run")
+
+	// Rate-limited: still shows as skipped
+	assert.NotNil(t, caseMap["rate-limited"].Skipped)
+	assert.Equal(t, "rate limited", caseMap["rate-limited"].Skipped.Message)
 }
 
 // TestFormatModelComparison verifies the cross-model comparison table rendering.
