@@ -2,9 +2,12 @@ package testsuite
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/maybedont/maybe-dont/internal/gateway"
 	"github.com/stretchr/testify/assert"
 )
@@ -362,6 +365,116 @@ func TestClassifyError(t *testing.T) {
 			if tt.detailsAbsent != "" {
 				assert.NotContains(t, result.Details, tt.detailsAbsent)
 			}
+		})
+	}
+}
+
+// TestEvaluateResponsePolicies_DenyTrumpsRedact verifies that the test executor's
+// response policy aggregation gives deny strict priority over redact, matching
+// production behavior. This is a regression test for a last-writer-wins bug where
+// a redact result indexed after a deny would overwrite the deny decision.
+func TestEvaluateResponsePolicies_DenyTrumpsRedact(t *testing.T) {
+	tests := []struct {
+		name             string
+		denyAllowed      bool
+		denyContent      string
+		redactAllowed    bool
+		redactContent    string
+		expectedDecision string
+	}{
+		{
+			name:             "deny + redact both trigger → deny wins",
+			denyAllowed:      false,
+			denyContent:      "",
+			redactAllowed:    true,
+			redactContent:    "sanitized content",
+			expectedDecision: "deny",
+		},
+		{
+			name:             "redact triggers + deny allows → redact",
+			denyAllowed:      true,
+			denyContent:      "",
+			redactAllowed:    true,
+			redactContent:    "sanitized content",
+			expectedDecision: "redact",
+		},
+		{
+			name:             "both allow → allow",
+			denyAllowed:      true,
+			denyContent:      "",
+			redactAllowed:    true,
+			redactContent:    "",
+			expectedDecision: "allow",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := gateway.NewMockAIProviderClient()
+			mockClient.SetGenerateFunc(func(_ context.Context, req gateway.AIRequest) (gateway.AICompletionResult, error) {
+				var resp gateway.AIResponseEvaluation
+
+				if strings.Contains(req.UserPrompt, "Deny check") {
+					resp = gateway.AIResponseEvaluation{
+						Allowed:         tt.denyAllowed,
+						Message:         "deny evaluation",
+						RedactedContent: tt.denyContent,
+					}
+				} else {
+					resp = gateway.AIResponseEvaluation{
+						Allowed:         tt.redactAllowed,
+						Message:         "redact evaluation",
+						RedactedContent: tt.redactContent,
+					}
+				}
+
+				respJSON, _ := json.Marshal(resp)
+				return gateway.AICompletionResult{
+					RawText:    string(respJSON),
+					ParsedJSON: json.RawMessage(respJSON),
+				}, nil
+			})
+
+			runner := &AITestRunner{
+				model: ModelConfig{
+					Provider: "openai",
+					Model:    "test-model",
+				},
+				providerClient: mockClient,
+				responsePolicies: []config.AIResponsePolicy{
+					{
+						// Deny is listed FIRST — the bug would let redact overwrite it
+						Name:   "test-deny-rule",
+						Prompt: "Deny check for dangerous content",
+						Action: config.PolicyActionDeny,
+					},
+					{
+						Name:   "test-redact-rule",
+						Prompt: "Redact check for sensitive data",
+						Action: config.PolicyActionRedact,
+					},
+				},
+				timeoutMs: 30000,
+			}
+
+			tc := TestCase{
+				CaseID: "deny-trumps-redact",
+				Title:  "Deny trumps redact priority test",
+				Phase:  "response",
+				Request: RequestConfig{
+					ToolName: "test_tool",
+				},
+				Response: &ResponseConfig{
+					Content: []ContentItem{
+						{Type: "text", Text: "Test response content"},
+					},
+				},
+			}
+
+			result, err := runner.evaluateResponsePolicies(context.Background(), tc)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedDecision, result.decision,
+				"expected overall decision to be %q", tt.expectedDecision)
 		})
 	}
 }
