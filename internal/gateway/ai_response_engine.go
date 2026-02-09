@@ -249,8 +249,10 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				return
 			}
 
+			// Sanitize invalid escape sequences that AI models may produce
+			// (e.g., C:\Windows → \W) when echoing text from policy prompts.
 			var evaluation AIResponseEvaluation
-			err = json.Unmarshal(result.ParsedJSON, &evaluation)
+			err = json.Unmarshal(SanitizeJSONEscapes(result.ParsedJSON), &evaluation)
 			if err != nil {
 				resultChan <- aiResponseRuleResult{
 					policy:       p,

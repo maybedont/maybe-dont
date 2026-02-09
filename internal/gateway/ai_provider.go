@@ -202,15 +202,6 @@ func NewAIProviderClient(cfg *config.Config) AIProviderClient {
 	aiCfg := cfg.Validation.AI
 	provider := aiCfg.Provider
 
-	// Ensure temperature defaults to 0.0 for deterministic policy decisions.
-	// Explicit user configuration takes precedence.
-	if aiCfg.Parameters == nil {
-		aiCfg.Parameters = map[string]any{"temperature": 0.0}
-	} else if _, ok := aiCfg.Parameters["temperature"]; !ok {
-		aiCfg.Parameters["temperature"] = 0.0
-	}
-	cfg.Validation.AI = aiCfg
-
 	// Default to OpenAI for backward compatibility (deprecation warning logged during config load)
 	if provider == "" {
 		provider = ProviderOpenAI
