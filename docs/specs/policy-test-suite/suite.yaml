@@ -84,31 +84,23 @@ engines:
     # Use 'enabled: false' to disable a model without removing it from the matrix.
     model_matrix:
       # OpenAI 4o series (previous generation)
+      # Note: OpenAI models (gpt-5-mini, etc.) do not support temperature=0.
+      # Do not set temperature for OpenAI models; use their default.
       - provider: "openai"
         model: "gpt-4o"  # High-intelligence flagship
-        parameters:
-          temperature: 0.0
 
       - provider: "openai"
         model: "gpt-4o-mini"  # Cost-effective option
-        parameters:
-          temperature: 0.0
 
       # OpenAI 4.1 series (current generation)
       - provider: "openai"
         model: "chatgpt-4o-latest"  # Latest 4o with updates
-        parameters:
-          temperature: 0.0
 
       - provider: "openai"
         model: "gpt-4.1-mini"  # Balanced speed/intelligence
-        parameters:
-          temperature: 0.0
 
       - provider: "openai"
         model: "gpt-4.1-nano"  # Cost-optimized, fastest
-        parameters:
-          temperature: 0.0
 
       # Anthropic models - high to low capability
       # Using dated versions for reproducible test results
@@ -143,16 +135,12 @@ engines:
         endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
         api_key: "${GEMINI_API_KEY}"
         enabled: false
-        parameters:
-          temperature: 0.0
 
       - provider: "openai_compatible"
         model: "gemini-2.5-pro"
         endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
         api_key: "${GEMINI_API_KEY}"
         enabled: false
-        parameters:
-          temperature: 0.0
 
       # Groq (via OpenAI-compatible endpoint)
       # export GROQ_API_KEY=<your key> then set enabled: true
@@ -161,8 +149,6 @@ engines:
         endpoint: "https://api.groq.com/openai/v1/chat/completions"
         api_key: "${GROQ_API_KEY}"
         enabled: false
-        parameters:
-          temperature: 0.0
 
       # Perplexity (via OpenAI-compatible endpoint)
       # export PERPLEXITY_API_KEY=<your key> then set enabled: true
@@ -171,8 +157,6 @@ engines:
         endpoint: "https://api.perplexity.ai/chat/completions"
         api_key: "${PERPLEXITY_API_KEY}"
         enabled: false
-        parameters:
-          temperature: 0.0
 
       # Example: Azure OpenAI (commented out - uncomment to test Azure endpoint)
       # - provider: "openai_compatible"
