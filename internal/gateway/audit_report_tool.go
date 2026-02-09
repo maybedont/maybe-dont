@@ -378,14 +378,16 @@ func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []Aud
 	)
 
 	// Parse the AI response from the provider-agnostic result
+	// Sanitize invalid escape sequences that AI models may produce
+	// (e.g., C:\Windows → \W) when echoing text from prompts.
 	var aiResponse AIReportResponse
 	if result.ParsedJSON != nil {
-		if err := json.Unmarshal(result.ParsedJSON, &aiResponse); err != nil {
+		if err := json.Unmarshal(SanitizeJSONEscapes(result.ParsedJSON), &aiResponse); err != nil {
 			return nil, fmt.Errorf("failed to parse AI response: %w", err)
 		}
 	} else {
 		// Fallback to raw text if no parsed JSON
-		if err := json.Unmarshal([]byte(result.RawText), &aiResponse); err != nil {
+		if err := json.Unmarshal(SanitizeJSONEscapes([]byte(result.RawText)), &aiResponse); err != nil {
 			return nil, fmt.Errorf("failed to parse AI response: %w", err)
 		}
 	}
