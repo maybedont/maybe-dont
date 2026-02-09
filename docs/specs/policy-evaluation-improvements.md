@@ -507,9 +507,11 @@ Embed policy descriptions and request descriptions into a shared vector space. U
 
 ## 8. Phased Implementation Plan
 
-### Phase 1: Fix Test Framework and Expectations (Quick wins → +15-20% match rate)
+### Phase 1: Fix Test Framework and Expectations (Quick wins → +15-20% match rate) — COMPLETE
 
 **Goal:** Fix issues in the test suite itself that don't require policy changes.
+
+**Implemented in:** PR #102, PR #103 (merge conflict resolution), PR #104 (code review feedback)
 
 1. **Fix ai-req-012**: Update policy to distinguish read vs delete in /var/log
    - Change: `"SAFE directories: /var/log/ (reading application logs is normal, but DELETING log files is dangerous - evidence tampering)"`
@@ -539,9 +541,11 @@ Embed policy descriptions and request descriptions into a shared vector space. U
 
 **Estimated impact:** Match rate improves from 44-68% to 65-85% across models.
 
-### Phase 2: Test Executor Alignment and Policy Review (Targeted)
+### Phase 2: Test Executor Alignment and Policy Review (Targeted) — COMPLETE
 
 **Goal:** Ensure test executor matches production behavior for response policies, and review policy prompts for clarity.
+
+**Implemented in:** PR #105 (executor alignment + shared decision logic), PR #106 (deny-trumps-redact bugfix + unit tests)
 
 **Completed work:**
 
@@ -569,6 +573,12 @@ The original plan called for adding explicit "SCOPE: Do NOT evaluate X, Y, Z" bo
 - **Fragility**: Every policy addition/removal would require auditing scope boundaries across all existing policies
 
 This idea may be revisited after post-Phase-1/Phase-2 test results reveal whether cross-triggering remains a significant accuracy issue. If needed, a lighter approach (tightening positive scope rather than adding negative exclusions) should be preferred.
+
+4. **Fixed deny-trumps-redact priority bug in test executor (PR #106):**
+   - The response policy aggregation loop had a last-writer-wins bug: if a deny policy was indexed before a redact policy, the redact result would overwrite the deny decision. Replaced with priority-aware logic (`deny > redact > allow`) matching production's `ai_response_engine.go`.
+   - Removed unused `isDeny` field from `policyEvalResult` struct.
+   - Renamed `context_` parameter to idiomatic `promptContext` in `callAIProvider`.
+   - Added `TestDetermineResponseDecision` (9 cases covering the full decision matrix) and `TestEvaluateResponsePolicies_DenyTrumpsRedact` (3 cases validating the priority fix).
 
 **Estimated impact:** Primarily improves accuracy for response policies (redact behavior) and ensures test results are predictive of production behavior. Cross-policy overlap improvements will be measured after running the full test suite.
 

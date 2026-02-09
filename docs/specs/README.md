@@ -27,12 +27,12 @@ Each spec should have a `## Status` section near the top with one of these value
 | Spec | Description |
 |------|-------------|
 | [ai-validation-provider-agnostic](ai-validation-provider-agnostic.md) | Multi-provider AI validation (OpenAI, Anthropic, OpenAI-compatible) |
+| [policy-evaluation-improvements](policy-evaluation-improvements.md) | Analysis of policy/test suite efficacy and phased improvement plan (Phases 1-2 complete, Phases 3-5 remaining) |
 
 ### Draft
 
 | Spec | Description |
 |------|-------------|
-| [policy-evaluation-improvements](policy-evaluation-improvements.md) | Analysis of policy/test suite efficacy and phased improvement plan |
 | [prompt-injection-considerations](prompt-injection-considerations.md) | Prompt injection threat model, product positioning, and optimization strategies |
 | [api-token-obfuscation](api-token-obfuscation.md) | Obfuscate sensitive tokens in logs and audit entries |
 | [confidence-scoring](confidence-scoring.md) | Confidence scoring for AI policy responses with configurable thresholds |
