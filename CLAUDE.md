@@ -29,8 +29,8 @@ Maybe Don't Gateway is a security middleware service built in Go that acts as a 
 - `make docker-run` - Build a local dev Docker image and then start it
 
 ### Running the Gateway
-- `./maybe-dont start` - Start the gateway with default config
-- `./maybe-dont start --config-dir {some dir}` - Start the gateway with a specific location for the config file
+- `./maybe-dont gateway start` - Start the gateway with default config
+- `./maybe-dont gateway start --config-dir {some dir}` - Start the gateway with a specific location for the config file
 - `./maybe-dont version` - Show version information
 
 ### CLI Proxy
@@ -438,7 +438,7 @@ To disable metrics collection entirely, set the `MAYBEDONT_METRICS_OPTOUT` envir
 
 ```bash
 export MAYBEDONT_METRICS_OPTOUT=1
-./maybe-dont start
+./maybe-dont gateway start
 ```
 
 When opted out:
