@@ -12,11 +12,6 @@ var testCmd = &cobra.Command{
 
 Available subcommands:
   policies    Run policy tests against a test suite`,
-	// Override PersistentPreRunE to skip gateway config loading.
-	// Test commands get their configuration from suite.yaml, not the gateway config.
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		return nil
-	},
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Help()
 	},

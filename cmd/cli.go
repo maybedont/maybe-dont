@@ -40,10 +40,6 @@ Examples:
 
 Environment Variables:
   MAYBE_DONT_CLIENT_ID    Client identifier sent with validation requests`,
-	// Skip parent's PersistentPreRunE - this command doesn't need full gateway config loaded
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		return nil
-	},
 	RunE: runCLI,
 }
 

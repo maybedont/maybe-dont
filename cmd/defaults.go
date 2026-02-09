@@ -11,7 +11,7 @@ var defaultsCmd = &cobra.Command{
 	Use:   "defaults",
 	Short: "Manage default configuration files",
 	Long:  `Commands for working with embedded default configuration files.`,
-	// Skip parent's PersistentPreRunE - these commands don't need config loaded
+	// Skip mcp's PersistentPreRunE - these commands don't need config loaded
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		return nil
 	},
@@ -57,5 +57,5 @@ func init() {
 	_ = defaultsExportCmd.MarkFlagRequired("output-dir")
 
 	defaultsCmd.AddCommand(defaultsExportCmd)
-	rootCmd.AddCommand(defaultsCmd)
+	gatewayCmd.AddCommand(defaultsCmd)
 }
