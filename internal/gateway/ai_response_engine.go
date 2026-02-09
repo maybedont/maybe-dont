@@ -110,6 +110,23 @@ type AIResponseEvaluation struct {
 	RedactedContent string `json:"redacted_content"`
 }
 
+// DetermineResponseDecision maps a response policy's action type and model output to a
+// final decision string. Redact rules check for redacted_content; deny rules check the
+// allowed field. This is the single source of truth for response decision logic —
+// both the production engine and the test executor must use this function.
+func DetermineResponseDecision(action config.PolicyAction, allowed bool, redactedContent string) string {
+	if action == config.PolicyActionRedact {
+		if redactedContent != "" {
+			return "redact"
+		}
+		return "allow"
+	}
+	if !allowed {
+		return "deny"
+	}
+	return "allow"
+}
+
 // aiResponseRuleResult represents the result of evaluating a single AI response rule
 type aiResponseRuleResult struct {
 	policy       AIResponsePolicy
@@ -265,21 +282,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				return
 			}
 
-			// Determine the result based on rule action type.
-			// Redact rules never produce "deny" — the only meaningful signal is whether
-			// redacted_content was provided. For deny/allow rules, use the allowed field.
-			var resultStr string
-			if p.Action == config.PolicyActionRedact {
-				if evaluation.RedactedContent != "" {
-					resultStr = "redact"
-				} else {
-					resultStr = "allow"
-				}
-			} else if !evaluation.Allowed {
-				resultStr = "deny"
-			} else {
-				resultStr = "allow"
-			}
+			resultStr := DetermineResponseDecision(p.Action, evaluation.Allowed, evaluation.RedactedContent)
 
 			resultChan <- aiResponseRuleResult{
 				policy:       p,
