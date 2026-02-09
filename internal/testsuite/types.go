@@ -90,6 +90,9 @@ type RunnerOptions struct {
 
 	// SummaryOnly shows summary from cached state without running tests
 	SummaryOnly bool
+
+	// HistoryDepth overrides suite.yaml history_depth for pass rate tracking (0 = use suite config)
+	HistoryDepth int
 }
 
 // RunResult contains the overall result of a test suite run.
@@ -162,6 +165,12 @@ type ModelComparisonEntry struct {
 	// TotalMs is the total test duration in milliseconds
 	TotalMs int64
 
+	// Stability is the mean pass rate across all tests with 3+ history entries for this model (0.0-1.0)
+	Stability float64
+
+	// StabilityTests is the count of tests with 3+ history entries used to compute Stability
+	StabilityTests int
+
 	// FromCache is true if data is entirely from cached state (not tested in current run)
 	FromCache bool
 }
@@ -229,10 +238,14 @@ type PoliciesConfig struct {
 	AIResponseRules  string `yaml:"ai_response_rules"`
 }
 
+// DefaultStabilityThreshold is the default pass rate below which a test is flagged as flaky.
+const DefaultStabilityThreshold = 0.90
+
 // AcceptanceConfig defines pass/fail thresholds.
 type AcceptanceConfig struct {
-	MinMatchRate     float64 `yaml:"min_match_rate"`
-	StrictPolicyMatch *bool  `yaml:"strict_policy_match,omitempty"` // Defaults to true if not specified
+	MinMatchRate       float64  `yaml:"min_match_rate"`
+	StrictPolicyMatch  *bool    `yaml:"strict_policy_match,omitempty"`    // Defaults to true if not specified
+	StabilityThreshold *float64 `yaml:"stability_threshold,omitempty"`    // Pass rate below this flags a test as flaky (default: 0.90)
 }
 
 // IsStrictPolicyMatch returns true if unexpected triggering policies should cause test failure.
@@ -243,6 +256,15 @@ func (a AcceptanceConfig) IsStrictPolicyMatch() bool {
 		return true
 	}
 	return *a.StrictPolicyMatch
+}
+
+// GetStabilityThreshold returns the pass rate below which a test is flagged as flaky.
+// Defaults to DefaultStabilityThreshold (0.90) when not explicitly set.
+func (a AcceptanceConfig) GetStabilityThreshold() float64 {
+	if a.StabilityThreshold == nil {
+		return DefaultStabilityThreshold
+	}
+	return *a.StabilityThreshold
 }
 
 // ExecutionConfig defines test execution parameters.
@@ -256,6 +278,10 @@ type ExecutionConfig struct {
 	RateLimits              map[string]ProviderRateLimit `yaml:"rate_limits,omitempty"`
 	DelayBetweenRequestsMs  int                          `yaml:"delay_between_requests_ms,omitempty"`
 	RateLimitBufferMs       int                          `yaml:"rate_limit_buffer_ms,omitempty"`
+
+	// HistoryDepth controls how many recent run outcomes are retained per test/model
+	// for pass rate calculation. 0 uses DefaultHistoryDepth (20).
+	HistoryDepth int `yaml:"history_depth,omitempty"`
 }
 
 // ProviderRateLimit defines rate limiting for a specific provider.
