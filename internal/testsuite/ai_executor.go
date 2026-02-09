@@ -636,14 +636,10 @@ func (r *AITestRunner) callAIProvider(ctx context.Context, prompt, promptContext
 	// Auto-scaling loop: try with increasing max_tokens on truncation
 	for attempt := 0; attempt < MaxScalingAttempts; attempt++ {
 		// Create AI request with current max_tokens.
-		// Only auto-inject temperature for Anthropic models (which support temperature=0
-		// for deterministic output). OpenAI models like gpt-5-mini do not support
-		// temperature=0 and should use their default.
+		// Temperature and other provider-specific parameters should be set in the
+		// suite config per model entry — the executor does not inject defaults.
 		params := copyParams(r.model.Parameters)
 		params["max_tokens"] = maxTokens
-		if _, ok := params["temperature"]; !ok && r.model.Provider == "anthropic" {
-			params["temperature"] = 0.0
-		}
 
 		aiReq := gateway.AIRequest{
 			Model:          r.model.Model,

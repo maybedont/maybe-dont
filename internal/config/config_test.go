@@ -3203,26 +3203,23 @@ rules:
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	os.Stderr = w
-	defer func() {
-		os.Stderr = origStderr
-		w.Close()
-		r.Close()
-	}()
+	defer func() { os.Stderr = origStderr }() // safety net if LoadConfig panics
 
-	cfg, err := LoadConfig(tmpDir, "")
-	require.NoError(t, err)
-	require.Equal(t, "openai", cfg.Validation.AI.Provider, "Provider should be 'openai' from YAML")
+	cfg, loadErr := LoadConfig(tmpDir, "")
 
-	w.Close()
+	// Restore stderr and capture output immediately after function under test
 	os.Stderr = origStderr
-
+	require.NoError(t, w.Close())
 	captured, err := io.ReadAll(r)
 	require.NoError(t, err)
-	r.Close()
-	output := string(captured)
+	require.NoError(t, r.Close())
 
-	require.NotContains(t, output, "DEPRECATION",
-		"No deprecation warning should appear when provider is explicitly set, but got: %q", output)
+	// Now assert on config and captured output
+	require.NoError(t, loadErr)
+	require.Equal(t, "openai", cfg.Validation.AI.Provider, "Provider should be 'openai' from YAML")
+
+	require.NotContains(t, string(captured), "DEPRECATION",
+		"No deprecation warning should appear when provider is explicitly set, but got: %q", string(captured))
 }
 
 // TestLoadConfig_ProviderFromYAMLWithAPIKeyFromEnv verifies that setting api_key via environment
@@ -3274,28 +3271,25 @@ rules:
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	os.Stderr = w
-	defer func() {
-		os.Stderr = origStderr
-		w.Close()
-		r.Close()
-	}()
+	defer func() { os.Stderr = origStderr }() // safety net if LoadConfig panics
 
-	cfg, err := LoadConfig(tmpDir, "")
+	cfg, loadErr := LoadConfig(tmpDir, "")
+
+	// Restore stderr and capture output immediately after function under test
+	os.Stderr = origStderr
+	require.NoError(t, w.Close())
+	captured, err := io.ReadAll(r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
+
+	// Now assert on config and captured output
+	require.NoError(t, loadErr)
 	require.Equal(t, "openai", cfg.Validation.AI.Provider,
 		"Provider should be 'openai' from YAML even when api_key is set via env var")
 	require.Equal(t, "sk-test-key-from-env", cfg.Validation.AI.APIKey,
 		"API key should come from env var")
 
-	w.Close()
-	os.Stderr = origStderr
-
-	captured, err := io.ReadAll(r)
-	require.NoError(t, err)
-	r.Close()
-	output := string(captured)
-
-	require.NotContains(t, output, "DEPRECATION",
-		"No deprecation warning should appear when provider is explicitly set, but got: %q", output)
+	require.NotContains(t, string(captured), "DEPRECATION",
+		"No deprecation warning should appear when provider is explicitly set, but got: %q", string(captured))
 }
 
