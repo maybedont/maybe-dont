@@ -26,10 +26,6 @@ jobs:
         with:
           go-version: '1.25'
           cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
-          registry-url: 'https://registry.npmjs.org'
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
@@ -61,7 +57,6 @@ jobs:
           # the Homebrew formula to maybedont/homebrew-tap. Docker push
           # uses docker login credentials (set above), not this token.
           GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           METRICS_API_TOKEN: ${{ secrets.METRICS_API_TOKEN }}
           METRICS_DATASET: ${{ secrets.METRICS_DATASET }}

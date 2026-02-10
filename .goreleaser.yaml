@@ -30,6 +30,8 @@ checksum:
 upx:
   - enabled: true
     compress: best
+    # If UPX causes issues on macOS (historically broken, may be resolved in
+    # UPX 4.2+), add: goos: [linux, windows]
 
 builds:
   - env:
