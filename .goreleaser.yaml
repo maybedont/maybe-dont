@@ -9,9 +9,8 @@ release:
   github:
     owner: maybedont
     name: releases
-  # Use curated release notes instead of auto-generated commit log.
-  # Update RELEASE_NOTES.md before each release with user-facing content.
-  release_notes: RELEASE_NOTES.md
+  # Release notes are passed via --release-notes flag in the CI workflow,
+  # sourced from release-notes/v{version}.md. See docs/specs/release-notes-process.md.
 
 before:
   hooks:

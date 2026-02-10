@@ -4,20 +4,27 @@
 
 ## Overview
 
-Each release published to `maybedont/releases` should have curated, user-facing release notes rather than a raw commit log. GoReleaser is configured to use `RELEASE_NOTES.md` at the repo root as the release body.
+Each release published to `maybedont/releases` should have curated, user-facing release notes rather than a raw commit log. Release notes are stored as versioned files in `release-notes/` (e.g., `release-notes/v1.1.0.md`) and are enforced by the release workflow.
+
+## Enforcement
+
+The release workflow (`releaser.yaml`) validates that `release-notes/v{version}.md` exists before goreleaser runs. If the file is missing, the release fails with a clear error message.
+
+Since branch protection requires PRs with reviews to merge to `main`, the release notes file must have been reviewed before it can land on `main` — and therefore before a tag can successfully release. This ensures release notes are both present and reviewed for every release.
 
 ## Pre-Release Checklist
 
 Before running `make bump-version`:
 
 1. **Review changes since last release**: `git log <last-tag>..HEAD --oneline --grep="^feat"`
-2. **Update `RELEASE_NOTES.md`** with user-facing content:
+2. **Create `release-notes/v{version}.md`** with user-facing content:
    - Brief intro paragraph summarizing the release theme
    - Breaking changes called out first (with before/after examples)
    - New features with short descriptions and usage examples
    - Omit: bug fixes, CI/CD changes, refactors, internal details
-3. **Verify the release URL** in the installation section points to the correct tag
-4. **Commit `RELEASE_NOTES.md`** as part of the version bump or in a preceding commit
+   - Installation section with Homebrew and GitHub releases links
+3. **Open a PR** with the release notes file for review
+4. **After merge**, run `make bump-version` and push the tag
 
 ## Content Guidelines
 
@@ -29,8 +36,11 @@ Before running `make bump-version`:
 
 ## How It Works
 
-GoReleaser is configured with `release.release_notes: RELEASE_NOTES.md` in `.goreleaser.yaml`. When a tag is pushed and the release workflow runs, GoReleaser reads this file and uses its contents as the GitHub release body instead of generating a changelog from commit messages.
+The release workflow in `.github/workflows/releaser.yaml`:
 
-## Post-Release
+1. Extracts the version from the git tag (e.g., `v1.2.0` → `1.2.0`)
+2. Checks that `release-notes/v1.2.0.md` exists — fails the workflow if missing
+3. Passes `--release-notes=release-notes/v1.2.0.md` to goreleaser
+4. GoReleaser uses the file contents as the GitHub release body
 
-After the release is published, `RELEASE_NOTES.md` remains in the repo as a record of the last release. It gets overwritten before the next release.
+The `release-notes/` directory preserves history across releases. These files can also be used by future workflows to update releases programmatically.
