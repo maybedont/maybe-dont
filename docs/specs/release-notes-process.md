@@ -28,11 +28,22 @@ Before running `make bump-version`:
 
 ## Content Guidelines
 
+Start from `release-notes/TEMPLATE.md` — copy it to `release-notes/v{version}.md` and fill in the sections.
+
 - **Audience**: Developers and operators who use Maybe Don't Gateway
 - **Tone**: Concise and scannable, with code examples where they aid understanding
-- **Structure**: Intro paragraph, then feature sections separated by horizontal rules
-- **Breaking changes**: Always document with before/after examples
-- **Installation section**: Include Homebrew and GitHub releases links at the end
+- **Remove empty sections**: Delete any section that doesn't apply to the release
+
+### Standard Sections
+
+| Section | Contents |
+|---------|----------|
+| **Breaking Changes** | Backward-incompatible changes with before/after examples |
+| **New** | New features and capabilities |
+| **Changed** | Enhancements to existing functionality |
+| **Fixed** | Notable bug fixes worth calling out (omit trivial/internal fixes) |
+| **Security** | Security improvements, vulnerability fixes, or hardening |
+| **Installation** | Pre-filled — just update the version in the releases URL |
 
 ## How It Works
 
