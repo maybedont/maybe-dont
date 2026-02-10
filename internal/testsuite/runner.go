@@ -1659,12 +1659,18 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 		result.MatchRate = float64(result.Passed) / float64(decided)
 	}
 
-	// Check threshold
+	// Check threshold. When no tests produced a pass/fail decision (e.g., all skipped,
+	// all errored, or engine had no matching cases), thresholds are vacuously met —
+	// there's nothing to evaluate.
 	minMatchRate := r.suite.Acceptance.MinMatchRate
 	if minMatchRate == 0 {
 		minMatchRate = 1.0 // Default to strict matching
 	}
-	result.ThresholdsMet = result.MatchRate >= minMatchRate
+	if decided == 0 {
+		result.ThresholdsMet = true
+	} else {
+		result.ThresholdsMet = result.MatchRate >= minMatchRate
+	}
 
 	// Calculate remaining tests (for --max-tests)
 	if r.opts.MaxTests > 0 {

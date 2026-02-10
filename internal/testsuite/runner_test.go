@@ -1307,6 +1307,50 @@ func TestCalculateResults_CachedResultsCountAsOriginalStatus(t *testing.T) {
 	assert.False(t, summary.ThresholdsMet, "71.4% < 80% threshold")
 }
 
+// TestCalculateResults_ZeroDecidedThresholdsVacuouslyMet verifies that when no tests
+// produce a pass/fail decision (e.g., all skipped, all errored, or engine had no
+// matching cases), thresholds are vacuously met rather than failing on 0/0.
+func TestCalculateResults_ZeroDecidedThresholdsVacuouslyMet(t *testing.T) {
+	tests := []struct {
+		name    string
+		results []TestResult
+	}{
+		{
+			name:    "empty results (no matching cases for engine)",
+			results: []TestResult{},
+		},
+		{
+			name: "all skipped (rate limited)",
+			results: []TestResult{
+				{Status: "skipped", Error: &TestError{Type: "rate_limited", Message: "rate limited"}},
+				{Status: "skipped", Error: &TestError{Type: "rate_limited", Message: "rate limited"}},
+			},
+		},
+		{
+			name: "all errored",
+			results: []TestResult{
+				{Status: "errored"},
+				{Status: "errored"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &Runner{
+				suite: &Suite{
+					Acceptance: AcceptanceConfig{MinMatchRate: 1.0},
+				},
+			}
+
+			summary := runner.calculateResults(tt.results)
+
+			assert.Equal(t, 0.0, summary.MatchRate)
+			assert.True(t, summary.ThresholdsMet, "0/0 decided tests should vacuously meet thresholds")
+		})
+	}
+}
+
 // TestFormatJSONOutput_OverallSummaryAggregates verifies that the JSON output's
 // overall_summary contains pre-computed aggregate totals that match the policy
 // quality view (cached results counted by original status).
