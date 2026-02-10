@@ -264,11 +264,18 @@ jobs:
           path: ai-results.json
 
       - name: Upload AI state file
+        id: upload-state
         uses: actions/upload-artifact@v4
         if: always() && github.ref == 'refs/heads/main' && steps.check-keys.outputs.keys_available == 'true'
         with:
           name: ai-test-state
           path: ai-test-state.json
+
+      - name: Verify state persisted
+        if: always() && steps.upload-state.outcome == 'failure'
+        run: |
+          echo "::error::Failed to persist ai-test-state artifact. Incremental test results will be lost."
+          echo "Check that ai-test-state.json was created by the test step."
 
 
   summary:
