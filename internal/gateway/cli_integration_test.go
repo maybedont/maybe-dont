@@ -9,7 +9,10 @@ import (
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // cliIntegrationStack holds all wired components for a single integration test.
@@ -429,4 +432,78 @@ func TestCLIValidation_Integration_AuditEntry(t *testing.T) {
 	assert.Equal(t, "deny", entry.RequestValidation.CEL.Action)
 	assert.Equal(t, "deny-sudo", entry.RequestValidation.CEL.DecidingRule)
 	assert.Equal(t, "sudo is blocked", entry.RequestValidation.CEL.Reason)
+}
+
+// TestCLIValidation_Integration_RequestIDInLogs verifies that the generated request ID
+// is propagated to the context used by downstream loggers (CEL engine, AI engine).
+// Before the fix, all CLI validation logs had request_id: "-" because the handler
+// didn't attach the request ID to the context passed to evaluatePolicies.
+func TestCLIValidation_Integration_RequestIDInLogs(t *testing.T) {
+	// Use zap/observer to capture log entries so we can inspect fields
+	core, observed := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	celEngine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
+	require.NoError(t, err)
+
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:          "deny-rm",
+			CLIExpression: `cli.command == "rm"`,
+			Action:        config.PolicyActionDeny,
+			Message:       "rm is blocked",
+		},
+	}, "")
+	require.NoError(t, err)
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:               true,
+		ValidateCommands:      []string{"*"},
+		Logger:                sessionLogger,
+		Version:               "test-1.0.0",
+		CELEngine:             celEngine,
+		IncludeArgumentValues: true,
+	})
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	client := cliproxy.NewClient(cliproxy.ClientConfig{
+		ServerURL: server.URL,
+	})
+
+	resp, err := client.Validate(context.Background(), cliproxy.ValidationRequest{
+		Command:   "rm",
+		Arguments: []string{"-rf", "/tmp/test"},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Allowed)
+
+	// The response has the generated request ID — verify it appears in log entries
+	requestID := resp.RequestID
+	require.NotEmpty(t, requestID)
+
+	// Find CEL evaluation log entries and verify they have the request ID
+	var foundCELLog bool
+	for _, entry := range observed.All() {
+		if entry.Message == "Evaluating CLI command with CEL policies" {
+			foundCELLog = true
+			ridField, ok := findStringField(entry.ContextMap(), "request_id")
+			require.True(t, ok, "request_id field should be present in CEL log entry")
+			assert.Equal(t, requestID, ridField,
+				"request_id in CEL engine logs should match the response request ID")
+		}
+	}
+	assert.True(t, foundCELLog, "Should have found CEL evaluation log entry")
+}
+
+// findStringField extracts a string field from a log entry's context map.
+func findStringField(fields map[string]interface{}, key string) (string, bool) {
+	val, ok := fields[key]
+	if !ok {
+		return "", false
+	}
+	str, ok := val.(string)
+	return str, ok
 }

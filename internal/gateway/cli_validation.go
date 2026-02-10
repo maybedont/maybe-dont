@@ -247,8 +247,11 @@ func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Attach request ID to context so downstream loggers (CEL engine, AI engine) include it
+	reqCtx := context.WithValue(r.Context(), config.RequestIDKey, ctx.RequestID)
+
 	// Command requires validation - evaluate policies
-	validationResults := h.evaluatePolicies(r.Context(), &req)
+	validationResults := h.evaluatePolicies(reqCtx, &req)
 
 	// Build response from validation results
 	resp := CLIValidationResponse{
@@ -569,10 +572,10 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 					_, _ = h.config.AuditWriter.Write(asyncEntry)
 				}
 			case <-time.After(5 * time.Minute):
-				// Timeout waiting for async completion
-				h.config.Logger.Debug(r.Context(), "Timeout waiting for async AI completion",
-					zap.String("request_id", ctx.RequestID),
-				)
+				// Timeout waiting for async completion — use detached context since
+				// the HTTP request context is cancelled after ServeHTTP returns.
+				logCtx := context.WithValue(context.Background(), config.RequestIDKey, ctx.RequestID)
+				h.config.Logger.Debug(logCtx, "Timeout waiting for async AI completion")
 			}
 		}()
 	}
