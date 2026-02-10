@@ -13,7 +13,7 @@
 # but don't block merges. CEL tests are always blocking.
 #
 # State Persistence:
-#   - AI test results are cached in .ai-test-state.json
+#   - AI test results are cached in ai-test-state.json
 #   - State is persisted as a GitHub Actions artifact (ai-test-state)
 #   - Each run restores state from the most recent previous artifact
 #   - Content hashes ensure test case changes trigger re-runs
@@ -242,7 +242,7 @@ jobs:
             $RUN_MODE \
             $RETRY_FLAG \
             --wait \
-            --state-file .ai-test-state.json \
+            --state-file ai-test-state.json \
             --format json \
             --output ai-results.json
           EXIT_CODE=$?
@@ -268,7 +268,7 @@ jobs:
         if: always() && github.ref == 'refs/heads/main' && steps.check-keys.outputs.keys_available == 'true'
         with:
           name: ai-test-state
-          path: .ai-test-state.json
+          path: ai-test-state.json
 
 
   summary:

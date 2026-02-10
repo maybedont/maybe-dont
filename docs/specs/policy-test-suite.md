@@ -1498,20 +1498,20 @@ The state file tracks test execution history, keyed by content hashes for change
     ./maybe-dont test policies \
       --suite-dir ./internal/config/defaults/tests \
       --incremental \
-      --state-file .ai-test-state.json \
+      --state-file ai-test-state.json \
       --max-tests 10 \
       --rpm 20
 
 - name: Commit state file (on main only)
   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
   run: |
-    if git diff --quiet .ai-test-state.json 2>/dev/null; then
+    if git diff --quiet ai-test-state.json 2>/dev/null; then
       echo "No changes to state file"
       exit 0
     fi
     git config user.name "github-actions[bot]"
     git config user.email "github-actions[bot]@users.noreply.github.com"
-    git add .ai-test-state.json
+    git add ai-test-state.json
     git commit -m "chore: update AI test state file [skip ci]"
     git push
 ```
@@ -1568,20 +1568,20 @@ jobs:
           ./maybe-dont test policies \
             --suite-dir ./internal/config/defaults/tests \
             --incremental \
-            --state-file .ai-test-state.json \
+            --state-file ai-test-state.json \
             --wait
         continue-on-error: true
 
       - name: Commit state file
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          if git diff --quiet .ai-test-state.json 2>/dev/null; then
+          if git diff --quiet ai-test-state.json 2>/dev/null; then
             echo "No changes to state file"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .ai-test-state.json
+          git add ai-test-state.json
           git commit -m "chore: update AI test state file [skip ci]"
           git push
 

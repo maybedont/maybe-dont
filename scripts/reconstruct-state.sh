@@ -1,5 +1,5 @@
 #!/bin/bash
-# Reconstruct .ai-test-state.json from an ai-results.json artifact and local test case files.
+# Reconstruct ai-test-state.json from an ai-results.json artifact and local test case files.
 #
 # Usage:
 #   ./scripts/reconstruct-state.sh <ai-results.json> [output-file]
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 RESULTS_FILE="${1:?Usage: $0 <ai-results.json> [output-file]}"
-OUTPUT_FILE="${2:-.ai-test-state.json}"
+OUTPUT_FILE="${2:-ai-test-state.json}"
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 SUITE_DIR="$REPO_ROOT/internal/config/defaults/tests"
