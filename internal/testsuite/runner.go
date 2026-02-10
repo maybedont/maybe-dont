@@ -1175,7 +1175,7 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, models []
 		fmt.Printf("\n%s", formatSectionHeader(modelKey))
 
 		// Create AI runner for this model
-		runner, err := NewAITestRunner(model, r.suite, r.suiteDir, r.logger, r.rateLimiter)
+		runner, err := NewAITestRunner(model, r.suite, r.suiteDir, r.logger, r.rateLimiter, r.opts.ProviderClientFactory)
 		if err != nil {
 			// If we can't create the runner, mark all cases as errored for this model
 			for _, tc := range cases {

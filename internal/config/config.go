@@ -1197,14 +1197,14 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	// This allows configuring the map-based downstream_mcp_servers entirely via env vars
 	config.DownstreamMCPServers = parseDownstreamServersFromEnv(config.DownstreamMCPServers, v.GetEnvPrefix())
 
-	// Set default server type to stdio if not configured
+	// Set default server type to http if not configured
 	if config.Server.Type == "" {
-		config.Server.Type = ServerTypeSTDIO
+		config.Server.Type = ServerTypeHTTP
 	}
 
-	// Set default listen address to 127.0.0.1 for non-stdio servers if not set
+	// Set default listen address for non-stdio servers if not set
 	if config.Server.Type != ServerTypeSTDIO && config.Server.ListenAddr == "" {
-		config.Server.ListenAddr = "127.0.0.1"
+		config.Server.ListenAddr = "127.0.0.1:8080"
 	}
 
 	// Set default values for native tools configuration

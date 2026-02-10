@@ -10,11 +10,24 @@ import (
 
 // JSONOutput represents the full JSON output structure.
 type JSONOutput struct {
-	Suite          JSONSuiteInfo       `json:"suite"`
-	PoliciesLoaded JSONPoliciesLoaded  `json:"policies_loaded"`
-	ResultsByModel []JSONModelResults  `json:"results_by_model"`
-	OverallSummary JSONOverallSummary  `json:"overall_summary"`
-	Coverage       *JSONCoverage       `json:"coverage,omitempty"`
+	Suite           JSONSuiteInfo                `json:"suite"`
+	PoliciesLoaded  JSONPoliciesLoaded           `json:"policies_loaded"`
+	ResultsByModel  []JSONModelResults           `json:"results_by_model"`
+	OverallSummary  JSONOverallSummary           `json:"overall_summary"`
+	ModelComparison []JSONModelComparisonEntry   `json:"model_comparison,omitempty"`
+	Coverage        *JSONCoverage                `json:"coverage,omitempty"`
+}
+
+// JSONModelComparisonEntry holds per-model summary stats including historical cached models.
+type JSONModelComparisonEntry struct {
+	Model     string  `json:"model"`
+	Passed    int     `json:"passed"`
+	Failed    int     `json:"failed"`
+	Errored   int     `json:"errored"`
+	MatchRate float64 `json:"match_rate"`
+	AvgMs     int64   `json:"avg_ms"`
+	TotalMs   int64   `json:"total_ms"`
+	FromCache bool    `json:"from_cache"`
 }
 
 // JSONSuiteInfo contains suite metadata.
@@ -342,6 +355,20 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		ThresholdsMet:        summary.ThresholdsMet,
 		MinMatchRateRequired: minMatchRate,
 		WorstMatchRate:       worstMatchRate,
+	}
+
+	// Add model comparison entries (includes historical cached models)
+	for _, c := range comparison {
+		output.ModelComparison = append(output.ModelComparison, JSONModelComparisonEntry{
+			Model:     c.Model,
+			Passed:    c.Passed,
+			Failed:    c.Failed,
+			Errored:   c.Errored,
+			MatchRate: c.MatchRate,
+			AvgMs:     c.AvgMs,
+			TotalMs:   c.TotalMs,
+			FromCache: c.FromCache,
+		})
 	}
 
 	// Add coverage if available

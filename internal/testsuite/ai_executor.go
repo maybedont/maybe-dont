@@ -29,10 +29,19 @@ type AITestRunner struct {
 	strictPolicyMatch  bool
 }
 
+// ProviderClientFactoryFunc creates an AIProviderClient from a ModelConfig.
+// Used to inject mock providers in tests.
+type ProviderClientFactoryFunc func(model ModelConfig) (gateway.AIProviderClient, error)
+
 // NewAITestRunner creates a runner for AI policy tests against a specific model.
-func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *config.SessionLogger, rateLimiter *RateLimiter) (*AITestRunner, error) {
-	// Create provider client from model config
-	client, err := createProviderClient(model)
+// If factory is non-nil, it is used to create the provider client instead of the default.
+func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *config.SessionLogger, rateLimiter *RateLimiter, factory ProviderClientFactoryFunc) (*AITestRunner, error) {
+	// Create provider client from model config (or use injected factory)
+	createClient := createProviderClient
+	if factory != nil {
+		createClient = factory
+	}
+	client, err := createClient(model)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AI provider client: %w", err)
 	}
