@@ -23,6 +23,10 @@
 
 name: policy tests
 
+permissions:
+  contents: read
+  actions: read
+
 on:
   # TODO: Re-enable pull_request trigger once AI test state is fully populated on main
   # pull_request:
@@ -150,8 +154,10 @@ jobs:
     name: AI Policy Tests
     runs-on: ubuntu-latest
     needs: validate
-    continue-on-error: true
-    # TODO: Restore pull_request condition when PR trigger is re-enabled
+    # TODO: When PR trigger is re-enabled, add `continue-on-error: true` back so AI test
+    # failures don't block PR merges. Currently disabled because all triggers (push to main,
+    # schedule, workflow_dispatch) should surface failures. Only AI test result failures
+    # should be non-blocking on PRs — state file failures should always be hard errors.
     if: >
       github.event_name == 'schedule' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -174,22 +180,43 @@ jobs:
         if: steps.check-keys.outputs.keys_available == 'true'
 
       - name: Restore state file from previous run
+        id: restore-state
         if: steps.check-keys.outputs.keys_available == 'true'
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Download the most recent ai-test-state artifact from a main branch run.
           # Filter to main branch only to prevent feature branch artifacts from polluting state.
           # This provides incremental test execution — only changed tests are re-run.
+          #
+          # No artifact existing is expected on the very first run — exit 0 in that case.
+          # Any other failure (permissions, network, corrupt zip) is a hard error.
           artifact_url=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=ai-test-state&per_page=5" \
             --jq '[.artifacts[] | select(.workflow_run.head_branch == "main")][0].archive_download_url // empty')
-          if [ -n "$artifact_url" ]; then
-            gh api "$artifact_url" > state.zip && unzip -o state.zip && rm state.zip
-            echo "Restored state file from previous run"
-          else
-            echo "No previous state file found, starting fresh"
+
+          if [ -z "$artifact_url" ]; then
+            echo "No previous state artifact found — this is expected on the first run."
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          echo "Found state artifact, downloading..."
+          gh api "$artifact_url" > state.zip
+          unzip -o state.zip && rm state.zip
+
+          # Validate the restored state file is parseable JSON
+          if [ ! -f ai-test-state.json ]; then
+            echo "::error::State artifact downloaded but ai-test-state.json not found in archive."
+            exit 1
+          fi
+
+          if ! jq empty ai-test-state.json 2>/dev/null; then
+            echo "::error::Restored ai-test-state.json is not valid JSON. Archive may be corrupt."
+            exit 1
+          fi
+
+          echo "Restored and validated state file from previous run"
+          echo "restored=true" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         if: steps.check-keys.outputs.keys_available == 'true'
@@ -263,6 +290,19 @@ jobs:
           name: ai-test-results
           path: ai-results.json
 
+      - name: Verify state file was created
+        if: always() && github.ref == 'refs/heads/main' && steps.check-keys.outputs.keys_available == 'true'
+        run: |
+          if [ ! -f ai-test-state.json ]; then
+            echo "::error::ai-test-state.json was not created by the test step. Test results cannot be persisted."
+            exit 1
+          fi
+          if ! jq empty ai-test-state.json 2>/dev/null; then
+            echo "::error::ai-test-state.json is not valid JSON. Test results cannot be persisted."
+            exit 1
+          fi
+          echo "State file exists and is valid JSON"
+
       - name: Upload AI state file
         id: upload-state
         uses: actions/upload-artifact@v4
@@ -271,11 +311,11 @@ jobs:
           name: ai-test-state
           path: ai-test-state.json
 
-      - name: Verify state persisted
-        if: always() && steps.upload-state.outcome == 'failure'
+      - name: Verify state upload succeeded
+        if: always() && github.ref == 'refs/heads/main' && steps.check-keys.outputs.keys_available == 'true' && steps.upload-state.outcome == 'failure'
         run: |
-          echo "::error::Failed to persist ai-test-state artifact. Incremental test results will be lost."
-          echo "Check that ai-test-state.json was created by the test step."
+          echo "::error::Failed to upload ai-test-state artifact. Incremental test results will be lost."
+          exit 1
 
 
   summary:
@@ -337,23 +377,23 @@ jobs:
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          # --- Model Comparison (only when multiple models exist) ---
+          # --- Model Comparison (use model_comparison which includes historical cached models) ---
           for dir in results/*/; do
             [ -d "$dir" ] || continue
             for file in "$dir"*.json; do
               [ -f "$file" ] || continue
-              model_count=$(jq '.results_by_model | length' "$file")
-              if [ "$model_count" -gt 1 ]; then
+              comparison_count=$(jq '.model_comparison // [] | length' "$file")
+              if [ "$comparison_count" -gt 1 ]; then
                 name=$(basename "$file" .json)
                 echo "### Model Comparison ($name)" >> "$GITHUB_STEP_SUMMARY"
                 echo "" >> "$GITHUB_STEP_SUMMARY"
-                echo "| Model | Passed | Failed | Errored | Match Rate | Avg (ms) | Total (ms) |" >> "$GITHUB_STEP_SUMMARY"
-                echo "|-------|--------|--------|---------|------------|----------|------------|" >> "$GITHUB_STEP_SUMMARY"
+                echo "| Model | Passed | Failed | Errored | Match Rate | Avg (ms) | Total (ms) | Source |" >> "$GITHUB_STEP_SUMMARY"
+                echo "|-------|--------|--------|---------|------------|----------|------------|--------|" >> "$GITHUB_STEP_SUMMARY"
 
-                jq -r '.results_by_model[] |
-                  "\(.model.provider):\(.model.model) | \(.summary.passed) | \(.summary.failed) | \(.summary.errored) | \(.summary.match_rate * 100 | . * 10 | round / 10)% | \(if .summary.total_cases > 0 then (.summary.total_elapsed_ms / .summary.total_cases | round) else 0 end) | \(.summary.total_elapsed_ms)"' "$file" |
-                while IFS='|' read -r model passed failed errored match_rate avg_ms total_ms; do
-                  echo "| $model |$passed |$failed |$errored |$match_rate |$avg_ms |$total_ms |" >> "$GITHUB_STEP_SUMMARY"
+                jq -r '.model_comparison[] |
+                  "\(.model) | \(.passed) | \(.failed) | \(.errored) | \(.match_rate * 100 | . * 10 | round / 10)% | \(.avg_ms) | \(.total_ms) | \(if .from_cache then "cached" else "current" end)"' "$file" |
+                while IFS='|' read -r model passed failed errored match_rate avg_ms total_ms source; do
+                  echo "| $model |$passed |$failed |$errored |$match_rate |$avg_ms |$total_ms |$source |" >> "$GITHUB_STEP_SUMMARY"
                 done
 
                 echo "" >> "$GITHUB_STEP_SUMMARY"

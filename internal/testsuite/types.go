@@ -1,6 +1,10 @@
 package testsuite
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/maybedont/maybe-dont/internal/gateway"
+)
 
 // Default rate limiting values
 const (
@@ -93,6 +97,10 @@ type RunnerOptions struct {
 
 	// HistoryDepth overrides suite.yaml history_depth for pass rate tracking (0 = use suite config)
 	HistoryDepth int
+
+	// ProviderClientFactory overrides AI provider client creation (for testing).
+	// When nil, the default createProviderClient is used.
+	ProviderClientFactory func(model ModelConfig) (gateway.AIProviderClient, error)
 }
 
 // RunResult contains the overall result of a test suite run.
