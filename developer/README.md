@@ -11,6 +11,9 @@ You'll need to ensure you have some tools configured.
 - `goreleaser` for running `make snapshot`
 - `cz` for running `make bump-version`
 
+Ideally install `upx` so when you run `make snapshot` you test the full release bundling and compression as we do in the GHA runner. 
+`brew install upx`
+
 ## Shell configuration
 
 `.zshrc` or similar
