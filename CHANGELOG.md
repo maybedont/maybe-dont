@@ -1,3 +1,38 @@
+## v1.1.0 (2026-02-10)
+
+### Feat
+
+- move gateway server to `gateway` sub-command (#107)
+- rolling pass rate history and stability reporting (#106)
+- pre-release updates with AI parameter defaults and env var support (#96)
+- clean up AI policy prompts and fix redact decision logic (#93)
+- implement policy test suite CLI (#85)
+- CLI proxy for AI agent command validation (#86)
+- implement provider-agnostic AI validation (#83)
+- add gateway authentication header for caller identification (#81)
+
+### Fix
+
+- harden CI state file handling and add model comparison output (#112)
+- treat zero-decided tests as vacuously meeting thresholds
+- rename state file to prevent silent upload exclusion
+- propagate request ID to context for CLI validation logs (#111)
+- defaults export no-clobber and temperature handling (#110)
+- remove duplicate config validation causing double deprecation warnings (#108)
+- align test executor response evaluation with production engine (Phase 2) (#105)
+- deny action should suppress redacted content in response validation (#104)
+- improve AI policy test accuracy and executor alignment (#102)
+- align summary stats across stdout, JSON, and GH action summary (#101)
+- sanitize invalid JSON escapes and fix temperature config (#100)
+- sanitize invalid JSON escapes from AI responses and fix temperature config
+- default temperature to 0.0 for deterministic AI policy decisions (#99)
+- default temperature to 0.0 in AI provider factory for deterministic output
+- bump default test suite timeout to 60s to reduce false timeouts
+- persist AI test state on failure and reduce rate limit noise (#97)
+- persist AI test state on failure and reduce rate limit output noise
+- resolve data race in TestBackgroundFlush (#89)
+- add session validation to native tools for consistent recovery (#87)
+
 ## v1.0.0 (2026-02-02)
 
 ### BREAKING CHANGE
