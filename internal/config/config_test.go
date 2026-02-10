@@ -13,16 +13,16 @@ import (
 )
 
 func TestDefaultServerType(t *testing.T) {
-	// Test that when no server type is configured, it defaults to stdio
+	// Test that when no server type is configured, it defaults to http
 	config := &Config{}
 
 	// Simulate the default setting logic from LoadConfig
 	if config.Server.Type == "" {
-		config.Server.Type = ServerTypeSTDIO
+		config.Server.Type = ServerTypeHTTP
 	}
 
-	if config.Server.Type != ServerTypeSTDIO {
-		t.Errorf("Expected default server type to be %s, got %s", ServerTypeSTDIO, config.Server.Type)
+	if config.Server.Type != ServerTypeHTTP {
+		t.Errorf("Expected default server type to be %s, got %s", ServerTypeHTTP, config.Server.Type)
 	}
 }
 

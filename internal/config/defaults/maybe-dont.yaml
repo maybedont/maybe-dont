@@ -46,8 +46,8 @@ downstream_mcp_servers:
 
 # Server configuration
 server:
-  type: stdio  # stdio, http, sse
-  # listen_addr: "127.0.0.1:8080"  # Required for http/sse
+  type: http  # stdio, http, sse
+  listen_addr: "127.0.0.1:8080"  # Required for http/sse
 
 # Global validation settings
 validation:
