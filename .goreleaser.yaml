@@ -28,10 +28,15 @@ checksum:
   split: true
 
 upx:
+  # UPX can't pack Mach-O (darwin) or PE/ARM64 (windows_arm64).
+  # Two entries needed to compress linux (both arches) and windows (amd64 only).
   - enabled: true
     compress: best
-    # If UPX causes issues on macOS (historically broken, may be resolved in
-    # UPX 4.2+), add: goos: [linux, windows]
+    goos: [linux]
+  - enabled: true
+    compress: best
+    goos: [windows]
+    goarch: [amd64]
 
 builds:
   - env:
