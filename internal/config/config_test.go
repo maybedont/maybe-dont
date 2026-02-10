@@ -3,6 +3,7 @@ package config
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -13,17 +14,35 @@ import (
 )
 
 func TestDefaultServerType(t *testing.T) {
-	// Test that when no server type is configured, it defaults to http
-	config := &Config{}
+	// Verify that LoadConfig defaults to http with listen_addr 127.0.0.1:8080
+	// when no server.type is specified in the config file.
+	viper.Reset()
 
-	// Simulate the default setting logic from LoadConfig
-	if config.Server.Type == "" {
-		config.Server.Type = ServerTypeHTTP
-	}
+	tmpDir := t.TempDir()
 
-	if config.Server.Type != ServerTypeHTTP {
-		t.Errorf("Expected default server type to be %s, got %s", ServerTypeHTTP, config.Server.Type)
-	}
+	// Config with no server.type — LoadConfig should default to http
+	configContent := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "maybe-dont.yaml"), []byte(configContent), 0644))
+
+	config, err := LoadConfig(tmpDir, "")
+	require.NoError(t, err)
+	require.Equal(t, ServerTypeHTTP, config.Server.Type, "default server type should be http")
+	require.Equal(t, "127.0.0.1:8080", config.Server.ListenAddr, "default listen_addr should include port")
 }
 
 func TestServerTypeValidation(t *testing.T) {

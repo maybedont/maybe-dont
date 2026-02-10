@@ -330,18 +330,20 @@ func TestIntegration_StateAccumulation_SameModel(t *testing.T) {
 	assert.Equal(t, 0, runResult1.Skipped)
 
 	// Run 2: same model, incremental — all tests should be cached
+	mock2 := newDenyMock()
 	runner2, err := NewRunner(RunnerOptions{
 		SuiteDir:              dir,
 		Engine:                "ai",
 		Model:                 "openai:test-model-a",
 		StateFile:             stateFile,
 		Quiet:                 true,
-		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+		ProviderClientFactory: mockProviderFactory(mock2),
 	})
 	require.NoError(t, err)
 	runResult2, err := runner2.Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, runResult2.CachedCount, "all tests should come from cache on second run")
+	assert.Empty(t, mock2.GetRecordedRequests(), "cached run should not call AI provider")
 }
 
 // TestIntegration_ModelSummaryIncludesHistoricalModels verifies that after multi-model
@@ -987,4 +989,161 @@ func TestIntegration_MatrixMode_IncrementalSecondRun(t *testing.T) {
 	for key, mock := range mocks2 {
 		assert.Empty(t, mock.GetRecordedRequests(), "%s should not be called in run 2", key)
 	}
+}
+
+// --- Edge case tests ---
+
+// TestIntegration_EmptyTestSuite verifies that a suite with a valid cases/ directory
+// but no YAML files produces valid output with zero test cases and no errors.
+func TestIntegration_EmptyTestSuite(t *testing.T) {
+	dir := t.TempDir()
+	outputFile := filepath.Join(dir, "results.json")
+
+	// Create suite with empty cases directory (no test case YAML files)
+	setupTestSuite(t, dir, testPolicy, map[string]string{})
+
+	ctx := context.Background()
+
+	runner, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		Quiet:                 true,
+		OutputFormat:          "json",
+		OutputFile:            outputFile,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	result, err := runner.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, result.TotalCases, "empty suite should have zero test cases")
+	assert.Equal(t, 0, result.Passed)
+	assert.Equal(t, 0, result.Failed)
+	assert.True(t, result.ThresholdsMet, "zero test cases should vacuously meet thresholds")
+
+	// JSON output should be valid and parseable with empty arrays
+	output := parseJSONOutput(t, outputFile)
+	assert.Equal(t, 0, output.OverallSummary.TotalCases)
+	assert.Empty(t, output.ResultsByModel, "results_by_model should be empty or have an entry with no results")
+}
+
+// TestIntegration_FirstRun_CreatesStateFile verifies that the first run with a
+// state file path creates the file on disk, even when starting from nothing.
+func TestIntegration_FirstRun_CreatesStateFile(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "brand-new-state.json")
+
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"deny.yaml": testCaseDeny,
+	})
+
+	// State file should not exist before the run
+	_, err := os.Stat(stateFile)
+	require.True(t, os.IsNotExist(err), "state file should not exist before first run")
+
+	ctx := context.Background()
+	runner, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	result, err := runner.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Passed)
+
+	// State file should now exist and be valid JSON
+	info, err := os.Stat(stateFile)
+	require.NoError(t, err, "state file should exist after first run")
+	assert.Greater(t, info.Size(), int64(0), "state file should not be empty")
+
+	data, err := os.ReadFile(stateFile)
+	require.NoError(t, err)
+	require.True(t, json.Valid(data), "state file should contain valid JSON")
+
+	// Verify state contains the model's results
+	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)
+	require.NoError(t, err)
+	summaries := sm.GetModelSummaries(readPolicyHashes(t, dir))
+	assert.Contains(t, summaries, "openai:test-model-a", "state should contain the model's results")
+}
+
+// TestIntegration_ModelKeyWithColons verifies that model names containing colons
+// (e.g., "gpt-4:turbo") round-trip correctly through state persistence and
+// model comparison output. The model flag parser uses SplitN(":", 2) so the
+// colon in the model name should be preserved.
+func TestIntegration_ModelKeyWithColons(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+	outputFile := filepath.Join(dir, "results.json")
+
+	// Suite YAML with a model name that contains a colon
+	colonModelSuiteYAML := `version: "v1"
+bundle_id: integration-test
+description: "Integration test suite"
+
+providers:
+  openai:
+    api_key: "test-key"
+
+policies:
+  ai_request_rules: "./ai_request_rules.yaml"
+
+acceptance:
+  min_match_rate: 0.0
+
+execution:
+  timeout_ms: 5000
+  retries: 0
+
+engines:
+  cel:
+    enabled: false
+  ai:
+    enabled: true
+    model_matrix:
+      - provider: openai
+        model: "gpt-4:turbo"
+        api_key: "test-key"
+`
+	setupTestSuiteWithYAML(t, dir, colonModelSuiteYAML, testPolicy, map[string]string{
+		"deny.yaml": testCaseDeny,
+	})
+
+	ctx := context.Background()
+
+	// Run with the colon-containing model name
+	runner, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:gpt-4:turbo",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		OutputFormat:          "json",
+		OutputFile:            outputFile,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	result, err := runner.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Passed)
+
+	// Verify the model key round-trips through state
+	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)
+	require.NoError(t, err)
+	summaries := sm.GetModelSummaries(readPolicyHashes(t, dir))
+	assert.Contains(t, summaries, "openai:gpt-4:turbo",
+		"state should store model key with colons intact")
+	assert.Equal(t, 1, summaries["openai:gpt-4:turbo"].Passed)
+
+	// Verify JSON output model_comparison uses the full key
+	output := parseJSONOutput(t, outputFile)
+	require.NotEmpty(t, output.ModelComparison)
+	byName := modelComparisonByName(output.ModelComparison)
+	assert.Contains(t, byName, "openai:gpt-4:turbo",
+		"model_comparison should use the full model key including colons")
 }
