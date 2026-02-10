@@ -97,17 +97,6 @@ The test suite tracks rolling pass rate history per model, reporting a stability
 
 ---
 
-## Gateway Authentication Header
-
-Callers can now be identified via a required authentication header, enabling audit attribution. Allowed values support glob pattern matching for flexible access control.
-
-```bash
-export MAYBE_DONT_REQUIRED_HEADER_NAME="X-MaybeDont-Caller"
-export MAYBE_DONT_REQUIRED_HEADER_VALUE="*@company.com,ci-bot"
-```
-
----
-
 ## Environment Variable Configuration Improvements
 
 All configuration fields, including deeply nested map fields, can now be overridden via environment variables. The default AI temperature has been set to 0.0 for deterministic policy decisions.
