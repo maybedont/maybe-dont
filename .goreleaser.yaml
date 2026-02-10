@@ -9,6 +9,9 @@ release:
   github:
     owner: maybedont
     name: releases
+  # Use curated release notes instead of auto-generated commit log.
+  # Update RELEASE_NOTES.md before each release with user-facing content.
+  release_notes: RELEASE_NOTES.md
 
 before:
   hooks:
