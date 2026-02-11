@@ -1584,6 +1584,111 @@ func TestFormatModelComparison(t *testing.T) {
 	})
 }
 
+// TestFormatModelComparison_ColumnAlignment verifies that all rows in the
+// comparison table have equal width, catching column overflow bugs where
+// formatted values exceed their field width and push subsequent columns out.
+func TestFormatModelComparison_ColumnAlignment(t *testing.T) {
+	origColor := colorEnabled
+	colorEnabled = false
+	defer func() { colorEnabled = origColor }()
+
+	// dataRowWidths extracts the display width (rune count) of each data row.
+	// Uses rune count rather than byte length because multibyte characters like
+	// the em dash (—) occupy 1 display column but 3 bytes.
+	dataRowWidths := func(output string) (headerWidth int, rowWidths []int) {
+		lines := strings.Split(strings.TrimSpace(output), "\n")
+		// lines[0] = top separator ("── Model ...")
+		// lines[1] = header row
+		// lines[2..n-1] = data rows
+		// lines[n] = bottom separator ("───...")
+		// optional: footnote
+		require.GreaterOrEqual(t, len(lines), 4, "table must have separator + header + at least 1 data row + separator")
+		headerWidth = utf8.RuneCountInString(lines[1])
+		for _, line := range lines[2:] {
+			if strings.HasPrefix(line, "─") || strings.Contains(line, "previous run") {
+				continue
+			}
+			rowWidths = append(rowWidths, utf8.RuneCountInString(line))
+		}
+		return headerWidth, rowWidths
+	}
+
+	t.Run("small values stay aligned", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "cel", Passed: 10, Failed: 0, Errored: 0, MatchRate: 1.0, AvgMs: 2, TotalMs: 20},
+			{Model: "openai:gpt-5", Passed: 8, Failed: 2, Errored: 0, MatchRate: 0.8, AvgMs: 1200, TotalMs: 12000},
+		}
+		output := formatModelComparison(entries)
+		headerWidth, rowWidths := dataRowWidths(output)
+		for i, rw := range rowWidths {
+			assert.Equal(t, headerWidth, rw, "row %d width %d != header width %d\n%s", i, rw, headerWidth, output)
+		}
+	})
+
+	t.Run("large totals stay aligned", func(t *testing.T) {
+		// TotalMs: 2349500 → "2349.5 s" (8 chars) — would have overflowed old %7s
+		entries := []ModelComparisonEntry{
+			{Model: "cel", Passed: 500, Failed: 0, Errored: 0, MatchRate: 1.0, AvgMs: 2, TotalMs: 1000},
+			{Model: "openai:gpt-5", Passed: 400, Failed: 100, Errored: 0, MatchRate: 0.8, AvgMs: 4699, TotalMs: 2349500},
+		}
+		output := formatModelComparison(entries)
+		headerWidth, rowWidths := dataRowWidths(output)
+		for i, rw := range rowWidths {
+			assert.Equal(t, headerWidth, rw, "row %d width %d != header width %d\n%s", i, rw, headerWidth, output)
+		}
+	})
+
+	t.Run("large avg ms stays aligned", func(t *testing.T) {
+		// AvgMs: 150000 → "150000 ms" (9 chars) — would have overflowed old %8s
+		entries := []ModelComparisonEntry{
+			{Model: "fast-model", Passed: 50, Failed: 0, Errored: 0, MatchRate: 1.0, AvgMs: 500, TotalMs: 25000},
+			{Model: "slow-model", Passed: 40, Failed: 10, Errored: 0, MatchRate: 0.8, AvgMs: 150000, TotalMs: 7500000},
+		}
+		output := formatModelComparison(entries)
+		headerWidth, rowWidths := dataRowWidths(output)
+		for i, rw := range rowWidths {
+			assert.Equal(t, headerWidth, rw, "row %d width %d != header width %d\n%s", i, rw, headerWidth, output)
+		}
+	})
+
+	t.Run("large pass fail err counts stay aligned", func(t *testing.T) {
+		// Passed: 50000, Failed: 12000, Errored: 1500 — would have overflowed old %4d/%3d
+		entries := []ModelComparisonEntry{
+			{Model: "cel", Passed: 50000, Failed: 0, Errored: 0, MatchRate: 1.0, AvgMs: 1, TotalMs: 50000},
+			{Model: "openai:gpt-5", Passed: 50000, Failed: 12000, Errored: 1500, MatchRate: 0.787, AvgMs: 2000, TotalMs: 127000000},
+		}
+		output := formatModelComparison(entries)
+		headerWidth, rowWidths := dataRowWidths(output)
+		for i, rw := range rowWidths {
+			assert.Equal(t, headerWidth, rw, "row %d width %d != header width %d\n%s", i, rw, headerWidth, output)
+		}
+	})
+
+	t.Run("stability column stays aligned with large values", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "cel", Passed: 50000, Failed: 0, Errored: 0, MatchRate: 1.0, AvgMs: 1, TotalMs: 50000},
+			{Model: "openai:gpt-5", Passed: 50000, Failed: 12000, Errored: 1500, MatchRate: 0.787, AvgMs: 150000, TotalMs: 2349500, Stability: 0.96, StabilityTests: 10},
+		}
+		output := formatModelComparison(entries)
+		headerWidth, rowWidths := dataRowWidths(output)
+		for i, rw := range rowWidths {
+			assert.Equal(t, headerWidth, rw, "row %d width %d != header width %d\n%s", i, rw, headerWidth, output)
+		}
+	})
+
+	t.Run("mixed cached and non-cached stay aligned", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "openai:gpt-5", Passed: 50000, Failed: 12000, Errored: 1500, MatchRate: 0.787, AvgMs: 150000, TotalMs: 2349500},
+			{Model: "anthropic:claude", Passed: 30000, Failed: 5000, Errored: 200, MatchRate: 0.852, AvgMs: 120000, TotalMs: 1800000, FromCache: true},
+		}
+		output := formatModelComparison(entries)
+		headerWidth, rowWidths := dataRowWidths(output)
+		for i, rw := range rowWidths {
+			assert.Equal(t, headerWidth, rw, "row %d width %d != header width %d\n%s", i, rw, headerWidth, output)
+		}
+	})
+}
+
 // TestBuildModelComparison verifies that the model summary table always reflects
 // the current run's results, not stale state data. This is a regression test for
 // the bug where the Summary showed 50 results but Model Summary showed only 9.
