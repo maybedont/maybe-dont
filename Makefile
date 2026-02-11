@@ -26,11 +26,26 @@ lint:
 test:
 	$(GO) test -v ./...
 
-# Note to test, call 'cz bump --dry-run', this will provide the tag and change log to stdout.
+# Bump version with pre-flight check that release notes exist.
+# To preview: cz bump --dry-run
 bump-version:
-	cz bump
-	git push
-	git push --tags
+	@TAG=$$(cz bump --dry-run 2>&1 | grep -oE 'tag to create: v[^ ]+' | sed 's/tag to create: //'); \
+	if [ -z "$$TAG" ]; then echo "Could not determine next version from cz bump --dry-run"; exit 1; fi; \
+	if [ ! -f "release-notes/$$TAG.md" ]; then \
+		echo ""; \
+		echo "ERROR: Release notes not found for $$TAG"; \
+		echo ""; \
+		echo "  Missing: release-notes/$$TAG.md"; \
+		echo ""; \
+		echo "Before bumping, create the release notes file in a PR:"; \
+		echo ""; \
+		echo "  cp release-notes/TEMPLATE.md release-notes/$$TAG.md"; \
+		echo ""; \
+		echo "See docs/specs/release-notes-process.md for the full checklist."; \
+		exit 1; \
+	fi; \
+	echo "Release notes found: release-notes/$$TAG.md"; \
+	cz bump && git push && git push --tags
 
 snapshot:
 	METRICS_DATASET= METRICS_API_TOKEN= goreleaser release --snapshot --skip=docker --clean

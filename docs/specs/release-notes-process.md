@@ -8,7 +8,10 @@ Each release published to `maybedont/releases` should have curated, user-facing 
 
 ## Enforcement
 
-The release workflow (`releaser.yaml`) validates that `release-notes/v{version}.md` exists before goreleaser runs. If the file is missing, the release fails with a clear error message.
+Release notes are enforced at two levels:
+
+1. **Local**: `make bump-version` dry-runs `cz bump` to determine the next version, then checks that `release-notes/v{version}.md` exists before creating the tag. This catches missing notes before anything is pushed.
+2. **CI**: The release workflow (`releaser.yaml`) validates the file exists before goreleaser runs. If the file is missing, the release fails with a clear error message.
 
 Since branch protection requires PRs with reviews to merge to `main`, the release notes file must have been reviewed before it can land on `main` — and therefore before a tag can successfully release. This ensures release notes are both present and reviewed for every release.
 
