@@ -2552,10 +2552,10 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 	// Build header based on whether stability data is available
 	var header string
 	if hasStability {
-		header = fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %8s  %7s  %5s",
+		header = fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %8s  %9s  %5s",
 			maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total", "Stab%")
 	} else {
-		header = fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %8s  %7s",
+		header = fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %8s  %9s",
 			maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total")
 	}
 	tableWidth := len(header)
@@ -2587,13 +2587,13 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 			if e.StabilityTests > 0 {
 				stabStr = fmt.Sprintf("%4.0f%%", e.Stability*100)
 			}
-			row = fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %8s  %7s  %5s",
+			row = fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %8s  %9s  %5s",
 				maxModelLen, e.Model,
 				e.Passed, e.Failed, e.Errored,
 				e.MatchRate*100,
 				avgStr, totalStr, stabStr)
 		} else {
-			row = fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %8s  %7s",
+			row = fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %8s  %9s",
 				maxModelLen, e.Model,
 				e.Passed, e.Failed, e.Errored,
 				e.MatchRate*100,
