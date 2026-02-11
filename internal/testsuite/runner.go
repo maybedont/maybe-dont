@@ -2552,10 +2552,10 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 	// Build header based on whether stability data is available
 	var header string
 	if hasStability {
-		header = fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %7s  %6s  %5s",
+		header = fmt.Sprintf("%-*s  %5s  %5s  %4s  %6s  %9s  %10s  %5s",
 			maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total", "Stab%")
 	} else {
-		header = fmt.Sprintf("%-*s  %4s  %4s  %3s  %6s  %7s  %6s",
+		header = fmt.Sprintf("%-*s  %5s  %5s  %4s  %6s  %9s  %10s",
 			maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total")
 	}
 	tableWidth := len(header)
@@ -2587,13 +2587,13 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 			if e.StabilityTests > 0 {
 				stabStr = fmt.Sprintf("%4.0f%%", e.Stability*100)
 			}
-			row = fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %7s  %6s  %5s",
+			row = fmt.Sprintf("%-*s  %5d  %5d  %4d  %5.1f%%  %9s  %10s  %5s",
 				maxModelLen, e.Model,
 				e.Passed, e.Failed, e.Errored,
 				e.MatchRate*100,
 				avgStr, totalStr, stabStr)
 		} else {
-			row = fmt.Sprintf("%-*s  %4d  %4d  %3d  %5.1f%%  %7s  %6s",
+			row = fmt.Sprintf("%-*s  %5d  %5d  %4d  %5.1f%%  %9s  %10s",
 				maxModelLen, e.Model,
 				e.Passed, e.Failed, e.Errored,
 				e.MatchRate*100,
@@ -2630,10 +2630,10 @@ func formatMs(ms int64) string {
 
 // formatDurationMs formats milliseconds for the Avg ms column in the comparison table.
 func formatDurationMs(ms int64) string {
-	return fmt.Sprintf("%dms", ms)
+	return fmt.Sprintf("%d ms", ms)
 }
 
 // formatDurationSec formats milliseconds as seconds for the Total column.
 func formatDurationSec(ms int64) string {
-	return fmt.Sprintf("%.1fs", float64(ms)/1000.0)
+	return fmt.Sprintf("%.1f s", float64(ms)/1000.0)
 }
