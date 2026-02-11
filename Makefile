@@ -29,8 +29,9 @@ test:
 # Bump version with pre-flight check that release notes exist.
 # To preview: cz bump --dry-run
 bump-version:
-	@TAG=$$(cz bump --dry-run 2>&1 | grep -oE 'tag to create: v[^ ]+' | sed 's/tag to create: //'); \
-	if [ -z "$$TAG" ]; then echo "Could not determine next version from cz bump --dry-run"; exit 1; fi; \
+	@VERSION=$$(cz bump --get-next 2>/dev/null); \
+	if [ -z "$$VERSION" ]; then echo "Could not determine next version from cz bump --get-next"; exit 1; fi; \
+	TAG="v$$VERSION"; \
 	if [ ! -f "release-notes/$$TAG.md" ]; then \
 		echo ""; \
 		echo "ERROR: Release notes not found for $$TAG"; \
