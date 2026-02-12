@@ -143,13 +143,7 @@ type Config struct {
 	DownstreamMCPServers map[string]ClientConfig `mapstructure:"downstream_mcp_servers"`
 
 	// Audit configuration
-	Audit struct {
-		Path   string `mapstructure:"path"`   // Default: maybedont-audit.log (resolved in log-dir), or stdout/stderr
-		Filter string `mapstructure:"filter"` // "all" (default) or "deny_only"
-
-		// Log rotation settings (only applicable when path is a filename)
-		Rotation RotationConfig `mapstructure:"rotation"`
-	} `mapstructure:"audit"`
+	Audit AuditConfig `mapstructure:"audit"`
 
 	// Logger configuration (application logs)
 	Logger struct {
@@ -359,6 +353,30 @@ type AIResponseValidationConfig struct {
 	Rules     []AIResponsePolicy `mapstructure:"rules"`
 }
 
+// AuditConfig contains audit log configuration.
+type AuditConfig struct {
+	Path   string `mapstructure:"path"`   // Default: maybedont-audit.log (resolved in log-dir), or stdout/stderr
+	Filter string `mapstructure:"filter"` // "all" (default) or "deny_only"
+
+	// Log rotation settings (only applicable when path is a filename)
+	Rotation RotationConfig `mapstructure:"rotation"`
+
+	// IncludeArgumentValues controls whether full argument values are included in audit entries.
+	// When true (default), full argument values are included for forensic analysis.
+	// When false, only argument flags/names are included (CLI) or param keys (MCP tools)
+	// to protect sensitive data like tokens and passwords.
+	IncludeArgumentValues *bool `mapstructure:"include_argument_values"`
+}
+
+// ShouldIncludeArgumentValues returns whether full argument values should be included in audit.
+// Defaults to true if not explicitly configured.
+func (c *AuditConfig) ShouldIncludeArgumentValues() bool {
+	if c.IncludeArgumentValues == nil {
+		return true // Default to including full values for forensic analysis
+	}
+	return *c.IncludeArgumentValues
+}
+
 // CLIRequestValidationConfig configures CLI command validation via REST API.
 type CLIRequestValidationConfig struct {
 	// Enabled controls whether the CLI validation endpoint is active.
@@ -369,21 +387,6 @@ type CLIRequestValidationConfig struct {
 	// Use "*" to validate all commands.
 	// Empty list when enabled=true is a configuration error.
 	ValidateCommands []string `mapstructure:"validate_commands"`
-
-	// IncludeArgumentValues controls whether full argument values are included in audit entries.
-	// When true (default), full argument values are included for forensic analysis.
-	// When false, only argument flags/names are included to protect sensitive data
-	// like tokens and passwords that may appear in command arguments.
-	IncludeArgumentValues *bool `mapstructure:"include_argument_values"`
-}
-
-// ShouldIncludeArgumentValues returns whether full argument values should be included in audit.
-// Defaults to true if not explicitly configured.
-func (c *CLIRequestValidationConfig) ShouldIncludeArgumentValues() bool {
-	if c.IncludeArgumentValues == nil {
-		return true // Default to including full values for forensic analysis
-	}
-	return *c.IncludeArgumentValues
 }
 
 // LoadPoliciesFromFile loads deterministic policies from a file

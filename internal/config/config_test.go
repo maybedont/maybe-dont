@@ -83,11 +83,7 @@ func TestServerTypeValidation(t *testing.T) {
 						Command: "echo",
 					},
 				},
-				Audit: struct {
-					Path     string         `mapstructure:"path"`
-					Filter   string         `mapstructure:"filter"`
-					Rotation RotationConfig `mapstructure:"rotation"`
-				}{
+				Audit: AuditConfig{
 					Path: "audit.log",
 				},
 			}
@@ -143,11 +139,7 @@ func TestListenAddrValidation(t *testing.T) {
 						Command: "echo",
 					},
 				},
-				Audit: struct {
-					Path     string         `mapstructure:"path"`
-					Filter   string         `mapstructure:"filter"`
-					Rotation RotationConfig `mapstructure:"rotation"`
-				}{
+				Audit: AuditConfig{
 					Path: "audit.log",
 				},
 			}
@@ -292,11 +284,7 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 				CapabilityRetryDelayMs:     40000, // Error 9: delay too large
 			},
 		},
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			// No required fields in Audit anymore
 		},
 		RequestValidation: RequestValidationConfig{
@@ -359,11 +347,7 @@ func TestValidateConfigSuccess(t *testing.T) {
 				Command: "echo",
 			},
 		},
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			Path: "audit.log",
 		},
 	}
@@ -1754,11 +1738,7 @@ func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
 			Type: ServerTypeSTDIO,
 		},
 		// Missing DownstreamMCPServers - will cause validation error
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			Path: "audit.log",
 		},
 	}
@@ -1794,11 +1774,7 @@ func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
 			Type: ServerTypeSTDIO,
 		},
 		// Missing DownstreamMCPServers - will cause validation error
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			Path: "audit.log",
 		},
 	}
@@ -1886,11 +1862,7 @@ func createValidBaseConfig() *Config {
 				Command: "echo",
 			},
 		},
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			Path: "audit.log",
 		},
 		NativeTools: struct {
@@ -3312,3 +3284,37 @@ rules:
 		"No deprecation warning should appear when provider is explicitly set, but got: %q", string(captured))
 }
 
+// TestAuditConfigShouldIncludeArgumentValues verifies the default and explicit behavior
+// of the ShouldIncludeArgumentValues method on AuditConfig.
+func TestAuditConfigShouldIncludeArgumentValues(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
+	tests := []struct {
+		name     string
+		config   AuditConfig
+		expected bool
+	}{
+		{
+			name:     "nil defaults to true",
+			config:   AuditConfig{},
+			expected: true,
+		},
+		{
+			name:     "explicitly true",
+			config:   AuditConfig{IncludeArgumentValues: boolPtr(true)},
+			expected: true,
+		},
+		{
+			name:     "explicitly false",
+			config:   AuditConfig{IncludeArgumentValues: boolPtr(false)},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.config.ShouldIncludeArgumentValues()
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}

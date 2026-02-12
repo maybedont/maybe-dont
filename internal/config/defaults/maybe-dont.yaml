@@ -14,6 +14,10 @@ logger:
 audit:
   path: maybedont-audit.log # filename, stderr, stdout
   filter: all # all or deny_only
+  # Include full argument values in audit log entries (applies to both CLI and MCP tool calls).
+  # When true (default), full argument values are logged for forensic analysis.
+  # When false, only argument flags/names (CLI) or param keys (MCP) are logged to protect sensitive data.
+  include_argument_values: true
 
 # Downstream MCP servers configuration
 # Configure at least one downstream server to proxy requests to.
@@ -116,8 +120,3 @@ cli_request_validation:
   #   - aws
   #   - kubectl
   validate_commands: []
-
-  # Include full argument values in audit log entries.
-  # When true (default), full argument values are logged for forensic analysis.
-  # When false, only argument flags/names are logged to protect sensitive data.
-  include_argument_values: true
