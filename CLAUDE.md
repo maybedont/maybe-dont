@@ -43,6 +43,8 @@ Maybe Don't Gateway is a security middleware service built in Go that acts as a 
 - `make bump-version` - Bump version using commitizen
 - `make snapshot` - Create a snapshot release (for testing)
 
+**Release Notes Process**: Before each release, create `release-notes/v{version}.md` with user-facing content in a reviewed PR. The release workflow enforces this — it fails if the file is missing. Focus on new features and breaking changes — omit bug fixes, CI changes, and internal details. See `docs/specs/release-notes-process.md` for the full checklist.
+
 ## Architecture and Key Components
 
 ### Core Structure

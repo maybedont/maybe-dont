@@ -9,6 +9,8 @@ release:
   github:
     owner: maybedont
     name: releases
+  # Release notes are passed via --release-notes flag in the CI workflow,
+  # sourced from release-notes/v{version}.md. See docs/specs/release-notes-process.md.
 
 before:
   hooks:

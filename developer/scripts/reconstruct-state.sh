@@ -2,7 +2,7 @@
 # Reconstruct ai-test-state.json from an ai-results.json artifact and local test case files.
 #
 # Usage:
-#   ./scripts/reconstruct-state.sh <ai-results.json> [output-file]
+#   ./developer/scripts/reconstruct-state.sh <ai-results.json> [output-file]
 #
 # This script is a recovery tool for when the CI state file was not persisted.
 # It computes content hashes and policy hashes from local files (which must match

@@ -47,11 +47,22 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: maybedont
           repositories: releases,homebrew-tap
+      - name: Resolve release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES_FILE="release-notes/v${VERSION}.md"
+          if [ ! -f "$NOTES_FILE" ]; then
+            echo "::error::Release notes not found: ${NOTES_FILE}"
+            echo "Create this file in a PR before tagging. See docs/specs/release-notes-process.md."
+            exit 1
+          fi
+          echo "release_notes_flag=--release-notes=${NOTES_FILE}" >> $GITHUB_ENV
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser-pro
           version: latest
-          args: release --clean ${{ env.flags }}
+          args: release --clean ${{ env.flags }} ${{ env.release_notes_flag }}
         env:
           # App token for publishing to maybedont/releases and pushing
           # the Homebrew formula to maybedont/homebrew-tap. Docker push
