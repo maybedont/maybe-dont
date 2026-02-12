@@ -582,6 +582,15 @@ func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix strin
 					field.Set(reflect.ValueOf(result))
 				}
 
+			case reflect.Ptr:
+				// Handle pointer types (e.g., *bool for optional config fields)
+				switch field.Type().Elem().Kind() {
+				case reflect.Bool:
+					if boolVal, err := strconv.ParseBool(envVal); err == nil {
+						field.Set(reflect.ValueOf(&boolVal))
+					}
+				}
+
 			case reflect.Struct:
 				// Recursively process nested structs
 				applyEnvironmentOverrides(field, fieldType.Type, fullPath, envPrefix)

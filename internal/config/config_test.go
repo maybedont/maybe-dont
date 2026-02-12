@@ -3318,3 +3318,19 @@ func TestAuditConfigShouldIncludeArgumentValues(t *testing.T) {
 		})
 	}
 }
+
+// TestAuditIncludeArgumentValues_EnvVarOverride verifies that the audit.include_argument_values
+// setting can be overridden via the MAYBE_DONT_AUDIT_INCLUDE_ARGUMENT_VALUES environment variable.
+// The YAML default is true; this test confirms the env var can flip it to false.
+func TestAuditIncludeArgumentValues_EnvVarOverride(t *testing.T) {
+	viper.Reset()
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	t.Setenv("MAYBE_DONT_AUDIT_INCLUDE_ARGUMENT_VALUES", "false")
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.False(t, cfg.Audit.ShouldIncludeArgumentValues())
+}
