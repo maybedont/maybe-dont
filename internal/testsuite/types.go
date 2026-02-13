@@ -132,6 +132,9 @@ type RunResult struct {
 	// Remaining is the count of tests not yet run (for incremental execution)
 	Remaining int
 
+	// ExtraPolicyOnly is the count of tests that failed only due to unexpected policy matches
+	ExtraPolicyOnly int
+
 	// MatchRate is the percentage of tests that passed (0.0-1.0)
 	MatchRate float64
 
@@ -178,6 +181,14 @@ type ModelComparisonEntry struct {
 
 	// StabilityTests is the count of tests with 3+ history entries used to compute Stability
 	StabilityTests int
+
+	// ExtraPolicyOnly is the count of tests that failed solely due to unexpected
+	// triggering policies (decision was correct, all expected policies matched)
+	ExtraPolicyOnly int
+
+	// AdjMatchRate is the match rate excluding extra-policy-only failures:
+	// (Passed + ExtraPolicyOnly) / (Passed + Failed + ExtraPolicyOnly)
+	AdjMatchRate float64
 
 	// FromCache is true if data is entirely from cached state (not tested in current run)
 	FromCache bool

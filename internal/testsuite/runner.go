@@ -188,20 +188,23 @@ func (r *Runner) runSummaryOnly() (*RunResult, error) {
 	var entries []ModelComparisonEntry
 	for modelKey, summary := range cachedSummaries {
 		entry := ModelComparisonEntry{
-			Model:          modelKey,
-			Passed:         summary.Passed,
-			Failed:         summary.Failed,
-			Errored:        summary.Errored,
-			TotalMs:        summary.TotalMs,
-			Stability:      summary.Stability,
-			StabilityTests: summary.StabilityTests,
-			FromCache:      true,
+			Model:           modelKey,
+			Passed:          summary.Passed,
+			Failed:          summary.Failed,
+			ExtraPolicyOnly: summary.ExtraPolicyOnly,
+			Errored:         summary.Errored,
+			TotalMs:         summary.TotalMs,
+			Stability:       summary.Stability,
+			StabilityTests:  summary.StabilityTests,
+			FromCache:       true,
 		}
-		// Match rate and avg latency exclude errored tests — errors are infrastructure issues
-		decided := summary.Passed + summary.Failed
+		// Match rate and avg latency exclude errored tests — errors are infrastructure issues.
+		// ExtraPolicyOnly are counted separately from Failed, so include them in decided.
+		decided := summary.Passed + summary.Failed + summary.ExtraPolicyOnly
 		if decided > 0 {
 			entry.MatchRate = float64(summary.Passed) / float64(decided)
 			entry.AvgMs = summary.TotalMs / int64(decided)
+			entry.AdjMatchRate = float64(summary.Passed+summary.ExtraPolicyOnly) / float64(decided)
 		}
 		entries = append(entries, entry)
 	}
@@ -1285,10 +1288,11 @@ func (r *Runner) executeAITests(ctx context.Context, cases []TestCase, models []
 			if r.stateManager != nil {
 				contentHash := r.testCaseHashes[result.CaseID]
 				cachedResult := &CachedResult{
-					Status:     result.Status,
-					Confidence: result.Actual.Confidence,
-					LastRun:    time.Now(),
-					DurationMs: result.ElapsedMs,
+					Status:          result.Status,
+					Confidence:      result.Actual.Confidence,
+					LastRun:         time.Now(),
+					DurationMs:      result.ElapsedMs,
+					ExtraPolicyOnly: result.ExtraPolicyOnly,
 				}
 				r.stateManager.RecordResult(contentHash, result.CaseID, r.policyHashes, modelKey, cachedResult)
 
@@ -1638,7 +1642,11 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 		case "passed":
 			result.Passed++
 		case "failed":
-			result.Failed++
+			if tr.ExtraPolicyOnly {
+				result.ExtraPolicyOnly++
+			} else {
+				result.Failed++
+			}
 		case "errored":
 			result.Errored++
 		case "skipped":
@@ -1646,9 +1654,10 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 		}
 	}
 
-	// Calculate match rate: passed / (passed + failed), excluding errors and skipped.
+	// Calculate match rate: passed / (passed + failed + extraPolicyOnly), excluding errors and skipped.
 	// Errors are infrastructure issues (timeouts, rate limits), not policy accuracy failures.
-	decided := result.Passed + result.Failed
+	// ExtraPolicyOnly are counted separately from Failed, so include them in decided.
+	decided := result.Passed + result.Failed + result.ExtraPolicyOnly
 	if decided > 0 {
 		result.MatchRate = float64(result.Passed) / float64(decided)
 	}
@@ -2405,7 +2414,11 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 		case "passed":
 			entry.Passed++
 		case "failed":
-			entry.Failed++
+			if tr.ExtraPolicyOnly {
+				entry.ExtraPolicyOnly++
+			} else {
+				entry.Failed++
+			}
 		case "errored":
 			entry.Errored++
 		}
@@ -2415,7 +2428,7 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 	var entries []ModelComparisonEntry
 
 	// CEL entry from current run results (CEL results are not cached in state)
-	var celPassed, celFailed, celErrored int
+	var celPassed, celFailed, celExtraPolicyOnly, celErrored int
 	var celTotalMs int64
 	hasCEL := false
 
@@ -2428,7 +2441,11 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 		case "passed":
 			celPassed++
 		case "failed":
-			celFailed++
+			if tr.ExtraPolicyOnly {
+				celExtraPolicyOnly++
+			} else {
+				celFailed++
+			}
 		case "errored":
 			celErrored++
 		}
@@ -2437,17 +2454,19 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 
 	if hasCEL {
 		entry := ModelComparisonEntry{
-			Model:   "cel",
-			Passed:  celPassed,
-			Failed:  celFailed,
-			Errored: celErrored,
-			TotalMs: celTotalMs,
+			Model:           "cel",
+			Passed:          celPassed,
+			Failed:          celFailed,
+			ExtraPolicyOnly: celExtraPolicyOnly,
+			Errored:         celErrored,
+			TotalMs:         celTotalMs,
 		}
 		// Match rate and avg latency exclude errored tests — errors are infrastructure issues
-		celDecided := celPassed + celFailed
+		celDecided := celPassed + celFailed + celExtraPolicyOnly
 		if celDecided > 0 {
 			entry.MatchRate = float64(celPassed) / float64(celDecided)
 			entry.AvgMs = celTotalMs / int64(celDecided)
+			entry.AdjMatchRate = float64(celPassed+celExtraPolicyOnly) / float64(celDecided)
 		}
 		entries = append(entries, entry)
 	}
@@ -2460,11 +2479,13 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 
 	// Add current run's AI model entries, enriching with stability from cached state
 	for _, entry := range aiStats {
-		// Match rate and avg latency exclude errored tests — errors are infrastructure issues
-		decided := entry.Passed + entry.Failed
+		// Match rate and avg latency exclude errored tests — errors are infrastructure issues.
+		// ExtraPolicyOnly are counted separately from Failed, so include them in decided.
+		decided := entry.Passed + entry.Failed + entry.ExtraPolicyOnly
 		if decided > 0 {
 			entry.MatchRate = float64(entry.Passed) / float64(decided)
 			entry.AvgMs = entry.TotalMs / int64(decided)
+			entry.AdjMatchRate = float64(entry.Passed+entry.ExtraPolicyOnly) / float64(decided)
 		}
 		// Pull stability from cached summaries (computed from history)
 		if cs, ok := cachedSummaries[entry.Model]; ok {
@@ -2480,20 +2501,23 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 			continue // Already have current-run data for this model
 		}
 		entry := ModelComparisonEntry{
-			Model:          modelKey,
-			Passed:         summary.Passed,
-			Failed:         summary.Failed,
-			Errored:        summary.Errored,
-			TotalMs:        summary.TotalMs,
-			Stability:      summary.Stability,
-			StabilityTests: summary.StabilityTests,
-			FromCache:      true,
+			Model:           modelKey,
+			Passed:          summary.Passed,
+			Failed:          summary.Failed,
+			ExtraPolicyOnly: summary.ExtraPolicyOnly,
+			Errored:         summary.Errored,
+			TotalMs:         summary.TotalMs,
+			Stability:       summary.Stability,
+			StabilityTests:  summary.StabilityTests,
+			FromCache:       true,
 		}
-		// Match rate and avg latency exclude errored tests — errors are infrastructure issues
-		decided := summary.Passed + summary.Failed
+		// Match rate and avg latency exclude errored tests — errors are infrastructure issues.
+		// ExtraPolicyOnly are counted separately from Failed, so include them in decided.
+		decided := summary.Passed + summary.Failed + summary.ExtraPolicyOnly
 		if decided > 0 {
 			entry.MatchRate = float64(summary.Passed) / float64(decided)
 			entry.AvgMs = summary.TotalMs / int64(decided)
+			entry.AdjMatchRate = float64(summary.Passed+summary.ExtraPolicyOnly) / float64(decided)
 		}
 		entries = append(entries, entry)
 	}
@@ -2534,21 +2558,32 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 		}
 	}
 
-	// Check if any entry has stability data (show Stab% column only when there's history)
+	// Check which optional columns are needed
 	hasStability := false
+	hasExtraPolicy := false
 	for _, e := range entries {
 		if e.StabilityTests > 0 {
 			hasStability = true
-			break
+		}
+		if e.ExtraPolicyOnly > 0 {
+			hasExtraPolicy = true
 		}
 	}
 
-	// Build header based on whether stability data is available
+	// Build header dynamically based on which optional columns are present.
+	// Core columns: Model, Pass, Fail, [Extra, Adj%,] Err, Match%, Avg ms, Total, [Stab%]
 	var header string
-	if hasStability {
+	switch {
+	case hasExtraPolicy && hasStability:
+		header = fmt.Sprintf("%-*s  %5s  %5s  %5s  %4s  %6s  %6s  %9s  %10s  %5s",
+			maxModelLen, "Model", "Pass", "Fail", "Extra", "Err", "Match%", "  Adj%", "Avg ms", "Total", "Stab%")
+	case hasExtraPolicy:
+		header = fmt.Sprintf("%-*s  %5s  %5s  %5s  %4s  %6s  %6s  %9s  %10s",
+			maxModelLen, "Model", "Pass", "Fail", "Extra", "Err", "Match%", "  Adj%", "Avg ms", "Total")
+	case hasStability:
 		header = fmt.Sprintf("%-*s  %5s  %5s  %4s  %6s  %9s  %10s  %5s",
 			maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total", "Stab%")
-	} else {
+	default:
 		header = fmt.Sprintf("%-*s  %5s  %5s  %4s  %6s  %9s  %10s",
 			maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total")
 	}
@@ -2576,7 +2611,24 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 		totalStr := formatDurationSec(e.TotalMs)
 
 		var row string
-		if hasStability {
+		switch {
+		case hasExtraPolicy && hasStability:
+			stabStr := "  —"
+			if e.StabilityTests > 0 {
+				stabStr = fmt.Sprintf("%4.0f%%", e.Stability*100)
+			}
+			row = fmt.Sprintf("%-*s  %5d  %5d  %5d  %4d  %5.1f%%  %5.1f%%  %9s  %10s  %5s",
+				maxModelLen, e.Model,
+				e.Passed, e.Failed, e.ExtraPolicyOnly, e.Errored,
+				e.MatchRate*100, e.AdjMatchRate*100,
+				avgStr, totalStr, stabStr)
+		case hasExtraPolicy:
+			row = fmt.Sprintf("%-*s  %5d  %5d  %5d  %4d  %5.1f%%  %5.1f%%  %9s  %10s",
+				maxModelLen, e.Model,
+				e.Passed, e.Failed, e.ExtraPolicyOnly, e.Errored,
+				e.MatchRate*100, e.AdjMatchRate*100,
+				avgStr, totalStr)
+		case hasStability:
 			stabStr := "  —"
 			if e.StabilityTests > 0 {
 				stabStr = fmt.Sprintf("%4.0f%%", e.Stability*100)
@@ -2586,7 +2638,7 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 				e.Passed, e.Failed, e.Errored,
 				e.MatchRate*100,
 				avgStr, totalStr, stabStr)
-		} else {
+		default:
 			row = fmt.Sprintf("%-*s  %5d  %5d  %4d  %5.1f%%  %9s  %10s",
 				maxModelLen, e.Model,
 				e.Passed, e.Failed, e.Errored,

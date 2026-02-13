@@ -1307,6 +1307,44 @@ func TestCalculateResults_CachedResultsCountAsOriginalStatus(t *testing.T) {
 	assert.False(t, summary.ThresholdsMet, "71.4% < 80% threshold")
 }
 
+// TestCalculateResults_ExtraPolicyOnlySplitsFromFailed verifies that extra-policy-only
+// failures are counted in ExtraPolicyOnly and NOT in Failed. The spec requires that
+// "Extra column splits out from Fail" — they are mutually exclusive categories.
+// MatchRate should use decided = Passed + Failed + ExtraPolicyOnly.
+func TestCalculateResults_ExtraPolicyOnlySplitsFromFailed(t *testing.T) {
+	runner := &Runner{
+		suite: &Suite{
+			Acceptance: AcceptanceConfig{MinMatchRate: 0.5},
+		},
+	}
+
+	results := []TestResult{
+		{Status: "passed"},
+		{Status: "passed"},
+		{Status: "passed"},
+		{Status: "failed"},                              // real failure
+		{Status: "failed", ExtraPolicyOnly: true},        // extra-policy-only
+		{Status: "failed", ExtraPolicyOnly: true},        // extra-policy-only
+		{Status: "errored", Error: &TestError{Type: "timeout", Message: "timed out"}},
+	}
+
+	summary := runner.calculateResults(results)
+
+	assert.Equal(t, 7, summary.TotalCases)
+	assert.Equal(t, 3, summary.Passed)
+	assert.Equal(t, 1, summary.Failed, "only real failures, not extra-policy-only")
+	assert.Equal(t, 2, summary.ExtraPolicyOnly, "extra-policy-only counted separately")
+	assert.Equal(t, 1, summary.Errored)
+
+	// decided = Passed + Failed + ExtraPolicyOnly = 3 + 1 + 2 = 6
+	// MatchRate = 3/6 = 0.5
+	assert.InDelta(t, 0.5, summary.MatchRate, 0.001,
+		"MatchRate should be Passed/(Passed+Failed+ExtraPolicyOnly)")
+
+	// Threshold check: 0.5 >= 0.5 → met
+	assert.True(t, summary.ThresholdsMet)
+}
+
 // TestCalculateResults_ZeroDecidedThresholdsVacuouslyMet verifies that when no tests
 // produce a pass/fail decision (e.g., all skipped, all errored, or engine had no
 // matching cases), thresholds are vacuously met rather than failing on 0/0.
@@ -2464,4 +2502,157 @@ func TestValidateSuiteSchema_StabilityThreshold(t *testing.T) {
 			assert.NoError(t, r.validateSuiteSchema(suite), "threshold=%f should be valid", val)
 		}
 	})
+}
+
+// TestFormatModelComparison_ExtraPolicyColumns verifies that the Extra and Adj%
+// columns appear only when at least one model has ExtraPolicyOnly > 0, and that
+// they are absent when no extra-policy-only failures exist.
+func TestFormatModelComparison_ExtraPolicyColumns(t *testing.T) {
+	origColor := colorEnabled
+	colorEnabled = false
+	defer func() { colorEnabled = origColor }()
+
+	t.Run("no extra columns without extra-policy-only data", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "openai:gpt-5", Passed: 8, Failed: 2, MatchRate: 0.8},
+		}
+		output := formatModelComparison(entries)
+		assert.NotContains(t, output, "Extra")
+		assert.NotContains(t, output, "Adj%")
+	})
+
+	t.Run("extra columns shown when extra-policy-only data present", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "openai:gpt-5", Passed: 7, Failed: 1, ExtraPolicyOnly: 2, Errored: 0, MatchRate: 0.7, AdjMatchRate: 0.9, AvgMs: 1200, TotalMs: 12000},
+			{Model: "anthropic:claude", Passed: 9, Failed: 1, ExtraPolicyOnly: 0, Errored: 0, MatchRate: 0.9, AdjMatchRate: 0.9, AvgMs: 800, TotalMs: 8000},
+		}
+		output := formatModelComparison(entries)
+		assert.Contains(t, output, "Extra")
+		assert.Contains(t, output, "Adj%")
+		assert.Contains(t, output, "70.0%")  // MatchRate for gpt-5
+		assert.Contains(t, output, "90.0%")  // AdjMatchRate for gpt-5
+	})
+
+	t.Run("extra and stability columns together", func(t *testing.T) {
+		entries := []ModelComparisonEntry{
+			{Model: "openai:gpt-5", Passed: 7, Failed: 1, ExtraPolicyOnly: 2, MatchRate: 0.7, AdjMatchRate: 0.9, Stability: 0.95, StabilityTests: 5},
+		}
+		output := formatModelComparison(entries)
+		assert.Contains(t, output, "Extra")
+		assert.Contains(t, output, "Adj%")
+		assert.Contains(t, output, "Stab%")
+		assert.Contains(t, output, "95%")
+	})
+
+	t.Run("extra column alignment stays correct", func(t *testing.T) {
+		// dataRowWidths from TestFormatModelComparison_ColumnAlignment
+		dataRowWidths := func(output string) (headerWidth int, rowWidths []int) {
+			lines := strings.Split(strings.TrimSpace(output), "\n")
+			require.GreaterOrEqual(t, len(lines), 4, "table must have separator + header + at least 1 data row + separator")
+			headerWidth = utf8.RuneCountInString(lines[1])
+			for _, line := range lines[2:] {
+				if strings.HasPrefix(line, "─") || strings.Contains(line, "previous run") {
+					continue
+				}
+				rowWidths = append(rowWidths, utf8.RuneCountInString(line))
+			}
+			return headerWidth, rowWidths
+		}
+
+		entries := []ModelComparisonEntry{
+			{Model: "cel", Passed: 50, Failed: 0, ExtraPolicyOnly: 0, Errored: 0, MatchRate: 1.0, AdjMatchRate: 1.0, AvgMs: 2, TotalMs: 100},
+			{Model: "openai:gpt-5", Passed: 35, Failed: 5, ExtraPolicyOnly: 10, Errored: 0, MatchRate: 0.7, AdjMatchRate: 0.9, AvgMs: 1200, TotalMs: 60000},
+		}
+		output := formatModelComparison(entries)
+		headerWidth, rowWidths := dataRowWidths(output)
+		for i, rw := range rowWidths {
+			assert.Equal(t, headerWidth, rw, "row %d width %d != header width %d\n%s", i, rw, headerWidth, output)
+		}
+	})
+}
+
+// TestJSONOutput_ExtraPolicyOnlyFields verifies that extra-policy-only fields
+// appear in JSON output when present.
+func TestJSONOutput_ExtraPolicyOnlyFields(t *testing.T) {
+	suite := &Suite{
+		BundleID: "test",
+		Version:  "v1",
+		Acceptance: AcceptanceConfig{
+			MinMatchRate: 0.8,
+		},
+	}
+
+	results := []TestResult{
+		{
+			CaseID:          "test-extra-policy",
+			Engine:          "ai",
+			Model:           "openai:gpt-5",
+			Status:          "failed",
+			ExtraPolicyOnly: true,
+			Expected:        ExpectedResult{Decision: "deny"},
+			Actual:          ActualResult{Decision: "deny"},
+			Failures:        []string{"1 unexpected policy match(es)"},
+			ElapsedMs:       1200,
+		},
+		{
+			CaseID:    "test-normal-pass",
+			Engine:    "ai",
+			Model:     "openai:gpt-5",
+			Status:    "passed",
+			Expected:  ExpectedResult{Decision: "deny"},
+			Actual:    ActualResult{Decision: "deny"},
+			ElapsedMs: 800,
+		},
+		{
+			CaseID:    "test-real-failure",
+			Engine:    "ai",
+			Model:     "openai:gpt-5",
+			Status:    "failed",
+			Expected:  ExpectedResult{Decision: "deny"},
+			Actual:    ActualResult{Decision: "allow"},
+			Failures:  []string{"expected \"deny\", actual \"allow\""},
+			ElapsedMs: 900,
+		},
+	}
+
+	summary := &RunResult{
+		TotalCases:      3,
+		Passed:          1,
+		Failed:          1,
+		ExtraPolicyOnly: 1,
+	}
+
+	comparison := []ModelComparisonEntry{
+		{Model: "openai:gpt-5", Passed: 1, Failed: 1, ExtraPolicyOnly: 1, MatchRate: 1.0 / 3.0, AdjMatchRate: 2.0 / 3.0},
+	}
+
+	jsonStr, err := formatJSONOutput(suite, results, summary, nil, comparison)
+	require.NoError(t, err)
+
+	// Parse and verify
+	var output JSONOutput
+	require.NoError(t, json.Unmarshal([]byte(jsonStr), &output))
+
+	// Check model comparison entry
+	require.Len(t, output.ModelComparison, 1)
+	assert.Equal(t, 1, output.ModelComparison[0].ExtraPolicyOnly)
+	assert.InDelta(t, 2.0/3.0, output.ModelComparison[0].AdjMatchRate, 0.001)
+
+	// Check individual test result
+	require.Len(t, output.ResultsByModel, 1)
+	found := false
+	for _, r := range output.ResultsByModel[0].Results {
+		if r.CaseID == "test-extra-policy" {
+			assert.True(t, r.ExtraPolicyOnly, "ExtraPolicyOnly should be true for extra-policy test")
+			found = true
+		}
+	}
+	assert.True(t, found, "test-extra-policy result should be in output")
+
+	// Check model summary includes ExtraPolicyOnly
+	modelSummary := output.ResultsByModel[0].Summary
+	assert.Equal(t, 1, modelSummary.ExtraPolicyOnly)
+
+	// Check overall summary includes ExtraPolicyOnly
+	assert.Equal(t, 1, output.OverallSummary.ExtraPolicyOnly)
 }
