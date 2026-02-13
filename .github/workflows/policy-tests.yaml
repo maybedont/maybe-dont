@@ -327,6 +327,7 @@ jobs:
       - name: Download all results
         uses: actions/download-artifact@v4
         with:
+          pattern: "*-results"
           path: results
 
       - name: Generate summary
