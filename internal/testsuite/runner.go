@@ -436,7 +436,11 @@ func (r *Runner) discoverTestCases() error {
 				}
 			}
 			seenIDs[tc.CaseID] = path
-			testCaseHashes[tc.CaseID] = ComputeTestCaseHash(tc)
+			hash, err := ComputeTestCaseHash(tc)
+			if err != nil {
+				return fmt.Errorf("case %q in %s: %w", tc.CaseID, path, err)
+			}
+			testCaseHashes[tc.CaseID] = hash
 			testCaseFiles[tc.CaseID] = path
 			testCases = append(testCases, tc)
 		}

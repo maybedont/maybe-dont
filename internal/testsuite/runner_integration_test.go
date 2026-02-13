@@ -310,13 +310,14 @@ func TestIntegration_MultiCaseFile_PerCaseStateTracking(t *testing.T) {
 	ctx := context.Background()
 
 	// Run with deny mock: mc-001 pass, mc-002 fail (expects allow), mc-003 pass
+	mock := newDenyMock()
 	runner, err := NewRunner(RunnerOptions{
 		SuiteDir:              dir,
 		Engine:                "ai",
 		Model:                 "openai:test-model-a",
 		StateFile:             stateFile,
 		Quiet:                 true,
-		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+		ProviderClientFactory: mockProviderFactory(mock),
 	})
 	require.NoError(t, err)
 	result, err := runner.Run(ctx)
@@ -325,6 +326,7 @@ func TestIntegration_MultiCaseFile_PerCaseStateTracking(t *testing.T) {
 	assert.Equal(t, 3, result.TotalCases, "should run all 3 cases")
 	assert.Equal(t, 2, result.Passed, "mc-001 and mc-003 should pass")
 	assert.Equal(t, 1, result.Failed, "mc-002 should fail (expects allow, got deny)")
+	assert.Len(t, mock.GetRecordedRequests(), 3, "should call AI provider once per case")
 
 	// Verify state has 3 entries (not 1)
 	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)
@@ -355,21 +357,24 @@ func TestIntegration_MultiCaseFile_CrossModelAccumulation(t *testing.T) {
 	ctx := context.Background()
 
 	// Run 1: model A
+	mock1 := newDenyMock()
 	runner1, err := NewRunner(RunnerOptions{
 		SuiteDir:              dir,
 		Engine:                "ai",
 		Model:                 "openai:test-model-a",
 		StateFile:             stateFile,
 		Quiet:                 true,
-		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+		ProviderClientFactory: mockProviderFactory(mock1),
 	})
 	require.NoError(t, err)
 	result1, err := runner1.Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 2, result1.Passed)
 	assert.Equal(t, 1, result1.Failed)
+	assert.Len(t, mock1.GetRecordedRequests(), 3, "model A should call AI provider for all 3 cases")
 
-	// Run 2: model B with JSON output
+	// Run 2: model B with JSON output (different model, no cache reuse)
+	mock2 := newDenyMock()
 	runner2, err := NewRunner(RunnerOptions{
 		SuiteDir:              dir,
 		Engine:                "ai",
@@ -378,13 +383,14 @@ func TestIntegration_MultiCaseFile_CrossModelAccumulation(t *testing.T) {
 		Quiet:                 true,
 		OutputFormat:          "json",
 		OutputFile:            outputFile,
-		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+		ProviderClientFactory: mockProviderFactory(mock2),
 	})
 	require.NoError(t, err)
 	result2, err := runner2.Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 2, result2.Passed)
 	assert.Equal(t, 1, result2.Failed)
+	assert.Len(t, mock2.GetRecordedRequests(), 3, "model B should call AI provider for all 3 cases")
 
 	// Verify state has both models with correct per-case counts
 	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)

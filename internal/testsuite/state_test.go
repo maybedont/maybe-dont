@@ -1239,8 +1239,10 @@ func TestComputeTestCaseHash(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hashA := ComputeTestCaseHash(tt.a)
-			hashB := ComputeTestCaseHash(tt.b)
+			hashA, err := ComputeTestCaseHash(tt.a)
+			require.NoError(t, err)
+			hashB, err := ComputeTestCaseHash(tt.b)
+			require.NoError(t, err)
 
 			assert.NotEmpty(t, hashA, "hash should not be empty")
 			assert.True(t, strings.HasPrefix(hashA, "sha256:"), "hash should have sha256 prefix")

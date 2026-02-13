@@ -463,7 +463,7 @@ func ComputePolicyHash(policyYAML []byte) string {
 // documentation changes don't invalidate the cache. Uses JSON marshaling which
 // sorts map keys alphabetically, ensuring deterministic output for map[string]any
 // fields like Arguments.
-func ComputeTestCaseHash(tc TestCase) string {
+func ComputeTestCaseHash(tc TestCase) (string, error) {
 	input := struct {
 		Phase        string             `json:"phase,omitempty"`
 		Engine       string             `json:"engine,omitempty"`
@@ -477,8 +477,11 @@ func ComputeTestCaseHash(tc TestCase) string {
 		Response:     tc.Response,
 		Expectations: tc.Expectations,
 	}
-	data, _ := json.Marshal(input)
-	return ComputeContentHash(data)
+	data, err := json.Marshal(input)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal test case %q for hashing: %w", tc.CaseID, err)
+	}
+	return ComputeContentHash(data), nil
 }
 
 // ModelKey generates a cache key for a model configuration.
