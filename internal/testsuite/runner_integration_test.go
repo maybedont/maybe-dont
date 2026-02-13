@@ -340,6 +340,79 @@ func TestIntegration_MultiCaseFile_PerCaseStateTracking(t *testing.T) {
 	assert.Equal(t, 1, summary.Failed, "state should show 1 failed")
 }
 
+// TestIntegration_MultiCaseFile_CrossModelAccumulation verifies that running
+// model A then model B against a multi-case file preserves model A's per-case
+// results in the cached model comparison.
+func TestIntegration_MultiCaseFile_CrossModelAccumulation(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+	outputFile := filepath.Join(dir, "results.json")
+
+	setupTestSuiteWithYAML(t, dir, twoModelSuiteYAML, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: model A
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	result1, err := runner1.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result1.Passed)
+	assert.Equal(t, 1, result1.Failed)
+
+	// Run 2: model B with JSON output
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-b",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		OutputFormat:          "json",
+		OutputFile:            outputFile,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result2.Passed)
+	assert.Equal(t, 1, result2.Failed)
+
+	// Verify state has both models with correct per-case counts
+	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)
+	require.NoError(t, err)
+	policyHashes := readPolicyHashes(t, dir)
+	summaries := sm.GetModelSummaries(policyHashes)
+
+	require.Contains(t, summaries, "openai:test-model-a")
+	require.Contains(t, summaries, "openai:test-model-b")
+	assert.Equal(t, 3, summaries["openai:test-model-a"].TestCount, "model A should have 3 entries")
+	assert.Equal(t, 2, summaries["openai:test-model-a"].Passed, "model A should have 2 passed")
+	assert.Equal(t, 1, summaries["openai:test-model-a"].Failed, "model A should have 1 failed")
+	assert.Equal(t, 3, summaries["openai:test-model-b"].TestCount, "model B should have 3 entries")
+
+	// Verify JSON model_comparison shows model A from cache with correct counts
+	output := parseJSONOutput(t, outputFile)
+	byName := modelComparisonByName(output.ModelComparison)
+
+	require.Contains(t, byName, "openai:test-model-a")
+	assert.True(t, byName["openai:test-model-a"].FromCache, "model A should be from cache")
+	assert.Equal(t, 2, byName["openai:test-model-a"].Passed, "cached model A should show 2 passed (not 1)")
+	assert.Equal(t, 1, byName["openai:test-model-a"].Failed, "cached model A should show 1 failed")
+
+	assert.False(t, byName["openai:test-model-b"].FromCache, "model B should be current")
+	assert.Equal(t, 2, byName["openai:test-model-b"].Passed)
+	assert.Equal(t, 1, byName["openai:test-model-b"].Failed)
+}
+
 // --- Original tests (state accumulation, historical models, cache invalidation) ---
 
 // TestIntegration_StateAccumulation_AcrossModels verifies that running with model A,
