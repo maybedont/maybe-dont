@@ -464,6 +464,52 @@ func TestIntegration_MultiCaseFile_IncrementalCaching(t *testing.T) {
 	assert.Empty(t, mock2.GetRecordedRequests(), "no tests should re-run in default incremental (all cached)")
 }
 
+// TestIntegration_MultiCaseFile_RetryFailed verifies that --retry-failed with
+// a multi-case file re-runs only the individually failed cases.
+func TestIntegration_MultiCaseFile_RetryFailed(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: deny mock → mc-001 pass, mc-002 fail, mc-003 pass
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	_, err = runner1.Run(ctx)
+	require.NoError(t, err)
+
+	// Run 2: retry-failed with allow mock — only mc-002 should re-run
+	mock2 := newAllowMock()
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		RetryFailed:           true,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock2),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, result2.CachedCount, "mc-001 and mc-003 should be cached (passed)")
+	assert.Equal(t, 3, result2.Passed, "all 3 should now show as passed")
+	assert.Equal(t, 0, result2.Failed, "no failures after retry with allow mock")
+	assert.Len(t, mock2.GetRecordedRequests(), 1, "only mc-002 should be re-executed")
+}
+
 // --- Original tests (state accumulation, historical models, cache invalidation) ---
 
 // TestIntegration_StateAccumulation_AcrossModels verifies that running with model A,
