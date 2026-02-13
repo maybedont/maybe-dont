@@ -555,6 +555,97 @@ func TestIntegration_MultiCaseFile_ForceMode(t *testing.T) {
 	assert.Len(t, mock2.GetRecordedRequests(), 3, "AI provider should be called 3 times")
 }
 
+// TestIntegration_MultiCaseFile_EditOneCasePreservesSiblings verifies that
+// modifying one test case in a multi-case file only invalidates that case's
+// cache, leaving siblings cached.
+func TestIntegration_MultiCaseFile_EditOneCasePreservesSiblings(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: populate state with all 3 cases
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	_, err = runner1.Run(ctx)
+	require.NoError(t, err)
+
+	// Modify mc-002 only (change tool_name) — siblings mc-001 and mc-003 unchanged
+	modifiedMultiCase := `- case_id: mc-001
+  title: "Multi-case deny 1"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__dangerous_action"
+    arguments:
+      command: "delete-all-data"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+
+- case_id: mc-002
+  title: "Multi-case allow"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__modified_action"
+    arguments:
+      path: "/tmp/different.txt"
+  expectations:
+    decision: allow
+    policies:
+      - policy_name: "test-policy"
+        decision: allow
+
+- case_id: mc-003
+  title: "Multi-case deny 2"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__another_dangerous"
+    arguments:
+      command: "drop-database"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+`
+	// Overwrite the file with modified mc-002
+	casesDir := filepath.Join(dir, "cases")
+	require.NoError(t, os.WriteFile(filepath.Join(casesDir, "multi.yaml"), []byte(modifiedMultiCase), 0644))
+
+	// Run 2: incremental — mc-001 and mc-003 should be cached, mc-002 should re-run
+	mock2 := newAllowMock()
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock2),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, result2.CachedCount, "mc-001 and mc-003 should still be cached")
+	assert.Len(t, mock2.GetRecordedRequests(), 1, "only modified mc-002 should re-run")
+}
+
 // --- Original tests (state accumulation, historical models, cache invalidation) ---
 
 // TestIntegration_StateAccumulation_AcrossModels verifies that running with model A,
