@@ -510,6 +510,51 @@ func TestIntegration_MultiCaseFile_RetryFailed(t *testing.T) {
 	assert.Len(t, mock2.GetRecordedRequests(), 1, "only mc-002 should be re-executed")
 }
 
+// TestIntegration_MultiCaseFile_ForceMode verifies that --full bypasses per-case
+// cache and re-runs all cases even if they previously passed.
+func TestIntegration_MultiCaseFile_ForceMode(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: populate state
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	_, err = runner1.Run(ctx)
+	require.NoError(t, err)
+
+	// Run 2: force mode — all 3 cases should re-execute
+	mock2 := newDenyMock()
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Force:                 true,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock2),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, result2.CachedCount, "force mode should not use cache")
+	assert.Equal(t, 3, result2.TotalCases, "all 3 cases should run")
+	assert.Len(t, mock2.GetRecordedRequests(), 3, "AI provider should be called 3 times")
+}
+
 // --- Original tests (state accumulation, historical models, cache invalidation) ---
 
 // TestIntegration_StateAccumulation_AcrossModels verifies that running with model A,
