@@ -245,6 +245,498 @@ expectations:
       decision: allow
 `
 
+// multiCaseYAML contains 3 test cases in a single file (the multi-case format
+// that triggered the per-file hashing bug). mc-001 and mc-003 expect deny,
+// mc-002 expects allow.
+const multiCaseYAML = `- case_id: mc-001
+  title: "Multi-case deny 1"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__dangerous_action"
+    arguments:
+      command: "delete-all-data"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+
+- case_id: mc-002
+  title: "Multi-case allow"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__safe_action"
+    arguments:
+      path: "/tmp/readme.txt"
+  expectations:
+    decision: allow
+    policies:
+      - policy_name: "test-policy"
+        decision: allow
+
+- case_id: mc-003
+  title: "Multi-case deny 2"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__another_dangerous"
+    arguments:
+      command: "drop-database"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+`
+
+// --- Multi-case file tests ---
+// These tests verify that multiple test cases in a single YAML file are tracked
+// individually in the state, not collapsed into one entry per file.
+
+// TestIntegration_MultiCaseFile_PerCaseStateTracking verifies that a single YAML
+// file with 3 test cases produces 3 separate state entries, not 1.
+// This is the core regression test for the per-file hashing bug.
+func TestIntegration_MultiCaseFile_PerCaseStateTracking(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	// Single file with 3 cases
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run with deny mock: mc-001 pass, mc-002 fail (expects allow), mc-003 pass
+	mock := newDenyMock()
+	runner, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock),
+	})
+	require.NoError(t, err)
+	result, err := runner.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, result.TotalCases, "should run all 3 cases")
+	assert.Equal(t, 2, result.Passed, "mc-001 and mc-003 should pass")
+	assert.Equal(t, 1, result.Failed, "mc-002 should fail (expects allow, got deny)")
+	assert.Len(t, mock.GetRecordedRequests(), 3, "should call AI provider once per case")
+
+	// Verify state has 3 entries (not 1)
+	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)
+	require.NoError(t, err)
+
+	policyHashes := readPolicyHashes(t, dir)
+	summaries := sm.GetModelSummaries(policyHashes)
+	require.Contains(t, summaries, "openai:test-model-a")
+
+	summary := summaries["openai:test-model-a"]
+	assert.Equal(t, 3, summary.TestCount, "state should have 3 entries, not 1")
+	assert.Equal(t, 2, summary.Passed, "state should show 2 passed")
+	assert.Equal(t, 1, summary.Failed, "state should show 1 failed")
+}
+
+// TestIntegration_MultiCaseFile_CrossModelAccumulation verifies that running
+// model A then model B against a multi-case file preserves model A's per-case
+// results in the cached model comparison.
+func TestIntegration_MultiCaseFile_CrossModelAccumulation(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+	outputFile := filepath.Join(dir, "results.json")
+
+	setupTestSuiteWithYAML(t, dir, twoModelSuiteYAML, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: model A
+	mock1 := newDenyMock()
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock1),
+	})
+	require.NoError(t, err)
+	result1, err := runner1.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result1.Passed)
+	assert.Equal(t, 1, result1.Failed)
+	assert.Len(t, mock1.GetRecordedRequests(), 3, "model A should call AI provider for all 3 cases")
+
+	// Run 2: model B with JSON output (different model, no cache reuse)
+	mock2 := newDenyMock()
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-b",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		OutputFormat:          "json",
+		OutputFile:            outputFile,
+		ProviderClientFactory: mockProviderFactory(mock2),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result2.Passed)
+	assert.Equal(t, 1, result2.Failed)
+	assert.Len(t, mock2.GetRecordedRequests(), 3, "model B should call AI provider for all 3 cases")
+
+	// Verify state has both models with correct per-case counts
+	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)
+	require.NoError(t, err)
+	policyHashes := readPolicyHashes(t, dir)
+	summaries := sm.GetModelSummaries(policyHashes)
+
+	require.Contains(t, summaries, "openai:test-model-a")
+	require.Contains(t, summaries, "openai:test-model-b")
+	assert.Equal(t, 3, summaries["openai:test-model-a"].TestCount, "model A should have 3 entries")
+	assert.Equal(t, 2, summaries["openai:test-model-a"].Passed, "model A should have 2 passed")
+	assert.Equal(t, 1, summaries["openai:test-model-a"].Failed, "model A should have 1 failed")
+	assert.Equal(t, 3, summaries["openai:test-model-b"].TestCount, "model B should have 3 entries")
+
+	// Verify JSON model_comparison shows model A from cache with correct counts
+	output := parseJSONOutput(t, outputFile)
+	byName := modelComparisonByName(output.ModelComparison)
+
+	require.Contains(t, byName, "openai:test-model-a")
+	assert.True(t, byName["openai:test-model-a"].FromCache, "model A should be from cache")
+	assert.Equal(t, 2, byName["openai:test-model-a"].Passed, "cached model A should show 2 passed (not 1)")
+	assert.Equal(t, 1, byName["openai:test-model-a"].Failed, "cached model A should show 1 failed")
+
+	assert.False(t, byName["openai:test-model-b"].FromCache, "model B should be current")
+	assert.Equal(t, 2, byName["openai:test-model-b"].Passed)
+	assert.Equal(t, 1, byName["openai:test-model-b"].Failed)
+}
+
+// TestIntegration_MultiCaseFile_IncrementalCaching verifies that incremental mode
+// caches each case individually within a multi-case file. Passing cases are skipped,
+// the failing case is re-run.
+func TestIntegration_MultiCaseFile_IncrementalCaching(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: deny mock → mc-001 pass, mc-002 fail, mc-003 pass
+	mock1 := newDenyMock()
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock1),
+	})
+	require.NoError(t, err)
+	result1, err := runner1.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result1.TotalCases)
+	assert.Equal(t, 0, result1.CachedCount, "first run should have no cached results")
+	assert.Len(t, mock1.GetRecordedRequests(), 3, "first run should call AI provider 3 times")
+
+	// Run 2: same model, incremental — all 3 cached (2 passed + 1 failed)
+	mock2 := newDenyMock()
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock2),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, result2.TotalCases, "should still report 3 total cases")
+	assert.Equal(t, 3, result2.CachedCount, "all 3 cases should be cached")
+	assert.Equal(t, 2, result2.Passed, "2 cases should show as passed (cached)")
+	assert.Equal(t, 1, result2.Failed, "1 case should still show as failed (cached)")
+	assert.Empty(t, mock2.GetRecordedRequests(), "no tests should re-run in default incremental (all cached)")
+}
+
+// TestIntegration_MultiCaseFile_RetryFailed verifies that --retry-failed with
+// a multi-case file re-runs only the individually failed cases.
+func TestIntegration_MultiCaseFile_RetryFailed(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: deny mock → mc-001 pass, mc-002 fail, mc-003 pass
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	_, err = runner1.Run(ctx)
+	require.NoError(t, err)
+
+	// Run 2: retry-failed with allow mock — only mc-002 should re-run
+	mock2 := newAllowMock()
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		RetryFailed:           true,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock2),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, result2.CachedCount, "mc-001 and mc-003 should be cached (passed)")
+	assert.Equal(t, 3, result2.Passed, "all 3 should now show as passed")
+	assert.Equal(t, 0, result2.Failed, "no failures after retry with allow mock")
+	assert.Len(t, mock2.GetRecordedRequests(), 1, "only mc-002 should be re-executed")
+}
+
+// TestIntegration_MultiCaseFile_ForceMode verifies that --full bypasses per-case
+// cache and re-runs all cases even if they previously passed.
+func TestIntegration_MultiCaseFile_ForceMode(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: populate state
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	_, err = runner1.Run(ctx)
+	require.NoError(t, err)
+
+	// Run 2: force mode — all 3 cases should re-execute
+	mock2 := newDenyMock()
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Force:                 true,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock2),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, result2.CachedCount, "force mode should not use cache")
+	assert.Equal(t, 3, result2.TotalCases, "all 3 cases should run")
+	assert.Len(t, mock2.GetRecordedRequests(), 3, "AI provider should be called 3 times")
+}
+
+// TestIntegration_MultiCaseFile_EditOneCasePreservesSiblings verifies that
+// modifying one test case in a multi-case file only invalidates that case's
+// cache, leaving siblings cached.
+func TestIntegration_MultiCaseFile_EditOneCasePreservesSiblings(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: populate state with all 3 cases
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	_, err = runner1.Run(ctx)
+	require.NoError(t, err)
+
+	// Modify mc-002 only (change tool_name) — siblings mc-001 and mc-003 unchanged
+	modifiedMultiCase := `- case_id: mc-001
+  title: "Multi-case deny 1"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__dangerous_action"
+    arguments:
+      command: "delete-all-data"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+
+- case_id: mc-002
+  title: "Multi-case allow"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__modified_action"
+    arguments:
+      path: "/tmp/different.txt"
+  expectations:
+    decision: allow
+    policies:
+      - policy_name: "test-policy"
+        decision: allow
+
+- case_id: mc-003
+  title: "Multi-case deny 2"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__another_dangerous"
+    arguments:
+      command: "drop-database"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+`
+	// Overwrite the file with modified mc-002
+	casesDir := filepath.Join(dir, "cases")
+	require.NoError(t, os.WriteFile(filepath.Join(casesDir, "multi.yaml"), []byte(modifiedMultiCase), 0644))
+
+	// Run 2: incremental — mc-001 and mc-003 should be cached, mc-002 should re-run
+	mock2 := newAllowMock()
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock2),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, result2.CachedCount, "mc-001 and mc-003 should still be cached")
+	assert.Len(t, mock2.GetRecordedRequests(), 1, "only modified mc-002 should re-run")
+}
+
+// TestIntegration_MultiCaseFile_ThreeModelCIPattern simulates the real CI workflow:
+// three sequential single-model runs, then a fourth run that should show all three
+// models in the comparison with correct per-case counts. This is the exact scenario
+// that was broken before the per-case hashing fix.
+func TestIntegration_MultiCaseFile_ThreeModelCIPattern(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuiteWithYAML(t, dir, threeModelSuiteYAML, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+	models := []string{"openai:test-model-a", "openai:test-model-b", "openai:test-model-c"}
+
+	// Three sequential single-model runs (simulating separate CI dispatches)
+	for _, model := range models {
+		runner, err := NewRunner(RunnerOptions{
+			SuiteDir:              dir,
+			Engine:                "ai",
+			Model:                 model,
+			StateFile:             stateFile,
+			Quiet:                 true,
+			ProviderClientFactory: mockProviderFactory(newDenyMock()),
+		})
+		require.NoError(t, err)
+		result, err := runner.Run(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 3, result.TotalCases, "%s should run 3 cases", model)
+	}
+
+	// Verify state has all 3 models with 3 entries each
+	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)
+	require.NoError(t, err)
+	policyHashes := readPolicyHashes(t, dir)
+	summaries := sm.GetModelSummaries(policyHashes)
+	assert.Len(t, summaries, 3, "state should have all 3 models")
+
+	for _, model := range models {
+		require.Contains(t, summaries, model)
+		assert.Equal(t, 3, summaries[model].TestCount, "%s should have 3 test entries", model)
+		assert.Equal(t, 2, summaries[model].Passed, "%s should have 2 passed", model)
+		assert.Equal(t, 1, summaries[model].Failed, "%s should have 1 failed", model)
+	}
+
+	// Run 4: model A again (incremental) with JSON output
+	outputFile := filepath.Join(dir, "results.json")
+	mock4 := newDenyMock()
+	runner4, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		OutputFormat:          "json",
+		OutputFile:            outputFile,
+		ProviderClientFactory: mockProviderFactory(mock4),
+	})
+	require.NoError(t, err)
+	result4, err := runner4.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, result4.CachedCount, "all 3 cases should be cached for model A")
+	assert.Empty(t, mock4.GetRecordedRequests(), "no AI calls needed for fully cached run")
+
+	// Verify JSON model_comparison shows all 3 models with correct counts
+	output := parseJSONOutput(t, outputFile)
+	assert.Len(t, output.ModelComparison, 3, "model_comparison should have all 3 models")
+
+	byName := modelComparisonByName(output.ModelComparison)
+
+	// Model A is current run (cached but counted as current)
+	require.Contains(t, byName, "openai:test-model-a")
+	assert.Equal(t, 2, byName["openai:test-model-a"].Passed, "model A should show 2 passed")
+	assert.Equal(t, 1, byName["openai:test-model-a"].Failed, "model A should show 1 failed")
+
+	// Models B and C are from cache — this is the exact assertion that was failing before the fix
+	for _, model := range []string{"openai:test-model-b", "openai:test-model-c"} {
+		require.Contains(t, byName, model)
+		assert.True(t, byName[model].FromCache, "%s should be from cache", model)
+		assert.Equal(t, 2, byName[model].Passed, "%s should show 2 passed (not 1)", model)
+		assert.Equal(t, 1, byName[model].Failed, "%s should show 1 failed", model)
+	}
+}
+
 // --- Original tests (state accumulation, historical models, cache invalidation) ---
 
 // TestIntegration_StateAccumulation_AcrossModels verifies that running with model A,
