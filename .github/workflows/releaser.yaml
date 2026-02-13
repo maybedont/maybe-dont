@@ -75,7 +75,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           gh api repos/maybedont/maybedont-site/dispatches \
-            -f event_type=gateway-release \
+            -f event_type=maybedont-release \
             -f "client_payload[version]=${GITHUB_REF_NAME}"
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
