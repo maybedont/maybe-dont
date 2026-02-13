@@ -1,3 +1,20 @@
+## v1.2.0 (2026-02-13)
+
+### Feat
+
+- categorize extra-policy-only failures in model comparison (#118)
+
+### Fix
+
+- per-test-case content hashing for correct model comparison (#117)
+- widen comparison table columns and add alignment tests (#115)
+- add space before units in model comparison table (#113)
+- add space before units in model comparison table columns
+
+### Refactor
+
+- move include_argument_values from CLI to audit config (#116)
+
 ## v1.1.0 (2026-02-10)
 
 ### Feat
