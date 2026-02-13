@@ -496,6 +496,7 @@ func resolveRulesFilePath(rulesFile, configDir string) string {
 //   - int, int64: parsed as base-10 integers
 //   - float64: parsed as floating point numbers
 //   - []string: parsed as comma-separated values (e.g., "a,b,c" -> ["a", "b", "c"])
+//   - *bool: parsed like bool, sets pointer for optional/tri-state fields
 //   - nested structs: recursively processed
 func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix string, envPrefix string) {
 	if !v.IsValid() {
@@ -550,21 +551,29 @@ func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix strin
 			case reflect.Bool:
 				if boolVal, err := strconv.ParseBool(envVal); err == nil {
 					field.SetBool(boolVal)
+				} else {
+					fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid value %q for %s: %s\n", envVal, envKey, err)
 				}
 
 			case reflect.Int:
 				if intVal, err := strconv.ParseInt(envVal, 10, 0); err == nil {
 					field.SetInt(intVal)
+				} else {
+					fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid value %q for %s: %s\n", envVal, envKey, err)
 				}
 
 			case reflect.Int64:
 				if intVal, err := strconv.ParseInt(envVal, 10, 64); err == nil {
 					field.SetInt(intVal)
+				} else {
+					fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid value %q for %s: %s\n", envVal, envKey, err)
 				}
 
 			case reflect.Float64:
 				if floatVal, err := strconv.ParseFloat(envVal, 64); err == nil {
 					field.SetFloat(floatVal)
+				} else {
+					fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid value %q for %s: %s\n", envVal, envKey, err)
 				}
 
 			case reflect.Slice:
@@ -588,7 +597,11 @@ func applyEnvironmentOverrides(v reflect.Value, t reflect.Type, pathPrefix strin
 				case reflect.Bool:
 					if boolVal, err := strconv.ParseBool(envVal); err == nil {
 						field.Set(reflect.ValueOf(&boolVal))
+					} else {
+						fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid value %q for %s: %s\n", envVal, envKey, err)
 					}
+				default:
+					fmt.Fprintf(os.Stderr, "WARNING: env var %s targets unsupported pointer type *%s, ignoring\n", envKey, field.Type().Elem().Kind())
 				}
 
 			case reflect.Struct:

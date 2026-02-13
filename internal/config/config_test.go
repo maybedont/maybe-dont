@@ -703,6 +703,14 @@ func TestApplyEnvironmentOverrides_AllConfigFields(t *testing.T) {
 				}
 				require.Equal(t, expected, actualSlice,
 					"Slice field %s was not set correctly from %s", field.path, field.envVar)
+
+			case reflect.Ptr:
+				// *bool field — value should be a non-nil *bool after env override
+				expected, _ := strconv.ParseBool(field.testValue)
+				require.False(t, actualVal.IsNil(),
+					"Ptr field %s should not be nil after env override from %s", field.path, field.envVar)
+				require.Equal(t, expected, actualVal.Elem().Bool(),
+					"Ptr field %s was not set correctly from %s", field.path, field.envVar)
 			}
 		})
 	}
@@ -717,7 +725,7 @@ type configFieldInfo struct {
 }
 
 // collectConfigFields recursively discovers all settable fields in a struct type.
-// It skips maps, slices of structs, and pointer types (except *bool which is special).
+// It skips maps, slices of structs, and non-bool pointer types.
 func collectConfigFields(t reflect.Type, pathPrefix string) []configFieldInfo {
 	var fields []configFieldInfo
 
@@ -811,8 +819,15 @@ func collectConfigFields(t reflect.Type, pathPrefix string) []configFieldInfo {
 			// Skip maps (like DownstreamMCPServers) - they can't be set via simple env vars
 
 		case reflect.Ptr:
-			// Skip pointer fields (like *bool for deprecated Enabled fields)
-			// These require special handling that we don't support via env vars
+			// Handle pointer-to-bool fields (e.g., *bool for optional config like IncludeArgumentValues)
+			if fieldType.Elem().Kind() == reflect.Bool {
+				fields = append(fields, configFieldInfo{
+					path:      fullPath,
+					envVar:    envVar,
+					kind:      reflect.Ptr,
+					testValue: "true",
+				})
+			}
 		}
 	}
 
@@ -888,6 +903,18 @@ func TestApplyEnvironmentOverrides_InvalidValues(t *testing.T) {
 
 		require.Equal(t, 100, config.NativeTools.AuditLog.MaxEntries,
 			"Invalid int should leave default unchanged")
+	})
+
+	t.Run("invalid *bool leaves default nil", func(t *testing.T) {
+		t.Setenv("MAYBE_DONT_AUDIT_INCLUDE_ARGUMENT_VALUES", "not-a-bool")
+
+		config := &Config{}
+
+		applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+		// Should remain nil because "not-a-bool" can't be parsed
+		require.Nil(t, config.Audit.IncludeArgumentValues,
+			"Invalid *bool should leave pointer nil")
 	})
 }
 
