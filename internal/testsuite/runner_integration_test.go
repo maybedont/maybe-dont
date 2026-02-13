@@ -245,6 +245,101 @@ expectations:
       decision: allow
 `
 
+// multiCaseYAML contains 3 test cases in a single file (the multi-case format
+// that triggered the per-file hashing bug). mc-001 and mc-003 expect deny,
+// mc-002 expects allow.
+const multiCaseYAML = `- case_id: mc-001
+  title: "Multi-case deny 1"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__dangerous_action"
+    arguments:
+      command: "delete-all-data"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+
+- case_id: mc-002
+  title: "Multi-case allow"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__safe_action"
+    arguments:
+      path: "/tmp/readme.txt"
+  expectations:
+    decision: allow
+    policies:
+      - policy_name: "test-policy"
+        decision: allow
+
+- case_id: mc-003
+  title: "Multi-case deny 2"
+  engine: ai
+  phase: request
+  request:
+    tool_name: "test__another_dangerous"
+    arguments:
+      command: "drop-database"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+`
+
+// --- Multi-case file tests ---
+// These tests verify that multiple test cases in a single YAML file are tracked
+// individually in the state, not collapsed into one entry per file.
+
+// TestIntegration_MultiCaseFile_PerCaseStateTracking verifies that a single YAML
+// file with 3 test cases produces 3 separate state entries, not 1.
+// This is the core regression test for the per-file hashing bug.
+func TestIntegration_MultiCaseFile_PerCaseStateTracking(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	// Single file with 3 cases
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run with deny mock: mc-001 pass, mc-002 fail (expects allow), mc-003 pass
+	runner, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(newDenyMock()),
+	})
+	require.NoError(t, err)
+	result, err := runner.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, result.TotalCases, "should run all 3 cases")
+	assert.Equal(t, 2, result.Passed, "mc-001 and mc-003 should pass")
+	assert.Equal(t, 1, result.Failed, "mc-002 should fail (expects allow, got deny)")
+
+	// Verify state has 3 entries (not 1)
+	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)
+	require.NoError(t, err)
+
+	policyHashes := readPolicyHashes(t, dir)
+	summaries := sm.GetModelSummaries(policyHashes)
+	require.Contains(t, summaries, "openai:test-model-a")
+
+	summary := summaries["openai:test-model-a"]
+	assert.Equal(t, 3, summary.TestCount, "state should have 3 entries, not 1")
+	assert.Equal(t, 2, summary.Passed, "state should show 2 passed")
+	assert.Equal(t, 1, summary.Failed, "state should show 1 failed")
+}
+
 // --- Original tests (state accumulation, historical models, cache invalidation) ---
 
 // TestIntegration_StateAccumulation_AcrossModels verifies that running with model A,
