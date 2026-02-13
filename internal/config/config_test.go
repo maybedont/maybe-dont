@@ -83,11 +83,7 @@ func TestServerTypeValidation(t *testing.T) {
 						Command: "echo",
 					},
 				},
-				Audit: struct {
-					Path     string         `mapstructure:"path"`
-					Filter   string         `mapstructure:"filter"`
-					Rotation RotationConfig `mapstructure:"rotation"`
-				}{
+				Audit: AuditConfig{
 					Path: "audit.log",
 				},
 			}
@@ -143,11 +139,7 @@ func TestListenAddrValidation(t *testing.T) {
 						Command: "echo",
 					},
 				},
-				Audit: struct {
-					Path     string         `mapstructure:"path"`
-					Filter   string         `mapstructure:"filter"`
-					Rotation RotationConfig `mapstructure:"rotation"`
-				}{
+				Audit: AuditConfig{
 					Path: "audit.log",
 				},
 			}
@@ -292,11 +284,7 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 				CapabilityRetryDelayMs:     40000, // Error 9: delay too large
 			},
 		},
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			// No required fields in Audit anymore
 		},
 		RequestValidation: RequestValidationConfig{
@@ -359,11 +347,7 @@ func TestValidateConfigSuccess(t *testing.T) {
 				Command: "echo",
 			},
 		},
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			Path: "audit.log",
 		},
 	}
@@ -719,6 +703,14 @@ func TestApplyEnvironmentOverrides_AllConfigFields(t *testing.T) {
 				}
 				require.Equal(t, expected, actualSlice,
 					"Slice field %s was not set correctly from %s", field.path, field.envVar)
+
+			case reflect.Ptr:
+				// *bool field — value should be a non-nil *bool after env override
+				expected, _ := strconv.ParseBool(field.testValue)
+				require.False(t, actualVal.IsNil(),
+					"Ptr field %s should not be nil after env override from %s", field.path, field.envVar)
+				require.Equal(t, expected, actualVal.Elem().Bool(),
+					"Ptr field %s was not set correctly from %s", field.path, field.envVar)
 			}
 		})
 	}
@@ -733,7 +725,7 @@ type configFieldInfo struct {
 }
 
 // collectConfigFields recursively discovers all settable fields in a struct type.
-// It skips maps, slices of structs, and pointer types (except *bool which is special).
+// It skips maps, slices of structs, and non-bool pointer types.
 func collectConfigFields(t reflect.Type, pathPrefix string) []configFieldInfo {
 	var fields []configFieldInfo
 
@@ -827,8 +819,15 @@ func collectConfigFields(t reflect.Type, pathPrefix string) []configFieldInfo {
 			// Skip maps (like DownstreamMCPServers) - they can't be set via simple env vars
 
 		case reflect.Ptr:
-			// Skip pointer fields (like *bool for deprecated Enabled fields)
-			// These require special handling that we don't support via env vars
+			// Handle pointer-to-bool fields (e.g., *bool for optional config like IncludeArgumentValues)
+			if fieldType.Elem().Kind() == reflect.Bool {
+				fields = append(fields, configFieldInfo{
+					path:      fullPath,
+					envVar:    envVar,
+					kind:      reflect.Ptr,
+					testValue: "true",
+				})
+			}
 		}
 	}
 
@@ -904,6 +903,18 @@ func TestApplyEnvironmentOverrides_InvalidValues(t *testing.T) {
 
 		require.Equal(t, 100, config.NativeTools.AuditLog.MaxEntries,
 			"Invalid int should leave default unchanged")
+	})
+
+	t.Run("invalid *bool leaves default nil", func(t *testing.T) {
+		t.Setenv("MAYBE_DONT_AUDIT_INCLUDE_ARGUMENT_VALUES", "not-a-bool")
+
+		config := &Config{}
+
+		applyEnvironmentOverrides(reflect.ValueOf(config).Elem(), reflect.TypeOf(*config), "", "MAYBE_DONT")
+
+		// Should remain nil because "not-a-bool" can't be parsed
+		require.Nil(t, config.Audit.IncludeArgumentValues,
+			"Invalid *bool should leave pointer nil")
 	})
 }
 
@@ -1754,11 +1765,7 @@ func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
 			Type: ServerTypeSTDIO,
 		},
 		// Missing DownstreamMCPServers - will cause validation error
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			Path: "audit.log",
 		},
 	}
@@ -1794,11 +1801,7 @@ func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
 			Type: ServerTypeSTDIO,
 		},
 		// Missing DownstreamMCPServers - will cause validation error
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			Path: "audit.log",
 		},
 	}
@@ -1886,11 +1889,7 @@ func createValidBaseConfig() *Config {
 				Command: "echo",
 			},
 		},
-		Audit: struct {
-			Path     string         `mapstructure:"path"`
-			Filter   string         `mapstructure:"filter"`
-			Rotation RotationConfig `mapstructure:"rotation"`
-		}{
+		Audit: AuditConfig{
 			Path: "audit.log",
 		},
 		NativeTools: struct {
@@ -3312,3 +3311,53 @@ rules:
 		"No deprecation warning should appear when provider is explicitly set, but got: %q", string(captured))
 }
 
+// TestAuditConfigShouldIncludeArgumentValues verifies the default and explicit behavior
+// of the ShouldIncludeArgumentValues method on AuditConfig.
+func TestAuditConfigShouldIncludeArgumentValues(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
+	tests := []struct {
+		name     string
+		config   AuditConfig
+		expected bool
+	}{
+		{
+			name:     "nil defaults to true",
+			config:   AuditConfig{},
+			expected: true,
+		},
+		{
+			name:     "explicitly true",
+			config:   AuditConfig{IncludeArgumentValues: boolPtr(true)},
+			expected: true,
+		},
+		{
+			name:     "explicitly false",
+			config:   AuditConfig{IncludeArgumentValues: boolPtr(false)},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.config.ShouldIncludeArgumentValues()
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestAuditIncludeArgumentValues_EnvVarOverride verifies that the audit.include_argument_values
+// setting can be overridden via the MAYBE_DONT_AUDIT_INCLUDE_ARGUMENT_VALUES environment variable.
+// The YAML default is true; this test confirms the env var can flip it to false.
+func TestAuditIncludeArgumentValues_EnvVarOverride(t *testing.T) {
+	viper.Reset()
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	t.Setenv("MAYBE_DONT_AUDIT_INCLUDE_ARGUMENT_VALUES", "false")
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.False(t, cfg.Audit.ShouldIncludeArgumentValues())
+}
