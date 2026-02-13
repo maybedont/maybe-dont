@@ -1648,9 +1648,10 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 		case "passed":
 			result.Passed++
 		case "failed":
-			result.Failed++
 			if tr.ExtraPolicyOnly {
 				result.ExtraPolicyOnly++
+			} else {
+				result.Failed++
 			}
 		case "errored":
 			result.Errored++
@@ -1659,9 +1660,10 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 		}
 	}
 
-	// Calculate match rate: passed / (passed + failed), excluding errors and skipped.
+	// Calculate match rate: passed / (passed + failed + extraPolicyOnly), excluding errors and skipped.
 	// Errors are infrastructure issues (timeouts, rate limits), not policy accuracy failures.
-	decided := result.Passed + result.Failed
+	// ExtraPolicyOnly are counted separately from Failed, so include them in decided.
+	decided := result.Passed + result.Failed + result.ExtraPolicyOnly
 	if decided > 0 {
 		result.MatchRate = float64(result.Passed) / float64(decided)
 	}

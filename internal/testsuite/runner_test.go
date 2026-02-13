@@ -1307,6 +1307,44 @@ func TestCalculateResults_CachedResultsCountAsOriginalStatus(t *testing.T) {
 	assert.False(t, summary.ThresholdsMet, "71.4% < 80% threshold")
 }
 
+// TestCalculateResults_ExtraPolicyOnlySplitsFromFailed verifies that extra-policy-only
+// failures are counted in ExtraPolicyOnly and NOT in Failed. The spec requires that
+// "Extra column splits out from Fail" — they are mutually exclusive categories.
+// MatchRate should use decided = Passed + Failed + ExtraPolicyOnly.
+func TestCalculateResults_ExtraPolicyOnlySplitsFromFailed(t *testing.T) {
+	runner := &Runner{
+		suite: &Suite{
+			Acceptance: AcceptanceConfig{MinMatchRate: 0.5},
+		},
+	}
+
+	results := []TestResult{
+		{Status: "passed"},
+		{Status: "passed"},
+		{Status: "passed"},
+		{Status: "failed"},                              // real failure
+		{Status: "failed", ExtraPolicyOnly: true},        // extra-policy-only
+		{Status: "failed", ExtraPolicyOnly: true},        // extra-policy-only
+		{Status: "errored", Error: &TestError{Type: "timeout", Message: "timed out"}},
+	}
+
+	summary := runner.calculateResults(results)
+
+	assert.Equal(t, 7, summary.TotalCases)
+	assert.Equal(t, 3, summary.Passed)
+	assert.Equal(t, 1, summary.Failed, "only real failures, not extra-policy-only")
+	assert.Equal(t, 2, summary.ExtraPolicyOnly, "extra-policy-only counted separately")
+	assert.Equal(t, 1, summary.Errored)
+
+	// decided = Passed + Failed + ExtraPolicyOnly = 3 + 1 + 2 = 6
+	// MatchRate = 3/6 = 0.5
+	assert.InDelta(t, 0.5, summary.MatchRate, 0.001,
+		"MatchRate should be Passed/(Passed+Failed+ExtraPolicyOnly)")
+
+	// Threshold check: 0.5 >= 0.5 → met
+	assert.True(t, summary.ThresholdsMet)
+}
+
 // TestCalculateResults_ZeroDecidedThresholdsVacuouslyMet verifies that when no tests
 // produce a pass/fail decision (e.g., all skipped, all errored, or engine had no
 // matching cases), thresholds are vacuously met rather than failing on 0/0.
