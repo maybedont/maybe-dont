@@ -458,6 +458,29 @@ func ComputePolicyHash(policyYAML []byte) string {
 	return "sha256:" + hex.EncodeToString(hash[:])
 }
 
+// ComputeTestCaseHash produces a deterministic hash of a test case's behavioral
+// fields. Metadata (CaseID, Title, Tags, Notes) is excluded so that renames and
+// documentation changes don't invalidate the cache. Uses JSON marshaling which
+// sorts map keys alphabetically, ensuring deterministic output for map[string]any
+// fields like Arguments.
+func ComputeTestCaseHash(tc TestCase) string {
+	input := struct {
+		Phase        string             `json:"phase,omitempty"`
+		Engine       string             `json:"engine,omitempty"`
+		Request      RequestConfig      `json:"request"`
+		Response     *ResponseConfig    `json:"response,omitempty"`
+		Expectations ExpectationsConfig `json:"expectations"`
+	}{
+		Phase:        tc.Phase,
+		Engine:       tc.Engine,
+		Request:      tc.Request,
+		Response:     tc.Response,
+		Expectations: tc.Expectations,
+	}
+	data, _ := json.Marshal(input)
+	return ComputeContentHash(data)
+}
+
 // ModelKey generates a cache key for a model configuration.
 func ModelKey(provider, model string) string {
 	return provider + ":" + model

@@ -3,6 +3,7 @@ package testsuite
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1062,4 +1063,193 @@ func TestDefaultHistoryDepth(t *testing.T) {
 		sm, _ := NewStateManager("", "test-suite", "1.0.0", 10)
 		assert.Equal(t, 10, sm.historyDepth)
 	})
+}
+
+// TestComputeTestCaseHash verifies that ComputeTestCaseHash produces deterministic
+// hashes based only on behavioral fields (phase, engine, request, response,
+// expectations), and ignores metadata fields (case_id, title, tags, notes).
+func TestComputeTestCaseHash(t *testing.T) {
+	baseCase := TestCase{
+		CaseID: "test-001",
+		Title:  "Test case",
+		Tags:   []string{"ai", "request"},
+		Notes:  []string{"A note"},
+		Phase:  "request",
+		Engine: "ai",
+		Request: RequestConfig{
+			ToolName:  "test__action",
+			Arguments: map[string]any{"path": "/tmp/file.txt", "mode": "read"},
+		},
+		Expectations: ExpectationsConfig{
+			Decision: "deny",
+			Policies: []PolicyExpectation{
+				{PolicyName: "test-policy", Decision: "deny"},
+			},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		a          TestCase
+		b          TestCase
+		expectSame bool
+	}{
+		{
+			name:       "same case produces same hash",
+			a:          baseCase,
+			b:          baseCase,
+			expectSame: true,
+		},
+		{
+			name: "different case_id same hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.CaseID = "different-id"
+				return tc
+			}(),
+			expectSame: true,
+		},
+		{
+			name: "different title same hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.Title = "Different title"
+				return tc
+			}(),
+			expectSame: true,
+		},
+		{
+			name: "different tags same hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.Tags = []string{"different", "tags"}
+				return tc
+			}(),
+			expectSame: true,
+		},
+		{
+			name: "different notes same hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.Notes = []string{"different note"}
+				return tc
+			}(),
+			expectSame: true,
+		},
+		{
+			name: "different tool_name different hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.Request.ToolName = "test__other_action"
+				return tc
+			}(),
+			expectSame: false,
+		},
+		{
+			name: "different arguments different hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.Request.Arguments = map[string]any{"path": "/etc/passwd"}
+				return tc
+			}(),
+			expectSame: false,
+		},
+		{
+			name: "different decision different hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.Expectations.Decision = "allow"
+				return tc
+			}(),
+			expectSame: false,
+		},
+		{
+			name: "different phase different hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.Phase = "response"
+				return tc
+			}(),
+			expectSame: false,
+		},
+		{
+			name: "different engine different hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.Engine = "cel"
+				return tc
+			}(),
+			expectSame: false,
+		},
+		{
+			name: "with response vs without different hash",
+			a:    baseCase,
+			b: func() TestCase {
+				tc := baseCase
+				tc.Response = &ResponseConfig{
+					Content: []ContentItem{{Type: "text", Text: "secret data"}},
+				}
+				return tc
+			}(),
+			expectSame: false,
+		},
+		{
+			name: "map key ordering does not affect hash",
+			a: func() TestCase {
+				tc := baseCase
+				tc.Request.Arguments = map[string]any{"alpha": "1", "beta": "2", "gamma": "3"}
+				return tc
+			}(),
+			b: func() TestCase {
+				tc := baseCase
+				// Different insertion order, same keys and values
+				tc.Request.Arguments = map[string]any{"gamma": "3", "alpha": "1", "beta": "2"}
+				return tc
+			}(),
+			expectSame: true,
+		},
+		{
+			name: "nested map key ordering does not affect hash",
+			a: func() TestCase {
+				tc := baseCase
+				tc.Request.Arguments = map[string]any{
+					"config": map[string]any{"zebra": "z", "apple": "a"},
+				}
+				return tc
+			}(),
+			b: func() TestCase {
+				tc := baseCase
+				tc.Request.Arguments = map[string]any{
+					"config": map[string]any{"apple": "a", "zebra": "z"},
+				}
+				return tc
+			}(),
+			expectSame: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hashA := ComputeTestCaseHash(tt.a)
+			hashB := ComputeTestCaseHash(tt.b)
+
+			assert.NotEmpty(t, hashA, "hash should not be empty")
+			assert.True(t, strings.HasPrefix(hashA, "sha256:"), "hash should have sha256 prefix")
+
+			if tt.expectSame {
+				assert.Equal(t, hashA, hashB, "hashes should be equal")
+			} else {
+				assert.NotEqual(t, hashA, hashB, "hashes should differ")
+			}
+		})
+	}
 }
