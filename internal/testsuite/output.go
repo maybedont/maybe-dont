@@ -20,14 +20,16 @@ type JSONOutput struct {
 
 // JSONModelComparisonEntry holds per-model summary stats including historical cached models.
 type JSONModelComparisonEntry struct {
-	Model     string  `json:"model"`
-	Passed    int     `json:"passed"`
-	Failed    int     `json:"failed"`
-	Errored   int     `json:"errored"`
-	MatchRate float64 `json:"match_rate"`
-	AvgMs     int64   `json:"avg_ms"`
-	TotalMs   int64   `json:"total_ms"`
-	FromCache bool    `json:"from_cache"`
+	Model           string  `json:"model"`
+	Passed          int     `json:"passed"`
+	Failed          int     `json:"failed"`
+	ExtraPolicyOnly int     `json:"extra_policy_only,omitempty"`
+	Errored         int     `json:"errored"`
+	MatchRate       float64 `json:"match_rate"`
+	AdjMatchRate    float64 `json:"adj_match_rate,omitempty"`
+	AvgMs           int64   `json:"avg_ms"`
+	TotalMs         int64   `json:"total_ms"`
+	FromCache       bool    `json:"from_cache"`
 }
 
 // JSONSuiteInfo contains suite metadata.
@@ -67,8 +69,9 @@ type JSONTestResult struct {
 	ElapsedMs int64               `json:"elapsed_ms"`
 	Expected  *JSONExpected       `json:"expected,omitempty"`
 	Actual    *JSONActual         `json:"actual,omitempty"`
-	Failures  []string            `json:"failures,omitempty"`
-	Error     *JSONError          `json:"error,omitempty"`
+	Failures        []string `json:"failures,omitempty"`
+	ExtraPolicyOnly bool     `json:"extra_policy_only,omitempty"`
+	Error           *JSONError `json:"error,omitempty"`
 
 	// Pass rate fields (present only when history has 2+ entries)
 	PassRate                     *float64 `json:"pass_rate,omitempty"`
@@ -114,15 +117,17 @@ type JSONError struct {
 
 // JSONModelSummary contains summary stats for a model.
 type JSONModelSummary struct {
-	TotalCases     int      `json:"total_cases"`
-	Passed         int      `json:"passed"`
-	Failed         int      `json:"failed"`
-	Errored        int      `json:"errored"`
-	Skipped        int      `json:"skipped"`
-	MatchRate      float64  `json:"match_rate"`
-	TotalElapsedMs int64    `json:"total_elapsed_ms"`
-	Stability      *float64 `json:"stability,omitempty"`       // Mean pass rate across tests with 3+ history entries
-	StabilityTests *int     `json:"stability_tests,omitempty"` // Number of tests used for stability calculation
+	TotalCases      int      `json:"total_cases"`
+	Passed          int      `json:"passed"`
+	Failed          int      `json:"failed"`
+	ExtraPolicyOnly int      `json:"extra_policy_only,omitempty"`
+	Errored         int      `json:"errored"`
+	Skipped         int      `json:"skipped"`
+	MatchRate       float64  `json:"match_rate"`
+	AdjMatchRate    float64  `json:"adj_match_rate,omitempty"`
+	TotalElapsedMs  int64    `json:"total_elapsed_ms"`
+	Stability       *float64 `json:"stability,omitempty"`       // Mean pass rate across tests with 3+ history entries
+	StabilityTests  *int     `json:"stability_tests,omitempty"` // Number of tests used for stability calculation
 }
 
 // JSONOverallSummary contains overall run summary.
@@ -134,9 +139,11 @@ type JSONOverallSummary struct {
 	TotalCases           int     `json:"total_cases"`
 	Passed               int     `json:"passed"`
 	Failed               int     `json:"failed"`
+	ExtraPolicyOnly      int     `json:"extra_policy_only,omitempty"`
 	Errored              int     `json:"errored"`
 	Skipped              int     `json:"skipped"`
 	MatchRate            float64 `json:"match_rate"`
+	AdjMatchRate         float64 `json:"adj_match_rate,omitempty"`
 	ThresholdsMet        bool    `json:"thresholds_met"`
 	MinMatchRateRequired float64 `json:"min_match_rate_required"`
 	WorstMatchRate       float64 `json:"worst_match_rate"`
@@ -174,13 +181,14 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 
 	// Group results by model key (Engine:Model or "cel" for deterministic)
 	type modelBucket struct {
-		info    JSONModelInfo
-		results []JSONTestResult
-		passed  int
-		failed  int
-		errored int
-		skipped int
-		totalMs int64
+		info            JSONModelInfo
+		results         []JSONTestResult
+		passed          int
+		failed          int
+		extraPolicyOnly int
+		errored         int
+		skipped         int
+		totalMs         int64
 	}
 
 	buckets := make(map[string]*modelBucket)
@@ -208,11 +216,12 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		}
 
 		jr := JSONTestResult{
-			CaseID:    r.CaseID,
-			Title:     r.Title,
-			Status:    r.Status,
-			ElapsedMs: r.ElapsedMs,
-			Failures:  r.Failures,
+			CaseID:          r.CaseID,
+			Title:           r.Title,
+			Status:          r.Status,
+			ElapsedMs:       r.ElapsedMs,
+			Failures:        r.Failures,
+			ExtraPolicyOnly: r.ExtraPolicyOnly,
 		}
 
 		if r.Expected.Decision != "" {
@@ -271,7 +280,11 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		case "passed":
 			b.passed++
 		case "failed":
-			b.failed++
+			if r.ExtraPolicyOnly {
+				b.extraPolicyOnly++
+			} else {
+				b.failed++
+			}
 		case "errored":
 			b.errored++
 		case "skipped":
@@ -287,33 +300,42 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 
 	// Build ResultsByModel in insertion order and accumulate aggregate totals
 	worstMatchRate := 1.0
-	var aggPassed, aggFailed, aggErrored, aggSkipped int
+	worstAdjMatchRate := 1.0
+	var aggPassed, aggFailed, aggErrored, aggSkipped, aggExtraPolicyOnly int
 	for _, key := range bucketOrder {
 		b := buckets[key]
-		total := b.passed + b.failed + b.errored + b.skipped
+		total := b.passed + b.failed + b.extraPolicyOnly + b.errored + b.skipped
 		// Match rate excludes errored tests — errors are infrastructure issues, not policy failures
-		decided := b.passed + b.failed
+		decided := b.passed + b.failed + b.extraPolicyOnly
 		matchRate := 0.0
+		adjMatchRate := 0.0
 		if decided > 0 {
 			matchRate = float64(b.passed) / float64(decided)
+			adjMatchRate = float64(b.passed+b.extraPolicyOnly) / float64(decided)
 		}
 		if matchRate < worstMatchRate {
 			worstMatchRate = matchRate
 		}
+		if adjMatchRate < worstAdjMatchRate {
+			worstAdjMatchRate = adjMatchRate
+		}
 
 		aggPassed += b.passed
 		aggFailed += b.failed
+		aggExtraPolicyOnly += b.extraPolicyOnly
 		aggErrored += b.errored
 		aggSkipped += b.skipped
 
 		modelSummary := JSONModelSummary{
-			TotalCases:     total,
-			Passed:         b.passed,
-			Failed:         b.failed,
-			Errored:        b.errored,
-			Skipped:        b.skipped,
-			MatchRate:      matchRate,
-			TotalElapsedMs: b.totalMs,
+			TotalCases:      total,
+			Passed:          b.passed,
+			Failed:          b.failed,
+			ExtraPolicyOnly: b.extraPolicyOnly,
+			Errored:         b.errored,
+			Skipped:         b.skipped,
+			MatchRate:       matchRate,
+			AdjMatchRate:    adjMatchRate,
+			TotalElapsedMs:  b.totalMs,
 		}
 
 		// Add stability data from comparison entries
@@ -336,12 +358,14 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		minMatchRate = 1.0
 	}
 
-	aggTotal := aggPassed + aggFailed + aggErrored + aggSkipped
+	aggTotal := aggPassed + aggFailed + aggExtraPolicyOnly + aggErrored + aggSkipped
 	// Match rate excludes errored tests — errors are infrastructure issues, not policy failures
-	aggDecided := aggPassed + aggFailed
+	aggDecided := aggPassed + aggFailed + aggExtraPolicyOnly
 	aggMatchRate := 0.0
+	aggAdjMatchRate := 0.0
 	if aggDecided > 0 {
 		aggMatchRate = float64(aggPassed) / float64(aggDecided)
+		aggAdjMatchRate = float64(aggPassed+aggExtraPolicyOnly) / float64(aggDecided)
 	}
 
 	output.OverallSummary = JSONOverallSummary{
@@ -349,9 +373,11 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		TotalCases:           aggTotal,
 		Passed:               aggPassed,
 		Failed:               aggFailed,
+		ExtraPolicyOnly:      aggExtraPolicyOnly,
 		Errored:              aggErrored,
 		Skipped:              aggSkipped,
 		MatchRate:            aggMatchRate,
+		AdjMatchRate:         aggAdjMatchRate,
 		ThresholdsMet:        summary.ThresholdsMet,
 		MinMatchRateRequired: minMatchRate,
 		WorstMatchRate:       worstMatchRate,
@@ -360,14 +386,16 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 	// Add model comparison entries (includes historical cached models)
 	for _, c := range comparison {
 		output.ModelComparison = append(output.ModelComparison, JSONModelComparisonEntry{
-			Model:     c.Model,
-			Passed:    c.Passed,
-			Failed:    c.Failed,
-			Errored:   c.Errored,
-			MatchRate: c.MatchRate,
-			AvgMs:     c.AvgMs,
-			TotalMs:   c.TotalMs,
-			FromCache: c.FromCache,
+			Model:           c.Model,
+			Passed:          c.Passed,
+			Failed:          c.Failed,
+			ExtraPolicyOnly: c.ExtraPolicyOnly,
+			Errored:         c.Errored,
+			MatchRate:       c.MatchRate,
+			AdjMatchRate:    c.AdjMatchRate,
+			AvgMs:           c.AvgMs,
+			TotalMs:         c.TotalMs,
+			FromCache:       c.FromCache,
 		})
 	}
 

@@ -1063,3 +1063,87 @@ func TestDefaultHistoryDepth(t *testing.T) {
 		assert.Equal(t, 10, sm.historyDepth)
 	})
 }
+
+// TestGetModelSummaries_ExtraPolicyOnly verifies that GetModelSummaries correctly
+// splits extra-policy-only failures from real failures in its aggregation.
+func TestGetModelSummaries_ExtraPolicyOnly(t *testing.T) {
+	t.Run("counts extra-policy-only separately from failed", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0", 0)
+		policyHashes := []string{"sha256:policy1"}
+
+		sm.RecordResult("sha256:test1", "case-1", policyHashes, "openai:gpt-5", &CachedResult{
+			Status: "passed", DurationMs: 100,
+		})
+		sm.RecordResult("sha256:test2", "case-2", policyHashes, "openai:gpt-5", &CachedResult{
+			Status: "failed", DurationMs: 200, ExtraPolicyOnly: true,
+		})
+		sm.RecordResult("sha256:test3", "case-3", policyHashes, "openai:gpt-5", &CachedResult{
+			Status: "failed", DurationMs: 300,
+		})
+
+		summaries := sm.GetModelSummaries(policyHashes)
+		require.Len(t, summaries, 1)
+
+		openai := summaries["openai:gpt-5"]
+		require.NotNil(t, openai)
+		assert.Equal(t, 1, openai.Passed, "1 test passed")
+		assert.Equal(t, 1, openai.Failed, "1 real failure")
+		assert.Equal(t, 1, openai.ExtraPolicyOnly, "1 extra-policy-only failure")
+		assert.Equal(t, 3, openai.TestCount, "3 total tests")
+	})
+
+	t.Run("no extra-policy-only results in zero count", func(t *testing.T) {
+		sm, _ := NewStateManager("", "test-suite", "1.0.0", 0)
+		policyHashes := []string{"sha256:policy1"}
+
+		sm.RecordResult("sha256:test1", "case-1", policyHashes, "openai:gpt-5", &CachedResult{
+			Status: "passed", DurationMs: 100,
+		})
+		sm.RecordResult("sha256:test2", "case-2", policyHashes, "openai:gpt-5", &CachedResult{
+			Status: "failed", DurationMs: 200,
+		})
+
+		summaries := sm.GetModelSummaries(policyHashes)
+		openai := summaries["openai:gpt-5"]
+		assert.Equal(t, 0, openai.ExtraPolicyOnly, "no extra-policy-only failures")
+		assert.Equal(t, 1, openai.Failed, "1 real failure")
+	})
+}
+
+// TestExtraPolicyOnly_Persistence verifies that ExtraPolicyOnly on CachedResult
+// survives a save/load round-trip.
+func TestExtraPolicyOnly_Persistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+	policyHashes := []string{"sha256:policy1"}
+
+	// Session 1: Record results with ExtraPolicyOnly flag
+	sm1, err := NewStateManager(statePath, "test-suite", "1.0.0", 0)
+	require.NoError(t, err)
+
+	sm1.RecordResult("sha256:test1", "case-1", policyHashes, "openai:gpt-5", &CachedResult{
+		Status: "failed", DurationMs: 100, ExtraPolicyOnly: true,
+	})
+	sm1.RecordResult("sha256:test2", "case-2", policyHashes, "openai:gpt-5", &CachedResult{
+		Status: "failed", DurationMs: 200, ExtraPolicyOnly: false,
+	})
+	require.NoError(t, sm1.Save())
+
+	// Session 2: Load and verify ExtraPolicyOnly survived
+	sm2, err := NewStateManager(statePath, "test-suite", "1.0.0", 0)
+	require.NoError(t, err)
+
+	result1 := sm2.state.Results["sha256:test1"].Models["openai:gpt-5"]
+	require.NotNil(t, result1)
+	assert.True(t, result1.ExtraPolicyOnly, "ExtraPolicyOnly should be true after round-trip")
+
+	result2 := sm2.state.Results["sha256:test2"].Models["openai:gpt-5"]
+	require.NotNil(t, result2)
+	assert.False(t, result2.ExtraPolicyOnly, "ExtraPolicyOnly should be false after round-trip")
+
+	// Verify GetModelSummaries also reflects the persisted data
+	summaries := sm2.GetModelSummaries(policyHashes)
+	openai := summaries["openai:gpt-5"]
+	assert.Equal(t, 1, openai.ExtraPolicyOnly)
+	assert.Equal(t, 1, openai.Failed)
+}

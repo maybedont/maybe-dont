@@ -482,3 +482,163 @@ func TestTestResultFields(t *testing.T) {
 		assert.Contains(t, result.Model, ":")
 	})
 }
+
+// TestCompareResults_ExtraPolicyOnly verifies that the extraPolicyOnly flag is set
+// correctly based on the combination of strict mode, prior failures, and unexpected
+// triggering policies. The flag should be true ONLY when strict mode is on, phases 1-3
+// produced no failures, and the sole failure came from phase 4 (unexpected triggers).
+func TestCompareResults_ExtraPolicyOnly(t *testing.T) {
+	tests := []struct {
+		name            string
+		expected        ExpectedResult
+		actual          ActualResult
+		strict          bool
+		wantFailures    int
+		wantWarnings    int
+		wantExtraPolicy bool
+	}{
+		{
+			name: "extra policy only: correct decision + unexpected trigger = extraPolicyOnly",
+			expected: ExpectedResult{
+				Decision: "deny",
+				Policies: []PolicyExpectation{
+					{PolicyName: "block-exec", Decision: "deny"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+					{PolicyName: "block-network", Decision: "deny"}, // unexpected trigger
+				},
+			},
+			strict:          true,
+			wantFailures:    1,
+			wantWarnings:    0,
+			wantExtraPolicy: true,
+		},
+		{
+			name: "decision mismatch + unexpected trigger = NOT extraPolicyOnly",
+			expected: ExpectedResult{
+				Decision: "allow",
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+				},
+			},
+			strict:          true,
+			wantFailures:    1, // decision mismatch
+			wantWarnings:    0,
+			wantExtraPolicy: false,
+		},
+		{
+			name: "expected policy mismatch + unexpected trigger = NOT extraPolicyOnly",
+			expected: ExpectedResult{
+				Decision: "deny",
+				Policies: []PolicyExpectation{
+					{PolicyName: "block-exec", Decision: "deny"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "allow"},  // mismatch on expected policy
+					{PolicyName: "block-network", Decision: "deny"}, // unexpected trigger
+				},
+			},
+			strict:          true,
+			wantFailures:    2, // policy decision mismatch + unexpected trigger
+			wantWarnings:    0,
+			wantExtraPolicy: false,
+		},
+		{
+			name: "non-strict mode: extra trigger produces warning, not failure, no extraPolicyOnly",
+			expected: ExpectedResult{
+				Decision: "deny",
+				Policies: []PolicyExpectation{
+					{PolicyName: "block-exec", Decision: "deny"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+					{PolicyName: "block-network", Decision: "deny"}, // unexpected trigger
+				},
+			},
+			strict:          false,
+			wantFailures:    0,
+			wantWarnings:    1,
+			wantExtraPolicy: false,
+		},
+		{
+			name: "no policy expectations: no extraPolicyOnly even with extra triggers",
+			expected: ExpectedResult{
+				Decision: "deny",
+				// No policies specified
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+					{PolicyName: "block-network", Decision: "deny"},
+				},
+			},
+			strict:          true,
+			wantFailures:    0,
+			wantWarnings:    0,
+			wantExtraPolicy: false,
+		},
+		{
+			name: "clean pass: no failures, no extraPolicyOnly",
+			expected: ExpectedResult{
+				Decision: "deny",
+				Policies: []PolicyExpectation{
+					{PolicyName: "block-exec", Decision: "deny"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "deny",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "block-exec", Decision: "deny"},
+					{PolicyName: "check-args", Decision: "allow"}, // non-triggering, OK
+				},
+			},
+			strict:          true,
+			wantFailures:    0,
+			wantWarnings:    0,
+			wantExtraPolicy: false,
+		},
+		{
+			name: "redact decision with extra policy = extraPolicyOnly",
+			expected: ExpectedResult{
+				Decision: "redact",
+				Policies: []PolicyExpectation{
+					{PolicyName: "redact-ssn", Decision: "redact"},
+				},
+			},
+			actual: ActualResult{
+				Decision: "redact",
+				PoliciesExecuted: []PolicyResult{
+					{PolicyName: "redact-ssn", Decision: "redact"},
+					{PolicyName: "redact-email", Decision: "redact"}, // unexpected trigger
+				},
+			},
+			strict:          true,
+			wantFailures:    1,
+			wantWarnings:    0,
+			wantExtraPolicy: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := compareResults(tt.expected, tt.actual, tt.strict)
+			assert.Len(t, out.failures, tt.wantFailures, "failures count")
+			assert.Len(t, out.warnings, tt.wantWarnings, "warnings count")
+			assert.Equal(t, tt.wantExtraPolicy, out.extraPolicyOnly, "extraPolicyOnly flag")
+		})
+	}
+}

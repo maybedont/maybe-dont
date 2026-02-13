@@ -34,10 +34,11 @@ type CachedTestCase struct {
 
 // CachedResult stores the cached result for a single model run.
 type CachedResult struct {
-	Status     string    `json:"status"`
-	Confidence float64   `json:"confidence"`
-	LastRun    time.Time `json:"last_run"`
-	DurationMs int64     `json:"duration_ms"`
+	Status          string    `json:"status"`
+	Confidence      float64   `json:"confidence"`
+	LastRun         time.Time `json:"last_run"`
+	DurationMs      int64     `json:"duration_ms"`
+	ExtraPolicyOnly bool      `json:"extra_policy_only,omitempty"`
 
 	// Rolling history of recent runs (most recent first, capped at history_depth).
 	// History only records actual executions — skipped (cached) runs are not included.
@@ -501,11 +502,12 @@ func (sm *StateManager) HasResults() bool {
 
 // CachedModelSummary aggregates test results for a single model from cached state.
 type CachedModelSummary struct {
-	Passed    int
-	Failed    int
-	Errored   int
-	TotalMs   int64
-	TestCount int
+	Passed          int
+	Failed          int
+	ExtraPolicyOnly int
+	Errored         int
+	TotalMs         int64
+	TestCount       int
 
 	// Stability is the mean pass rate across tests with 3+ history entries (0.0-1.0)
 	Stability float64
@@ -549,7 +551,11 @@ func (sm *StateManager) GetModelSummaries(policyHashes []string) map[string]*Cac
 			case "passed":
 				s.Passed++
 			case "failed":
-				s.Failed++
+				if result.ExtraPolicyOnly {
+					s.ExtraPolicyOnly++
+				} else {
+					s.Failed++
+				}
 			case "errored":
 				s.Errored++
 			}

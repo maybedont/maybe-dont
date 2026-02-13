@@ -26,9 +26,10 @@ type TestResult struct {
 	TestTotal   int    // total tests in the current engine/model section
 	Expected    ExpectedResult
 	Actual      ActualResult
-	Failures    []string
-	Warnings    []string // Non-fatal issues (e.g., unexpected triggering policies in non-strict mode)
-	Error       *TestError
+	Failures        []string
+	Warnings        []string // Non-fatal issues (e.g., unexpected triggering policies in non-strict mode)
+	ExtraPolicyOnly bool     // true when the only failure is unexpected triggering policies (decision was correct)
+	Error           *TestError
 
 	// Pass rate from history (populated when state manager is available and history has 2+ entries)
 	PassRate                    float64
@@ -403,6 +404,7 @@ func (e *Executor) executeCELTest(ctx context.Context, tc TestCase) TestResult {
 	cmp := compareResults(result.Expected, result.Actual, e.suite.Acceptance.IsStrictPolicyMatch())
 	result.Failures = cmp.failures
 	result.Warnings = cmp.warnings
+	result.ExtraPolicyOnly = cmp.extraPolicyOnly
 	if len(result.Failures) == 0 {
 		result.Status = "passed"
 	} else {
@@ -566,8 +568,9 @@ func mergeActualResults(request, response ActualResult) ActualResult {
 
 // compareResultsOutput holds both failures and warnings from result comparison.
 type compareResultsOutput struct {
-	failures []string
-	warnings []string
+	failures        []string
+	warnings        []string
+	extraPolicyOnly bool // true when the only failure is unexpected triggering policies
 }
 
 // compareResults compares expected vs actual and returns failures and warnings.
@@ -629,9 +632,15 @@ func compareResults(expected ExpectedResult, actual ActualResult, strictPolicyMa
 		}
 
 		if len(unexpected) > 0 {
+			// If phases 1-3 produced no failures and this is strict mode,
+			// the test failed only because of extra triggering policies.
+			priorFailures := len(out.failures)
 			msg := fmt.Sprintf("%d unexpected policy match(es) — see highlighted ► above", len(unexpected))
 			if strictPolicyMatch {
 				out.failures = append(out.failures, msg)
+				if priorFailures == 0 {
+					out.extraPolicyOnly = true
+				}
 			} else {
 				out.warnings = append(out.warnings, msg)
 			}
