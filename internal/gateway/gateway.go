@@ -403,9 +403,13 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		audit.SetAIProvider(g.aiProviderInfo)
 	}
 
-	// Set request params (convert to map for audit)
+	// Set request params (convert to map for audit), filtered by include_argument_values config
 	if params, ok := req.Params.Arguments.(map[string]interface{}); ok {
-		audit.SetRequestParams(params)
+		if g.config.Audit.ShouldIncludeArgumentValues() {
+			audit.SetToolParams(params)
+		} else {
+			audit.SetToolParams(redactToolParams(params))
+		}
 	}
 
 	// Create blocking budget for cumulative blocking time tracking
@@ -833,6 +837,16 @@ func (g *Gateway) buildResponseDeniedError(results *ResponseValidationResults, t
 	}
 
 	return errorMessage
+}
+
+// redactToolParams returns a copy of the params map with all values replaced by "[redacted]".
+// This preserves the parameter names for audit visibility while protecting sensitive values.
+func redactToolParams(params map[string]interface{}) map[string]interface{} {
+	redacted := make(map[string]interface{}, len(params))
+	for key := range params {
+		redacted[key] = "[redacted]"
+	}
+	return redacted
 }
 
 // humanizeErrorMessage translates technical Go error messages to user-friendly descriptions

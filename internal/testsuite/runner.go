@@ -422,16 +422,6 @@ func (r *Runner) discoverTestCases() error {
 	var testCases []TestCase
 
 	for _, path := range caseFiles {
-		// Read raw file content for hashing
-		rawContent, err := os.ReadFile(path)
-		if err != nil {
-			return &PathResolutionError{
-				Path:    path,
-				Message: fmt.Sprintf("failed to read file for hashing: %v", err),
-			}
-		}
-		contentHash := ComputeContentHash(rawContent)
-
 		cases, err := r.parseTestCases(path)
 		if err != nil {
 			return err
@@ -449,7 +439,11 @@ func (r *Runner) discoverTestCases() error {
 				}
 			}
 			seenIDs[tc.CaseID] = path
-			testCaseHashes[tc.CaseID] = contentHash
+			hash, err := ComputeTestCaseHash(tc)
+			if err != nil {
+				return fmt.Errorf("case %q in %s: %w", tc.CaseID, path, err)
+			}
+			testCaseHashes[tc.CaseID] = hash
 			testCaseFiles[tc.CaseID] = path
 			testCases = append(testCases, tc)
 		}

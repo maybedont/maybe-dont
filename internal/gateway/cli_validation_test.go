@@ -752,3 +752,71 @@ func TestHandleCLIValidation_AuditEntryMinimalRequest(t *testing.T) {
 	assert.Len(t, entry.UpstreamRequest.RequestID, 32, "Generated request ID should be 32 characters")
 }
 
+// TestHandleCLIValidation_AuditArgumentRedaction verifies that CLI argument values
+// are redacted in audit entries when IncludeArgumentValues is false, and included when true.
+// This setting now lives in the audit config (not CLI config) because it applies to all audit sources.
+func TestHandleCLIValidation_AuditArgumentRedaction(t *testing.T) {
+	tests := []struct {
+		name              string
+		includeArgValues  bool
+		inputArgs         []string
+		expectedAuditArgs []string
+	}{
+		{
+			name:              "included when true",
+			includeArgValues:  true,
+			inputArgs:         []string{"pr", "create", "--title", "fix bug", "--body", "details"},
+			expectedAuditArgs: []string{"pr", "create", "--title", "fix bug", "--body", "details"},
+		},
+		{
+			name:             "redacted when false",
+			includeArgValues: false,
+			inputArgs:        []string{"pr", "create", "--title", "fix bug", "--body", "details"},
+			// extractCLIArgumentFlags keeps flags and positional args but redacts flag values
+			expectedAuditArgs: []string{"pr", "create", "--title", "[value]", "--body", "[value]"},
+		},
+		{
+			name:              "empty args included when true",
+			includeArgValues:  true,
+			inputArgs:         []string{},
+			expectedAuditArgs: []string{},
+		},
+		{
+			name:              "empty args when false",
+			includeArgValues:  false,
+			inputArgs:         []string{},
+			expectedAuditArgs: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := zaptest.NewLogger(t)
+			sessionLogger := config.NewSessionLogger(logger)
+			auditWriter := &mockAuditWriter{}
+
+			handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+				Enabled:               true,
+				ValidateCommands:      []string{"*"},
+				Logger:                sessionLogger,
+				Version:               "1.0.0",
+				AuditWriter:           auditWriter,
+				IncludeArgumentValues: tt.includeArgValues,
+			})
+
+			argsJSON, _ := json.Marshal(tt.inputArgs)
+			reqBody := `{"command": "gh", "arguments": ` + string(argsJSON) + `}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			entries := auditWriter.getEntries()
+			require.Len(t, entries, 1)
+			assert.Equal(t, tt.expectedAuditArgs, entries[0].CLI.Arguments)
+		})
+	}
+}

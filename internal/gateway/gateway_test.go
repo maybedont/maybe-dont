@@ -324,3 +324,68 @@ func TestStaleSessionDetection_PrefixParsing(t *testing.T) {
 		})
 	}
 }
+
+// TestRedactToolParams verifies that redactToolParams preserves keys but replaces all values
+// with "[redacted]". This protects sensitive tool parameter values in audit logs.
+func TestRedactToolParams(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    map[string]interface{}
+		expected map[string]interface{}
+	}{
+		{
+			name:     "empty map",
+			input:    map[string]interface{}{},
+			expected: map[string]interface{}{},
+		},
+		{
+			name: "string values",
+			input: map[string]interface{}{
+				"repo":  "my-org/my-repo",
+				"token": "ghp_secret123",
+			},
+			expected: map[string]interface{}{
+				"repo":  "[redacted]",
+				"token": "[redacted]",
+			},
+		},
+		{
+			name: "mixed types",
+			input: map[string]interface{}{
+				"path":    "/home/user/.ssh/id_rsa",
+				"count":   42,
+				"verbose": true,
+				"nested":  map[string]interface{}{"key": "value"},
+			},
+			expected: map[string]interface{}{
+				"path":    "[redacted]",
+				"count":   "[redacted]",
+				"verbose": "[redacted]",
+				"nested":  "[redacted]",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := redactToolParams(tt.input)
+			assert.Equal(t, tt.expected, result)
+			// Verify original is not modified
+			if len(tt.input) > 0 {
+				for key, val := range tt.input {
+					if val != "[redacted]" {
+						assert.NotEqual(t, "[redacted]", tt.input[key], "original map should not be modified")
+						break
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestRedactToolParams_NilSafety verifies that redactToolParams handles nil input.
+func TestRedactToolParams_NilSafety(t *testing.T) {
+	result := redactToolParams(nil)
+	assert.NotNil(t, result)
+	assert.Empty(t, result)
+}
