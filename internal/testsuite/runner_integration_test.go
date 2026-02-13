@@ -646,6 +646,91 @@ func TestIntegration_MultiCaseFile_EditOneCasePreservesSiblings(t *testing.T) {
 	assert.Len(t, mock2.GetRecordedRequests(), 1, "only modified mc-002 should re-run")
 }
 
+// TestIntegration_MultiCaseFile_ThreeModelCIPattern simulates the real CI workflow:
+// three sequential single-model runs, then a fourth run that should show all three
+// models in the comparison with correct per-case counts. This is the exact scenario
+// that was broken before the per-case hashing fix.
+func TestIntegration_MultiCaseFile_ThreeModelCIPattern(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuiteWithYAML(t, dir, threeModelSuiteYAML, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+	models := []string{"openai:test-model-a", "openai:test-model-b", "openai:test-model-c"}
+
+	// Three sequential single-model runs (simulating separate CI dispatches)
+	for _, model := range models {
+		runner, err := NewRunner(RunnerOptions{
+			SuiteDir:              dir,
+			Engine:                "ai",
+			Model:                 model,
+			StateFile:             stateFile,
+			Quiet:                 true,
+			ProviderClientFactory: mockProviderFactory(newDenyMock()),
+		})
+		require.NoError(t, err)
+		result, err := runner.Run(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 3, result.TotalCases, "%s should run 3 cases", model)
+	}
+
+	// Verify state has all 3 models with 3 entries each
+	sm, err := NewStateManager(stateFile, "integration-test", "dev", 0)
+	require.NoError(t, err)
+	policyHashes := readPolicyHashes(t, dir)
+	summaries := sm.GetModelSummaries(policyHashes)
+	assert.Len(t, summaries, 3, "state should have all 3 models")
+
+	for _, model := range models {
+		require.Contains(t, summaries, model)
+		assert.Equal(t, 3, summaries[model].TestCount, "%s should have 3 test entries", model)
+		assert.Equal(t, 2, summaries[model].Passed, "%s should have 2 passed", model)
+		assert.Equal(t, 1, summaries[model].Failed, "%s should have 1 failed", model)
+	}
+
+	// Run 4: model A again (incremental) with JSON output
+	outputFile := filepath.Join(dir, "results.json")
+	mock4 := newDenyMock()
+	runner4, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		OutputFormat:          "json",
+		OutputFile:            outputFile,
+		ProviderClientFactory: mockProviderFactory(mock4),
+	})
+	require.NoError(t, err)
+	result4, err := runner4.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, result4.CachedCount, "all 3 cases should be cached for model A")
+	assert.Empty(t, mock4.GetRecordedRequests(), "no AI calls needed for fully cached run")
+
+	// Verify JSON model_comparison shows all 3 models with correct counts
+	output := parseJSONOutput(t, outputFile)
+	assert.Len(t, output.ModelComparison, 3, "model_comparison should have all 3 models")
+
+	byName := modelComparisonByName(output.ModelComparison)
+
+	// Model A is current run (cached but counted as current)
+	require.Contains(t, byName, "openai:test-model-a")
+	assert.Equal(t, 2, byName["openai:test-model-a"].Passed, "model A should show 2 passed")
+	assert.Equal(t, 1, byName["openai:test-model-a"].Failed, "model A should show 1 failed")
+
+	// Models B and C are from cache — this is the exact assertion that was failing before the fix
+	for _, model := range []string{"openai:test-model-b", "openai:test-model-c"} {
+		require.Contains(t, byName, model)
+		assert.True(t, byName[model].FromCache, "%s should be from cache", model)
+		assert.Equal(t, 2, byName[model].Passed, "%s should show 2 passed (not 1)", model)
+		assert.Equal(t, 1, byName[model].Failed, "%s should show 1 failed", model)
+	}
+}
+
 // --- Original tests (state accumulation, historical models, cache invalidation) ---
 
 // TestIntegration_StateAccumulation_AcrossModels verifies that running with model A,
