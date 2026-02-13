@@ -413,6 +413,57 @@ func TestIntegration_MultiCaseFile_CrossModelAccumulation(t *testing.T) {
 	assert.Equal(t, 1, byName["openai:test-model-b"].Failed)
 }
 
+// TestIntegration_MultiCaseFile_IncrementalCaching verifies that incremental mode
+// caches each case individually within a multi-case file. Passing cases are skipped,
+// the failing case is re-run.
+func TestIntegration_MultiCaseFile_IncrementalCaching(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+
+	setupTestSuite(t, dir, testPolicy, map[string]string{
+		"multi.yaml": multiCaseYAML,
+	})
+
+	ctx := context.Background()
+
+	// Run 1: deny mock → mc-001 pass, mc-002 fail, mc-003 pass
+	mock1 := newDenyMock()
+	runner1, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock1),
+	})
+	require.NoError(t, err)
+	result1, err := runner1.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result1.TotalCases)
+	assert.Equal(t, 0, result1.CachedCount, "first run should have no cached results")
+	assert.Len(t, mock1.GetRecordedRequests(), 3, "first run should call AI provider 3 times")
+
+	// Run 2: same model, incremental — all 3 cached (2 passed + 1 failed)
+	mock2 := newDenyMock()
+	runner2, err := NewRunner(RunnerOptions{
+		SuiteDir:              dir,
+		Engine:                "ai",
+		Model:                 "openai:test-model-a",
+		StateFile:             stateFile,
+		Quiet:                 true,
+		ProviderClientFactory: mockProviderFactory(mock2),
+	})
+	require.NoError(t, err)
+	result2, err := runner2.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, result2.TotalCases, "should still report 3 total cases")
+	assert.Equal(t, 3, result2.CachedCount, "all 3 cases should be cached")
+	assert.Equal(t, 2, result2.Passed, "2 cases should show as passed (cached)")
+	assert.Equal(t, 1, result2.Failed, "1 case should still show as failed (cached)")
+	assert.Empty(t, mock2.GetRecordedRequests(), "no tests should re-run in default incremental (all cached)")
+}
+
 // --- Original tests (state accumulation, historical models, cache invalidation) ---
 
 // TestIntegration_StateAccumulation_AcrossModels verifies that running with model A,
