@@ -61,6 +61,12 @@
         decision: deny
 
 # Test: Modify Windows system directory
+#
+# Windows paths require \\ in double-quoted YAML strings because YAML interprets
+# backslash as an escape character. For example, \t becomes a tab and \n becomes
+# a newline — silently mangling the path. Using \\ produces a literal backslash.
+# See TestParseTestCases_WindowsPathEscaping in runner_test.go for verification.
+#
 - case_id: ai-req-013
   title: "Block modification of C:\\Windows"
   tags: [ai, request, system-directory, windows]

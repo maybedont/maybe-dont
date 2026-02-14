@@ -2656,3 +2656,150 @@ func TestJSONOutput_ExtraPolicyOnlyFields(t *testing.T) {
 	// Check overall summary includes ExtraPolicyOnly
 	assert.Equal(t, 1, output.OverallSummary.ExtraPolicyOnly)
 }
+
+// TestParseTestCases_WindowsPathEscaping verifies that Windows paths with
+// backslashes are parsed correctly across the three YAML string styles.
+//
+// Convention: use double-quoted strings with \\ for backslashes. This is
+// consistent with all other string values in test cases and policy files.
+//
+// YAML rules for backslashes:
+//   - Double-quoted:       backslashes are escape chars — "C:\\Windows" → C:\Windows
+//                          WARNING: "C:\tmp" silently becomes C:<TAB>mp (\t = tab)
+//   - Unquoted (plain):    backslashes are literal — C:\Windows → C:\Windows
+//   - Single-quoted:       backslashes are literal — 'C:\Windows' → C:\Windows
+func TestParseTestCases_WindowsPathEscaping(t *testing.T) {
+	expectedPath := "C:\\Windows\\System32\\drivers\\etc\\hosts"
+
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "unquoted path",
+			yaml: `
+- case_id: yaml-escape-unquoted
+  title: "Unquoted Windows path"
+  phase: request
+  engine: ai
+  request:
+    tool_name: "filesystem__write_file"
+    arguments:
+      path: C:\Windows\System32\drivers\etc\hosts
+      content: "test"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+`,
+		},
+		{
+			name: "single-quoted path",
+			yaml: `
+- case_id: yaml-escape-single
+  title: "Single-quoted Windows path"
+  phase: request
+  engine: ai
+  request:
+    tool_name: "filesystem__write_file"
+    arguments:
+      path: 'C:\Windows\System32\drivers\etc\hosts'
+      content: "test"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+`,
+		},
+		{
+			name: "double-quoted path with escaped backslashes (convention)",
+			yaml: `
+- case_id: yaml-escape-double
+  title: "Double-quoted Windows path"
+  phase: request
+  engine: ai
+  request:
+    tool_name: "filesystem__write_file"
+    arguments:
+      path: "C:\\Windows\\System32\\drivers\\etc\\hosts"
+      content: "test"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "test.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(tc.yaml), 0o644))
+
+			runner := &Runner{
+				suite: &Suite{
+					Acceptance: AcceptanceConfig{MinMatchRate: 0.8},
+				},
+			}
+
+			cases, err := runner.parseTestCases(path)
+			require.NoError(t, err)
+			require.Len(t, cases, 1)
+
+			gotPath, ok := cases[0].Request.Arguments["path"].(string)
+			require.True(t, ok, "path argument should be a string")
+			assert.Equal(t, expectedPath, gotPath,
+				"all YAML quoting styles should produce the same Windows path")
+		})
+	}
+}
+
+// TestParseTestCases_DoubleQuotedBackslashTrap demonstrates why double-quoted
+// YAML strings are dangerous for Windows paths without proper escaping.
+// Characters like \t (tab), \n (newline), \r (carriage return) are silently
+// interpreted as escape sequences, mangling the path.
+func TestParseTestCases_DoubleQuotedBackslashTrap(t *testing.T) {
+	// "C:\tmp\new" in double quotes: \t → tab, \n → newline
+	yaml := `
+- case_id: yaml-escape-trap
+  title: "Backslash trap"
+  phase: request
+  engine: ai
+  request:
+    tool_name: "filesystem__write_file"
+    arguments:
+      path: "C:\tmp\new"
+      content: "test"
+  expectations:
+    decision: deny
+    policies:
+      - policy_name: "test-policy"
+        decision: deny
+`
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o644))
+
+	runner := &Runner{
+		suite: &Suite{
+			Acceptance: AcceptanceConfig{MinMatchRate: 0.8},
+		},
+	}
+
+	cases, err := runner.parseTestCases(path)
+	require.NoError(t, err)
+	require.Len(t, cases, 1)
+
+	gotPath := cases[0].Request.Arguments["path"].(string)
+	// This is the WRONG value — \t became tab, \n became newline.
+	// This test documents the trap, not a desired behavior.
+	assert.NotEqual(t, `C:\tmp\new`, gotPath,
+		"double-quoted \\t and \\n are silently interpreted as escape sequences")
+	assert.Contains(t, gotPath, "\t", "\\t in double quotes becomes a tab character")
+	assert.Contains(t, gotPath, "\n", "\\n in double quotes becomes a newline character")
+}
