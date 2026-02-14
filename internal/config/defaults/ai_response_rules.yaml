@@ -44,18 +44,11 @@ rules:
         - export SECRET="actual-password-here"
         - Environment dumps showing resolved values
 
-      NOT credentials (do not flag):
-      - Financial figures (dollar amounts, percentages, revenue numbers)
-      - Employee names, salaries, or business data
-      - Aggregated metrics or statistics
-
       EXAMPLES:
       - "Connected to database on port 5432" -> SAFE: No credentials exposed
       - "API_KEY=sk-proj-abc123def456" -> DANGEROUS: API key with actual value exposed
       - "Using endpoint ${API_URL}" -> SAFE: Environment variable reference, not a value
       - "-----BEGIN RSA PRIVATE KEY-----" -> DANGEROUS: Private key material
-      - "Revenue: $2.4M, margin: 12%" -> SAFE: Financial data, not credentials
-      - {"name": "Widget", "price": 9.99} -> SAFE: Product data, not credentials
 
     message: Credential leakage detected in response
 
@@ -78,21 +71,13 @@ rules:
       If internal paths or infrastructure details are found, provide redacted content with sensitive parts replaced by [PATH_REDACTED] or [HOST_REDACTED].
 
       NOT internal paths (do not flag):
-      - URLs (http://, https://) — these are public endpoints, not filesystem paths
       - Bare filenames without directory separators (e.g., "main.go", "config.yaml")
-      - JSON field names, business addresses, and email addresses
-      - Certificate/key markers ("-----BEGIN RSA PRIVATE KEY-----")
-      - Version numbers in JSON data (e.g., "version": "2.1.0")
-      - Product names, prices, or other business data
 
       EXAMPLES:
       - "File not found: /home/deploy/app/v2.3.1/config.yaml" -> PATHS DETECTED: Deployment path with version info
       - "Query returned 42 results" -> SAFE: No sensitive paths detected
       - "Error at staging-db-01.corp.internal:5432" -> PATHS DETECTED: Internal hostname exposed
-      - "API docs at https://docs.example.com/api/v2" -> SAFE: Public URL, not a filesystem path
       - "syntax error in main.go line 42" -> SAFE: Bare filename without directory path
-      - {"total_users": 15234} -> SAFE: JSON data, no filesystem paths
-      - "-----BEGIN RSA PRIVATE KEY-----" -> SAFE: Key format marker, not a path
 
     message: Internal paths redacted from response
 
@@ -119,16 +104,11 @@ rules:
       - Public metrics without individual identifiers
       - General system status or health information
       - Product catalogs with retail prices (e.g., {"name": "Widget", "price": 9.99})
-      - Stack traces, error messages, and deployment paths (handled by other policies)
-      - Internal hostnames and infrastructure details (handled by other policies)
-      - Authentication credentials, API keys, tokens (handled by the credential leakage policy)
 
       EXAMPLES:
       - "Total active users: 15,234" -> SAFE: Aggregated statistic
       - "Customer: Jane Doe, email: jane@company.com, revenue: $45,000" -> DANGEROUS: Individual customer record with PII
       - "System health: all services operational" -> SAFE: General status information
       - {"name": "Widget", "price": 9.99} -> SAFE: Product catalog with retail prices
-      - "Error at /opt/deployments/prod/app-v2.3.1/" -> SAFE: Deployment path (handled by path policy)
-      - "API_KEY=sk-proj-abc123..." -> SAFE: Credential (handled by credential policy)
 
     message: Sensitive business data detected in response
