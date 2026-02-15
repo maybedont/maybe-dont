@@ -1444,3 +1444,92 @@ The demo is not a product walkthrough -- it's a risk scenario that the buyer rec
 - [Walden Catalyst - Why We Invested in Virtue AI](https://waldencatalyst.com/blog/why-we-invested-in-virtue-ai-building-the-future-of-safe-and-secure-ai)
 - [Insight Partners - Promptfoo Scale-Up AI](https://www.insightpartners.com/ideas/promptfoo-scale-up-ai/)
 - [Runlayer $11M Seed (TechCrunch)](https://techcrunch.com/2025/11/17/mcp-ai-agent-security-startup-runlayer-launches-with-8-unicorns-11m-from-khoslas-keith-rabois-and-felicis/)
+
+
+Adding on below a follow up:
+# Beyond the MCP gateway: where Maybe Don't AI should place its next bet
+
+**The fastest path to $10K+/month ACV is not building more security features — it's becoming the security control plane for AI agents by bundling permissions, audit trails, and secret management through your existing gateway, then selling to CISOs who already have budget authority and regulatory pressure.** This conclusion emerges from a convergence of signals: AI security tools close enterprise deals in 2–8 weeks (faster than any other AI infrastructure category), CISOs rank "securing AI agents" as their #1 priority (37%), and the insurance industry began excluding AI-related losses effective January 1, 2026 — creating a compliance trigger that shortens sales cycles dramatically. The MCP gateway itself is becoming table stakes; the value is in what you enforce through it.
+
+---
+
+## The market is screaming for agent governance, not just agent security
+
+Enterprise generative AI spending hit **$37 billion in 2025**, a 3.2x year-over-year increase, yet Gartner estimates **40% of agentic AI projects will be cancelled by 2027** due to cost, scaling complexity, or unexpected risks. This gap between ambition and failure is where the real opportunity lives — not in stopping attacks, but in making AI agents governable enough that enterprises actually deploy them at scale.
+
+The agentic AI market sits at roughly **$7.5 billion** today and is projected to reach $93–199 billion by 2032. But here's the critical nuance most market maps miss: **86% of enterprise AI spend still goes to copilots, not autonomous agents**. Agent platforms captured only about $750 million in 2025. The buyer of "agent security" is still emerging. This means Maybe Don't AI is building for a market that's forming right now — which is both the risk and the opportunity.
+
+AI security as a category, however, is already white-hot. Over $8.5 billion flowed into 175 AI security companies in 2024–2025, and a breathtaking wave of M&A validated the space: Palo Alto Networks acquired Protect AI for ~$500M, Cisco bought Robust Intelligence for ~$400M, SentinelOne acquired Prompt Security for ~$250M (a two-year-old company with under $10M in revenue), and Check Point grabbed Lakera. Every major platform security vendor has made at least one AI security acquisition. **The M&A window is open. Small teams with deep MCP expertise are exactly what acquirers want.**
+
+---
+
+## Three features that would sell with minimal friction
+
+After analyzing adjacent opportunities across ten categories — from agent testing to cross-organizational trust federation — three emerge as clear winners based on buyer pain urgency, willingness to pay $10K+/month, competitive density, and fit for a small team with MCP gateway expertise.
+
+**Permission enforcement per agent, per tool, per user** is the single most acute problem. Astrix Research found that **88% of MCP servers require credentials, yet only 8.5% use OAuth** — the rest rely on static API keys and long-lived secrets. In a typical 10,000-person enterprise, roughly 3,056 MCP servers run with zero centralized governance. CyberArk's 2025 survey found 96% of enterprises recognize AI agents as a risk, but fewer than half have governance controls. The buyer is the CISO, the budget line already exists (PAM/IAM, typically $50K–$500K/year), and deployment through a gateway architecture means no agent installs. Runlayer, backed by $11M from Khosla with the MCP protocol creator as advisor, signed dozens of customers in four months doing exactly this. The demand signal is undeniable.
+
+**Immutable audit trails with compliance mapping** is the natural complement. The EU AI Act's first enforcement milestones hit in August 2025, with full high-risk system requirements arriving August 2026. Fines reach €35 million or 7% of global turnover. ISO/Verisk issued standardized insurance exclusions for AI-related losses effective January 2026 — companies that cannot demonstrate AI governance face coverage gaps. ISACA's 2025 report describes auditing agentic AI as a "growing challenge" because agent decision-making lacks traceability. Your gateway already sees every tool call, every prompt, every agent action. Building compliance-ready logging that maps to SOC 2, HIPAA, and EU AI Act frameworks is an incredibly natural extension.
+
+**Credential vaulting and short-lived token issuance** rounds out the bundle. With 53% of MCP servers passing secrets via environment variables, the risk of credential leakage is endemic. Peta ("1Password for AI Agents") and Astrix's open-source MCP Secret Wrapper are early movers, but gateway-level credential injection — where agents never see raw keys — is architecturally superior and uniquely enabled by your existing position in the data path.
+
+The combined positioning: **"The security control plane for AI agents — permissions, audit trails, and secret management for every MCP connection."** This maps to three existing CISO budget lines simultaneously, sells to a single decision-maker, deploys in minutes, and addresses documented, regulation-driven urgency.
+
+---
+
+## What the PLG winners actually did (and what to steal)
+
+The most successful bottom-up security and governance tools share a pattern that Maybe Don't AI can replicate — but with a crucial caveat about patience.
+
+Snyk took **two years and ~50,000 free users** to reach its first $100K ARR. The critical insight was picking one ecosystem (Node.js) and solving one pain point (dependency vulnerabilities) with a tool that **fixed issues rather than just finding them** — auto-generating pull requests with remediation. When Snyk first added a paywall at 5,000 registered developers, self-serve revenue was negligible. The real money came from a "pincer" strategy: bottom-up free usage created Product Qualified Leads, then sales engaged the actual buyer (the CISO) armed with internal usage data showing "your organization already has X developers using Snyk."
+
+Tailscale achieved organic developer love by making security invisible — zero-config VPN where encryption, identity, and access control happen automatically. Their 40,000+ member subreddit (larger than Jira's) and word-of-mouth growth came from individuals using it for personal projects (Pi-hole, Home Assistant, Minecraft servers), then bringing it to work. The lesson: **if engineers use your security tool for personal projects, you've won.**
+
+Datadog proved that even infrastructure monitoring can be PLG if time-to-value is under 15 minutes. They capture 40,000+ trial signups monthly and now have 603 customers paying $1M+/year. Usage-based pricing captures more revenue from power users than seat-based models ever could.
+
+LaunchDarkly offers the most directly transferable playbook: feature flags started as a developer empowerment tool ("deploy with confidence"), then governance (audit logs, mandatory approvals, SOC 2 compliance) was layered on top as the enterprise upsell. The developer hook is speed and confidence; the enterprise check is written for governance. Accounts that started at $500/year expanded to $800–900K over three years.
+
+The exception that proves the rule is Wiz, which hit $100M ARR in 18 months with zero PLG — pure top-down sales to Fortune 500 CISOs. But Wiz had $250M+ in funding, an ex-Microsoft leadership team with deep enterprise credibility, and agentless deployment that showed value in minutes. Without those advantages, PLG is the more replicable path.
+
+The actionable synthesis for Maybe Don't AI: **build an open-source CLI that scans agent configurations and shows their "blast radius" — what each agent can access, what credentials it holds, what tools it can invoke.** Make it `pip install maybe-dont-ai` simple. Free forever for individuals and open-source projects. The scary results ("your agent has read-write access to production databases with a static API key that hasn't rotated in 90 days") motivate action and create urgency. Then sell the control plane that fixes it.
+
+---
+
+## Where the enterprise checks are actually being written
+
+The data on deal velocity is unambiguous. AI security tools close enterprise deals in **2–8 weeks** — faster than any other AI infrastructure category. The reason is structural: CISOs have dedicated budget lines, regulatory pressure creates urgency, and board-level awareness of AI risk is near-universal after high-profile incidents (Replit database deletion, Gemini CLI file deletion, IBM Research documenting agents that "wouldn't hesitate to delete an entire production cluster").
+
+For comparison, AI observability tools take 4–12 weeks for enterprise contracts. AI agent platforms take 1–3 months. AI gateways close quickly but at low ACV ($49/month starting tiers) and face severe commoditization from Kong, Cloudflare, and cloud providers adding native gateway features.
+
+The fastest-growing funded companies in relevant spaces tell the story clearly:
+
+- **Arize AI** raised $131M total ($70M Series C in February 2025), serving the US Navy, Uber, and DoorDash at **$50K–$100K/year ACV** for enterprise observability
+- **LangChain** reached $16M ARR (doubling in 16 months) with a $1.25B valuation, but primarily through developer-tier PLG revenue
+- **CrewAI** went from zero to $3.2M revenue in ~18 months with 150+ enterprise customers
+- **Portkey** achieved $5M revenue on just $3M in seed funding with 13 employees — but gateway economics are brutal
+
+Meanwhile, AI security startups are commanding **$50K–$500K+/year** enterprise contracts and getting acquired at 10–12x their funding. Prompt Security raised $23M, had under $10M revenue, and sold for ~$250M in two years. That's the math that matters for Maybe Don't AI.
+
+Enterprise buyers convert on AI tools at **47%** versus 25% for traditional SaaS, and 76% now prefer buying over building (up from 53% in 2024). The market is ready to write checks — but specifically for tools that address documented, regulated risks with clear single-buyer ownership.
+
+---
+
+## What to avoid and why the window is closing
+
+Several adjacent opportunities sound appealing but would be strategic mistakes. **Standalone AI agent cost management** is a saturated feature, not a product — Portkey, Helicone, TrueFoundry, Datadog, and a dozen others already offer it, often for free. Add cost visibility as a dashboard feature in your gateway, but don't build a product around it.
+
+**AI agent sandbox/testing environments** are infrastructure-heavy, low-ACV, and crowded (E2B, Daytona, Blaxel, plus open-source options). **Cross-organizational agent trust** is theoretically important but 12–18 months from buyer readiness — standards bodies are still writing specs. **AI agent rollback/undo** requires deep integration with databases, file systems, and configurations that play to Rubrik's strengths (they've already shipped Agent Rewind), not a security startup's. **AI agent insurance** is an insurance product, not a software product — but use the insurance exclusion trend as sales ammunition.
+
+**Multi-agent coordination safety** is the most intellectually interesting opportunity — zero commercial tools exist, the Cooperative AI Foundation's 60+ author report documents real risks (miscoordination, collusion, cascading jailbreaks), and first-mover advantage would be massive. But enterprises are still deploying single agents. This is a 2027+ opportunity. Monitor it; don't build for it yet.
+
+The competitive landscape demands urgency. **Runlayer** raised $11M from Khosla Ventures with the MCP protocol creator as advisor and signed dozens of customers in four months. Lasso Security, MintMCP, Portkey, Composio, and TrueFoundry are all building MCP governance features. Cloudflare, Wiz, Docker, and Kong have entered the space. And the $1.3 billion M&A wave means platform vendors are actively shopping for exactly the kind of company Maybe Don't AI is. **The window to establish position is 6–12 months before consolidation narrows the field to 2–3 winners.**
+
+---
+
+## Conclusion: the precise play
+
+The strategic recommendation is specific and time-bound. **Ship permissions + audit trails + secret management as a bundled "AI Agent Security Control Plane" within 3–6 months.** Price it at $10–25K/month for enterprises with 100+ agents/MCP servers, with a compliance reporting add-on for regulated industries at $5–10K/month. Sell exclusively to CISOs, mapping to their existing PAM/IAM and GRC budget lines.
+
+Simultaneously, **launch an open-source agent configuration scanner** that shows every agent's blast radius — permissions, credentials, tool access, and risk score. Make it genuinely free, genuinely useful, and installable in under five minutes. This creates the Snyk-style bottom-up funnel: engineers discover the scary truth about their agent configurations, share results internally, and create the internal champion who pulls Maybe Don't AI into the enterprise procurement process.
+
+The insight that changes everything: the MCP gateway is not the product. It's the delivery mechanism. **What sells is governance** — the ability for a CISO to tell their board, their auditors, and their insurance carrier that every AI agent in the organization operates under least-privilege permissions, generates an immutable audit trail, and never touches a raw credential. That's a $10K+/month product. That's what enterprises are writing checks for today. And maybe that's what Maybe Don't AI should build next.
