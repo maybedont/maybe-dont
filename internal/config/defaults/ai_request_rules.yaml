@@ -12,6 +12,7 @@ rules:
         - File deletions: delete_file, rm, remove_file with wildcards (*), recursive flags (-r, --recursive), force flags (-f, --force), or >5 files
         - Database deletions: DELETE FROM without WHERE clause, TRUNCATE TABLE, DROP TABLE, DROP DATABASE
         - Kubernetes deletions: kubectl delete with --all or wildcard selectors
+        - Disk/partition destruction: mkfs, fdisk, dd if=, formatting or overwriting entire devices
 
         EXAMPLES:
         - kubectl get po -> SAFE: Not a deletion operation
@@ -22,6 +23,7 @@ rules:
         - DELETE FROM users -> DANGEROUS: Mass database deletion with no WHERE clause
         - DELETE FROM users WHERE id = 5 -> SAFE: Single record deletion
         - TRUNCATE TABLE logs -> DANGEROUS: Table truncation destroys all data
+        - mkfs.ext4 /dev/sda1 -> DANGEROUS: Formats entire partition, destroying all data
 
     - name: "Check system directory access"
       description: "Prevent access to critical system directories"
@@ -30,7 +32,7 @@ rules:
       prompt: |-
         ANALYZE: Does this operation access dangerous system directories?
 
-        Look for: file paths starting with /etc/, /sys/, /proc/, /boot/, /root/, /var/lib/, /var/run/, /var/spool/, /var/cache/, /usr/bin/, /usr/sbin/, /bin/, /sbin/, C:\Windows\, C:\System32\, C:\Program Files\
+        Look for: file paths starting with /etc/, /sys/, /proc/, /dev/, /boot/, /root/, /var/lib/, /var/run/, /var/spool/, /var/cache/, /usr/bin/, /usr/sbin/, /bin/, /sbin/, C:\Windows\, C:\System32\, C:\Program Files\
 
         SAFE directories (do NOT block):
         - /var/log/ when READING (reading application logs is normal)
