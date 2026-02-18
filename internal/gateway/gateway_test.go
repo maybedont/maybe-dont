@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zaptest"
 )
 
 func TestPolicyDeniedError_Structure(t *testing.T) {
@@ -388,4 +390,28 @@ func TestRedactToolParams_NilSafety(t *testing.T) {
 	result := redactToolParams(nil)
 	assert.NotNil(t, result)
 	assert.Empty(t, result)
+}
+
+// TestGatewayNew_NoDownstreamServers verifies the gateway creates successfully
+// with no downstream MCP servers configured. The gateway should still be usable
+// for native tools and CLI validation.
+func TestGatewayNew_NoDownstreamServers(t *testing.T) {
+	cfg := &config.Config{
+		DownstreamMCPServers: map[string]config.ClientConfig{},
+		Audit: config.AuditConfig{
+			Path: "test-audit.log",
+		},
+	}
+	cfg.Server.Type = config.ServerTypeSTDIO
+
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	ctx := t.Context()
+
+	gw, err := New(ctx, cfg, logger, "test", t.TempDir())
+	require.NoError(t, err)
+	require.NotNil(t, gw)
+
+	// Verify the gateway has a client manager but no downstream clients
+	assert.NotNil(t, gw.clientManager)
+	assert.NotNil(t, gw.nativeToolsHandler)
 }
