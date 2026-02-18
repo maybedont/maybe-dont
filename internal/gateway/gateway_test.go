@@ -392,9 +392,9 @@ func TestRedactToolParams_NilSafety(t *testing.T) {
 	assert.Empty(t, result)
 }
 
-// TestGatewayNew_NoDownstreamServers verifies the gateway creates successfully
-// with no downstream MCP servers configured. The gateway should still be usable
-// for native tools and CLI validation.
+// TestGatewayNew_NoDownstreamServers verifies the gateway initializes correctly
+// with no downstream MCP servers. Native tools should still be registered and
+// the client manager should have zero downstream clients.
 func TestGatewayNew_NoDownstreamServers(t *testing.T) {
 	cfg := &config.Config{
 		DownstreamMCPServers: map[string]config.ClientConfig{},
@@ -403,6 +403,7 @@ func TestGatewayNew_NoDownstreamServers(t *testing.T) {
 		},
 	}
 	cfg.Server.Type = config.ServerTypeSTDIO
+	cfg.NativeTools.ListServers.Enabled = true
 
 	logger := config.NewSessionLogger(zaptest.NewLogger(t))
 	ctx := t.Context()
@@ -411,7 +412,12 @@ func TestGatewayNew_NoDownstreamServers(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, gw)
 
-	// Verify the gateway has a client manager but no downstream clients
+	// Client manager exists with zero downstream clients
 	assert.NotNil(t, gw.clientManager)
+	assert.Empty(t, gw.clientManager.GetClientConfigs())
+
+	// Native tools handler is wired up and returns tools
 	assert.NotNil(t, gw.nativeToolsHandler)
+	nativeTools := gw.nativeToolsHandler.GetTools()
+	assert.NotEmpty(t, nativeTools, "native tools should be registered even without downstream servers")
 }

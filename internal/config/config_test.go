@@ -1812,33 +1812,48 @@ func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
 	require.NotContains(t, errMsg, "maybe-dont.yaml")
 }
 
-func TestValidateConfig_NoDownstreamServersIsValid(t *testing.T) {
-	// Verify that a config with no downstream MCP servers passes validation.
-	// The gateway can run with only native tools and CLI validation.
-	config := &Config{
-		Server: struct {
-			Type       ServerType `mapstructure:"type"`
-			ListenAddr string     `mapstructure:"listen_addr"`
-			SSE        struct {
-				TLS struct {
-					Enabled  bool   `mapstructure:"enabled"`
-					CertFile string `mapstructure:"cert_file"`
-					KeyFile  string `mapstructure:"key_file"`
-				} `mapstructure:"tls"`
-			} `mapstructure:"sse"`
-			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
-		}{
-			Type: ServerTypeSTDIO,
-		},
-		DownstreamMCPServers: map[string]ClientConfig{},
-		Audit: AuditConfig{
-			Path: "audit.log",
-		},
+// TestValidateConfig_DownstreamServersOptional verifies that downstream MCP servers
+// are optional — the gateway can run with only native tools and CLI validation.
+func TestValidateConfig_DownstreamServersOptional(t *testing.T) {
+	tests := []struct {
+		name    string
+		servers map[string]ClientConfig
+	}{
+		{"nil map", nil},
+		{"empty map", map[string]ClientConfig{}},
+		{"one valid server", map[string]ClientConfig{
+			"test": {Type: "stdio", Command: "echo"},
+		}},
 	}
 
-	err := ValidateConfig(config)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Server: struct {
+					Type       ServerType `mapstructure:"type"`
+					ListenAddr string     `mapstructure:"listen_addr"`
+					SSE        struct {
+						TLS struct {
+							Enabled  bool   `mapstructure:"enabled"`
+							CertFile string `mapstructure:"cert_file"`
+							KeyFile  string `mapstructure:"key_file"`
+						} `mapstructure:"tls"`
+					} `mapstructure:"sse"`
+					TrustedProxies        []string `mapstructure:"trusted_proxies"`
+					SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+				}{
+					Type: ServerTypeSTDIO,
+				},
+				DownstreamMCPServers: tt.servers,
+				Audit: AuditConfig{
+					Path: "audit.log",
+				},
+			}
+
+			err := ValidateConfig(cfg)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestLoadConfigWithEnvVarsOnly_ValidConfig(t *testing.T) {
