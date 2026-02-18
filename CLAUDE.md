@@ -14,6 +14,18 @@ Maybe Don't Gateway is a security middleware service built in Go that acts as a 
 - **Wait for responses**: When asking questions or requesting clarification, always wait for the user's response before continuing. Do not assume answers or proceed without explicit input.
 - **Challenge ideas**: Be careful to agree just to be agreeable. Be prepared to defend your position, and communicate why a recommendation from the developer may not be a good idea. If the idea sounds good, see if you can find a reason why it is not based upon current conventions, code quality, risk or external specifications.  
 
+## Git Workflow
+
+**Keep the root working directory on `main` at all times.** Do not check out feature branches in the root directory.
+
+For all feature work, use git worktrees in the `.worktrees/` directory. Before creating a worktree, ask the user what the branch should be named. Branch names follow the convention `<owner>/<descriptive-name>` (e.g., `degroff/featureA`), but this may vary by developer. The worktree directory name and branch name must match:
+
+```bash
+git worktree add .worktrees/<branch-name> -b <branch-name>
+```
+
+This keeps worktrees co-located with the repo instead of scattered as sibling directories. The `.worktrees/` directory is gitignored.
+
 ## Essential Commands
 
 ### Build and Development
