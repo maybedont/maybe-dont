@@ -26,7 +26,7 @@ type JSONModelComparisonEntry struct {
 	ExtraPolicyOnly int     `json:"extra_policy_only,omitempty"`
 	Errored         int     `json:"errored"`
 	MatchRate       float64 `json:"match_rate"`
-	AdjMatchRate    float64 `json:"adj_match_rate,omitempty"`
+	StrictMatchRate float64 `json:"strict_match_rate,omitempty"`
 	AvgMs           int64   `json:"avg_ms"`
 	TotalMs         int64   `json:"total_ms"`
 	FromCache       bool    `json:"from_cache"`
@@ -124,7 +124,7 @@ type JSONModelSummary struct {
 	Errored         int      `json:"errored"`
 	Skipped         int      `json:"skipped"`
 	MatchRate       float64  `json:"match_rate"`
-	AdjMatchRate    float64  `json:"adj_match_rate,omitempty"`
+	StrictMatchRate float64  `json:"strict_match_rate,omitempty"`
 	TotalElapsedMs  int64    `json:"total_elapsed_ms"`
 	Stability       *float64 `json:"stability,omitempty"`       // Mean pass rate across tests with 3+ history entries
 	StabilityTests  *int     `json:"stability_tests,omitempty"` // Number of tests used for stability calculation
@@ -143,7 +143,7 @@ type JSONOverallSummary struct {
 	Errored              int     `json:"errored"`
 	Skipped              int     `json:"skipped"`
 	MatchRate            float64 `json:"match_rate"`
-	AdjMatchRate         float64 `json:"adj_match_rate,omitempty"`
+	StrictMatchRate      float64 `json:"strict_match_rate,omitempty"`
 	ThresholdsMet        bool    `json:"thresholds_met"`
 	MinMatchRateRequired float64 `json:"min_match_rate_required"`
 	WorstMatchRate       float64 `json:"worst_match_rate"`
@@ -300,7 +300,6 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 
 	// Build ResultsByModel in insertion order and accumulate aggregate totals
 	worstMatchRate := 1.0
-	worstAdjMatchRate := 1.0
 	var aggPassed, aggFailed, aggErrored, aggSkipped, aggExtraPolicyOnly int
 	for _, key := range bucketOrder {
 		b := buckets[key]
@@ -308,16 +307,13 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		// Match rate excludes errored tests — errors are infrastructure issues, not policy failures
 		decided := b.passed + b.failed + b.extraPolicyOnly
 		matchRate := 0.0
-		adjMatchRate := 0.0
+		strictMatchRate := 0.0
 		if decided > 0 {
-			matchRate = float64(b.passed) / float64(decided)
-			adjMatchRate = float64(b.passed+b.extraPolicyOnly) / float64(decided)
+			matchRate = float64(b.passed+b.extraPolicyOnly) / float64(decided)
+			strictMatchRate = float64(b.passed) / float64(decided)
 		}
 		if matchRate < worstMatchRate {
 			worstMatchRate = matchRate
-		}
-		if adjMatchRate < worstAdjMatchRate {
-			worstAdjMatchRate = adjMatchRate
 		}
 
 		aggPassed += b.passed
@@ -334,7 +330,7 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 			Errored:         b.errored,
 			Skipped:         b.skipped,
 			MatchRate:       matchRate,
-			AdjMatchRate:    adjMatchRate,
+			StrictMatchRate:    strictMatchRate,
 			TotalElapsedMs:  b.totalMs,
 		}
 
@@ -362,10 +358,10 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 	// Match rate excludes errored tests — errors are infrastructure issues, not policy failures
 	aggDecided := aggPassed + aggFailed + aggExtraPolicyOnly
 	aggMatchRate := 0.0
-	aggAdjMatchRate := 0.0
+	aggStrictMatchRate := 0.0
 	if aggDecided > 0 {
-		aggMatchRate = float64(aggPassed) / float64(aggDecided)
-		aggAdjMatchRate = float64(aggPassed+aggExtraPolicyOnly) / float64(aggDecided)
+		aggMatchRate = float64(aggPassed+aggExtraPolicyOnly) / float64(aggDecided)
+		aggStrictMatchRate = float64(aggPassed) / float64(aggDecided)
 	}
 
 	output.OverallSummary = JSONOverallSummary{
@@ -377,7 +373,7 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		Errored:              aggErrored,
 		Skipped:              aggSkipped,
 		MatchRate:            aggMatchRate,
-		AdjMatchRate:         aggAdjMatchRate,
+		StrictMatchRate:         aggStrictMatchRate,
 		ThresholdsMet:        summary.ThresholdsMet,
 		MinMatchRateRequired: minMatchRate,
 		WorstMatchRate:       worstMatchRate,
@@ -392,7 +388,7 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 			ExtraPolicyOnly: c.ExtraPolicyOnly,
 			Errored:         c.Errored,
 			MatchRate:       c.MatchRate,
-			AdjMatchRate:    c.AdjMatchRate,
+			StrictMatchRate:    c.StrictMatchRate,
 			AvgMs:           c.AvgMs,
 			TotalMs:         c.TotalMs,
 			FromCache:       c.FromCache,

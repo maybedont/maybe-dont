@@ -26,7 +26,7 @@ The user cannot tell: are those 8 failures wrong decisions, or cases where extra
 ## Goals
 
 1. Add an `Extra` column to the model comparison table showing failures caused solely by unexpected policy matches
-2. Add an `Adj%` (adjusted match rate) column: `(Pass + Extra) / (Pass + Fail + Extra)` — the accuracy rate when extra policy matches are excluded
+2. Add a `Strict%` (strict match rate) column: `Pass / (Pass + Fail + Extra)` — the match rate that penalizes extra policy triggers. `Match%` is the lenient metric: `(Pass + Extra) / (Pass + Fail + Extra)`
 3. Surface the same breakdown in JSON output for programmatic consumption
 4. Persist failure categorization in cached state so cached model rows also show the breakdown
 
@@ -54,13 +54,13 @@ In code terms: the `compareResults()` function in `executor.go` already detects 
 ```
 compareResults()          →  compareResultsOutput (add ExtraPolicyOnly bool)
   ↓
-buildModelComparison()    →  ModelComparisonEntry (add ExtraPolicyOnly int, AdjMatchRate float64)
+buildModelComparison()    →  ModelComparisonEntry (add ExtraPolicyOnly int, StrictMatchRate float64)
   ↓
-formatModelComparison()   →  table rendering (add Extra, Adj% columns)
+formatModelComparison()   →  table rendering (add Extra, Strict% columns)
   ↓
 CachedModelSummary        →  state persistence (add ExtraPolicyOnly int)
   ↓
-JSONModelComparisonEntry  →  JSON output (add extra_policy_only int, adj_match_rate float64)
+JSONModelComparisonEntry  →  JSON output (add extra_policy_only int, strict_match_rate float64)
 ```
 
 ### Changes by File
@@ -108,9 +108,9 @@ type ModelComparisonEntry struct {
     // triggering policies (decision was correct, all expected policies matched)
     ExtraPolicyOnly int
 
-    // AdjMatchRate is the match rate excluding extra-policy-only failures:
-    // (Passed + ExtraPolicyOnly) / (Passed + Failed + ExtraPolicyOnly)
-    AdjMatchRate float64
+    // StrictMatchRate is the strict match rate that penalizes extra policy matches:
+    // Passed / (Passed + Failed + ExtraPolicyOnly)
+    StrictMatchRate float64
 }
 ```
 
@@ -140,28 +140,28 @@ case "failed":
     }
 ```
 
-Compute `AdjMatchRate`:
+Compute `StrictMatchRate`:
 
 ```go
-adjDecided := entry.Passed + entry.Failed + entry.ExtraPolicyOnly
-if adjDecided > 0 {
-    entry.AdjMatchRate = float64(entry.Passed + entry.ExtraPolicyOnly) / float64(adjDecided)
+decided := entry.Passed + entry.Failed + entry.ExtraPolicyOnly
+if decided > 0 {
+    entry.StrictMatchRate = float64(entry.Passed) / float64(decided)
 }
 ```
 
 #### `runner.go` → `formatModelComparison()`
 
-Add `Extra` and `Adj%` columns. The `Extra` column only appears when at least one entry has `ExtraPolicyOnly > 0` (like `Stab%` appearing only when history exists):
+Add `Extra` and `Strict%` columns. The `Extra` column only appears when at least one entry has `ExtraPolicyOnly > 0` (like `Stab%` appearing only when history exists):
 
 ```
 ── Model Comparison ──────────────────────────────────────────────────────────
-Model                 Pass   Fail  Extra   Err  Match%   Adj%     Avg ms      Total
-openai:gpt-5            42      2      6     0   84.0%  96.0%    1234 ms     52.3s
-anthropic:claude-3.7     40      4      6     0   80.0%  92.0%    1456 ms     58.2s
+Model                 Pass   Fail  Extra   Err  Match%  Strict%     Avg ms      Total
+openai:gpt-5            42      2      6     0   96.0%   84.0%    1234 ms     52.3s
+anthropic:claude-3.7     40      4      6     0   92.0%   80.0%    1456 ms     58.2s
 ──────────────────────────────────────────────────────────────────────────────
 ```
 
-When no entries have extra policy failures, the table renders without the `Extra` and `Adj%` columns (unchanged from today).
+When no entries have extra policy failures, the table renders without the `Extra` and `Strict%` columns (unchanged from today).
 
 #### `runner.go` → `calculateResults()`
 
@@ -203,7 +203,7 @@ Add to `JSONModelComparisonEntry`:
 type JSONModelComparisonEntry struct {
     // ... existing fields ...
     ExtraPolicyOnly int     `json:"extra_policy_only"`
-    AdjMatchRate    float64 `json:"adj_match_rate"`
+    StrictMatchRate    float64 `json:"strict_match_rate"`
 }
 ```
 
@@ -220,11 +220,11 @@ type JSONTestResult struct {
 
 No explicit migration needed. The new `extra_policy_only` field in `CachedResult` uses `omitempty` — existing state files without the field will deserialize as `false`, which is correct (we don't know the failure category for historical results). First run after deployment will re-run tests (due to the per-case hashing change in PR #117), populating the new field.
 
-For cached model rows from older state files, `ExtraPolicyOnly` will be 0 and `Adj%` will equal `Match%`. This is conservative and correct — we don't claim accuracy we can't verify.
+For cached model rows from older state files, `ExtraPolicyOnly` will be 0 and `Strict%` will equal `Match%`. This is conservative and correct — we don't claim accuracy we can't verify.
 
 ### Interaction with `strict_policy_match`
 
-When `strict_policy_match: false`, unexpected policy matches produce warnings (not failures), so `ExtraPolicyOnly` will always be 0 — the test passes. The `Extra` and `Adj%` columns are only meaningful when `strict_policy_match: true` (the default).
+When `strict_policy_match: false`, unexpected policy matches produce warnings (not failures), so `ExtraPolicyOnly` will always be 0 — the test passes. The `Extra` and `Strict%` columns are only meaningful when `strict_policy_match: true` (the default).
 
 ## Test Plan
 
@@ -232,15 +232,15 @@ When `strict_policy_match: false`, unexpected policy matches produce warnings (n
 2. **Unit test `compareResults`**: Verify `extraPolicyOnly` is false when decision mismatches (even if extra policies also trigger)
 3. **Unit test `compareResults`**: Verify `extraPolicyOnly` is false when an expected policy has wrong decision
 4. **Unit test `compareResults`**: Verify `extraPolicyOnly` is false when `strict_policy_match` is false (warnings, not failures)
-5. **Unit test `buildModelComparison`**: Verify `ExtraPolicyOnly` count and `AdjMatchRate` calculation
-6. **Unit test `formatModelComparison`**: Verify `Extra` and `Adj%` columns appear when data exists, absent when all zeros
+5. **Unit test `buildModelComparison`**: Verify `ExtraPolicyOnly` count and `StrictMatchRate` calculation
+6. **Unit test `formatModelComparison`**: Verify `Extra` and `Strict%` columns appear when data exists, absent when all zeros
 7. **Integration test**: Multi-case file with mixed failure types, verify table breakdown
-8. **JSON output test**: Verify `extra_policy_only` and `adj_match_rate` fields in JSON
+8. **JSON output test**: Verify `extra_policy_only` and `strict_match_rate` fields in JSON
 9. **State persistence test**: Record result with `ExtraPolicyOnly`, reload state, verify field preserved
 10. **Cached model row test**: Verify cached rows show `ExtraPolicyOnly` from state
 
 ## Implementation Notes
 
 - The `Extra` column splits out from `Fail` — i.e., `Fail` count should **decrease** by `ExtraPolicyOnly`. The total `Fail + Extra` equals the old `Fail` count. This is important: `Fail` now means "real failures" and `Extra` means "needs tuning."
-- `Adj%` is computed as `(Pass + Extra) / (Pass + Fail + Extra)`. This excludes errored tests (same as current `Match%`).
+- `Match%` (lenient) is `(Pass + Extra) / (Pass + Fail + Extra)`. `Strict%` is `Pass / (Pass + Fail + Extra)`. Both exclude errored tests.
 - The `RecordResult()` function signature changes to accept `ExtraPolicyOnly`. All callers need updating.

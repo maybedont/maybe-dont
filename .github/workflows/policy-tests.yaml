@@ -388,14 +388,27 @@ jobs:
                 name=$(basename "$file" .json)
                 echo "### Model Comparison ($name)" >> "$GITHUB_STEP_SUMMARY"
                 echo "" >> "$GITHUB_STEP_SUMMARY"
-                echo "| Model | Passed | Failed | Errored | Match Rate | Avg (ms) | Total (ms) | Source |" >> "$GITHUB_STEP_SUMMARY"
-                echo "|-------|--------|--------|---------|------------|----------|------------|--------|" >> "$GITHUB_STEP_SUMMARY"
+                # Check if any model has extra_policy_only > 0
+                has_extra=$(jq '[.model_comparison[] | .extra_policy_only // 0] | any(. > 0)' "$file")
+                if [ "$has_extra" = "true" ]; then
+                  echo "| Model | Passed | Failed | Extra | Errored | Match % | Strict % | Avg (ms) | Total (ms) | Source |" >> "$GITHUB_STEP_SUMMARY"
+                  echo "|-------|--------|--------|-------|---------|---------|----------|----------|------------|--------|" >> "$GITHUB_STEP_SUMMARY"
 
-                jq -r '.model_comparison[] |
-                  "\(.model) | \(.passed) | \(.failed) | \(.errored) | \(.match_rate * 100 | . * 10 | round / 10)% | \(.avg_ms) | \(.total_ms) | \(if .from_cache then "cached" else "current" end)"' "$file" |
-                while IFS='|' read -r model passed failed errored match_rate avg_ms total_ms source; do
-                  echo "| $model |$passed |$failed |$errored |$match_rate |$avg_ms |$total_ms |$source |" >> "$GITHUB_STEP_SUMMARY"
-                done
+                  jq -r '.model_comparison[] |
+                    "\(.model) | \(.passed) | \(.failed) | \(.extra_policy_only // 0) | \(.errored) | \(.match_rate * 100 | . * 10 | round / 10)% | \(.strict_match_rate * 100 | . * 10 | round / 10)% | \(.avg_ms) | \(.total_ms) | \(if .from_cache then "cached" else "current" end)"' "$file" |
+                  while IFS='|' read -r model passed failed extra errored match_rate strict_rate avg_ms total_ms source; do
+                    echo "| $model |$passed |$failed |$extra |$errored |$match_rate |$strict_rate |$avg_ms |$total_ms |$source |" >> "$GITHUB_STEP_SUMMARY"
+                  done
+                else
+                  echo "| Model | Passed | Failed | Errored | Match % | Avg (ms) | Total (ms) | Source |" >> "$GITHUB_STEP_SUMMARY"
+                  echo "|-------|--------|--------|---------|---------|----------|------------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+                  jq -r '.model_comparison[] |
+                    "\(.model) | \(.passed) | \(.failed) | \(.errored) | \(.match_rate * 100 | . * 10 | round / 10)% | \(.avg_ms) | \(.total_ms) | \(if .from_cache then "cached" else "current" end)"' "$file" |
+                  while IFS='|' read -r model passed failed errored match_rate avg_ms total_ms source; do
+                    echo "| $model |$passed |$failed |$errored |$match_rate |$avg_ms |$total_ms |$source |" >> "$GITHUB_STEP_SUMMARY"
+                  done
+                fi
 
                 echo "" >> "$GITHUB_STEP_SUMMARY"
               fi

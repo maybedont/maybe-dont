@@ -202,9 +202,9 @@ func (r *Runner) runSummaryOnly() (*RunResult, error) {
 		// ExtraPolicyOnly are counted separately from Failed, so include them in decided.
 		decided := summary.Passed + summary.Failed + summary.ExtraPolicyOnly
 		if decided > 0 {
-			entry.MatchRate = float64(summary.Passed) / float64(decided)
+			entry.MatchRate = float64(summary.Passed+summary.ExtraPolicyOnly) / float64(decided)
 			entry.AvgMs = summary.TotalMs / int64(decided)
-			entry.AdjMatchRate = float64(summary.Passed+summary.ExtraPolicyOnly) / float64(decided)
+			entry.StrictMatchRate = float64(summary.Passed) / float64(decided)
 		}
 		entries = append(entries, entry)
 	}
@@ -1662,12 +1662,12 @@ func (r *Runner) calculateResults(results []TestResult) *RunResult {
 		}
 	}
 
-	// Calculate match rate: passed / (passed + failed + extraPolicyOnly), excluding errors and skipped.
-	// Errors are infrastructure issues (timeouts, rate limits), not policy accuracy failures.
-	// ExtraPolicyOnly are counted separately from Failed, so include them in decided.
+	// Calculate lenient match rate: (passed + extraPolicyOnly) / decided.
+	// ExtraPolicyOnly results matched all expected policies, so they count as matching.
+	// Errors and skipped are excluded — errors are infrastructure issues, not policy failures.
 	decided := result.Passed + result.Failed + result.ExtraPolicyOnly
 	if decided > 0 {
-		result.MatchRate = float64(result.Passed) / float64(decided)
+		result.MatchRate = float64(result.Passed+result.ExtraPolicyOnly) / float64(decided)
 	}
 
 	// Check threshold. When no tests produced a pass/fail decision (e.g., all skipped,
@@ -2472,9 +2472,9 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 		// Match rate and avg latency exclude errored tests — errors are infrastructure issues
 		celDecided := celPassed + celFailed + celExtraPolicyOnly
 		if celDecided > 0 {
-			entry.MatchRate = float64(celPassed) / float64(celDecided)
+			entry.MatchRate = float64(celPassed+celExtraPolicyOnly) / float64(celDecided)
 			entry.AvgMs = celTotalMs / int64(celDecided)
-			entry.AdjMatchRate = float64(celPassed+celExtraPolicyOnly) / float64(celDecided)
+			entry.StrictMatchRate = float64(celPassed) / float64(celDecided)
 		}
 		entries = append(entries, entry)
 	}
@@ -2491,9 +2491,9 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 		// ExtraPolicyOnly are counted separately from Failed, so include them in decided.
 		decided := entry.Passed + entry.Failed + entry.ExtraPolicyOnly
 		if decided > 0 {
-			entry.MatchRate = float64(entry.Passed) / float64(decided)
+			entry.MatchRate = float64(entry.Passed+entry.ExtraPolicyOnly) / float64(decided)
 			entry.AvgMs = entry.TotalMs / int64(decided)
-			entry.AdjMatchRate = float64(entry.Passed+entry.ExtraPolicyOnly) / float64(decided)
+			entry.StrictMatchRate = float64(entry.Passed) / float64(decided)
 		}
 		// Pull stability from cached summaries (computed from history)
 		if cs, ok := cachedSummaries[entry.Model]; ok {
@@ -2523,9 +2523,9 @@ func (r *Runner) buildModelComparison(results []TestResult) []ModelComparisonEnt
 		// ExtraPolicyOnly are counted separately from Failed, so include them in decided.
 		decided := summary.Passed + summary.Failed + summary.ExtraPolicyOnly
 		if decided > 0 {
-			entry.MatchRate = float64(summary.Passed) / float64(decided)
+			entry.MatchRate = float64(summary.Passed+summary.ExtraPolicyOnly) / float64(decided)
 			entry.AvgMs = summary.TotalMs / int64(decided)
-			entry.AdjMatchRate = float64(summary.Passed+summary.ExtraPolicyOnly) / float64(decided)
+			entry.StrictMatchRate = float64(summary.Passed) / float64(decided)
 		}
 		entries = append(entries, entry)
 	}
@@ -2579,15 +2579,15 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 	}
 
 	// Build header dynamically based on which optional columns are present.
-	// Core columns: Model, Pass, Fail, [Extra, Adj%,] Err, Match%, Avg ms, Total, [Stab%]
+	// Core columns: Model, Pass, Fail, [Extra, Strict%,] Err, Match%, Avg ms, Total, [Stab%]
 	var header string
 	switch {
 	case hasExtraPolicy && hasStability:
-		header = fmt.Sprintf("%-*s  %5s  %5s  %5s  %4s  %6s  %6s  %9s  %10s  %5s",
-			maxModelLen, "Model", "Pass", "Fail", "Extra", "Err", "Match%", "  Adj%", "Avg ms", "Total", "Stab%")
+		header = fmt.Sprintf("%-*s  %5s  %5s  %5s  %4s  %6s  %7s  %9s  %10s  %5s",
+			maxModelLen, "Model", "Pass", "Fail", "Extra", "Err", "Match%", "Strict%", "Avg ms", "Total", "Stab%")
 	case hasExtraPolicy:
-		header = fmt.Sprintf("%-*s  %5s  %5s  %5s  %4s  %6s  %6s  %9s  %10s",
-			maxModelLen, "Model", "Pass", "Fail", "Extra", "Err", "Match%", "  Adj%", "Avg ms", "Total")
+		header = fmt.Sprintf("%-*s  %5s  %5s  %5s  %4s  %6s  %7s  %9s  %10s",
+			maxModelLen, "Model", "Pass", "Fail", "Extra", "Err", "Match%", "Strict%", "Avg ms", "Total")
 	case hasStability:
 		header = fmt.Sprintf("%-*s  %5s  %5s  %4s  %6s  %9s  %10s  %5s",
 			maxModelLen, "Model", "Pass", "Fail", "Err", "Match%", "Avg ms", "Total", "Stab%")
@@ -2625,16 +2625,16 @@ func formatModelComparison(entries []ModelComparisonEntry) string {
 			if e.StabilityTests > 0 {
 				stabStr = fmt.Sprintf("%4.0f%%", e.Stability*100)
 			}
-			row = fmt.Sprintf("%-*s  %5d  %5d  %5d  %4d  %5.1f%%  %5.1f%%  %9s  %10s  %5s",
+			row = fmt.Sprintf("%-*s  %5d  %5d  %5d  %4d  %5.1f%%  %6.1f%%  %9s  %10s  %5s",
 				maxModelLen, e.Model,
 				e.Passed, e.Failed, e.ExtraPolicyOnly, e.Errored,
-				e.MatchRate*100, e.AdjMatchRate*100,
+				e.MatchRate*100, e.StrictMatchRate*100,
 				avgStr, totalStr, stabStr)
 		case hasExtraPolicy:
-			row = fmt.Sprintf("%-*s  %5d  %5d  %5d  %4d  %5.1f%%  %5.1f%%  %9s  %10s",
+			row = fmt.Sprintf("%-*s  %5d  %5d  %5d  %4d  %5.1f%%  %6.1f%%  %9s  %10s",
 				maxModelLen, e.Model,
 				e.Passed, e.Failed, e.ExtraPolicyOnly, e.Errored,
-				e.MatchRate*100, e.AdjMatchRate*100,
+				e.MatchRate*100, e.StrictMatchRate*100,
 				avgStr, totalStr)
 		case hasStability:
 			stabStr := "  —"

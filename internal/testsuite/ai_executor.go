@@ -540,7 +540,7 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 			}
 
 			// Use the shared decision function — single source of truth with production.
-			decision := gateway.DetermineResponseDecision(p.Action, aiResp.Allowed, aiResp.RedactedContent)
+			decision := gateway.DetermineResponseDecision(p.Action, aiResp.Allowed, aiResp.RedactedContent, respContext)
 
 			pr := aiPolicyResult{
 				policyName: p.Name,

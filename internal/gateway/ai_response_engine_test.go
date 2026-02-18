@@ -419,6 +419,7 @@ func TestDetermineResponseDecision(t *testing.T) {
 		action          config.PolicyAction
 		allowed         bool
 		redactedContent string
+		originalContent string
 		expected        string
 	}{
 		{
@@ -426,6 +427,7 @@ func TestDetermineResponseDecision(t *testing.T) {
 			action:          config.PolicyActionRedact,
 			allowed:         true,
 			redactedContent: "sanitized content",
+			originalContent: "original secret content",
 			expected:        "redact",
 		},
 		{
@@ -433,6 +435,7 @@ func TestDetermineResponseDecision(t *testing.T) {
 			action:          config.PolicyActionRedact,
 			allowed:         true,
 			redactedContent: "",
+			originalContent: "some content",
 			expected:        "allow",
 		},
 		{
@@ -440,6 +443,7 @@ func TestDetermineResponseDecision(t *testing.T) {
 			action:          config.PolicyActionRedact,
 			allowed:         false,
 			redactedContent: "redacted version",
+			originalContent: "original version",
 			expected:        "redact",
 		},
 		{
@@ -447,6 +451,23 @@ func TestDetermineResponseDecision(t *testing.T) {
 			action:          config.PolicyActionRedact,
 			allowed:         false,
 			redactedContent: "",
+			originalContent: "some content",
+			expected:        "allow",
+		},
+		{
+			name:            "redact rule, redacted_content matches original → allow (no actual redaction)",
+			action:          config.PolicyActionRedact,
+			allowed:         true,
+			redactedContent: "the original content",
+			originalContent: "the original content",
+			expected:        "allow",
+		},
+		{
+			name:            "redact rule, redacted_content matches original with whitespace → allow",
+			action:          config.PolicyActionRedact,
+			allowed:         true,
+			redactedContent: "  the original content  \n",
+			originalContent: "the original content",
 			expected:        "allow",
 		},
 		{
@@ -488,7 +509,7 @@ func TestDetermineResponseDecision(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := DetermineResponseDecision(tt.action, tt.allowed, tt.redactedContent)
+			result := DetermineResponseDecision(tt.action, tt.allowed, tt.redactedContent, tt.originalContent)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

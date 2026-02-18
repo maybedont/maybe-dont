@@ -135,7 +135,9 @@ type RunResult struct {
 	// ExtraPolicyOnly is the count of tests that failed only due to unexpected policy matches
 	ExtraPolicyOnly int
 
-	// MatchRate is the percentage of tests that passed (0.0-1.0)
+	// MatchRate is the lenient match rate (0.0-1.0): tests that matched expected
+	// policies count as passing, even if extra policies also triggered.
+	// Formula: (Passed + ExtraPolicyOnly) / (Passed + Failed + ExtraPolicyOnly)
 	MatchRate float64
 
 	// MoreTestsRemain indicates --max-tests was used and more tests remain
@@ -167,7 +169,8 @@ type ModelComparisonEntry struct {
 	// Errored is the number of tests that errored for this model
 	Errored int
 
-	// MatchRate is the pass rate (0.0-1.0) for this model
+	// MatchRate is the lenient match rate (0.0-1.0): extra-policy-only results
+	// count as passing. Formula: (Passed + ExtraPolicyOnly) / decided
 	MatchRate float64
 
 	// AvgMs is the average test duration in milliseconds
@@ -186,9 +189,9 @@ type ModelComparisonEntry struct {
 	// triggering policies (decision was correct, all expected policies matched)
 	ExtraPolicyOnly int
 
-	// AdjMatchRate is the match rate excluding extra-policy-only failures:
-	// (Passed + ExtraPolicyOnly) / (Passed + Failed + ExtraPolicyOnly)
-	AdjMatchRate float64
+	// StrictMatchRate is the strict match rate that penalizes extra policy matches:
+	// Passed / (Passed + Failed + ExtraPolicyOnly)
+	StrictMatchRate float64
 
 	// FromCache is true if data is entirely from cached state (not tested in current run)
 	FromCache bool
