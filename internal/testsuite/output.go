@@ -26,7 +26,7 @@ type JSONModelComparisonEntry struct {
 	ExtraPolicyOnly int     `json:"extra_policy_only,omitempty"`
 	Errored         int     `json:"errored"`
 	MatchRate       float64 `json:"match_rate"`
-	StrictMatchRate    float64 `json:"strict_match_rate,omitempty"`
+	StrictMatchRate float64 `json:"strict_match_rate,omitempty"`
 	AvgMs           int64   `json:"avg_ms"`
 	TotalMs         int64   `json:"total_ms"`
 	FromCache       bool    `json:"from_cache"`
@@ -124,7 +124,7 @@ type JSONModelSummary struct {
 	Errored         int      `json:"errored"`
 	Skipped         int      `json:"skipped"`
 	MatchRate       float64  `json:"match_rate"`
-	StrictMatchRate    float64  `json:"strict_match_rate,omitempty"`
+	StrictMatchRate float64  `json:"strict_match_rate,omitempty"`
 	TotalElapsedMs  int64    `json:"total_elapsed_ms"`
 	Stability       *float64 `json:"stability,omitempty"`       // Mean pass rate across tests with 3+ history entries
 	StabilityTests  *int     `json:"stability_tests,omitempty"` // Number of tests used for stability calculation
@@ -143,7 +143,7 @@ type JSONOverallSummary struct {
 	Errored              int     `json:"errored"`
 	Skipped              int     `json:"skipped"`
 	MatchRate            float64 `json:"match_rate"`
-	StrictMatchRate         float64 `json:"strict_match_rate,omitempty"`
+	StrictMatchRate      float64 `json:"strict_match_rate,omitempty"`
 	ThresholdsMet        bool    `json:"thresholds_met"`
 	MinMatchRateRequired float64 `json:"min_match_rate_required"`
 	WorstMatchRate       float64 `json:"worst_match_rate"`
@@ -300,7 +300,6 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 
 	// Build ResultsByModel in insertion order and accumulate aggregate totals
 	worstMatchRate := 1.0
-	worstStrictMatchRate := 1.0
 	var aggPassed, aggFailed, aggErrored, aggSkipped, aggExtraPolicyOnly int
 	for _, key := range bucketOrder {
 		b := buckets[key]
@@ -315,9 +314,6 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		}
 		if matchRate < worstMatchRate {
 			worstMatchRate = matchRate
-		}
-		if strictMatchRate < worstStrictMatchRate {
-			worstStrictMatchRate = strictMatchRate
 		}
 
 		aggPassed += b.passed
