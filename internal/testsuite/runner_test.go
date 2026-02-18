@@ -1337,9 +1337,9 @@ func TestCalculateResults_ExtraPolicyOnlySplitsFromFailed(t *testing.T) {
 	assert.Equal(t, 1, summary.Errored)
 
 	// decided = Passed + Failed + ExtraPolicyOnly = 3 + 1 + 2 = 6
-	// MatchRate = 3/6 = 0.5
-	assert.InDelta(t, 0.5, summary.MatchRate, 0.001,
-		"MatchRate should be Passed/(Passed+Failed+ExtraPolicyOnly)")
+	// MatchRate (lenient) = (3+2)/6 = 5/6 ≈ 0.833
+	assert.InDelta(t, float64(5)/float64(6), summary.MatchRate, 0.001,
+		"MatchRate should be (Passed+ExtraPolicyOnly)/(Passed+Failed+ExtraPolicyOnly)")
 
 	// Threshold check: 0.5 >= 0.5 → met
 	assert.True(t, summary.ThresholdsMet)
@@ -2504,7 +2504,7 @@ func TestValidateSuiteSchema_StabilityThreshold(t *testing.T) {
 	})
 }
 
-// TestFormatModelComparison_ExtraPolicyColumns verifies that the Extra and Adj%
+// TestFormatModelComparison_ExtraPolicyColumns verifies that the Extra and Strict%
 // columns appear only when at least one model has ExtraPolicyOnly > 0, and that
 // they are absent when no extra-policy-only failures exist.
 func TestFormatModelComparison_ExtraPolicyColumns(t *testing.T) {
@@ -2518,28 +2518,28 @@ func TestFormatModelComparison_ExtraPolicyColumns(t *testing.T) {
 		}
 		output := formatModelComparison(entries)
 		assert.NotContains(t, output, "Extra")
-		assert.NotContains(t, output, "Adj%")
+		assert.NotContains(t, output, "Strict%")
 	})
 
 	t.Run("extra columns shown when extra-policy-only data present", func(t *testing.T) {
 		entries := []ModelComparisonEntry{
-			{Model: "openai:gpt-5", Passed: 7, Failed: 1, ExtraPolicyOnly: 2, Errored: 0, MatchRate: 0.7, AdjMatchRate: 0.9, AvgMs: 1200, TotalMs: 12000},
-			{Model: "anthropic:claude", Passed: 9, Failed: 1, ExtraPolicyOnly: 0, Errored: 0, MatchRate: 0.9, AdjMatchRate: 0.9, AvgMs: 800, TotalMs: 8000},
+			{Model: "openai:gpt-5", Passed: 7, Failed: 1, ExtraPolicyOnly: 2, Errored: 0, MatchRate: 0.9, StrictMatchRate: 0.7, AvgMs: 1200, TotalMs: 12000},
+			{Model: "anthropic:claude", Passed: 9, Failed: 1, ExtraPolicyOnly: 0, Errored: 0, MatchRate: 0.9, StrictMatchRate: 0.9, AvgMs: 800, TotalMs: 8000},
 		}
 		output := formatModelComparison(entries)
 		assert.Contains(t, output, "Extra")
-		assert.Contains(t, output, "Adj%")
-		assert.Contains(t, output, "70.0%")  // MatchRate for gpt-5
-		assert.Contains(t, output, "90.0%")  // AdjMatchRate for gpt-5
+		assert.Contains(t, output, "Strict%")
+		assert.Contains(t, output, "90.0%")  // MatchRate for gpt-5 (lenient)
+		assert.Contains(t, output, "70.0%")  // StrictMatchRate for gpt-5 (strict)
 	})
 
 	t.Run("extra and stability columns together", func(t *testing.T) {
 		entries := []ModelComparisonEntry{
-			{Model: "openai:gpt-5", Passed: 7, Failed: 1, ExtraPolicyOnly: 2, MatchRate: 0.7, AdjMatchRate: 0.9, Stability: 0.95, StabilityTests: 5},
+			{Model: "openai:gpt-5", Passed: 7, Failed: 1, ExtraPolicyOnly: 2, MatchRate: 0.9, StrictMatchRate: 0.7, Stability: 0.95, StabilityTests: 5},
 		}
 		output := formatModelComparison(entries)
 		assert.Contains(t, output, "Extra")
-		assert.Contains(t, output, "Adj%")
+		assert.Contains(t, output, "Strict%")
 		assert.Contains(t, output, "Stab%")
 		assert.Contains(t, output, "95%")
 	})
@@ -2560,8 +2560,8 @@ func TestFormatModelComparison_ExtraPolicyColumns(t *testing.T) {
 		}
 
 		entries := []ModelComparisonEntry{
-			{Model: "cel", Passed: 50, Failed: 0, ExtraPolicyOnly: 0, Errored: 0, MatchRate: 1.0, AdjMatchRate: 1.0, AvgMs: 2, TotalMs: 100},
-			{Model: "openai:gpt-5", Passed: 35, Failed: 5, ExtraPolicyOnly: 10, Errored: 0, MatchRate: 0.7, AdjMatchRate: 0.9, AvgMs: 1200, TotalMs: 60000},
+			{Model: "cel", Passed: 50, Failed: 0, ExtraPolicyOnly: 0, Errored: 0, MatchRate: 1.0, StrictMatchRate: 1.0, AvgMs: 2, TotalMs: 100},
+			{Model: "openai:gpt-5", Passed: 35, Failed: 5, ExtraPolicyOnly: 10, Errored: 0, MatchRate: 0.9, StrictMatchRate: 0.7, AvgMs: 1200, TotalMs: 60000},
 		}
 		output := formatModelComparison(entries)
 		headerWidth, rowWidths := dataRowWidths(output)
@@ -2623,7 +2623,7 @@ func TestJSONOutput_ExtraPolicyOnlyFields(t *testing.T) {
 	}
 
 	comparison := []ModelComparisonEntry{
-		{Model: "openai:gpt-5", Passed: 1, Failed: 1, ExtraPolicyOnly: 1, MatchRate: 1.0 / 3.0, AdjMatchRate: 2.0 / 3.0},
+		{Model: "openai:gpt-5", Passed: 1, Failed: 1, ExtraPolicyOnly: 1, MatchRate: 2.0 / 3.0, StrictMatchRate: 1.0 / 3.0},
 	}
 
 	jsonStr, err := formatJSONOutput(suite, results, summary, nil, comparison)
@@ -2636,7 +2636,7 @@ func TestJSONOutput_ExtraPolicyOnlyFields(t *testing.T) {
 	// Check model comparison entry
 	require.Len(t, output.ModelComparison, 1)
 	assert.Equal(t, 1, output.ModelComparison[0].ExtraPolicyOnly)
-	assert.InDelta(t, 2.0/3.0, output.ModelComparison[0].AdjMatchRate, 0.001)
+	assert.InDelta(t, 1.0/3.0, output.ModelComparison[0].StrictMatchRate, 0.001)
 
 	// Check individual test result
 	require.Len(t, output.ResultsByModel, 1)

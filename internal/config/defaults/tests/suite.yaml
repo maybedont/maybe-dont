@@ -59,7 +59,7 @@ engines:
         parameters:
           temperature: 0.0
       - provider: anthropic
-        model: claude-sonnet-4-6-20260217 # Improved reasoning, 1M context
+        model: claude-sonnet-4-6 # Improved reasoning, 1M context
         enabled: true
         parameters:
           temperature: 0.0

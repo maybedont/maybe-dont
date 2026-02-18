@@ -107,16 +107,27 @@ func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy
 type AIResponseEvaluation struct {
 	Allowed         bool   `json:"allowed"`
 	Message         string `json:"message"`
-	RedactedContent string `json:"redacted_content"`
+	RedactedContent string `json:"redacted_content" jsonschema:"description=The redacted version of the response content with sensitive parts replaced. MUST be empty string if no redaction is needed."`
 }
 
 // DetermineResponseDecision maps a response policy's action type and model output to a
 // final decision string. Redact rules check for redacted_content; deny rules check the
 // allowed field. This is the single source of truth for response decision logic —
 // both the production engine and the test executor must use this function.
-func DetermineResponseDecision(action config.PolicyAction, allowed bool, redactedContent string) string {
+//
+// The originalContent parameter enables a fallback check for redact rules: if the model
+// returns redacted_content that is identical to the original response content (i.e., no
+// actual redaction was performed), the decision is "allow". This handles a common model
+// behavior where the redacted_content field is populated with the original content even
+// when the model's reasoning concludes nothing needs redacting.
+func DetermineResponseDecision(action config.PolicyAction, allowed bool, redactedContent string, originalContent string) string {
 	if action == config.PolicyActionRedact {
 		if redactedContent != "" {
+			// Fallback: if the model echoed back the original content unchanged,
+			// treat it as "no redaction needed" since nothing was actually redacted.
+			if strings.TrimSpace(redactedContent) == strings.TrimSpace(originalContent) {
+				return "allow"
+			}
 			return "redact"
 		}
 		return "allow"
@@ -282,7 +293,7 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				return
 			}
 
-			resultStr := DetermineResponseDecision(p.Action, evaluation.Allowed, evaluation.RedactedContent)
+			resultStr := DetermineResponseDecision(p.Action, evaluation.Allowed, evaluation.RedactedContent, responseStr)
 
 			resultChan <- aiResponseRuleResult{
 				policy:       p,
