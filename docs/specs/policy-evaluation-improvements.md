@@ -432,7 +432,7 @@ Each AI policy has 2-3 allow test cases but ~4-5 deny cases. For false positive 
 
 ### 6.3 Configuration Recommendations
 
-**Temperature:** The production engine defaults to 0.0, which is correct for deterministic policy evaluation. The test executor should also explicitly set temperature to 0.0 to match production behavior.
+**Temperature:** Temperature is intentionally not set by default — some providers error if temperature is passed. Users can set it per-model in suite config via `parameters.temperature` (e.g., `temperature: 0.0` for Anthropic models to get deterministic output).
 
 **max_tokens:** The auto-scaling logic in the test executor (starting at 128 for Anthropic, 1024 for others) should be reviewed. Starting too low causes truncation errors. Recommendation: start at 256 for Anthropic, 512 for others.
 
