@@ -362,6 +362,7 @@ func (r *AITestRunner) executeTest(ctx context.Context, tc TestCase) TestResult 
 	cmp := compareResults(result.Expected, result.Actual, r.strictPolicyMatch)
 	result.Failures = cmp.failures
 	result.Warnings = cmp.warnings
+	result.ExtraPolicyOnly = cmp.extraPolicyOnly
 	if len(result.Failures) == 0 {
 		result.Status = "passed"
 	} else {

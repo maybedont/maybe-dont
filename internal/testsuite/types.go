@@ -41,7 +41,7 @@ type RunnerOptions struct {
 	// Empty string means use the suite.yaml configuration
 	Engine string
 
-	// Model overrides the model for AI tests (format: "provider:model")
+	// Model overrides the model(s) for AI tests (format: "provider:model", comma-separated for multiple)
 	Model string
 
 	// RunMatrix runs the full model matrix from suite.yaml

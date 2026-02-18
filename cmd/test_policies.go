@@ -128,7 +128,7 @@ func init() {
 
 	// Engine and model selection
 	testPoliciesCmd.Flags().StringVar(&engine, "engine", "", "Engine to test: cel, ai, or all (default: from suite.yaml)")
-	testPoliciesCmd.Flags().StringVar(&model, "model", "", "Override model for AI tests: provider:model (e.g., openai:gpt-5-mini)")
+	testPoliciesCmd.Flags().StringVar(&model, "model", "", "Override model(s) for AI tests: provider:model (comma-separated, e.g., openai:gpt-5-mini,openai:gpt-5)")
 	testPoliciesCmd.Flags().BoolVar(&runMatrix, "matrix", false, "Run full model matrix from suite.yaml")
 
 	// Output options
@@ -167,7 +167,7 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 	}
 
 	if model != "" && runMatrix {
-		return fmt.Errorf("cannot use both --model and --matrix; --model selects a single model, --matrix runs all enabled models")
+		return fmt.Errorf("cannot use both --model and --matrix; --model selects specific models, --matrix runs all enabled models")
 	}
 
 	useState := incremental || full || summaryOnly

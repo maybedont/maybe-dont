@@ -1376,32 +1376,40 @@ func interleaveByProvider(models []ModelConfig) []ModelConfig {
 // provider config (if not set at the model level).
 // Returns an error if --model flag specifies a provider not configured.
 func (r *Runner) getModelsToTest() ([]ModelConfig, error) {
-	// If --model flag is set, parse it and use only that model
+	// If --model flag is set, parse it (supports comma-separated list)
 	if r.opts.Model != "" {
-		model := parseModelFlag(r.opts.Model, r.suite.Engines.AI.ModelMatrix)
-		if model == nil {
-			// Parse the provider from the flag for the error message
-			parts := strings.SplitN(r.opts.Model, ":", 2)
-			if len(parts) != 2 {
-				return nil, fmt.Errorf("invalid --model format %q: expected provider:model", r.opts.Model)
+		modelFlags := strings.Split(r.opts.Model, ",")
+		var models []ModelConfig
+		for _, flag := range modelFlags {
+			flag = strings.TrimSpace(flag)
+			if flag == "" {
+				continue
 			}
-			provider := parts[0]
-			// Check if provider exists in providers section
-			if r.suite.Providers != nil {
-				if _, ok := r.suite.Providers[provider]; ok {
-					// Provider exists but model not in matrix - create config from provider
-					model = &ModelConfig{
-						Provider: provider,
-						Model:    parts[1],
+			model := parseModelFlag(flag, r.suite.Engines.AI.ModelMatrix)
+			if model == nil {
+				// Parse the provider from the flag for the error message
+				parts := strings.SplitN(flag, ":", 2)
+				if len(parts) != 2 {
+					return nil, fmt.Errorf("invalid --model format %q: expected provider:model", flag)
+				}
+				provider := parts[0]
+				// Check if provider exists in providers section
+				if r.suite.Providers != nil {
+					if _, ok := r.suite.Providers[provider]; ok {
+						// Provider exists but model not in matrix - create config from provider
+						model = &ModelConfig{
+							Provider: provider,
+							Model:    parts[1],
+						}
 					}
 				}
+				if model == nil {
+					return nil, fmt.Errorf("provider %q not found in providers or model_matrix; add it to suite.yaml", provider)
+				}
 			}
-			if model == nil {
-				return nil, fmt.Errorf("provider %q not found in providers or model_matrix; add it to suite.yaml", provider)
-			}
+			models = append(models, r.resolveModelConfig(*model))
 		}
-		resolved := r.resolveModelConfig(*model)
-		return []ModelConfig{resolved}, nil
+		return models, nil
 	}
 
 	// Filter to only enabled models and resolve their configs

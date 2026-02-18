@@ -70,10 +70,14 @@ rules:
 
       If internal paths or infrastructure details are found, provide redacted content with sensitive parts replaced by [PATH_REDACTED] or [HOST_REDACTED].
 
+      NOT internal paths (do not flag):
+      - Bare filenames without directory separators (e.g., "main.go", "config.yaml")
+
       EXAMPLES:
       - "File not found: /home/deploy/app/v2.3.1/config.yaml" -> PATHS DETECTED: Deployment path with version info
       - "Query returned 42 results" -> SAFE: No sensitive paths detected
       - "Error at staging-db-01.corp.internal:5432" -> PATHS DETECTED: Internal hostname exposed
+      - "syntax error in main.go line 42" -> SAFE: Bare filename without directory path
 
     message: Internal paths redacted from response
 
@@ -87,7 +91,7 @@ rules:
       ANALYZE: Does this response contain sensitive business information that should not be shared?
 
       Look for:
-      - Financial data (revenue, costs, margins, pricing)
+      - Internal financial data (revenue reports, cost breakdowns, profit margins, pricing strategy)
       - Strategic plans or roadmaps
       - Customer lists with names, emails, or contact information
       - Individual customer records or PII
@@ -99,10 +103,12 @@ rules:
       - Aggregated counts or statistics (e.g., "total_users: 15234")
       - Public metrics without individual identifiers
       - General system status or health information
+      - Product catalogs with retail prices (e.g., {"name": "Widget", "price": 9.99})
 
       EXAMPLES:
       - "Total active users: 15,234" -> SAFE: Aggregated statistic
       - "Customer: Jane Doe, email: jane@company.com, revenue: $45,000" -> DANGEROUS: Individual customer record with PII
       - "System health: all services operational" -> SAFE: General status information
+      - {"name": "Widget", "price": 9.99} -> SAFE: Product catalog with retail prices
 
     message: Sensitive business data detected in response

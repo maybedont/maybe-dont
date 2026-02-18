@@ -39,6 +39,9 @@ engines:
         model: gpt-5 # Balanced performance and quality
         enabled: true
       - provider: openai
+        model: gpt-5.1 # Enhanced reasoning, between gpt-5 and gpt-5.2
+        enabled: true
+      - provider: openai
         model: gpt-5.2 # Flagship reasoning model, highest quality
         enabled: true
 
@@ -52,6 +55,11 @@ engines:
           temperature: 0.0
       - provider: anthropic
         model: claude-sonnet-4-5-20250929 # Balanced performance and quality
+        enabled: true
+        parameters:
+          temperature: 0.0
+      - provider: anthropic
+        model: claude-sonnet-4-6-20260217 # Improved reasoning, 1M context
         enabled: true
         parameters:
           temperature: 0.0
