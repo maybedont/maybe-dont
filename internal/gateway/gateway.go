@@ -254,6 +254,10 @@ func (g *Gateway) Start(ctx context.Context) error {
 		g.logger.Warn(ctx, "Failed to marshal config for debug print", zap.Error(err))
 	}
 
+	if len(g.config.DownstreamMCPServers) == 0 {
+		g.logger.Info(ctx, "No downstream MCP servers configured — gateway will serve native tools and CLI validation only")
+	}
+
 	// Initialize validation chain with policy handlers
 	// Note: Audit logging is now handled centrally in HandleToolCall
 	var handlers []ToolValidationHandler
