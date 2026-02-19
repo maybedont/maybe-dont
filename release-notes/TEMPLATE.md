@@ -36,20 +36,4 @@
 
 ## Installation
 
-**Homebrew:**
-
-```bash
-brew install maybedont/tap/maybe-dont
-```
-
-**Docker:**
-
-```bash
-docker pull ghcr.io/maybedont/maybe-dont:latest
-```
-
-**GitHub Releases:**
-
-<!-- Update the version in the URL below. -->
-
-Download pre-built binaries from the [GitHub releases page](https://github.com/maybedont/releases/releases/tag/vX.Y.Z).
+See the [Getting Started](https://maybedont.ai/docs/get-started/) guide for installation options including Homebrew, Docker, and pre-built binaries.

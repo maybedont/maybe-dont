@@ -45,6 +45,10 @@ bump-version:
 		echo ""; \
 		echo "  cp release-notes/TEMPLATE.md release-notes/$$TAG.md"; \
 		echo ""; \
+		echo "Or ask Claude to draft them:"; \
+		echo ""; \
+		echo "  write release notes for $$TAG — see release-notes/TEMPLATE.md and docs/specs/release-notes-process.md"; \
+		echo ""; \
 		echo "See docs/specs/release-notes-process.md for the full checklist."; \
 		exit 1; \
 	fi; \
