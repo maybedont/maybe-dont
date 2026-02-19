@@ -273,7 +273,7 @@ func TestActionValidationHandler_ToCallToolRequest(t *testing.T) {
 		req        *ActionValidationRequest
 		wantName   string
 		wantArgs   map[string]any
-		hasContext  bool
+		hasContext bool
 	}{
 		{
 			name: "basic request without context",
@@ -281,8 +281,8 @@ func TestActionValidationHandler_ToCallToolRequest(t *testing.T) {
 				Target:     "execute_bash",
 				Parameters: map[string]any{"command": "ls"},
 			},
-			wantName:  "execute_bash",
-			wantArgs:  map[string]any{"command": "ls"},
+			wantName:   "execute_bash",
+			wantArgs:   map[string]any{"command": "ls"},
 			hasContext: false,
 		},
 		{
@@ -295,7 +295,7 @@ func TestActionValidationHandler_ToCallToolRequest(t *testing.T) {
 					Summary: "listing files",
 				},
 			},
-			wantName:  "execute_bash",
+			wantName:   "execute_bash",
 			hasContext: true,
 		},
 		{
@@ -306,7 +306,7 @@ func TestActionValidationHandler_ToCallToolRequest(t *testing.T) {
 					Thought: "checking directory",
 				},
 			},
-			wantName:  "list_files",
+			wantName:   "list_files",
 			hasContext: true,
 		},
 	}
@@ -654,8 +654,8 @@ func newTestActionHandler(t *testing.T, celEngine *CELPolicyEngine, aiEngine *AI
 	sessionLogger := config.NewSessionLogger(logger)
 
 	return NewActionValidationHandler(ActionValidationHandlerConfig{
-		Logger:  sessionLogger,
-		Version: "1.0.0-test",
+		Logger:    sessionLogger,
+		Version:   "1.0.0-test",
 		CELEngine: celEngine,
 		AIEngine:  aiEngine,
 	})
@@ -778,10 +778,10 @@ func TestActionValidation_CrossEngineTruthTable(t *testing.T) {
 	// Engine result types used in the truth table
 	type engineResult string
 	const (
-		resultNone             engineResult = "none"              // Engine not configured (nil)
-		resultAllow            engineResult = "allow"             // Enforced allow rule matches
-		resultDenyEnforced     engineResult = "deny_enforced"     // Enforced deny rule matches
-		resultDenyAuditOnly    engineResult = "deny_audit_only"   // Audit_only deny rule matches
+		resultNone          engineResult = "none"            // Engine not configured (nil)
+		resultAllow         engineResult = "allow"           // Enforced allow rule matches
+		resultDenyEnforced  engineResult = "deny_enforced"   // Enforced deny rule matches
+		resultDenyAuditOnly engineResult = "deny_audit_only" // Audit_only deny rule matches
 	)
 
 	tests := []struct {
