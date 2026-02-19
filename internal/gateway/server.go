@@ -671,6 +671,19 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		)
 	}
 
+	// Register action validation endpoint
+	actionHandler := NewActionValidationHandler(ActionValidationHandlerConfig{
+		Logger:              g.logger,
+		Version:             g.version,
+		AuditWriter:         g.auditWriter,
+		CELEngine:           g.policyEngine,
+		AIEngine:            g.aiPolicyEngine,
+		MaxBlockingMs:       g.config.Validation.MaxBlockingMs,
+		MaxRuleEvaluationMs: g.config.Validation.MaxRuleEvaluationMs,
+	})
+	mux.Handle("/api/v1/action/validate", actionHandler)
+	g.logger.Info(ctx, "Action validation endpoint registered")
+
 	// Wrap with auth middleware
 	handler := AuthMiddleware(g.callerAuthConfig, mux)
 
@@ -772,6 +785,19 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 			zap.Int("validate_commands_count", len(g.config.CLIRequestValidation.ValidateCommands)),
 		)
 	}
+
+	// Register action validation endpoint
+	actionHandler := NewActionValidationHandler(ActionValidationHandlerConfig{
+		Logger:              g.logger,
+		Version:             g.version,
+		AuditWriter:         g.auditWriter,
+		CELEngine:           g.policyEngine,
+		AIEngine:            g.aiPolicyEngine,
+		MaxBlockingMs:       g.config.Validation.MaxBlockingMs,
+		MaxRuleEvaluationMs: g.config.Validation.MaxRuleEvaluationMs,
+	})
+	mux.Handle("/api/v1/action/validate", actionHandler)
+	g.logger.Info(ctx, "Action validation endpoint registered")
 
 	// Wrap with auth middleware
 	handler := AuthMiddleware(g.callerAuthConfig, mux)

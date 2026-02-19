@@ -208,6 +208,150 @@ func TestCELPolicyEngine_AuditOnlyMode(t *testing.T) {
 	}
 }
 
+// TestCELPolicyEngine_AuditModeBypass verifies that the CEL engine correctly sets
+// AuditModeBypass and RecommendedAction when audit_only deny rules fire.
+// This ensures the CEL engine behaves consistently with the AI engine.
+func TestCELPolicyEngine_AuditModeBypass(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	tests := []struct {
+		name                  string
+		policies              []config.Policy
+		defaultMode           config.PolicyMode
+		wantAllowed           bool
+		wantAuditModeBypass   bool
+		wantRecommendedAction config.PolicyAction
+	}{
+		{
+			name: "audit_only deny sets AuditModeBypass and RecommendedAction",
+			policies: []config.Policy{
+				{
+					Name:       "audit-deny",
+					Expression: "true",
+					Action:     config.PolicyActionDeny,
+					Message:    "Would deny",
+					Mode:       config.PolicyModeAuditOnly,
+				},
+			},
+			wantAllowed:           true,
+			wantAuditModeBypass:   true,
+			wantRecommendedAction: config.PolicyActionDeny,
+		},
+		{
+			name: "enforced deny does not set AuditModeBypass",
+			policies: []config.Policy{
+				{
+					Name:       "enforced-deny",
+					Expression: "true",
+					Action:     config.PolicyActionDeny,
+					Message:    "Blocked",
+				},
+			},
+			wantAllowed:           false,
+			wantAuditModeBypass:   false,
+			wantRecommendedAction: config.PolicyActionDeny,
+		},
+		{
+			name: "allow rule sets RecommendedAction allow",
+			policies: []config.Policy{
+				{
+					Name:       "allow-all",
+					Expression: "true",
+					Action:     config.PolicyActionAllow,
+					Message:    "Allowed",
+				},
+			},
+			wantAllowed:           true,
+			wantAuditModeBypass:   false,
+			wantRecommendedAction: config.PolicyActionAllow,
+		},
+		{
+			name: "top-level audit_only mode sets AuditModeBypass",
+			policies: []config.Policy{
+				{
+					Name:       "deny-all",
+					Expression: "true",
+					Action:     config.PolicyActionDeny,
+					Message:    "Would deny",
+				},
+			},
+			defaultMode:           config.PolicyModeAuditOnly,
+			wantAllowed:           true,
+			wantAuditModeBypass:   true,
+			wantRecommendedAction: config.PolicyActionDeny,
+		},
+		{
+			name: "no policies matched does not set AuditModeBypass",
+			policies: []config.Policy{
+				{
+					Name:       "deny-specific",
+					Expression: `request.params.name == "other_tool"`,
+					Action:     config.PolicyActionDeny,
+					Message:    "Would deny other_tool",
+				},
+			},
+			wantAllowed:           true,
+			wantAuditModeBypass:   false,
+			wantRecommendedAction: "", // No recommendation when no rules matched
+		},
+	}
+
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "test_tool"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, err := NewCELPolicyEngine(t.Context(), sessionLogger)
+			require.NoError(t, err)
+
+			err = engine.LoadPolicies(tt.policies, tt.defaultMode)
+			require.NoError(t, err)
+
+			results, err := engine.EvaluateToolCall(t.Context(), req, nil)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantAllowed, results.Allowed, "Allowed")
+			assert.Equal(t, tt.wantAuditModeBypass, results.AuditModeBypass, "AuditModeBypass")
+			assert.Equal(t, tt.wantRecommendedAction, results.RecommendedAction, "RecommendedAction")
+		})
+	}
+}
+
+// TestCELEngine_EvaluateCLICommand_AuditModeBypass verifies that the CLI evaluation
+// path also correctly sets AuditModeBypass for audit_only deny rules.
+func TestCELEngine_EvaluateCLICommand_AuditModeBypass(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	engine, err := NewCELPolicyEngine(t.Context(), sessionLogger)
+	require.NoError(t, err)
+
+	policies := []config.Policy{
+		{
+			Name:          "audit-deny-cli",
+			CLIExpression: `cli.command == "rm"`,
+			Action:        config.PolicyActionDeny,
+			Message:       "Would deny rm",
+			Mode:          config.PolicyModeAuditOnly,
+		},
+	}
+	err = engine.LoadPolicies(policies, "")
+	require.NoError(t, err)
+
+	results, err := engine.EvaluateCLICommand(t.Context(), &CLIValidationRequest{
+		Command:   "rm",
+		Arguments: []string{"-rf", "/"},
+	}, nil)
+	require.NoError(t, err)
+
+	assert.True(t, results.Allowed, "Should be allowed (audit_only)")
+	assert.True(t, results.AuditModeBypass, "AuditModeBypass should be set")
+	assert.Equal(t, config.PolicyActionDeny, results.RecommendedAction, "Should recommend deny")
+}
+
 func TestCELPolicyEngine_DuplicatePolicyNames(t *testing.T) {
 	// Tests that LoadPolicies rejects policies with duplicate names
 	logger := zaptest.NewLogger(t)

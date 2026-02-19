@@ -417,6 +417,9 @@ func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIVal
 			if celResults.RulesDetails != nil {
 				finalResults.RulesDetails = celResults.RulesDetails
 			}
+			if celResults.AuditModeBypass {
+				finalResults.AuditModeBypass = true
+			}
 			// If CEL denies and it's not audit-only, update final result
 			if !celResults.Allowed && !celResults.AuditModeBypass {
 				finalResults.Allowed = false
@@ -447,6 +450,9 @@ func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIVal
 			if aiResults.AsyncCompletion != nil {
 				finalResults.AsyncCompletion = aiResults.AsyncCompletion
 			}
+			if aiResults.AuditModeBypass {
+				finalResults.AuditModeBypass = true
+			}
 			// If AI denies and it's not audit-only, update final result
 			if !aiResults.Allowed && !aiResults.AuditModeBypass {
 				finalResults.Allowed = false
@@ -455,6 +461,13 @@ func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIVal
 				}
 			}
 		}
+	}
+
+	// AuditModeBypass only applies when the final action is allow (the deny was bypassed).
+	// If an enforced deny from any engine overrides it, clear the bypass flag —
+	// the request was denied, no bypass occurred.
+	if !finalResults.Allowed {
+		finalResults.AuditModeBypass = false
 	}
 
 	// Set default message if none set
