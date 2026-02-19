@@ -237,6 +237,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 	var decidingRule, decidingReason string
 	finalAction := "allow"
 	earlyTerminated := false
+	auditOnlyDeny := false
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
@@ -411,6 +412,8 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 					results.DenyCount++
 					earlyTerminated = true
 					break // Early termination on first enabled deny
+				} else {
+					auditOnlyDeny = true
 				}
 			} else if policy.Action == config.PolicyActionAllow {
 				// Only count toward final decision if mode is enabled (not audit_only)
@@ -433,11 +436,18 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 	if finalAction == "deny" {
 		results.Allowed = false
 		results.Message = decidingReason
+		results.RecommendedAction = config.PolicyActionDeny
+	} else if auditOnlyDeny {
+		results.Allowed = true
+		results.AuditModeBypass = true
+		results.RecommendedAction = config.PolicyActionDeny
+		results.Message = "CEL policy would deny but mode is audit_only"
 	} else if results.FailedOpen {
 		results.Allowed = true
 		results.Message = "CEL evaluation failed, allowing request (fail-open)"
 	} else if results.AllowCount > 0 {
 		results.Allowed = true
+		results.RecommendedAction = config.PolicyActionAllow
 		// Find the first allow message
 		for _, r := range results.Results {
 			if r.Action == config.PolicyActionAllow && r.Mode == "" && r.Message != "" {
@@ -518,6 +528,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 	var decidingRule, decidingReason string
 	finalAction := "allow"
 	earlyTerminated := false
+	auditOnlyDeny := false
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
@@ -700,6 +711,8 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 					results.DenyCount++
 					earlyTerminated = true
 					break // Early termination on first enabled deny
+				} else {
+					auditOnlyDeny = true
 				}
 			} else if policy.Action == config.PolicyActionAllow {
 				// Only count toward final decision if mode is enabled (not audit_only)
@@ -722,11 +735,18 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 	if finalAction == "deny" {
 		results.Allowed = false
 		results.Message = decidingReason
+		results.RecommendedAction = config.PolicyActionDeny
+	} else if auditOnlyDeny {
+		results.Allowed = true
+		results.AuditModeBypass = true
+		results.RecommendedAction = config.PolicyActionDeny
+		results.Message = "CEL policy would deny but mode is audit_only"
 	} else if results.FailedOpen {
 		results.Allowed = true
 		results.Message = "CEL evaluation failed, allowing request (fail-open)"
 	} else if results.AllowCount > 0 {
 		results.Allowed = true
+		results.RecommendedAction = config.PolicyActionAllow
 		// Find the first allow message
 		for _, r := range results.Results {
 			if r.Action == config.PolicyActionAllow && r.Mode == "" && r.Message != "" {

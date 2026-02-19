@@ -356,6 +356,7 @@ func (h *CLIValidationHandler) writeAuditEntry(
 
 	now := time.Now().UTC()
 	entry := &AuditEntry{
+		Source:            "cli",
 		ValidationStarted: validationStart.Format(time.RFC3339Nano),
 		CreatedAt:         now.Format(time.RFC3339Nano),
 		CLI: &AuditCLIInfo{
@@ -417,6 +418,9 @@ func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIVal
 			if celResults.RulesDetails != nil {
 				finalResults.RulesDetails = celResults.RulesDetails
 			}
+			if celResults.AuditModeBypass {
+				finalResults.AuditModeBypass = true
+			}
 			// If CEL denies and it's not audit-only, update final result
 			if !celResults.Allowed && !celResults.AuditModeBypass {
 				finalResults.Allowed = false
@@ -447,6 +451,9 @@ func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIVal
 			if aiResults.AsyncCompletion != nil {
 				finalResults.AsyncCompletion = aiResults.AsyncCompletion
 			}
+			if aiResults.AuditModeBypass {
+				finalResults.AuditModeBypass = true
+			}
 			// If AI denies and it's not audit-only, update final result
 			if !aiResults.Allowed && !aiResults.AuditModeBypass {
 				finalResults.Allowed = false
@@ -455,6 +462,13 @@ func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIVal
 				}
 			}
 		}
+	}
+
+	// AuditModeBypass only applies when the final action is allow (the deny was bypassed).
+	// If an enforced deny from any engine overrides it, clear the bypass flag —
+	// the request was denied, no bypass occurred.
+	if !finalResults.Allowed {
+		finalResults.AuditModeBypass = false
 	}
 
 	// Set default message if none set
@@ -471,6 +485,12 @@ func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIVal
 
 // convertToResults converts ValidationResults to CLIPolicyResult slice for the response.
 func (h *CLIValidationHandler) convertToResults(results ValidationResults) []CLIPolicyResult {
+	return convertValidationResults(results)
+}
+
+// convertValidationResults converts ValidationResults to CLIPolicyResult slice.
+// Shared by both CLI and action validation handlers.
+func convertValidationResults(results ValidationResults) []CLIPolicyResult {
 	policyResults := make([]CLIPolicyResult, 0, len(results.Results))
 	for _, r := range results.Results {
 		policyResults = append(policyResults, CLIPolicyResult{
@@ -519,6 +539,7 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 	auditArgs := h.getAuditArguments(req.Arguments)
 
 	entry := &AuditEntry{
+		Source:            "cli",
 		ValidationStarted: validationStart.Format(time.RFC3339Nano),
 		CreatedAt:         now.Format(time.RFC3339Nano),
 		CLI: &AuditCLIInfo{
@@ -550,6 +571,7 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 				// Update audit entry with complete AI results
 				if completion.AIDetails != nil && h.config.AuditWriter != nil {
 					asyncEntry := &AuditEntry{
+						Source:            "cli",
 						ValidationStarted: validationStart.Format(time.RFC3339Nano),
 						CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 						CLI: &AuditCLIInfo{

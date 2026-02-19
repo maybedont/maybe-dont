@@ -26,16 +26,19 @@ func NewAuditAIProvider(info AIProviderInfo) *AuditAIProvider {
 	}
 }
 
-// AuditEntry represents a single consolidated audit log entry for a tool call or CLI validation
+// AuditEntry represents a single consolidated audit log entry for a tool call, CLI validation, or action validation
 type AuditEntry struct {
+	// Source identifies which validation path produced this entry: "mcp", "cli", or "action"
+	Source string `json:"source,omitempty"`
+
 	// Temporal fields - all in RFC3339Nano format
 	ValidationStarted string `json:"validation_started"` // When we received the tool call and began validation
 	CreatedAt         string `json:"created_at"`         // When this audit entry was finalized and written
 
-	// Tool is populated for MCP tool calls (nil for CLI validations).
+	// Tool is populated for MCP tool calls and action validations (nil for CLI validations).
 	Tool *AuditToolInfo `json:"tool,omitempty"`
 
-	// CLI is populated for CLI command validations (nil for MCP tool calls).
+	// CLI is populated for CLI command validations (nil for MCP tool calls and action validations).
 	CLI *AuditCLIInfo `json:"cli,omitempty"`
 
 	// Upstream request metadata (about the incoming request, not the tool call)
@@ -83,11 +86,12 @@ type AuditCLIInfo struct {
 
 // UpstreamRequestInfo contains metadata about the incoming request
 type UpstreamRequestInfo struct {
-	RequestID string `json:"id,omitempty"`
-	ClientID  string `json:"client_id,omitempty"` // Caller identifier for audit attribution (from X-Maybe-Dont-Client-ID header)
-	SessionID string `json:"session_id,omitempty"`
-	ClientIP  string `json:"client_ip,omitempty"`
-	UserAgent string `json:"user_agent,omitempty"` // User-Agent header from incoming request
+	RequestID  string `json:"id,omitempty"`
+	ExternalID string `json:"external_id,omitempty"` // Caller-provided correlation ID (e.g., OpenHands action.id)
+	ClientID   string `json:"client_id,omitempty"`   // Caller identifier for audit attribution (from X-Maybe-Dont-Client-ID header)
+	SessionID  string `json:"session_id,omitempty"`
+	ClientIP   string `json:"client_ip,omitempty"`
+	UserAgent  string `json:"user_agent,omitempty"` // User-Agent header from incoming request
 }
 
 // AuditValidationInfo contains validation results for CEL and AI policies
@@ -147,11 +151,12 @@ type AuditContext struct {
 	responseAICompletion <-chan AsyncCompletion // For async response AI validation
 }
 
-// NewAuditContext creates a new audit context for a tool call
+// NewAuditContext creates a new audit context for an MCP tool call
 func NewAuditContext(prefixedToolName, clientName, toolName, sessionID, clientIP, requestID string) *AuditContext {
 	now := time.Now().UTC()
 	return &AuditContext{
 		entry: &AuditEntry{
+			Source:            "mcp",
 			ValidationStarted: now.Format(time.RFC3339Nano),
 			Tool: &AuditToolInfo{
 				Name:         toolName,

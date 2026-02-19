@@ -30,6 +30,7 @@ Each spec should have a `## Status` section near the top with one of these value
 |------|-------------|
 | [ai-validation-provider-agnostic](ai-validation-provider-agnostic.md) | Multi-provider AI validation (OpenAI, Anthropic, OpenAI-compatible) |
 | [mcp-sub-command](mcp-sub-command.md) | Move gateway server to `gateway` sub-command, update help text |
+| [openhands-integration](openhands-integration.md) | OpenHands security analyzer integration via `POST /api/v1/action/validate` endpoint |
 | [policy-evaluation-improvements](policy-evaluation-improvements.md) | Analysis of policy/test suite efficacy and phased improvement plan (Phases 1-2 complete, Phases 3-5 remaining) |
 
 ### Draft
