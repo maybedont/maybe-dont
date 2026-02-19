@@ -54,8 +54,8 @@ type AuditEntry struct {
 	ActionReason      string `json:"action_reason,omitempty"` // request_policy, response_policy, audit_mode, fail_open
 
 	// Timing
-	DurationMs     int64 `json:"duration_ms"`       // Total wall-clock time from validation_started to created_at
-	TotalBlockedMs int64 `json:"total_blocked_ms"`  // Time caller was blocked (validation + tool call)
+	DurationMs     int64 `json:"duration_ms"`      // Total wall-clock time from validation_started to created_at
+	TotalBlockedMs int64 `json:"total_blocked_ms"` // Time caller was blocked (validation + tool call)
 }
 
 // AuditToolInfo contains tool identification and execution details.
@@ -84,7 +84,7 @@ type AuditCLIInfo struct {
 // UpstreamRequestInfo contains metadata about the incoming request
 type UpstreamRequestInfo struct {
 	RequestID string `json:"id,omitempty"`
-	ClientID  string `json:"client_id,omitempty"`  // Caller identifier for audit attribution (from X-Maybe-Dont-Client-ID header)
+	ClientID  string `json:"client_id,omitempty"` // Caller identifier for audit attribution (from X-Maybe-Dont-Client-ID header)
 	SessionID string `json:"session_id,omitempty"`
 	ClientIP  string `json:"client_ip,omitempty"`
 	UserAgent string `json:"user_agent,omitempty"` // User-Agent header from incoming request
@@ -108,11 +108,11 @@ type AuditRulesResult struct {
 
 // AuditRulesRuleResult contains the result of a single deterministic rule
 type AuditRulesRuleResult struct {
-	Rule         string `json:"rule"`           // Rule name from definition
-	Action       string `json:"action"`         // Rule's configured action: "allow", "deny", or "redact"
-	Mode         string `json:"mode,omitempty"` // Only present if "audit_only"
-	Result       string `json:"result"`         // Effective decision: "allow", "deny", or "redact"
-	EvaluationMs int64  `json:"evaluation_ms"`  // Time for this rule to complete
+	Rule         string `json:"rule"`            // Rule name from definition
+	Action       string `json:"action"`          // Rule's configured action: "allow", "deny", or "redact"
+	Mode         string `json:"mode,omitempty"`  // Only present if "audit_only"
+	Result       string `json:"result"`          // Effective decision: "allow", "deny", or "redact"
+	EvaluationMs int64  `json:"evaluation_ms"`   // Time for this rule to complete
 	Error        string `json:"error,omitempty"` // Only present when result is "error"
 }
 

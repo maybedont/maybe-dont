@@ -147,27 +147,27 @@ func TestCELResponsePolicyEngine_Redaction(t *testing.T) {
 	sessionLogger := config.NewSessionLogger(logger)
 
 	tests := []struct {
-		name              string
-		content           string
-		pattern           string
-		replacement       string
-		expectedContains  string
+		name                string
+		content             string
+		pattern             string
+		replacement         string
+		expectedContains    string
 		expectedNotContains string
 	}{
 		{
-			name:              "redact entire content",
-			content:           "Sensitive data here",
-			pattern:           ".*",
-			replacement:       "[REDACTED]",
-			expectedContains:  "[REDACTED]",
+			name:                "redact entire content",
+			content:             "Sensitive data here",
+			pattern:             ".*",
+			replacement:         "[REDACTED]",
+			expectedContains:    "[REDACTED]",
 			expectedNotContains: "Sensitive",
 		},
 		{
-			name:              "redact email addresses",
-			content:           "Contact us at test@example.com",
-			pattern:           "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
-			replacement:       "[EMAIL]",
-			expectedContains:  "Contact us at [EMAIL]",
+			name:                "redact email addresses",
+			content:             "Contact us at test@example.com",
+			pattern:             "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
+			replacement:         "[EMAIL]",
+			expectedContains:    "Contact us at [EMAIL]",
 			expectedNotContains: "test@example.com",
 		},
 	}

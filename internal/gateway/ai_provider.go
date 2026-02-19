@@ -170,14 +170,14 @@ func (e *AIProviderError) Unwrap() error {
 
 // Error category constants for consistent error classification across providers.
 const (
-	ErrCategoryAPIError        = "api_error"
-	ErrCategoryTimeout         = "timeout"
-	ErrCategoryCanceled        = "canceled"
-	ErrCategoryParseError      = "parse_error"
-	ErrCategoryNoResponse      = "no_response"
-	ErrCategoryRateLimited     = "rate_limited"
-	ErrCategoryAuthError       = "auth_error"
-	ErrCategoryInvalidRequest  = "invalid_request"
+	ErrCategoryAPIError       = "api_error"
+	ErrCategoryTimeout        = "timeout"
+	ErrCategoryCanceled       = "canceled"
+	ErrCategoryParseError     = "parse_error"
+	ErrCategoryNoResponse     = "no_response"
+	ErrCategoryRateLimited    = "rate_limited"
+	ErrCategoryAuthError      = "auth_error"
+	ErrCategoryInvalidRequest = "invalid_request"
 )
 
 // Provider constants for configuration and factory selection.
@@ -240,4 +240,3 @@ func parseEndpointURL(endpoint string) (host, path string) {
 
 	return host, path
 }
-

@@ -236,7 +236,7 @@ type Policy struct {
 	// CLIExpression is the CEL expression used for CLI command validation.
 	// This expression has access to different context variables than MCPExpression.
 	CLIExpression string       `mapstructure:"cli_expression" yaml:"cli_expression"`
-	Action        PolicyAction `mapstructure:"action" yaml:"action"`   // allow or deny
+	Action        PolicyAction `mapstructure:"action" yaml:"action"` // allow or deny
 	Message       string       `mapstructure:"message" yaml:"message"`
 	Enabled       *bool        `mapstructure:"enabled" yaml:"enabled"` // Whether this rule runs (default: true)
 	Mode          PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only" or empty (default: follows top-level)
@@ -255,7 +255,7 @@ type AIPolicy struct {
 	Name        string       `mapstructure:"name"`
 	Description string       `mapstructure:"description"`
 	Prompt      string       `mapstructure:"prompt"`
-	Action      PolicyAction `mapstructure:"action"`  // allow or deny
+	Action      PolicyAction `mapstructure:"action"` // allow or deny
 	Message     string       `mapstructure:"message"`
 	Enabled     *bool        `mapstructure:"enabled"` // Whether this rule runs (default: true)
 	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or empty (default: follows top-level)
@@ -295,7 +295,7 @@ type AIResponsePolicy struct {
 	Name        string       `mapstructure:"name"`
 	Description string       `mapstructure:"description"`
 	Prompt      string       `mapstructure:"prompt"`
-	Action      PolicyAction `mapstructure:"action"`  // allow, deny, or redact
+	Action      PolicyAction `mapstructure:"action"` // allow, deny, or redact
 	Message     string       `mapstructure:"message"`
 	Enabled     *bool        `mapstructure:"enabled"` // Whether this rule runs (default: true)
 	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or empty (default: follows top-level)
@@ -323,32 +323,32 @@ type ResponseValidationConfig struct {
 
 // CELRequestValidationConfig for deterministic CEL-based request validation
 type CELRequestValidationConfig struct {
-	Enabled   bool       `mapstructure:"enabled"`    // Whether this validation phase runs (default: true)
-	Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
+	Enabled   bool       `mapstructure:"enabled"` // Whether this validation phase runs (default: true)
+	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only" or empty (default: audit_only)
 	RulesFile string     `mapstructure:"rules_file"`
 	Rules     []Policy   `mapstructure:"rules"`
 }
 
 // AIRequestValidationConfig for AI-powered request validation
 type AIRequestValidationConfig struct {
-	Enabled   bool       `mapstructure:"enabled"`    // Whether this validation phase runs (default: true)
-	Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
+	Enabled   bool       `mapstructure:"enabled"` // Whether this validation phase runs (default: true)
+	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only" or empty (default: audit_only)
 	RulesFile string     `mapstructure:"rules_file"`
 	Rules     []AIPolicy `mapstructure:"rules"`
 }
 
 // CELResponseValidationConfig for deterministic CEL-based response validation
 type CELResponseValidationConfig struct {
-	Enabled   bool             `mapstructure:"enabled"`    // Whether this validation phase runs (default: false)
-	Mode      PolicyMode       `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
+	Enabled   bool             `mapstructure:"enabled"` // Whether this validation phase runs (default: false)
+	Mode      PolicyMode       `mapstructure:"mode"`    // "audit_only" or empty (default: audit_only)
 	RulesFile string           `mapstructure:"rules_file"`
 	Rules     []ResponsePolicy `mapstructure:"rules"`
 }
 
 // AIResponseValidationConfig for AI-powered response validation
 type AIResponseValidationConfig struct {
-	Enabled   bool               `mapstructure:"enabled"`    // Whether this validation phase runs (default: false)
-	Mode      PolicyMode         `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only)
+	Enabled   bool               `mapstructure:"enabled"` // Whether this validation phase runs (default: false)
+	Mode      PolicyMode         `mapstructure:"mode"`    // "audit_only" or empty (default: audit_only)
 	RulesFile string             `mapstructure:"rules_file"`
 	Rules     []AIResponsePolicy `mapstructure:"rules"`
 }
@@ -667,22 +667,22 @@ func applyMapFromEnv(field reflect.Value, envKeyPrefix string) {
 // These are derived from the mapstructure tags and used to identify where the client name
 // ends and the field path begins when parsing environment variables.
 var knownClientConfigFields = map[string]bool{
-	"TYPE":                           true,
-	"URL":                            true,
-	"DOWNSTREAM_URL":                 true,
-	"COMMAND":                        true,
-	"ARGS":                           true,
-	"COMMAND_ARGS":                   true,
-	"STARTUP_TIMEOUT_MS":             true,
-	"INITIALIZATION_RETRIES":         true,
-	"RETRY_DELAY_MS":                 true,
-	"CAPABILITY_DISCOVERY_DELAY_MS":  true,
-	"CAPABILITY_DISCOVERY_RETRIES":   true,
-	"CAPABILITY_RETRY_DELAY_MS":      true,
-	"AUTH_PASS_THROUGH_ENABLED":      true,
-	"AUTH_PASS_THROUGH_HEADERS":      true, // compact format
-	"SSE_HEADERS":                    true, // prefix for SSE headers
-	"HTTP_HEADERS":                   true, // prefix for HTTP headers
+	"TYPE":                          true,
+	"URL":                           true,
+	"DOWNSTREAM_URL":                true,
+	"COMMAND":                       true,
+	"ARGS":                          true,
+	"COMMAND_ARGS":                  true,
+	"STARTUP_TIMEOUT_MS":            true,
+	"INITIALIZATION_RETRIES":        true,
+	"RETRY_DELAY_MS":                true,
+	"CAPABILITY_DISCOVERY_DELAY_MS": true,
+	"CAPABILITY_DISCOVERY_RETRIES":  true,
+	"CAPABILITY_RETRY_DELAY_MS":     true,
+	"AUTH_PASS_THROUGH_ENABLED":     true,
+	"AUTH_PASS_THROUGH_HEADERS":     true, // compact format
+	"SSE_HEADERS":                   true, // prefix for SSE headers
+	"HTTP_HEADERS":                  true, // prefix for HTTP headers
 }
 
 // parseCompactHeaders parses the compact header format: "source:target[:format][;...]"
@@ -1024,7 +1024,7 @@ func ensureDir(path string) bool {
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		return true
 	}
-	if err := os.MkdirAll(path, 0700); err != nil {
+	if err := os.MkdirAll(path, 0o700); err != nil {
 		return false
 	}
 	return true
@@ -1035,12 +1035,12 @@ func ensureDir(path string) bool {
 // This is used to fail fast at startup rather than on first write.
 func ensureFileWritable(path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("cannot create directory %s: %w", dir, err)
 	}
 
 	// Try to open the file for appending (creates if doesn't exist)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -1096,13 +1096,13 @@ func ResolveLogDir(logDir string) (string, error) {
 	// Priority 3: XDG_STATE_HOME/maybe-dont
 	if xdgState := os.Getenv("XDG_STATE_HOME"); xdgState != "" {
 		xdgPath := filepath.Join(xdgState, "maybe-dont")
-		_ = os.MkdirAll(xdgPath, 0700) // Best effort, 0700 for security
+		_ = os.MkdirAll(xdgPath, 0o700) // Best effort, 0700 for security
 		return xdgPath, nil
 	}
 
 	// Priority 4: XDG default ($HOME/.local/state/maybe-dont)
 	xdgDefault := filepath.Join(homeDir, ".local", "state", "maybe-dont")
-	_ = os.MkdirAll(xdgDefault, 0700) // Best effort, 0700 for security
+	_ = os.MkdirAll(xdgDefault, 0o700) // Best effort, 0700 for security
 	return xdgDefault, nil
 }
 

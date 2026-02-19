@@ -116,7 +116,7 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 	finalResults.Results = make([]ResponseValidationResult, 0)
 	finalResults.Allowed = true // Default to allowed
 
-	var currentResult = result
+	currentResult := result
 
 	for _, handler := range c.handlers {
 		// Audit trail: 2 : Log the HandleResponse : Response audit log : github__search_pull_requests

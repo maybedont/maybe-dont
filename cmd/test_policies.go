@@ -12,12 +12,12 @@ import (
 
 // Exit codes as defined in the spec
 const (
-	ExitSuccess             = 0
-	ExitTestsFailed         = 1
-	ExitSchemaValidation    = 2
-	ExitPolicyIntegrity     = 3
-	ExitPathResolution      = 4
-	ExitMoreTestsRemain     = 5
+	ExitSuccess          = 0
+	ExitTestsFailed      = 1
+	ExitSchemaValidation = 2
+	ExitPolicyIntegrity  = 3
+	ExitPathResolution   = 4
+	ExitMoreTestsRemain  = 5
 )
 
 // CLI flags for test policies command
@@ -197,7 +197,7 @@ func runTestPolicies(cmd *cobra.Command, args []string) error {
 	// Create state file directory if it doesn't exist
 	if resolvedStateFile != "" {
 		stateDir := filepath.Dir(resolvedStateFile)
-		if err := os.MkdirAll(stateDir, 0700); err != nil {
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
 			return fmt.Errorf("failed to create state directory %s: %w", stateDir, err)
 		}
 	}

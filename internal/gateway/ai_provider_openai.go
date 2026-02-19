@@ -21,7 +21,7 @@ const openAIChatCompletionsPath = "/chat/completions"
 // openAIProvider implements AIProviderClient using the OpenAI REST API.
 // This adapter is used for the "openai" provider (with default or custom base URL).
 type openAIProvider struct {
-	endpoint    string            // Full endpoint URL (base + path for openai)
+	endpoint    string // Full endpoint URL (base + path for openai)
 	apiKey      string
 	model       string
 	parameters  map[string]any

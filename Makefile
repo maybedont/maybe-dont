@@ -10,7 +10,7 @@ DATE = $(shell date -u '+%Y-%m-%d %H:%M:%S')
 METRICS_DATASET ?= $(shell echo $$METRICS_DATASET)
 METRICS_API_TOKEN ?= $(shell echo $$METRICS_API_TOKEN)
 
-.PHONY: all build clean lint test bump-version snapshot run docker-build docker-run setup
+.PHONY: all build clean fmt lint test bump-version snapshot run docker-build docker-run setup
 
 all: build
 
@@ -19,6 +19,9 @@ build:
 
 clean:
 	rm -f $(BINARY_NAME)
+
+fmt:
+	golangci-lint fmt
 
 lint:
 	golangci-lint run

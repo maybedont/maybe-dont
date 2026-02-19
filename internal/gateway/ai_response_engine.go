@@ -154,11 +154,11 @@ type aiResponseRuleResult struct {
 // When budget is nil, no blocking time is tracked.
 //
 // Async behavior for audit_only policies:
-// - When ALL policies are audit_only, the function returns immediately with Allowed=true
-//   and a non-nil AsyncCompletion channel. Results are collected in the background.
-// - When there are ENABLED policies, the function blocks until all enabled policies complete
-//   (or one denies). If audit_only policies are still running, they continue in the background
-//   and results are sent on the AsyncCompletion channel.
+//   - When ALL policies are audit_only, the function returns immediately with Allowed=true
+//     and a non-nil AsyncCompletion channel. Results are collected in the background.
+//   - When there are ENABLED policies, the function blocks until all enabled policies complete
+//     (or one denies). If audit_only policies are still running, they continue in the background
+//     and results are sent on the AsyncCompletion channel.
 func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.CallToolRequest, toolResult *mcp.CallToolResult, budget *BlockingBudget) (ResponseValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -527,7 +527,12 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 				Message:         ruleResult.message,
 				RedactedContent: ruleResult.redacted,
 				DurationMs:      ruleResult.evaluationMs,
-				Error:           func() string { if ruleResult.err != nil { return formatAuditError(ruleResult.errCategory, ruleResult.err) }; return "" }(),
+				Error: func() string {
+					if ruleResult.err != nil {
+						return formatAuditError(ruleResult.errCategory, ruleResult.err)
+					}
+					return ""
+				}(),
 			})
 
 			// Log results

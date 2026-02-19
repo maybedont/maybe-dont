@@ -28,13 +28,13 @@ const anthropicDefaultMaxTokens = 256
 
 // anthropicProvider implements AIProviderClient using the Anthropic REST API.
 type anthropicProvider struct {
-	endpoint    string            // Full endpoint URL (base + path)
-	apiKey      string
-	model       string
-	parameters  map[string]any
-	headers     map[string]string
-	httpClient  *http.Client
-	info        AIProviderInfo
+	endpoint   string // Full endpoint URL (base + path)
+	apiKey     string
+	model      string
+	parameters map[string]any
+	headers    map[string]string
+	httpClient *http.Client
+	info       AIProviderInfo
 }
 
 // newAnthropicProvider creates a new Anthropic provider adapter.

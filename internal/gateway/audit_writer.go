@@ -25,11 +25,11 @@ type AuditWriter interface {
 // JSONLAuditWriter writes audit entries as JSON Lines (one JSON object per line)
 // with optional filtering and log rotation support.
 type JSONLAuditWriter struct {
-	writer     io.WriteCloser
-	filter     string // "all" or "deny_only"
-	mu         sync.Mutex
-	isStdout   bool
-	isStderr   bool
+	writer   io.WriteCloser
+	filter   string // "all" or "deny_only"
+	mu       sync.Mutex
+	isStdout bool
+	isStderr bool
 }
 
 // NewJSONLAuditWriter creates a new JSONL audit writer.
@@ -153,12 +153,12 @@ func isAbsolutePath(path string) bool {
 // This is used to fail fast at startup rather than on first write.
 func ensureAuditFileWritable(path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("cannot create directory %s: %w", dir, err)
 	}
 
 	// Try to open the file for appending (creates if doesn't exist)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}

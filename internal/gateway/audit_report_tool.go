@@ -305,7 +305,6 @@ func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeS
 	return entries, stats, nil
 }
 
-
 // generateAIReport calls the AI to analyze the audit entries
 func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []AuditLogEntry, stats AuditReportStatistics, params AuditReportRequest) (*AuditReportResponse, error) {
 	// Prepare a summary of entries for the AI (we don't send raw entries to avoid token limits)

@@ -822,8 +822,11 @@ func TestPassRate(t *testing.T) {
 		{
 			name: "mixed results",
 			history: []RunOutcome{
-				{Status: "passed"}, {Status: "failed"}, {Status: "passed"},
-				{Status: "errored"}, {Status: "passed"},
+				{Status: "passed"},
+				{Status: "failed"},
+				{Status: "passed"},
+				{Status: "errored"},
+				{Status: "passed"},
 			},
 			expectedRate: 0.6,
 			expectedRuns: 5,
@@ -960,7 +963,7 @@ func TestV1StateUpgrade(t *testing.T) {
 			}
 		}
 	}`
-	require.NoError(t, os.WriteFile(statePath, []byte(v1State), 0644))
+	require.NoError(t, os.WriteFile(statePath, []byte(v1State), 0o644))
 
 	// Load with v2 code
 	sm, err := NewStateManager(statePath, "test-suite", "dev", 0)
