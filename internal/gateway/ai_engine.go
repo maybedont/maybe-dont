@@ -172,11 +172,11 @@ type aiRuleResult struct {
 // When budget is nil, no blocking time is tracked and a default timeout is used.
 //
 // Async behavior for audit_only policies:
-// - When ALL policies are audit_only, the function returns immediately with Allowed=true
-//   and a non-nil AsyncCompletion channel. Results are collected in the background.
-// - When there are ENABLED policies, the function blocks until all enabled policies complete
-//   (or one denies). If audit_only policies are still running, they continue in the background
-//   and results are sent on the AsyncCompletion channel.
+//   - When ALL policies are audit_only, the function returns immediately with Allowed=true
+//     and a non-nil AsyncCompletion channel. Results are collected in the background.
+//   - When there are ENABLED policies, the function blocks until all enabled policies complete
+//     (or one denies). If audit_only policies are still running, they continue in the background
+//     and results are sent on the AsyncCompletion channel.
 func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest, budget *BlockingBudget) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -416,10 +416,10 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 	var decidingReason string
 	var blockedMs int64
 	var decided bool
-	var finalAction = "allow"
-	var auditOnlyDeny bool    // Track if any audit_only policy returned deny
-	var failedOpen bool       // Track if we failed open due to errors
-	var lastRequestID string  // Track last provider request ID for audit
+	finalAction := "allow"
+	var auditOnlyDeny bool   // Track if any audit_only policy returned deny
+	var failedOpen bool      // Track if we failed open due to errors
+	var lastRequestID string // Track last provider request ID for audit
 
 	// BlockingBudget is required - fail fast if not provided
 	if budget == nil {
@@ -938,7 +938,7 @@ func (e *AIPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValidat
 	var decidingReason string
 	var blockedMs int64
 	var decided bool
-	var finalAction = "allow"
+	finalAction := "allow"
 	var auditOnlyDeny bool   // Track if any audit_only policy returned deny
 	var failedOpen bool      // Track if we failed open due to errors
 	var lastRequestID string // Track last provider request ID for audit

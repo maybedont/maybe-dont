@@ -482,7 +482,6 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		zap.String("client", clientName),
 	)
 	validationResults, err := g.ValidateToolCall(validationCtx, req)
-
 	if err != nil {
 		// Validation error - don't write audit log (infrastructure error)
 		return nil, fmt.Errorf("request validation failed: %v", err)

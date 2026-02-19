@@ -15,27 +15,27 @@ import (
 
 // TestResult represents the result of a single test case execution.
 type TestResult struct {
-	CaseID      string
-	Title       string
-	Phase       string // "request", "response", or "both"
-	Engine      string // "cel" or "ai"
-	Model       string // Model key for AI tests (e.g., "anthropic:claude-haiku"), empty for CEL
-	Status      string // passed, failed, errored, skipped
-	ElapsedMs   int64
-	TestNumber  int    // 1-based index within the current engine/model section
-	TestTotal   int    // total tests in the current engine/model section
-	Expected    ExpectedResult
-	Actual      ActualResult
+	CaseID          string
+	Title           string
+	Phase           string // "request", "response", or "both"
+	Engine          string // "cel" or "ai"
+	Model           string // Model key for AI tests (e.g., "anthropic:claude-haiku"), empty for CEL
+	Status          string // passed, failed, errored, skipped
+	ElapsedMs       int64
+	TestNumber      int // 1-based index within the current engine/model section
+	TestTotal       int // total tests in the current engine/model section
+	Expected        ExpectedResult
+	Actual          ActualResult
 	Failures        []string
 	Warnings        []string // Non-fatal issues (e.g., unexpected triggering policies in non-strict mode)
 	ExtraPolicyOnly bool     // true when the only failure is unexpected triggering policies (decision was correct)
 	Error           *TestError
 
 	// Pass rate from history (populated when state manager is available and history has 2+ entries)
-	PassRate                    float64
-	PassRateRuns                int
-	PassRateSinceChange         float64
-	PassRateSinceChangeRuns     int
+	PassRate                float64
+	PassRateRuns            int
+	PassRateSinceChange     float64
+	PassRateSinceChangeRuns int
 }
 
 // ExpectedResult contains the expected outcomes from the test case.
@@ -71,12 +71,12 @@ type TestError struct {
 
 // Executor runs test cases against loaded policies.
 type Executor struct {
-	suite           *Suite
-	testCases       []TestCase
-	celEngine       *gateway.CELPolicyEngine
+	suite             *Suite
+	testCases         []TestCase
+	celEngine         *gateway.CELPolicyEngine
 	celResponseEngine *gateway.CELResponsePolicyEngine
-	logger          *config.SessionLogger
-	includeDisabled bool
+	logger            *config.SessionLogger
+	includeDisabled   bool
 }
 
 // NewExecutor creates an executor for running test cases.
@@ -543,7 +543,7 @@ func decisionSeverity(decision string) int {
 // from both phases are combined.
 func mergeActualResults(request, response ActualResult) ActualResult {
 	merged := ActualResult{
-		Confidence:      request.Confidence,
+		Confidence:       request.Confidence,
 		PoliciesExecuted: append(request.PoliciesExecuted, response.PoliciesExecuted...),
 	}
 

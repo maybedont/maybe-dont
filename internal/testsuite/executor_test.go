@@ -9,11 +9,11 @@ import (
 
 func TestCompareResults(t *testing.T) {
 	tests := []struct {
-		name            string
-		expected        ExpectedResult
-		actual          ActualResult
+		name             string
+		expected         ExpectedResult
+		actual           ActualResult
 		expectedFailures int
-		wantContains    []string
+		wantContains     []string
 	}{
 		{
 			name: "decisions match - allow",
@@ -44,7 +44,7 @@ func TestCompareResults(t *testing.T) {
 				Decision: "allow",
 			},
 			expectedFailures: 1,
-			wantContains:    []string{"expected \"deny\", actual \"allow\""},
+			wantContains:     []string{"expected \"deny\", actual \"allow\""},
 		},
 		{
 			name: "policy decision match",
@@ -77,7 +77,7 @@ func TestCompareResults(t *testing.T) {
 				},
 			},
 			expectedFailures: 1,
-			wantContains:    []string{"policy \"block-dangerous\": expected \"deny\", actual \"allow\""},
+			wantContains:     []string{"policy \"block-dangerous\": expected \"deny\", actual \"allow\""},
 		},
 		{
 			name: "expected policy not executed",
@@ -94,7 +94,7 @@ func TestCompareResults(t *testing.T) {
 				},
 			},
 			expectedFailures: 1,
-			wantContains:    []string{"policy \"missing-policy\" not executed (check if enabled or conditions match)"},
+			wantContains:     []string{"policy \"missing-policy\" not executed (check if enabled or conditions match)"},
 		},
 		{
 			name: "redacted content matches",
@@ -119,7 +119,7 @@ func TestCompareResults(t *testing.T) {
 				RedactedContent: "User: John, SSN: 123-45-6789",
 			},
 			expectedFailures: 1,
-			wantContains:    []string{"redacted content mismatch"},
+			wantContains:     []string{"redacted content mismatch"},
 		},
 		{
 			name: "expected redacted content but none returned",
@@ -132,7 +132,7 @@ func TestCompareResults(t *testing.T) {
 				RedactedContent: "",
 			},
 			expectedFailures: 1,
-			wantContains:    []string{"expected redacted content but none was returned"},
+			wantContains:     []string{"expected redacted content but none was returned"},
 		},
 		{
 			name: "no expected redacted content - skip validation",
@@ -174,13 +174,13 @@ func TestCompareResults(t *testing.T) {
 // every policy returns "allow" by default and that's not a meaningful trigger.
 func TestCompareResults_StrictPolicyMatch(t *testing.T) {
 	tests := []struct {
-		name             string
-		expected         ExpectedResult
-		actual           ActualResult
-		strict           bool
-		wantFailures     int
-		wantWarnings     int
-		wantContains     []string // substrings expected in failures or warnings
+		name         string
+		expected     ExpectedResult
+		actual       ActualResult
+		strict       bool
+		wantFailures int
+		wantWarnings int
+		wantContains []string // substrings expected in failures or warnings
 	}{
 		{
 			name: "strict mode: unexpected triggering policy is a failure",
@@ -544,7 +544,7 @@ func TestCompareResults_ExtraPolicyOnly(t *testing.T) {
 			actual: ActualResult{
 				Decision: "deny",
 				PoliciesExecuted: []PolicyResult{
-					{PolicyName: "block-exec", Decision: "allow"},  // mismatch on expected policy
+					{PolicyName: "block-exec", Decision: "allow"},   // mismatch on expected policy
 					{PolicyName: "block-network", Decision: "deny"}, // unexpected trigger
 				},
 			},

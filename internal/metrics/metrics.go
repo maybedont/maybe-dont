@@ -60,8 +60,8 @@ type Collector struct {
 	datasetName        string
 	apiToken           string
 	optedOut           bool
-	configFilePath     string        // Path to installation ID config file
-	stateFilePath      string        // Path to metrics state cache file
+	configFilePath     string // Path to installation ID config file
+	stateFilePath      string // Path to metrics state cache file
 	logger             *zap.Logger
 	dirty              bool          // Track if state has changed since last flush
 	stopFlush          chan struct{} // Signal to stop background flush goroutine
@@ -161,7 +161,7 @@ func getStateDir() (string, error) {
 	// Try XDG_STATE_HOME first
 	if stateHome := os.Getenv("XDG_STATE_HOME"); stateHome != "" {
 		dir := filepath.Join(stateHome, "maybe-dont")
-		if err := os.MkdirAll(dir, 0700); err == nil {
+		if err := os.MkdirAll(dir, 0o700); err == nil {
 			return dir, nil
 		}
 	}
@@ -171,7 +171,7 @@ func getStateDir() (string, error) {
 	if err != nil {
 		// Fallback to current directory
 		dir := "maybe-dont-state"
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", fmt.Errorf("failed to create state directory: %w", err)
 		}
 		return dir, nil
@@ -179,10 +179,10 @@ func getStateDir() (string, error) {
 
 	// Use ~/.local/state/maybe-dont (XDG default)
 	dir := filepath.Join(homeDir, ".local", "state", "maybe-dont")
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		// Fallback to current directory
 		dir := "maybe-dont-state"
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", fmt.Errorf("failed to create state directory: %w", err)
 		}
 		return dir, nil
@@ -247,7 +247,7 @@ func migrateFromOldLocations(stateDir string, logger *zap.Logger) error {
 					continue
 				}
 
-				if err := os.WriteFile(newPath, data, 0600); err != nil {
+				if err := os.WriteFile(newPath, data, 0o600); err != nil {
 					logger.Debug("Failed to write file to new location",
 						zap.String("new_path", newPath),
 						zap.Error(err))
@@ -331,7 +331,7 @@ func (c *Collector) saveInstallationID() error {
 		return fmt.Errorf("failed to marshal installation config: %w", err)
 	}
 
-	if err := os.WriteFile(c.configFilePath, data, 0600); err != nil {
+	if err := os.WriteFile(c.configFilePath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write installation config file: %w", err)
 	}
 
@@ -384,7 +384,7 @@ func (c *Collector) saveState() error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	if err := os.WriteFile(c.stateFilePath, data, 0600); err != nil {
+	if err := os.WriteFile(c.stateFilePath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write state file: %w", err)
 	}
 

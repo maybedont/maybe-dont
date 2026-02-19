@@ -61,7 +61,7 @@ func TestGetAuditLog_EmptyFile(t *testing.T) {
 	// Create a temporary empty file
 	tmpDir := t.TempDir()
 	auditPath := filepath.Join(tmpDir, "empty_audit.log")
-	err := os.WriteFile(auditPath, []byte{}, 0644)
+	err := os.WriteFile(auditPath, []byte{}, 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -101,7 +101,7 @@ func TestGetAuditLog_FileWithOnlyWhitespace(t *testing.T) {
 	// Create a file with only whitespace and empty lines
 	tmpDir := t.TempDir()
 	auditPath := filepath.Join(tmpDir, "whitespace_audit.log")
-	err := os.WriteFile(auditPath, []byte("\n\n   \n\t\n"), 0644)
+	err := os.WriteFile(auditPath, []byte("\n\n   \n\t\n"), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -150,7 +150,7 @@ func TestGetAuditLog_WithValidEntries(t *testing.T) {
 	for _, entry := range entries {
 		content += entry + "\n"
 	}
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -197,7 +197,7 @@ not valid json at all
 {incomplete json
 {"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"test3","client":"test","prefixed_name":"test__test3"},"action":"allow"}}
 `, now-2, now-1, now)
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -243,7 +243,7 @@ func TestGetAuditLog_WithOldFormatEntries(t *testing.T) {
 {"level":"info","ts":%f,"msg":"Tool call audit","audit":{"status":"denied","request":{"params":{"name":"another_old_tool"}}}}
 {"level":"info","ts":%f,"msg":"Tool call audit","audit":{"tool":{"name":"new_tool2","client":"test","prefixed_name":"test__new_tool2"},"action":"deny"}}
 `, now-3, now-2, now-1, now)
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -349,7 +349,7 @@ func TestGetAuditLog_AllEntriesOlderThanTimeWindow(t *testing.T) {
 	for _, entry := range entries {
 		content += entry + "\n"
 	}
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -437,7 +437,7 @@ func TestGetAuditLog_WithFiltering(t *testing.T) {
 	for _, entry := range entries {
 		content += entry + "\n"
 	}
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -545,7 +545,7 @@ func TestGetAuditLog_LineSpanningMultipleChunks(t *testing.T) {
 	normalEntry2 := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"another_small_tool","client":"test","prefixed_name":"test__another_small_tool"},"action":"deny"}}`, now)
 
 	content := normalEntry1 + "\n" + largeEntry + "\n" + normalEntry2 + "\n"
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	// Verify the file is larger than 64KB
@@ -604,7 +604,7 @@ func TestGetAuditLog_SingleLineLargerThan64KB(t *testing.T) {
 	largeEntry := fmt.Sprintf(`{"level":"info","ts":%f,"msg":"Tool call audit","logger":"audit","audit":{"tool":{"name":"single_large_tool","client":"test","prefixed_name":"test__single_large_tool"},"action":"allow","request":{"params":{"data":"%s"}}}}`, now, string(largeParams))
 
 	content := largeEntry + "\n"
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -649,7 +649,7 @@ func TestGetAuditLog_NoNewlineAtEOF(t *testing.T) {
 	}
 	// No trailing newline after last entry
 	content := entries[0] + "\n" + entries[1]
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -758,7 +758,7 @@ func TestGetAuditLog_TimeRangeWithFractionalTimestamps(t *testing.T) {
 	for _, entry := range entries {
 		content += entry + "\n"
 	}
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}

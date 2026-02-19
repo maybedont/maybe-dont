@@ -71,7 +71,7 @@ func TestWriteDefaultsIfMissing_SkipsWhenConfigExists(t *testing.T) {
 	// Create an existing config file with custom content
 	existingContent := "# My custom configuration\nlogger:\n  level: debug\n"
 	existingPath := filepath.Join(tmpDir, "maybe-dont.yaml")
-	err := os.WriteFile(existingPath, []byte(existingContent), 0600)
+	err := os.WriteFile(existingPath, []byte(existingContent), 0o600)
 	require.NoError(t, err)
 
 	// Run WriteDefaultsIfMissing
@@ -108,7 +108,7 @@ func TestWriteDefaultsIfMissing_FilePermissions(t *testing.T) {
 		info, err := os.Stat(path)
 		require.NoError(t, err)
 		// Files should be 0600 (owner read/write only) for security
-		require.Equal(t, os.FileMode(0600), info.Mode().Perm(),
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
 			"File %s should have 0600 permissions", f.Filename)
 	}
 }
@@ -148,9 +148,9 @@ func TestWriteDefaultsIfMissing_NonWritableDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Make directory read-only
-	err := os.Chmod(tmpDir, 0500)
+	err := os.Chmod(tmpDir, 0o500)
 	require.NoError(t, err)
-	defer func() { _ = os.Chmod(tmpDir, 0755) }() // Restore for cleanup
+	defer func() { _ = os.Chmod(tmpDir, 0o755) }() // Restore for cleanup
 
 	// Should succeed but create no files (non-fatal write failures)
 	created, err := WriteDefaultsIfMissing(tmpDir)
@@ -165,7 +165,7 @@ func TestDumpDefaults_SkipsExistingByDefault(t *testing.T) {
 	// Create an existing config file with custom content
 	existingContent := "# My custom configuration\n"
 	existingPath := filepath.Join(tmpDir, "maybe-dont.yaml")
-	err := os.WriteFile(existingPath, []byte(existingContent), 0600)
+	err := os.WriteFile(existingPath, []byte(existingContent), 0o600)
 	require.NoError(t, err)
 
 	// Run DumpDefaults without force
@@ -192,7 +192,7 @@ func TestDumpDefaults_OverwritesWithForce(t *testing.T) {
 	// Create an existing config file with custom content
 	existingContent := "# My custom configuration\n"
 	existingPath := filepath.Join(tmpDir, "maybe-dont.yaml")
-	err := os.WriteFile(existingPath, []byte(existingContent), 0600)
+	err := os.WriteFile(existingPath, []byte(existingContent), 0o600)
 	require.NoError(t, err)
 
 	// Run DumpDefaults with force

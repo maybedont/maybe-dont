@@ -10,12 +10,12 @@ import (
 
 // JSONOutput represents the full JSON output structure.
 type JSONOutput struct {
-	Suite           JSONSuiteInfo                `json:"suite"`
-	PoliciesLoaded  JSONPoliciesLoaded           `json:"policies_loaded"`
-	ResultsByModel  []JSONModelResults           `json:"results_by_model"`
-	OverallSummary  JSONOverallSummary           `json:"overall_summary"`
-	ModelComparison []JSONModelComparisonEntry   `json:"model_comparison,omitempty"`
-	Coverage        *JSONCoverage                `json:"coverage,omitempty"`
+	Suite           JSONSuiteInfo              `json:"suite"`
+	PoliciesLoaded  JSONPoliciesLoaded         `json:"policies_loaded"`
+	ResultsByModel  []JSONModelResults         `json:"results_by_model"`
+	OverallSummary  JSONOverallSummary         `json:"overall_summary"`
+	ModelComparison []JSONModelComparisonEntry `json:"model_comparison,omitempty"`
+	Coverage        *JSONCoverage              `json:"coverage,omitempty"`
 }
 
 // JSONModelComparisonEntry holds per-model summary stats including historical cached models.
@@ -63,27 +63,27 @@ type JSONModelInfo struct {
 
 // JSONTestResult contains a single test case result.
 type JSONTestResult struct {
-	CaseID    string              `json:"case_id"`
-	Title     string              `json:"title"`
-	Status    string              `json:"status"` // passed, failed, errored, skipped
-	ElapsedMs int64               `json:"elapsed_ms"`
-	Expected  *JSONExpected       `json:"expected,omitempty"`
-	Actual    *JSONActual         `json:"actual,omitempty"`
-	Failures        []string `json:"failures,omitempty"`
-	ExtraPolicyOnly bool     `json:"extra_policy_only,omitempty"`
-	Error           *JSONError `json:"error,omitempty"`
+	CaseID          string        `json:"case_id"`
+	Title           string        `json:"title"`
+	Status          string        `json:"status"` // passed, failed, errored, skipped
+	ElapsedMs       int64         `json:"elapsed_ms"`
+	Expected        *JSONExpected `json:"expected,omitempty"`
+	Actual          *JSONActual   `json:"actual,omitempty"`
+	Failures        []string      `json:"failures,omitempty"`
+	ExtraPolicyOnly bool          `json:"extra_policy_only,omitempty"`
+	Error           *JSONError    `json:"error,omitempty"`
 
 	// Pass rate fields (present only when history has 2+ entries)
-	PassRate                     *float64 `json:"pass_rate,omitempty"`
-	PassRateRuns                 *int     `json:"pass_rate_runs,omitempty"`
-	PassRateSincePolicyChange    *float64 `json:"pass_rate_since_policy_change,omitempty"`
-	PassRateSinceChangeRuns      *int     `json:"pass_rate_since_policy_change_runs,omitempty"`
+	PassRate                  *float64 `json:"pass_rate,omitempty"`
+	PassRateRuns              *int     `json:"pass_rate_runs,omitempty"`
+	PassRateSincePolicyChange *float64 `json:"pass_rate_since_policy_change,omitempty"`
+	PassRateSinceChangeRuns   *int     `json:"pass_rate_since_policy_change_runs,omitempty"`
 }
 
 // JSONExpected contains expected outcomes.
 type JSONExpected struct {
-	Decision string              `json:"decision"`
-	Policies []JSONPolicyExpect  `json:"policies,omitempty"`
+	Decision string             `json:"decision"`
+	Policies []JSONPolicyExpect `json:"policies,omitempty"`
 }
 
 // JSONPolicyExpect contains expected policy outcome.
@@ -151,10 +151,10 @@ type JSONOverallSummary struct {
 
 // JSONCoverage contains coverage information.
 type JSONCoverage struct {
-	TotalPolicies        int                    `json:"total_policies"`
-	PoliciesWithTests    int                    `json:"policies_with_tests"`
-	PoliciesWithoutTests []JSONPolicyCoverage   `json:"policies_without_tests,omitempty"`
-	DisabledSkipped      []JSONPolicyCoverage   `json:"disabled_policies_skipped,omitempty"`
+	TotalPolicies        int                  `json:"total_policies"`
+	PoliciesWithTests    int                  `json:"policies_with_tests"`
+	PoliciesWithoutTests []JSONPolicyCoverage `json:"policies_without_tests,omitempty"`
+	DisabledSkipped      []JSONPolicyCoverage `json:"disabled_policies_skipped,omitempty"`
 }
 
 // JSONPolicyCoverage represents a policy in coverage report.
@@ -330,7 +330,7 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 			Errored:         b.errored,
 			Skipped:         b.skipped,
 			MatchRate:       matchRate,
-			StrictMatchRate:    strictMatchRate,
+			StrictMatchRate: strictMatchRate,
 			TotalElapsedMs:  b.totalMs,
 		}
 
@@ -373,7 +373,7 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 		Errored:              aggErrored,
 		Skipped:              aggSkipped,
 		MatchRate:            aggMatchRate,
-		StrictMatchRate:         aggStrictMatchRate,
+		StrictMatchRate:      aggStrictMatchRate,
 		ThresholdsMet:        summary.ThresholdsMet,
 		MinMatchRateRequired: minMatchRate,
 		WorstMatchRate:       worstMatchRate,
@@ -388,7 +388,7 @@ func formatJSONOutput(suite *Suite, results []TestResult, summary *RunResult, co
 			ExtraPolicyOnly: c.ExtraPolicyOnly,
 			Errored:         c.Errored,
 			MatchRate:       c.MatchRate,
-			StrictMatchRate:    c.StrictMatchRate,
+			StrictMatchRate: c.StrictMatchRate,
 			AvgMs:           c.AvgMs,
 			TotalMs:         c.TotalMs,
 			FromCache:       c.FromCache,
@@ -432,14 +432,14 @@ type JUnitTestSuites struct {
 
 // JUnitTestSuite represents a single test suite (one per model).
 type JUnitTestSuite struct {
-	Name       string           `xml:"name,attr"`
-	Tests      int              `xml:"tests,attr"`
-	Failures   int              `xml:"failures,attr"`
-	Errors     int              `xml:"errors,attr"`
-	Skipped    int              `xml:"skipped,attr"`
-	Time       float64          `xml:"time,attr"`
-	Properties []JUnitProperty  `xml:"properties>property,omitempty"`
-	TestCases  []JUnitTestCase  `xml:"testcase"`
+	Name       string          `xml:"name,attr"`
+	Tests      int             `xml:"tests,attr"`
+	Failures   int             `xml:"failures,attr"`
+	Errors     int             `xml:"errors,attr"`
+	Skipped    int             `xml:"skipped,attr"`
+	Time       float64         `xml:"time,attr"`
+	Properties []JUnitProperty `xml:"properties>property,omitempty"`
+	TestCases  []JUnitTestCase `xml:"testcase"`
 }
 
 // JUnitProperty represents a property in the test suite.
@@ -613,4 +613,3 @@ type PolicyCoverageItem struct {
 	Name   string
 	Engine string
 }
-

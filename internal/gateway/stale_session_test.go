@@ -341,7 +341,6 @@ func TestCreateSingleSessionClient_CreatesSessionIfNotExists(t *testing.T) {
 	// Call CreateSingleSessionClient with the stale session ID
 	// This will fail to create the client (command doesn't exist), but should create the session
 	_, err := cm.CreateSingleSessionClient(ctx, staleSessionID, "test-client", cfg)
-
 	// The client creation might fail (command not found), but that's OK
 	// The important thing is that the session was created
 	if err != nil {

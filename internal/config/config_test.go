@@ -37,7 +37,7 @@ native_tools:
   audit_report:
     enabled: false
 `
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "maybe-dont.yaml"), []byte(configContent), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "maybe-dont.yaml"), []byte(configContent), 0o644))
 
 	config, err := LoadConfig(tmpDir, "")
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestServerTypeValidation(t *testing.T) {
 						} `mapstructure:"tls"`
 					} `mapstructure:"sse"`
 					TrustedProxies        []string `mapstructure:"trusted_proxies"`
-				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+					SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 				}{
 					Type:       tt.serverType,
 					ListenAddr: tt.listenAddr,
@@ -128,7 +128,7 @@ func TestListenAddrValidation(t *testing.T) {
 						} `mapstructure:"tls"`
 					} `mapstructure:"sse"`
 					TrustedProxies        []string `mapstructure:"trusted_proxies"`
-				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+					SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 				}{
 					Type:       tt.serverType,
 					ListenAddr: tt.listenAddr,
@@ -264,7 +264,7 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
 			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: "invalid-type", // Error 1: invalid server type
 		},
@@ -337,7 +337,7 @@ func TestValidateConfigSuccess(t *testing.T) {
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
 			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerTypeSTDIO,
 		},
@@ -532,7 +532,7 @@ validation:
     endpoint: https://api.openai.com/v1
     model: gpt-4
 `
-	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	err := os.WriteFile(configPath, []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	// Create a rules file
@@ -543,7 +543,7 @@ rules:
     prompt: Test prompt
     message: Test message
 `
-	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0644)
+	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0o644)
 	require.NoError(t, err)
 
 	// Set the API key via environment variable
@@ -1246,7 +1246,7 @@ func TestValidateRelativePath_ValidPaths(t *testing.T) {
 		"logs/2024/01/audit.log",
 		"a/b/c/d/e/f/g.log",
 		"CamelCase/File.Log",
-		"file/",  // trailing slash is allowed
+		"file/", // trailing slash is allowed
 	}
 
 	for _, path := range validPaths {
@@ -1497,7 +1497,7 @@ request_validation:
   ai:
     enabled: false
 `
-	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1530,7 +1530,7 @@ request_validation:
     enabled: true
     rules_file: "../../secrets/rules.yaml"
 `
-	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1561,7 +1561,7 @@ response_validation:
     enabled: true
     rules_file: "../secret/response_rules.yaml"
 `
-	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1598,7 +1598,7 @@ response_validation:
     enabled: true
     rules_file: "/etc/passwd"
 `
-	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1613,7 +1613,7 @@ func TestLoadConfig_RulesFileSubdirectoryAllowed(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create subdirectory and rules file
-	err := os.MkdirAll(tmpDir+"/rules/custom", 0755)
+	err := os.MkdirAll(tmpDir+"/rules/custom", 0o755)
 	require.NoError(t, err)
 
 	rulesContent := `
@@ -1624,7 +1624,7 @@ rules:
       tools: ["*"]
     action: allow
 `
-	err = os.WriteFile(tmpDir+"/rules/custom/my-rules.yaml", []byte(rulesContent), 0644)
+	err = os.WriteFile(tmpDir+"/rules/custom/my-rules.yaml", []byte(rulesContent), 0o644)
 	require.NoError(t, err)
 
 	configContent := `
@@ -1644,7 +1644,7 @@ native_tools:
   audit_report:
     enabled: false
 `
-	err = os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err = os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	cfg, err := LoadConfig(tmpDir, "")
@@ -1671,7 +1671,7 @@ request_validation:
   ai:
     enabled: false
 `
-	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1698,7 +1698,7 @@ request_validation:
   ai:
     enabled: false
 `
-	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	_, err = LoadConfig(tmpDir, "")
@@ -1740,7 +1740,6 @@ func TestLoadConfigWithoutConfigFile(t *testing.T) {
 	require.Contains(t, err.Error(), "No configuration file was found")
 	require.Contains(t, err.Error(), "MAYBE_DONT_")
 	require.Contains(t, err.Error(), "environment variables")
-
 }
 
 func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
@@ -1758,7 +1757,7 @@ func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
 			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerType("invalid"), // Invalid server type triggers a validation error
 		},
@@ -1793,7 +1792,7 @@ func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
 			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerType("invalid"), // Invalid server type triggers a validation error
 		},
@@ -1886,7 +1885,7 @@ native_tools:
   audit_report:
     enabled: false
 `
-	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	err := os.WriteFile(configPath, []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	// Set server type via environment variable to prove it works
@@ -1919,7 +1918,7 @@ func createValidBaseConfig() *Config {
 				} `mapstructure:"tls"`
 			} `mapstructure:"sse"`
 			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerTypeSTDIO,
 		},
@@ -2197,14 +2196,14 @@ func TestParseDownstreamServersFromEnv(t *testing.T) {
 
 	t.Run("pass-through auth with indexed headers", func(t *testing.T) {
 		cleanup := setEnvVars(map[string]string{
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE":                                            "http",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL":                                             "https://api.github.com/",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_ENABLED":                       "true",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER":       "X-Token",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_TARGET_HEADER":       "Authorization",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_FORMAT":              "Bearer {value}",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_1_SOURCE_HEADER":       "X-Tenant",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_1_TARGET_HEADER":       "X-Downstream-Tenant",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE":                                      "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL":                                       "https://api.github.com/",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_ENABLED":                 "true",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER": "X-Token",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_TARGET_HEADER": "Authorization",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_0_FORMAT":        "Bearer {value}",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_1_SOURCE_HEADER": "X-Tenant",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS_1_TARGET_HEADER": "X-Downstream-Tenant",
 		})
 		defer cleanup()
 
@@ -2236,9 +2235,9 @@ func TestParseDownstreamServersFromEnv(t *testing.T) {
 
 	t.Run("multiple clients", func(t *testing.T) {
 		cleanup := setEnvVars(map[string]string{
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE": "http",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL":  "https://api.github.com/",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_TYPE":  "stdio",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE":   "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL":    "https://api.github.com/",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_TYPE":    "stdio",
 			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_COMMAND": "/usr/bin/mcp",
 		})
 		defer cleanup()
@@ -2264,7 +2263,7 @@ func TestParseDownstreamServersFromEnv(t *testing.T) {
 
 		servers := parseDownstreamServersFromEnv(existing, "MAYBE_DONT")
 		require.Len(t, servers, 1)
-		require.Equal(t, "http", servers["github"].Type) // Unchanged
+		require.Equal(t, "http", servers["github"].Type)                // Unchanged
 		require.Equal(t, "https://new-url.com/", servers["github"].URL) // Overridden
 	})
 
@@ -2285,9 +2284,9 @@ func TestParseDownstreamServersFromEnv(t *testing.T) {
 
 	t.Run("integer fields", func(t *testing.T) {
 		cleanup := setEnvVars(map[string]string{
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_TYPE":               "stdio",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_COMMAND":            "echo",
-			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_STARTUP_TIMEOUT_MS": "5000",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_TYPE":                   "stdio",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_COMMAND":                "echo",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_STARTUP_TIMEOUT_MS":     "5000",
 			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_TEST_INITIALIZATION_RETRIES": "3",
 		})
 		defer cleanup()
@@ -2416,7 +2415,7 @@ func TestResolveConfigDir_XDGSupport(t *testing.T) {
 		_ = os.Chdir(tmpDir)
 		defer func() { _ = os.Chdir(oldWd) }()
 
-		_ = os.MkdirAll("./config", 0755)
+		_ = os.MkdirAll("./config", 0o755)
 
 		// Should still fail - ./config is NOT a fallback
 		result, err := ResolveConfigDir("")
@@ -2440,7 +2439,7 @@ func TestResolveConfigDir_XDGSupport(t *testing.T) {
 		info, err := os.Stat(result)
 		require.NoError(t, err)
 		// Check permissions (masking off type bits) - 0700 for security
-		require.Equal(t, os.FileMode(0700), info.Mode().Perm())
+		require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
 	})
 }
 
@@ -2510,7 +2509,7 @@ func TestResolveLogDir_XDGSupport(t *testing.T) {
 		info, statErr := os.Stat(result)
 		require.NoError(t, statErr)
 		// 0700 for security - logs may contain sensitive data
-		require.Equal(t, os.FileMode(0700), info.Mode().Perm())
+		require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
 	})
 }
 
@@ -2543,7 +2542,7 @@ func TestEnsureDir(t *testing.T) {
 		filePath := tmpDir + "/existingfile"
 
 		// Create a file at the path
-		err := os.WriteFile(filePath, []byte("test"), 0644)
+		err := os.WriteFile(filePath, []byte("test"), 0o644)
 		require.NoError(t, err)
 
 		// ensureDir should return false since it's a file, not a directory
@@ -2689,7 +2688,7 @@ native_tools:
 // writeConfigFile writes the given config content to maybe-dont.yaml in the config directory.
 func writeConfigFile(t *testing.T, configDir, configContent string) {
 	t.Helper()
-	err := os.WriteFile(configDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(configDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 }
 
@@ -2973,12 +2972,12 @@ func TestCLIRequestValidationConfig_EnvVarWildcard(t *testing.T) {
 // 4. Combinations of all three fields
 func TestPolicyExpressionFields(t *testing.T) {
 	tests := []struct {
-		name                  string
-		yamlContent           string
-		wantExpression        string
-		wantMCPExpression     string
-		wantCLIExpression     string
-		wantName              string
+		name              string
+		yamlContent       string
+		wantExpression    string
+		wantMCPExpression string
+		wantCLIExpression string
+		wantName          string
 	}{
 		{
 			name: "legacy expression field only (backwards compatibility)",
@@ -3174,7 +3173,7 @@ validation:
     model: gpt-4
     api_key: test-key
 `
-	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	rulesContent := `
@@ -3184,7 +3183,7 @@ rules:
     prompt: Test prompt
     message: Test message
 `
-	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0644)
+	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0o644)
 	require.NoError(t, err)
 
 	// Capture stderr to count deprecation warnings
@@ -3243,7 +3242,7 @@ validation:
     model: "gpt-5.2"
     api_key: test-key
 `
-	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	rulesContent := `
@@ -3253,7 +3252,7 @@ rules:
     prompt: Test prompt
     message: Test message
 `
-	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0644)
+	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0o644)
 	require.NoError(t, err)
 
 	// Capture stderr to check for deprecation warnings
@@ -3308,7 +3307,7 @@ validation:
     endpoint: "https://api.openai.com/v1/chat/completions"
     model: "gpt-5.2"
 `
-	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0644)
+	err := os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644)
 	require.NoError(t, err)
 
 	rulesContent := `
@@ -3318,7 +3317,7 @@ rules:
     prompt: Test prompt
     message: Test message
 `
-	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0644)
+	err = os.WriteFile(tmpDir+"/ai_request_rules.yaml", []byte(rulesContent), 0o644)
 	require.NoError(t, err)
 
 	// Set api_key via env var (like the user does)
