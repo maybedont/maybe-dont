@@ -39,11 +39,11 @@ Add `POST /api/v1/action/validate` — a purpose-built REST endpoint for validat
 {
   "action_type": "tool_call",
   "target": "execute_bash",
-  "parameters": { "command": "rm -rf /" },
+  "parameters": { "command": "rm -rf /tmp/important-data" },
   "actor": "openhands-agent",
   "context": {
     "thought": "I need to clean up temporary files",
-    "summary": "removing temporary files"
+    "summary": "removing temporary data"
   }
 }
 ```

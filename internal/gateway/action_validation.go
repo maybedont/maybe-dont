@@ -129,6 +129,10 @@ type ActionValidationHandlerConfig struct {
 	// MaxRuleEvaluationMs is the maximum time for any single rule evaluation
 	// (default: 45000ms).
 	MaxRuleEvaluationMs int
+
+	// IncludeArgumentValues controls whether full parameter values are included in audit entries.
+	// When false, parameters are omitted from the audit log to prevent sensitive data exposure.
+	IncludeArgumentValues bool
 }
 
 // ActionValidationHandler handles /api/v1/action/validate requests.
@@ -373,16 +377,7 @@ func (h *ActionValidationHandler) deriveRiskLevel(results ValidationResults) Ris
 
 // convertToResults converts ValidationResults to CLIPolicyResult slice for the response.
 func (h *ActionValidationHandler) convertToResults(results ValidationResults) []CLIPolicyResult {
-	policyResults := make([]CLIPolicyResult, 0, len(results.Results))
-	for _, r := range results.Results {
-		policyResults = append(policyResults, CLIPolicyResult{
-			PolicyName: r.PolicyName,
-			PolicyType: r.PolicyType,
-			Action:     string(r.Action),
-			Message:    r.Message,
-		})
-	}
-	return policyResults
+	return convertValidationResults(results)
 }
 
 // extractContext extracts request ID and client ID from HTTP headers.
@@ -456,6 +451,11 @@ func (h *ActionValidationHandler) writeAuditEntryWithValidation(
 
 	// Build action info for the audit entry
 	// Reuse the Tool field with a synthetic tool name from the action target
+	var auditParams map[string]any
+	if h.config.IncludeArgumentValues {
+		auditParams = req.Parameters
+	}
+
 	entry := &AuditEntry{
 		Source:            "action",
 		ValidationStarted: validationStart.Format(time.RFC3339Nano),
@@ -463,7 +463,7 @@ func (h *ActionValidationHandler) writeAuditEntryWithValidation(
 		Tool: &AuditToolInfo{
 			Name:         req.Target,
 			PrefixedName: req.Target,
-			Params:       req.Parameters,
+			Params:       auditParams,
 		},
 		UpstreamRequest: UpstreamRequestInfo{
 			RequestID:  ctx.RequestID,

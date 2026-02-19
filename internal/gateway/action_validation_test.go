@@ -23,11 +23,11 @@ func TestActionValidationRequest_JSONMarshaling(t *testing.T) {
 	req := ActionValidationRequest{
 		ActionType: "tool_call",
 		Target:     "execute_bash",
-		Parameters: map[string]any{"command": "rm -rf /"},
+		Parameters: map[string]any{"command": "rm -rf /tmp/important-data"},
 		Actor:      "openhands-agent",
 		Context: &ActionContext{
 			Thought: "I need to clean up temporary files",
-			Summary: "removing temporary files",
+			Summary: "removing temporary data",
 		},
 	}
 
@@ -133,44 +133,53 @@ func TestActionValidationError_JSON(t *testing.T) {
 
 // --- Handler HTTP Tests ---
 
-// TestHandleActionValidation_MissingTarget verifies that when the target field is empty,
-// the handler returns a 400 error with "missing_target" error code.
-func TestHandleActionValidation_MissingTarget(t *testing.T) {
+// TestHandleActionValidation_BadRequests verifies that invalid requests return 400
+// with the expected error code.
+func TestHandleActionValidation_BadRequests(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		contentType   string
+		wantErrorCode string
+	}{
+		{
+			name:          "missing target",
+			body:          `{"action_type": "tool_call", "target": ""}`,
+			contentType:   "application/json",
+			wantErrorCode: "missing_target",
+		},
+		{
+			name:          "invalid content type",
+			body:          `{"target": "execute_bash"}`,
+			contentType:   "text/plain",
+			wantErrorCode: "invalid_content_type",
+		},
+		{
+			name:          "invalid JSON",
+			body:          `{invalid json}`,
+			contentType:   "application/json",
+			wantErrorCode: "invalid_request",
+		},
+	}
+
 	handler := newTestActionHandler(t, nil, nil)
 
-	reqBody := `{"action_type": "tool_call", "target": ""}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", tt.contentType)
+			w := httptest.NewRecorder()
 
-	handler.ServeHTTP(w, req)
+			handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
 
-	var errResp ActionValidationError
-	err := json.Unmarshal(w.Body.Bytes(), &errResp)
-	require.NoError(t, err)
-	assert.Equal(t, "missing_target", errResp.Error)
-}
-
-// TestHandleActionValidation_InvalidContentType verifies that non-JSON content type
-// returns a 400 error with "invalid_content_type" error code.
-func TestHandleActionValidation_InvalidContentType(t *testing.T) {
-	handler := newTestActionHandler(t, nil, nil)
-
-	reqBody := `{"target": "execute_bash"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(reqBody))
-	req.Header.Set("Content-Type", "text/plain")
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-
-	var errResp ActionValidationError
-	err := json.Unmarshal(w.Body.Bytes(), &errResp)
-	require.NoError(t, err)
-	assert.Equal(t, "invalid_content_type", errResp.Error)
+			var errResp ActionValidationError
+			err := json.Unmarshal(w.Body.Bytes(), &errResp)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantErrorCode, errResp.Error)
+		})
+	}
 }
 
 // TestHandleActionValidation_ContentTypeWithCharset verifies that Content-Type with
@@ -186,26 +195,6 @@ func TestHandleActionValidation_ContentTypeWithCharset(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-// TestHandleActionValidation_InvalidJSON verifies that malformed JSON body
-// returns a 400 error with "invalid_request" error code.
-func TestHandleActionValidation_InvalidJSON(t *testing.T) {
-	handler := newTestActionHandler(t, nil, nil)
-
-	reqBody := `{invalid json}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-
-	var errResp ActionValidationError
-	err := json.Unmarshal(w.Body.Bytes(), &errResp)
-	require.NoError(t, err)
-	assert.Equal(t, "invalid_request", errResp.Error)
 }
 
 // --- Risk Level Tests ---
@@ -242,7 +231,7 @@ func TestHandleActionValidation_DeniedByPolicy_HighRisk(t *testing.T) {
 	celEngine := newTestCELEngineWithDenyRule(t)
 	handler := newTestActionHandler(t, celEngine, nil)
 
-	resp := sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /"}}`)
+	resp := sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /tmp/important-data"}}`)
 
 	assert.False(t, resp.Allowed)
 	assert.Equal(t, RiskLevelHigh, resp.RiskLevel)
@@ -255,7 +244,7 @@ func TestHandleActionValidation_AuditOnlyDeny_MediumRisk(t *testing.T) {
 	celEngine := newTestCELEngineWithAuditOnlyDenyRule(t)
 	handler := newTestActionHandler(t, celEngine, nil)
 
-	resp := sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /"}}`)
+	resp := sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /tmp/important-data"}}`)
 
 	assert.True(t, resp.Allowed)
 	assert.Equal(t, RiskLevelMedium, resp.RiskLevel)
@@ -548,6 +537,49 @@ func TestHandleActionValidation_ExternalIDInAuditLog(t *testing.T) {
 	entries := auditWriter.getEntries()
 	require.Len(t, entries, 1)
 	assert.Equal(t, "42", entries[0].UpstreamRequest.ExternalID)
+}
+
+// TestHandleActionValidation_AuditLogOmitsParamsWhenDisabled verifies that when
+// IncludeArgumentValues is false, parameters are not included in audit entries.
+func TestHandleActionValidation_AuditLogOmitsParamsWhenDisabled(t *testing.T) {
+	auditWriter := &mockAuditWriter{}
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewActionValidationHandler(ActionValidationHandlerConfig{
+		Logger:                sessionLogger,
+		Version:               "1.0.0-test",
+		AuditWriter:           auditWriter,
+		IncludeArgumentValues: false,
+	})
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /tmp/important-data"}}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+	assert.Nil(t, entries[0].Tool.Params, "Params should be nil when IncludeArgumentValues is false")
+}
+
+// TestHandleActionValidation_AuditLogIncludesParamsWhenEnabled verifies that when
+// IncludeArgumentValues is true, parameters are included in audit entries.
+func TestHandleActionValidation_AuditLogIncludesParamsWhenEnabled(t *testing.T) {
+	auditWriter := &mockAuditWriter{}
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	handler := NewActionValidationHandler(ActionValidationHandlerConfig{
+		Logger:                sessionLogger,
+		Version:               "1.0.0-test",
+		AuditWriter:           auditWriter,
+		IncludeArgumentValues: true,
+	})
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /tmp/important-data"}}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+	require.NotNil(t, entries[0].Tool.Params, "Params should be set when IncludeArgumentValues is true")
+	assert.Equal(t, "rm -rf /tmp/important-data", entries[0].Tool.Params["command"])
 }
 
 // TestHandleActionValidation_ExternalIDOmittedWhenEmpty verifies that when no external_id

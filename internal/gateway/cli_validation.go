@@ -485,6 +485,12 @@ func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIVal
 
 // convertToResults converts ValidationResults to CLIPolicyResult slice for the response.
 func (h *CLIValidationHandler) convertToResults(results ValidationResults) []CLIPolicyResult {
+	return convertValidationResults(results)
+}
+
+// convertValidationResults converts ValidationResults to CLIPolicyResult slice.
+// Shared by both CLI and action validation handlers.
+func convertValidationResults(results ValidationResults) []CLIPolicyResult {
 	policyResults := make([]CLIPolicyResult, 0, len(results.Results))
 	for _, r := range results.Results {
 		policyResults = append(policyResults, CLIPolicyResult{
