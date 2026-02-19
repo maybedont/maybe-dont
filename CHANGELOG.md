@@ -1,3 +1,15 @@
+## v1.3.0 (2026-02-19)
+
+### Feat
+
+- add action validation endpoint for OpenHands integration (#127)
+
+### Fix
+
+- improve AI policy test accuracy and match rate semantics (#125)
+- allow gateway to start without downstream MCP servers (#124)
+- improve AI policy test accuracy (#121)
+
 ## v1.2.0 (2026-02-13)
 
 ### Feat
