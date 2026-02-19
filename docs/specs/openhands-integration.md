@@ -143,9 +143,19 @@ The endpoint is available whenever request validation engines (CEL/AI) are confi
 
 See full plan in the implementation tracking document.
 
+## Workflow
+
+1. ~~Implement PR 1 (gateway endpoint)~~ — **Done** → [PR #127](https://github.com/maybedont/maybe-dont/pull/127)
+2. Merge PR 1, tag, release gateway
+3. Fork `OpenHands/software-agent-sdk` to `maybedont` org
+4. Implement PR 2 (MaybeDontAnalyzer) on the fork — see full plan in session plan file
+5. Open PR against `OpenHands/software-agent-sdk`
+6. PR 3: OpenHands docs — MCP settings page + security guide (can start in parallel with PR 2)
+7. PR 4: OpenHands skill (`skills/maybe-dont/SKILL.md`) — after PR 2 merges
+8. Update maybedont.ai/docs with new action validation API reference + OpenHands integration guide
+
 ## Out of Scope (v2)
 
 - Response validation (requires execution, not just pre-execution validation)
 - Conversation history forwarding beyond `thought`
 - Gateway-side routing by `action_type`
-- maybedont.ai/docs page for the security analyzer integration
