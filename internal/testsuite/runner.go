@@ -1743,7 +1743,7 @@ func (r *Runner) outputResults(results []TestResult, summary *RunResult, already
 			}
 		}
 
-		if err := os.WriteFile(r.opts.OutputFile, []byte(fileOutput), 0644); err != nil {
+		if err := os.WriteFile(r.opts.OutputFile, []byte(fileOutput), 0o644); err != nil {
 			return fmt.Errorf("failed to write output file: %w", err)
 		}
 	}

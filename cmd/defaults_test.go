@@ -48,7 +48,7 @@ func TestDefaultsExportCommand_SkipsExistingByDefault(t *testing.T) {
 	// Create an existing file with custom content
 	existingPath := filepath.Join(tmpDir, "maybe-dont.yaml")
 	customContent := "# Custom content that should be preserved\n"
-	err := os.WriteFile(existingPath, []byte(customContent), 0600)
+	err := os.WriteFile(existingPath, []byte(customContent), 0o600)
 	require.NoError(t, err)
 
 	// Run defaults export without --force
@@ -76,7 +76,7 @@ func TestDefaultsExportCommand_OverwritesWithForce(t *testing.T) {
 	// Create an existing file with custom content
 	existingPath := filepath.Join(tmpDir, "maybe-dont.yaml")
 	customContent := "# Custom content that should be overwritten\n"
-	err := os.WriteFile(existingPath, []byte(customContent), 0600)
+	err := os.WriteFile(existingPath, []byte(customContent), 0o600)
 	require.NoError(t, err)
 
 	// Run defaults export with --force

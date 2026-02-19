@@ -236,7 +236,7 @@ func TestCLIValidation_Integration(t *testing.T) {
 			wantAllowed:            true,
 			wantValidationRequired: true,
 			// Audit-only deny still produces a result in the results list
-			wantResultCount: 1,
+			wantResultCount:      1,
 			wantResultAction:     "deny",
 			wantResultPolicyName: "deny-rm",
 		},

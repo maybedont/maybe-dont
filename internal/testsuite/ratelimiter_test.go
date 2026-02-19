@@ -545,7 +545,6 @@ func TestRateLimiter_SharedWait(t *testing.T) {
 					RetryAfter: 30 * time.Millisecond,
 				}
 				err := rl.Handle429WithInfo(ctx, "openai", info)
-
 				// After wait, all should be able to proceed (with retryable error)
 				if err != nil {
 					mu.Lock()

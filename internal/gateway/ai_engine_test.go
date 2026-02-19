@@ -732,9 +732,9 @@ func TestFormatAuditError(t *testing.T) {
 			expectedOutput: "no_response: API returned empty choices",
 		},
 		{
-			name:     "truncates long error messages",
-			category: "api_error",
-			err:      fmt.Errorf("This is a very long error message that exceeds the maximum length of 100 characters and should be truncated for the audit log"),
+			name:           "truncates long error messages",
+			category:       "api_error",
+			err:            fmt.Errorf("This is a very long error message that exceeds the maximum length of 100 characters and should be truncated for the audit log"),
 			expectedOutput: "api_error: This is a very long error message that exceeds the maximum length of 100 characters and should be tr...",
 		},
 		{

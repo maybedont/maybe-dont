@@ -12,7 +12,7 @@ import (
 // Retry configuration matching SDK behavior for parity.
 // Both OpenAI and Anthropic SDKs use identical parameters.
 const (
-	retryMaxAttempts  = 2      // 1 initial + 2 retries = 3 total attempts
+	retryMaxAttempts  = 2 // 1 initial + 2 retries = 3 total attempts
 	retryInitialDelay = 500 * time.Millisecond
 	retryMaxDelay     = 8 * time.Second
 	retryJitterFactor = 0.25 // ±25% jitter

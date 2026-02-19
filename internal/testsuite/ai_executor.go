@@ -16,17 +16,17 @@ import (
 
 // AITestRunner handles AI policy test execution for a specific model.
 type AITestRunner struct {
-	model              ModelConfig
-	providerClient     gateway.AIProviderClient
-	policies           []config.AIPolicy
-	responsePolicies   []config.AIResponsePolicy
-	logger             *config.SessionLogger
-	timeoutMs          int
-	maxTestDurationMs  int
-	retries            int
-	retryDelayMs       int
-	rateLimiter        *RateLimiter
-	strictPolicyMatch  bool
+	model             ModelConfig
+	providerClient    gateway.AIProviderClient
+	policies          []config.AIPolicy
+	responsePolicies  []config.AIResponsePolicy
+	logger            *config.SessionLogger
+	timeoutMs         int
+	maxTestDurationMs int
+	retries           int
+	retryDelayMs      int
+	rateLimiter       *RateLimiter
+	strictPolicyMatch bool
 }
 
 // ProviderClientFactoryFunc creates an AIProviderClient from a ModelConfig.
@@ -421,11 +421,11 @@ func (r *AITestRunner) evaluateRequestPolicies(ctx context.Context, tc TestCase)
 
 	// Channel to collect results from parallel evaluations
 	type policyEvalResult struct {
-		index    int
-		result   aiPolicyResult
-		err      error
-		isDeny   bool
-		action   string
+		index     int
+		result    aiPolicyResult
+		err       error
+		isDeny    bool
+		action    string
 		reasoning string
 	}
 	resultChan := make(chan policyEvalResult, len(enabledPolicies))

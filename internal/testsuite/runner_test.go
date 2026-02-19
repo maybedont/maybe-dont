@@ -251,11 +251,11 @@ func TestResolvePath(t *testing.T) {
 	// Create a temp directory structure for testing
 	tempDir := t.TempDir()
 	suiteDir := filepath.Join(tempDir, "suite")
-	require.NoError(t, os.MkdirAll(suiteDir, 0755))
+	require.NoError(t, os.MkdirAll(suiteDir, 0o755))
 
 	// Create a file in suite dir for relative path test
 	suiteFile := filepath.Join(suiteDir, "rules.yaml")
-	require.NoError(t, os.WriteFile(suiteFile, []byte("test"), 0644))
+	require.NoError(t, os.WriteFile(suiteFile, []byte("test"), 0o644))
 
 	tests := []struct {
 		name     string
@@ -1035,10 +1035,14 @@ func TestFormatSingleTestResult_UnexpectedPolicyReasoning(t *testing.T) {
 				Confidence: 1.0,
 				Reasoning:  "Overall deny reasoning that should be hidden",
 				PoliciesExecuted: []PolicyResult{
-					{PolicyName: "Check command execution", Decision: "deny", ElapsedMs: 986,
-						Reasoning: "Dangerous tool blocked because shell__run_command is on the blocklist"},
-					{PolicyName: "Check system access", Decision: "deny", ElapsedMs: 1454,
-						Reasoning: "Sudo command detected"},
+					{
+						PolicyName: "Check command execution", Decision: "deny", ElapsedMs: 986,
+						Reasoning: "Dangerous tool blocked because shell__run_command is on the blocklist",
+					},
+					{
+						PolicyName: "Check system access", Decision: "deny", ElapsedMs: 1454,
+						Reasoning: "Sudo command detected",
+					},
 					{PolicyName: "Check credential access", Decision: "allow", ElapsedMs: 800},
 				},
 			},
@@ -1322,9 +1326,9 @@ func TestCalculateResults_ExtraPolicyOnlySplitsFromFailed(t *testing.T) {
 		{Status: "passed"},
 		{Status: "passed"},
 		{Status: "passed"},
-		{Status: "failed"},                              // real failure
-		{Status: "failed", ExtraPolicyOnly: true},        // extra-policy-only
-		{Status: "failed", ExtraPolicyOnly: true},        // extra-policy-only
+		{Status: "failed"},                        // real failure
+		{Status: "failed", ExtraPolicyOnly: true}, // extra-policy-only
+		{Status: "failed", ExtraPolicyOnly: true}, // extra-policy-only
 		{Status: "errored", Error: &TestError{Type: "timeout", Message: "timed out"}},
 	}
 
@@ -1465,18 +1469,28 @@ func TestFormatJUnitOutput_CachedResultsAndProperties(t *testing.T) {
 	results := []TestResult{
 		// Fresh results
 		{CaseID: "fresh-pass", Status: "passed", Expected: ExpectedResult{Decision: "allow"}},
-		{CaseID: "fresh-fail", Status: "failed", Expected: ExpectedResult{Decision: "deny"},
-			Actual: ActualResult{Decision: "allow"}, Failures: []string{"wrong decision"}},
+		{
+			CaseID: "fresh-fail", Status: "failed", Expected: ExpectedResult{Decision: "deny"},
+			Actual: ActualResult{Decision: "allow"}, Failures: []string{"wrong decision"},
+		},
 		// Cached results — should render as their original status, not <skipped>
-		{CaseID: "cached-pass", Status: "skipped", Expected: ExpectedResult{Decision: "allow"},
-			Error: &TestError{Type: "cached", Message: "cached passed"}},
-		{CaseID: "cached-fail", Status: "skipped", Expected: ExpectedResult{Decision: "deny"},
-			Error: &TestError{Type: "cached", Message: "cached failed"}},
-		{CaseID: "cached-err", Status: "skipped", Expected: ExpectedResult{Decision: "allow"},
-			Error: &TestError{Type: "cached", Message: "cached errored"}},
+		{
+			CaseID: "cached-pass", Status: "skipped", Expected: ExpectedResult{Decision: "allow"},
+			Error: &TestError{Type: "cached", Message: "cached passed"},
+		},
+		{
+			CaseID: "cached-fail", Status: "skipped", Expected: ExpectedResult{Decision: "deny"},
+			Error: &TestError{Type: "cached", Message: "cached failed"},
+		},
+		{
+			CaseID: "cached-err", Status: "skipped", Expected: ExpectedResult{Decision: "allow"},
+			Error: &TestError{Type: "cached", Message: "cached errored"},
+		},
 		// Rate-limited — genuinely skipped
-		{CaseID: "rate-limited", Status: "skipped", Expected: ExpectedResult{Decision: "allow"},
-			Error: &TestError{Type: "rate_limited", Message: "rate limited"}},
+		{
+			CaseID: "rate-limited", Status: "skipped", Expected: ExpectedResult{Decision: "allow"},
+			Error: &TestError{Type: "rate_limited", Message: "rate limited"},
+		},
 	}
 
 	// Summary uses policy quality view: cached results counted by original status
@@ -2529,8 +2543,8 @@ func TestFormatModelComparison_ExtraPolicyColumns(t *testing.T) {
 		output := formatModelComparison(entries)
 		assert.Contains(t, output, "Extra")
 		assert.Contains(t, output, "Strict%")
-		assert.Contains(t, output, "90.0%")  // MatchRate for gpt-5 (lenient)
-		assert.Contains(t, output, "70.0%")  // StrictMatchRate for gpt-5 (strict)
+		assert.Contains(t, output, "90.0%") // MatchRate for gpt-5 (lenient)
+		assert.Contains(t, output, "70.0%") // StrictMatchRate for gpt-5 (strict)
 	})
 
 	t.Run("extra and stability columns together", func(t *testing.T) {
@@ -2665,7 +2679,7 @@ func TestJSONOutput_ExtraPolicyOnlyFields(t *testing.T) {
 //
 // YAML rules for backslashes:
 //   - Double-quoted:       backslashes are escape chars — "C:\\Windows" → C:\Windows
-//                          WARNING: "C:\tmp" silently becomes C:<TAB>mp (\t = tab)
+//     WARNING: "C:\tmp" silently becomes C:<TAB>mp (\t = tab)
 //   - Unquoted (plain):    backslashes are literal — C:\Windows → C:\Windows
 //   - Single-quoted:       backslashes are literal — 'C:\Windows' → C:\Windows
 func TestParseTestCases_WindowsPathEscaping(t *testing.T) {

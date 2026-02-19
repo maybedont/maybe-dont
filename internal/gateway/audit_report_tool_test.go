@@ -21,7 +21,7 @@ func TestGenerateAuditReport_EmptyFile(t *testing.T) {
 	// Create an empty audit log file
 	tmpDir := t.TempDir()
 	auditPath := filepath.Join(tmpDir, "empty_audit.log")
-	err := os.WriteFile(auditPath, []byte{}, 0644)
+	err := os.WriteFile(auditPath, []byte{}, 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -100,7 +100,7 @@ func TestGenerateAuditReport_AllEntriesOlderThanTimeWindow(t *testing.T) {
 	for _, entry := range entries {
 		content += entry + "\n"
 	}
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -167,7 +167,7 @@ func TestGetEntriesForReport_LimitReturnsMostRecentEntries(t *testing.T) {
 	for _, entry := range entries {
 		content += entry + "\n"
 	}
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}
@@ -223,7 +223,7 @@ func TestGetEntriesForReport_AllTimeRange(t *testing.T) {
 	for _, entry := range entries {
 		content += entry + "\n"
 	}
-	err := os.WriteFile(auditPath, []byte(content), 0644)
+	err := os.WriteFile(auditPath, []byte(content), 0o644)
 	require.NoError(t, err)
 
 	cfg := &config.Config{}

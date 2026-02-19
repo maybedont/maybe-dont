@@ -1,0 +1,32 @@
+#!/bin/bash
+#
+# Git pre-commit hook to auto-format Go files with gofumpt via golangci-lint.
+#
+# This ensures all committed Go code is properly formatted. If any staged
+# Go files need formatting, they are formatted in-place and re-staged.
+#
+# Install this hook by running: make setup
+#
+
+# Check if golangci-lint is available
+if ! command -v golangci-lint &>/dev/null; then
+    echo "WARNING: golangci-lint not found, skipping format check"
+    exit 0
+fi
+
+# Get staged Go files
+STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+
+if [[ -z "$STAGED_GO_FILES" ]]; then
+    exit 0
+fi
+
+# Run golangci-lint fmt on staged files
+golangci-lint fmt $STAGED_GO_FILES 2>/dev/null
+
+# Re-stage any files that were reformatted
+for file in $STAGED_GO_FILES; do
+    if [[ -f "$file" ]]; then
+        git add "$file"
+    fi
+done

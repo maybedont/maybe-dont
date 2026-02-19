@@ -266,8 +266,8 @@ const DefaultStabilityThreshold = 0.90
 // AcceptanceConfig defines pass/fail thresholds.
 type AcceptanceConfig struct {
 	MinMatchRate       float64  `yaml:"min_match_rate"`
-	StrictPolicyMatch  *bool    `yaml:"strict_policy_match,omitempty"`    // Defaults to true if not specified
-	StabilityThreshold *float64 `yaml:"stability_threshold,omitempty"`    // Pass rate below this flags a test as flaky (default: 0.90)
+	StrictPolicyMatch  *bool    `yaml:"strict_policy_match,omitempty"` // Defaults to true if not specified
+	StabilityThreshold *float64 `yaml:"stability_threshold,omitempty"` // Pass rate below this flags a test as flaky (default: 0.90)
 }
 
 // IsStrictPolicyMatch returns true if unexpected triggering policies should cause test failure.
@@ -291,15 +291,15 @@ func (a AcceptanceConfig) GetStabilityThreshold() float64 {
 
 // ExecutionConfig defines test execution parameters.
 type ExecutionConfig struct {
-	TimeoutMs          int `yaml:"timeout_ms"`
-	MaxTestDurationMs  int `yaml:"max_test_duration_ms"`
-	Retries            int `yaml:"retries"`
-	RetryDelayMs       int `yaml:"retry_delay_ms"`
+	TimeoutMs         int `yaml:"timeout_ms"`
+	MaxTestDurationMs int `yaml:"max_test_duration_ms"`
+	Retries           int `yaml:"retries"`
+	RetryDelayMs      int `yaml:"retry_delay_ms"`
 
 	// Rate limiting configuration
-	RateLimits              map[string]ProviderRateLimit `yaml:"rate_limits,omitempty"`
-	DelayBetweenRequestsMs  int                          `yaml:"delay_between_requests_ms,omitempty"`
-	RateLimitBufferMs       int                          `yaml:"rate_limit_buffer_ms,omitempty"`
+	RateLimits             map[string]ProviderRateLimit `yaml:"rate_limits,omitempty"`
+	DelayBetweenRequestsMs int                          `yaml:"delay_between_requests_ms,omitempty"`
+	RateLimitBufferMs      int                          `yaml:"rate_limit_buffer_ms,omitempty"`
 
 	// HistoryDepth controls how many recent run outcomes are retained per test/model
 	// for pass rate calculation. 0 uses DefaultHistoryDepth (20).
@@ -358,21 +358,21 @@ type FiltersConfig struct {
 
 // TestCase represents a single test case from the cases/ directory.
 type TestCase struct {
-	CaseID       string              `yaml:"case_id"`
-	Title        string              `yaml:"title"`
-	Tags         []string            `yaml:"tags,omitempty"`
-	Notes        []string            `yaml:"notes,omitempty"`
-	Phase        string              `yaml:"phase,omitempty"`   // request, response, or both (default: request)
-	Engine       string              `yaml:"engine,omitempty"`  // cel, ai, or both (default: both)
-	Request      RequestConfig       `yaml:"request"`
-	Response     *ResponseConfig     `yaml:"response,omitempty"`
-	Expectations ExpectationsConfig  `yaml:"expectations"`
+	CaseID       string             `yaml:"case_id"`
+	Title        string             `yaml:"title"`
+	Tags         []string           `yaml:"tags,omitempty"`
+	Notes        []string           `yaml:"notes,omitempty"`
+	Phase        string             `yaml:"phase,omitempty"`  // request, response, or both (default: request)
+	Engine       string             `yaml:"engine,omitempty"` // cel, ai, or both (default: both)
+	Request      RequestConfig      `yaml:"request"`
+	Response     *ResponseConfig    `yaml:"response,omitempty"`
+	Expectations ExpectationsConfig `yaml:"expectations"`
 }
 
 // RequestConfig defines the request being validated.
 type RequestConfig struct {
-	ToolName   string         `yaml:"tool_name"`
-	Arguments  map[string]any `yaml:"arguments"`
+	ToolName  string         `yaml:"tool_name"`
+	Arguments map[string]any `yaml:"arguments"`
 	// Future: CLICmd, WorkingDir for CLI command testing
 }
 
@@ -390,9 +390,9 @@ type ContentItem struct {
 
 // ExpectationsConfig defines the expected outcomes.
 type ExpectationsConfig struct {
-	Decision        string             `yaml:"decision"` // allow, deny, or redact
+	Decision        string              `yaml:"decision"` // allow, deny, or redact
 	Policies        []PolicyExpectation `yaml:"policies,omitempty"`
-	RedactedContent []ContentItem      `yaml:"redacted_content,omitempty"`
+	RedactedContent []ContentItem       `yaml:"redacted_content,omitempty"`
 }
 
 // PolicyExpectation defines the expected decision for a specific policy.

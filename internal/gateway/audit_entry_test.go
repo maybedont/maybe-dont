@@ -383,8 +383,8 @@ func TestAuditEntry_EarlyTerminationScenarios(t *testing.T) {
 			RequestValidation: &AuditValidationInfo{
 				AI: &AuditAIResult{
 					Action:       "deny",
-					BlockedMs:    847,    // Stopped blocking after first deny
-					EvaluationMs: 1500,   // Total time including all results
+					BlockedMs:    847,  // Stopped blocking after first deny
+					EvaluationMs: 1500, // Total time including all results
 					DecidingRule: "block_destructive_ops",
 					Reason:       "This operation would delete repository",
 					Results: []AuditAIRuleResult{

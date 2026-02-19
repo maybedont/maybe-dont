@@ -38,10 +38,10 @@ func TestNewTrustedProxyChecker_WithIPv6(t *testing.T) {
 
 func TestNewTrustedProxyChecker_WithCIDR(t *testing.T) {
 	checker := NewTrustedProxyChecker([]string{
-		"10.0.0.0/8",       // Private A
-		"172.16.0.0/12",    // Private B
-		"192.168.0.0/16",   // Private C
-		"fc00::/7",         // IPv6 unique local
+		"10.0.0.0/8",     // Private A
+		"172.16.0.0/12",  // Private B
+		"192.168.0.0/16", // Private C
+		"fc00::/7",       // IPv6 unique local
 	})
 	assert.False(t, checker.TrustAll())
 
@@ -63,10 +63,10 @@ func TestNewTrustedProxyChecker_WithCIDR(t *testing.T) {
 
 func TestNewTrustedProxyChecker_MixedConfig(t *testing.T) {
 	checker := NewTrustedProxyChecker([]string{
-		"192.168.1.100",    // Individual IPv4
-		"10.0.0.0/8",       // CIDR
-		"::1",              // Individual IPv6
-		"fe80::/10",        // IPv6 link-local
+		"192.168.1.100", // Individual IPv4
+		"10.0.0.0/8",    // CIDR
+		"::1",           // Individual IPv6
+		"fe80::/10",     // IPv6 link-local
 	})
 	assert.False(t, checker.TrustAll())
 
@@ -80,11 +80,11 @@ func TestNewTrustedProxyChecker_MixedConfig(t *testing.T) {
 func TestNewTrustedProxyChecker_InvalidEntries(t *testing.T) {
 	// Invalid entries are silently ignored
 	checker := NewTrustedProxyChecker([]string{
-		"192.168.1.1",     // Valid
-		"not-an-ip",       // Invalid
-		"",                // Empty
-		"   ",             // Whitespace only
-		"192.168.1.0/33",  // Invalid CIDR
+		"192.168.1.1",    // Valid
+		"not-an-ip",      // Invalid
+		"",               // Empty
+		"   ",            // Whitespace only
+		"192.168.1.0/33", // Invalid CIDR
 	})
 
 	// Should still work with valid entries
@@ -395,8 +395,8 @@ func TestTrustedProxyChecker_RealWorldScenario_CloudFlare(t *testing.T) {
 func TestTrustedProxyChecker_RealWorldScenario_FullyTrustedChain(t *testing.T) {
 	// Simulate scenario where we trust all proxies in the chain
 	checker := NewTrustedProxyChecker([]string{
-		"10.0.0.0/8",       // Internal
-		"104.16.0.0/12",    // CloudFlare
+		"10.0.0.0/8",    // Internal
+		"104.16.0.0/12", // CloudFlare
 	})
 
 	result := checker.ExtractClientIP(

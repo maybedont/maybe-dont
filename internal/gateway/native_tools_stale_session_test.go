@@ -178,7 +178,6 @@ func TestNativeTools_DiscoverTools_ExemptFromSessionValidation_Integration(t *te
 	req.Params.Name = ToolDiscoverTools
 
 	result, err := handler.HandleToolCall(ctxWithSession, req)
-
 	// Should NOT return SessionExpiredError (discover_tools is exempt)
 	if err != nil {
 		// If there's an error, it should NOT be SessionExpiredError

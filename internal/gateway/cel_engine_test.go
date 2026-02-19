@@ -126,9 +126,9 @@ func TestCELPolicyEngine_AuditOnlyMode(t *testing.T) {
 				Request: mcp.Request{Method: "tools/call"},
 				Params:  mcp.CallToolParams{Name: "dangerous_tool"},
 			},
-			wantAllowed:       true,  // Should allow because mode is audit_only
-			wantDenyCount:     0,     // No enabled deny
-			wantAuditModeDeny: true,  // But audit_only rule did match
+			wantAllowed:       true, // Should allow because mode is audit_only
+			wantDenyCount:     0,    // No enabled deny
+			wantAuditModeDeny: true, // But audit_only rule did match
 		},
 		{
 			name: "default audit_only mode for all policies",
@@ -316,8 +316,8 @@ func TestCELEngine_MCPExpressionPrecedence(t *testing.T) {
 			name: "MCPExpression takes precedence over Expression",
 			policy: config.Policy{
 				Name:          "test-precedence",
-				Expression:    `false`,                                  // Legacy - always false, would never match
-				MCPExpression: `request.params.name == "blocked_tool"`,  // Should be used
+				Expression:    `false`,                                 // Legacy - always false, would never match
+				MCPExpression: `request.params.name == "blocked_tool"`, // Should be used
 				Action:        config.PolicyActionDeny,
 				Message:       "Tool blocked via mcp_expression",
 			},
@@ -332,8 +332,8 @@ func TestCELEngine_MCPExpressionPrecedence(t *testing.T) {
 			name: "Expression ignored when MCPExpression set",
 			policy: config.Policy{
 				Name:          "test-expression-ignored",
-				Expression:    `true`,                                   // Would match everything if used
-				MCPExpression: `request.params.name == "blocked_tool"`,  // But MCPExpression won't match
+				Expression:    `true`,                                  // Would match everything if used
+				MCPExpression: `request.params.name == "blocked_tool"`, // But MCPExpression won't match
 				Action:        config.PolicyActionDeny,
 				Message:       "Tool blocked",
 			},
@@ -880,14 +880,14 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name           string
-		req            mcp.CallToolRequest
-		wantAllowed    bool
-		wantMessage    string
-		wantCELAction  string
-		wantRuleCount  int
-		denyCount      int
-		allowCount     int
+		name          string
+		req           mcp.CallToolRequest
+		wantAllowed   bool
+		wantMessage   string
+		wantCELAction string
+		wantRuleCount int
+		denyCount     int
+		allowCount    int
 	}{
 		{
 			name: "allow read_file",

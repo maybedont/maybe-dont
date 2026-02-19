@@ -29,15 +29,15 @@ func setupTestSuiteWithYAML(t *testing.T, dir string, suiteYAML string, policyCo
 	t.Helper()
 
 	casesDir := filepath.Join(dir, "cases")
-	require.NoError(t, os.MkdirAll(casesDir, 0755))
+	require.NoError(t, os.MkdirAll(casesDir, 0o755))
 
 	policyPath := filepath.Join(dir, "ai_request_rules.yaml")
-	require.NoError(t, os.WriteFile(policyPath, []byte(policyContent), 0644))
+	require.NoError(t, os.WriteFile(policyPath, []byte(policyContent), 0o644))
 
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "suite.yaml"), []byte(suiteYAML), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "suite.yaml"), []byte(suiteYAML), 0o644))
 
 	for name, content := range testCases {
-		require.NoError(t, os.WriteFile(filepath.Join(casesDir, name), []byte(content), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(casesDir, name), []byte(content), 0o644))
 	}
 }
 
@@ -632,7 +632,7 @@ func TestIntegration_MultiCaseFile_EditOneCasePreservesSiblings(t *testing.T) {
 `
 	// Overwrite the file with modified mc-002
 	casesDir := filepath.Join(dir, "cases")
-	require.NoError(t, os.WriteFile(filepath.Join(casesDir, "multi.yaml"), []byte(modifiedMultiCase), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(casesDir, "multi.yaml"), []byte(modifiedMultiCase), 0o644))
 
 	// Run 2: incremental — mc-001 and mc-003 should be cached, mc-002 should re-run
 	mock2 := newAllowMock()
@@ -972,7 +972,7 @@ func TestIntegration_PolicyHashChange_InvalidatesCache(t *testing.T) {
     prompt: "Is this request REALLY safe? Check carefully."
     action: deny
 `
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "ai_request_rules.yaml"), []byte(modifiedPolicy), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ai_request_rules.yaml"), []byte(modifiedPolicy), 0o644))
 
 	// Run 2: policy hash changed → no cache hit
 	mock2 := newDenyMock()
@@ -1010,13 +1010,13 @@ func TestIntegration_MatrixMode_BothModelsInSingleRun(t *testing.T) {
 	ctx := context.Background()
 
 	runner, err := NewRunner(RunnerOptions{
-		SuiteDir:  dir,
-		Engine:    "ai",
-		RunMatrix: true,
-		StateFile: stateFile,
-		Quiet:     true,
-		OutputFormat: "json",
-		OutputFile:   outputFile,
+		SuiteDir:              dir,
+		Engine:                "ai",
+		RunMatrix:             true,
+		StateFile:             stateFile,
+		Quiet:                 true,
+		OutputFormat:          "json",
+		OutputFile:            outputFile,
 		ProviderClientFactory: mockProviderFactory(newDenyMock()),
 	})
 	require.NoError(t, err)

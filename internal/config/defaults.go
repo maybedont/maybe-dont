@@ -77,7 +77,7 @@ func WriteDefaultsIfMissing(configDir string) ([]string, error) {
 
 		// Try to write the file
 		// Use 0600 for config files (may contain sensitive data like API keys)
-		if err := os.WriteFile(path, d.Content, 0600); err != nil {
+		if err := os.WriteFile(path, d.Content, 0o600); err != nil {
 			// Write failed (read-only filesystem, permissions, etc.)
 			// This is non-fatal - user may be configuring via env vars
 			_, _ = fmt.Fprintf(os.Stderr, "Note: Skipping default %s (cannot write: %v). This is optional if configuring via environment variables.\n", d.Filename, err)
@@ -97,7 +97,7 @@ func WriteDefaultsIfMissing(configDir string) ([]string, error) {
 // This is used by the 'defaults export' command for users to get fresh defaults.
 func DumpDefaults(outputDir string, force bool) error {
 	// Ensure output directory exists
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -114,7 +114,7 @@ func DumpDefaults(outputDir string, force bool) error {
 			}
 		}
 
-		if err := os.WriteFile(path, d.Content, 0600); err != nil {
+		if err := os.WriteFile(path, d.Content, 0o600); err != nil {
 			return fmt.Errorf("failed to write %s: %w", d.Filename, err)
 		}
 

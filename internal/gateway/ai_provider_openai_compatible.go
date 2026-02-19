@@ -20,7 +20,7 @@ import (
 //
 // Use cases include: Google Gemini, LiteLLM, Azure OpenAI, vLLM, Ollama, OpenRouter.
 type openAICompatibleProvider struct {
-	endpoint    string            // Full endpoint URL from config
+	endpoint    string // Full endpoint URL from config
 	apiKey      string
 	model       string
 	parameters  map[string]any

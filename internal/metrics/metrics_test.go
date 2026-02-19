@@ -175,11 +175,11 @@ func TestShouldReport(t *testing.T) {
 		defer os.Setenv("HOME", originalHome)
 
 		cfg := Config{
-		Dataset:  "test-dataset",
-		APIToken: "test-token",
-	}
+			Dataset:  "test-dataset",
+			APIToken: "test-token",
+		}
 
-	c, err := NewCollector("v1.0.0", cfg, logger)
+		c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 		defer c.Close()
 
@@ -194,11 +194,11 @@ func TestShouldReport(t *testing.T) {
 		defer os.Setenv("HOME", originalHome)
 
 		cfg := Config{
-		Dataset:  "test-dataset",
-		APIToken: "test-token",
-	}
+			Dataset:  "test-dataset",
+			APIToken: "test-token",
+		}
 
-	c, err := NewCollector("v1.0.0", cfg, logger)
+		c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 		defer c.Close()
 
@@ -221,11 +221,11 @@ func TestShouldReport(t *testing.T) {
 		defer os.Unsetenv("MAYBEDONT_METRICS_OPTOUT")
 
 		cfg := Config{
-		Dataset:  "test-dataset",
-		APIToken: "test-token",
-	}
+			Dataset:  "test-dataset",
+			APIToken: "test-token",
+		}
 
-	c, err := NewCollector("v1.0.0", cfg, logger)
+		c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 
 		assert.False(t, c.ShouldReport())
@@ -256,11 +256,11 @@ func TestReport(t *testing.T) {
 		defer os.Setenv("HOME", originalHome)
 
 		cfg := Config{
-		Dataset:  "test-dataset",
-		APIToken: "test-token",
-	}
+			Dataset:  "test-dataset",
+			APIToken: "test-token",
+		}
 
-	c, err := NewCollector("v1.0.0", cfg, logger)
+		c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 
 		// Set some metrics
@@ -323,11 +323,11 @@ func TestReport(t *testing.T) {
 		defer os.Unsetenv("MAYBEDONT_METRICS_OPTOUT")
 
 		cfg := Config{
-		Dataset:  "test-dataset",
-		APIToken: "test-token",
-	}
+			Dataset:  "test-dataset",
+			APIToken: "test-token",
+		}
 
-	c, err := NewCollector("v1.0.0", cfg, logger)
+		c, err := NewCollector("v1.0.0", cfg, logger)
 		require.NoError(t, err)
 
 		err = c.Report(context.Background())
@@ -534,14 +534,14 @@ func TestMigrateFromOldLocations(t *testing.T) {
 
 		// Create old config directory with installation-id file
 		oldConfigDir := tmpDir + "/.config/maybe-dont"
-		require.NoError(t, os.MkdirAll(oldConfigDir, 0700))
+		require.NoError(t, os.MkdirAll(oldConfigDir, 0o700))
 		oldPath := oldConfigDir + "/" + InstallationIDFile
 		oldContent := []byte(`{"installation_id":"old-test-id-12345"}`)
-		require.NoError(t, os.WriteFile(oldPath, oldContent, 0600))
+		require.NoError(t, os.WriteFile(oldPath, oldContent, 0o600))
 
 		// Create new state directory
 		stateDir := tmpDir + "/.local/state/maybe-dont"
-		require.NoError(t, os.MkdirAll(stateDir, 0700))
+		require.NoError(t, os.MkdirAll(stateDir, 0o700))
 
 		// Run migration
 		err := migrateFromOldLocations(stateDir, logger)
@@ -566,14 +566,14 @@ func TestMigrateFromOldLocations(t *testing.T) {
 
 		// Create old cache directory with metrics-state file
 		oldCacheDir := tmpDir + "/.cache/maybe-dont"
-		require.NoError(t, os.MkdirAll(oldCacheDir, 0700))
+		require.NoError(t, os.MkdirAll(oldCacheDir, 0o700))
 		oldPath := oldCacheDir + "/" + MetricsStateFile
 		oldContent := []byte(`{"tool_invocations":42,"gateway_starts":5}`)
-		require.NoError(t, os.WriteFile(oldPath, oldContent, 0600))
+		require.NoError(t, os.WriteFile(oldPath, oldContent, 0o600))
 
 		// Create new state directory
 		stateDir := tmpDir + "/.local/state/maybe-dont"
-		require.NoError(t, os.MkdirAll(stateDir, 0700))
+		require.NoError(t, os.MkdirAll(stateDir, 0o700))
 
 		// Run migration
 		err := migrateFromOldLocations(stateDir, logger)
@@ -598,17 +598,17 @@ func TestMigrateFromOldLocations(t *testing.T) {
 
 		// Create old config directory with installation-id file
 		oldConfigDir := tmpDir + "/.config/maybe-dont"
-		require.NoError(t, os.MkdirAll(oldConfigDir, 0700))
+		require.NoError(t, os.MkdirAll(oldConfigDir, 0o700))
 		oldPath := oldConfigDir + "/" + InstallationIDFile
 		oldContent := []byte(`{"installation_id":"old-id"}`)
-		require.NoError(t, os.WriteFile(oldPath, oldContent, 0600))
+		require.NoError(t, os.WriteFile(oldPath, oldContent, 0o600))
 
 		// Create new state directory with existing file
 		stateDir := tmpDir + "/.local/state/maybe-dont"
-		require.NoError(t, os.MkdirAll(stateDir, 0700))
+		require.NoError(t, os.MkdirAll(stateDir, 0o700))
 		newPath := stateDir + "/" + InstallationIDFile
 		newContent := []byte(`{"installation_id":"new-id"}`)
-		require.NoError(t, os.WriteFile(newPath, newContent, 0600))
+		require.NoError(t, os.WriteFile(newPath, newContent, 0o600))
 
 		// Run migration
 		err := migrateFromOldLocations(stateDir, logger)
@@ -632,7 +632,7 @@ func TestMigrateFromOldLocations(t *testing.T) {
 
 		// Create only the new state directory
 		stateDir := tmpDir + "/.local/state/maybe-dont"
-		require.NoError(t, os.MkdirAll(stateDir, 0700))
+		require.NoError(t, os.MkdirAll(stateDir, 0o700))
 
 		// Run migration - should not error
 		err := migrateFromOldLocations(stateDir, logger)

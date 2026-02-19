@@ -42,7 +42,7 @@ type TestProgressIndicator struct {
 	mu          sync.Mutex
 	stop        chan struct{} // signals the animation goroutine to stop
 	done        chan struct{} // closed when the animation goroutine exits
-	running     bool         // true between Start and Stop (stays true during Pause)
+	running     bool          // true between Start and Stop (stays true during Pause)
 	caseID      string
 	engineInfo  string
 	title       string

@@ -31,6 +31,7 @@ This keeps worktrees co-located with the repo instead of scattered as sibling di
 ### Build and Development
 - `make build` - Build the binary
 - `make test` - Run all tests
+- `make fmt` - Auto-format Go code with gofumpt (via golangci-lint)
 - `make lint` - Run golangci-lint (linter must be installed)
 - `make clean` - Clean build artifacts
 - `go test -v ./internal/gateway/...` - Run tests for specific package
@@ -219,6 +220,7 @@ From `.cursor/rules/golang.mdc`:
 - Run `go mod tidy` after dependency changes
 - Ensure code compiles successfully
 - All tests must pass
+- Run `make fmt` before committing to auto-format with gofumpt
 - Code must pass `golangci-lint run`
 - Write unit tests where applicable
 - CLI configuration goes in `cmd/` folder
