@@ -2,12 +2,16 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zaptest"
 )
 
 // TestAllowedValue_Matches_ExactMatch verifies exact match behavior.
@@ -550,4 +554,200 @@ func TestExtractCallerFromRequest_NoCallerWhenHeaderMissing(t *testing.T) {
 
 	_, ok := GetCaller(ctx)
 	assert.False(t, ok, "caller should not be in context when header is missing")
+}
+
+// --- Endpoint Auth Integration Tests ---
+// These tests verify that real validation endpoints are protected by the auth middleware
+// when wired together on a mux, matching the setup in initSSEServer/initHTTPServer.
+
+// newAuthTestMux creates an http.ServeMux with the CLI and action validation handlers
+// registered at their real paths, wrapped with AuthMiddleware. This mirrors the wiring
+// in server.go's initSSEServer/initHTTPServer without starting a real server.
+func newAuthTestMux(t *testing.T, authConfig *CallerAuthConfig) http.Handler {
+	t.Helper()
+
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	mux := http.NewServeMux()
+
+	// Register CLI validation endpoint (same as server.go)
+	cliHandler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           logger,
+		Version:          "1.0.0-test",
+	})
+	mux.Handle("/api/v1/cli/validate", cliHandler)
+
+	// Register action validation endpoint (same as server.go)
+	actionHandler := NewActionValidationHandler(ActionValidationHandlerConfig{
+		Logger:  logger,
+		Version: "1.0.0-test",
+	})
+	mux.Handle("/api/v1/action/validate", actionHandler)
+
+	// Wrap with auth middleware (same as server.go)
+	return AuthMiddleware(authConfig, mux)
+}
+
+// TestAuthMiddleware_BlocksCLIEndpoint_MissingHeader verifies that the CLI validation
+// endpoint returns 401 when auth is enabled and the required header is missing.
+func TestAuthMiddleware_BlocksCLIEndpoint_MissingHeader(t *testing.T) {
+	authConfig := &CallerAuthConfig{
+		HeaderName:    "X-Api-Key",
+		AllowedValues: []AllowedValue{{Original: "secret-key", IsGlob: false}},
+		Enabled:       true,
+	}
+	handler := newAuthTestMux(t, authConfig)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(
+		`{"command": "gh", "arguments": ["pr", "list"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	assert.Contains(t, rr.Body.String(), "missing required header")
+}
+
+// TestAuthMiddleware_BlocksActionEndpoint_MissingHeader verifies that the action validation
+// endpoint returns 401 when auth is enabled and the required header is missing.
+func TestAuthMiddleware_BlocksActionEndpoint_MissingHeader(t *testing.T) {
+	authConfig := &CallerAuthConfig{
+		HeaderName:    "X-Api-Key",
+		AllowedValues: []AllowedValue{{Original: "secret-key", IsGlob: false}},
+		Enabled:       true,
+	}
+	handler := newAuthTestMux(t, authConfig)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(
+		`{"target": "execute_bash", "parameters": {"command": "ls"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	assert.Contains(t, rr.Body.String(), "missing required header")
+}
+
+// TestAuthMiddleware_BlocksCLIEndpoint_InvalidHeaderValue verifies that the CLI endpoint
+// returns 401 when the header value doesn't match.
+func TestAuthMiddleware_BlocksCLIEndpoint_InvalidHeaderValue(t *testing.T) {
+	authConfig := &CallerAuthConfig{
+		HeaderName:    "X-Api-Key",
+		AllowedValues: []AllowedValue{{Original: "secret-key", IsGlob: false}},
+		Enabled:       true,
+	}
+	handler := newAuthTestMux(t, authConfig)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(
+		`{"command": "gh", "arguments": ["pr", "list"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", "wrong-key")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	assert.Contains(t, rr.Body.String(), "invalid header value")
+}
+
+// TestAuthMiddleware_BlocksActionEndpoint_InvalidHeaderValue verifies that the action endpoint
+// returns 401 when the header value doesn't match.
+func TestAuthMiddleware_BlocksActionEndpoint_InvalidHeaderValue(t *testing.T) {
+	authConfig := &CallerAuthConfig{
+		HeaderName:    "X-Api-Key",
+		AllowedValues: []AllowedValue{{Original: "secret-key", IsGlob: false}},
+		Enabled:       true,
+	}
+	handler := newAuthTestMux(t, authConfig)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(
+		`{"target": "execute_bash", "parameters": {"command": "ls"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", "wrong-key")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	assert.Contains(t, rr.Body.String(), "invalid header value")
+}
+
+// TestAuthMiddleware_AllowsCLIEndpoint_ValidHeader verifies that the CLI endpoint
+// processes requests when the correct auth header is provided.
+func TestAuthMiddleware_AllowsCLIEndpoint_ValidHeader(t *testing.T) {
+	authConfig := &CallerAuthConfig{
+		HeaderName:    "X-Api-Key",
+		AllowedValues: []AllowedValue{{Original: "secret-key", IsGlob: false}},
+		Enabled:       true,
+	}
+	handler := newAuthTestMux(t, authConfig)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(
+		`{"command": "gh", "arguments": ["pr", "list"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", "secret-key")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	// Should reach the handler (200), not be blocked (401)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp CLIValidationResponse
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.True(t, resp.Allowed)
+}
+
+// TestAuthMiddleware_AllowsActionEndpoint_ValidHeader verifies that the action endpoint
+// processes requests when the correct auth header is provided.
+func TestAuthMiddleware_AllowsActionEndpoint_ValidHeader(t *testing.T) {
+	authConfig := &CallerAuthConfig{
+		HeaderName:    "X-Api-Key",
+		AllowedValues: []AllowedValue{{Original: "secret-key", IsGlob: false}},
+		Enabled:       true,
+	}
+	handler := newAuthTestMux(t, authConfig)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(
+		`{"target": "execute_bash", "parameters": {"command": "ls"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", "secret-key")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	// Should reach the handler (200), not be blocked (401)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp ActionValidationResponse
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.True(t, resp.Allowed)
+}
+
+// TestAuthMiddleware_EndpointsAccessible_AuthDisabled verifies that both endpoints
+// work normally when auth is disabled (no middleware blocking).
+func TestAuthMiddleware_EndpointsAccessible_AuthDisabled(t *testing.T) {
+	handler := newAuthTestMux(t, &CallerAuthConfig{Enabled: false})
+
+	// CLI endpoint
+	cliReq := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(
+		`{"command": "gh", "arguments": ["pr", "list"]}`))
+	cliReq.Header.Set("Content-Type", "application/json")
+	cliRR := httptest.NewRecorder()
+	handler.ServeHTTP(cliRR, cliReq)
+	assert.Equal(t, http.StatusOK, cliRR.Code, "CLI endpoint should be accessible when auth disabled")
+
+	// Action endpoint
+	actionReq := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(
+		`{"target": "execute_bash"}`))
+	actionReq.Header.Set("Content-Type", "application/json")
+	actionRR := httptest.NewRecorder()
+	handler.ServeHTTP(actionRR, actionReq)
+	assert.Equal(t, http.StatusOK, actionRR.Code, "Action endpoint should be accessible when auth disabled")
 }

@@ -40,8 +40,12 @@ type ActionValidationRequest struct {
 	Parameters map[string]any `json:"parameters,omitempty"`
 
 	// Actor identifies who is performing the action (e.g., "openhands-agent").
-	// Used for audit attribution via the X-Maybe-Dont-Client-ID header equivalent.
+	// Used as a fallback for client_id when X-Maybe-Dont-Client-ID header is not set.
 	Actor string `json:"actor,omitempty"`
+
+	// ExternalID is a caller-provided correlation ID (e.g., OpenHands action.id).
+	// Included in the audit log for correlating gateway entries back to the caller's records.
+	ExternalID string `json:"external_id,omitempty"`
 
 	// Context provides additional context about the action for AI policy evaluation.
 	Context *ActionContext `json:"context,omitempty"`
@@ -453,6 +457,7 @@ func (h *ActionValidationHandler) writeAuditEntryWithValidation(
 	// Build action info for the audit entry
 	// Reuse the Tool field with a synthetic tool name from the action target
 	entry := &AuditEntry{
+		Source:            "action",
 		ValidationStarted: validationStart.Format(time.RFC3339Nano),
 		CreatedAt:         now.Format(time.RFC3339Nano),
 		Tool: &AuditToolInfo{
@@ -461,10 +466,11 @@ func (h *ActionValidationHandler) writeAuditEntryWithValidation(
 			Params:       req.Parameters,
 		},
 		UpstreamRequest: UpstreamRequestInfo{
-			RequestID: ctx.RequestID,
-			ClientID:  ctx.ClientID,
-			ClientIP:  r.RemoteAddr,
-			UserAgent: r.Header.Get("User-Agent"),
+			RequestID:  ctx.RequestID,
+			ExternalID: req.ExternalID,
+			ClientID:   ctx.ClientID,
+			ClientIP:   r.RemoteAddr,
+			UserAgent:  r.Header.Get("User-Agent"),
 		},
 		RequestValidation: requestValidation,
 		Action:            action,
@@ -482,6 +488,7 @@ func (h *ActionValidationHandler) writeAuditEntryWithValidation(
 			case completion := <-results.AsyncCompletion:
 				if completion.AIDetails != nil && h.config.AuditWriter != nil {
 					asyncEntry := &AuditEntry{
+						Source:            "action",
 						ValidationStarted: validationStart.Format(time.RFC3339Nano),
 						CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 						Tool: &AuditToolInfo{
@@ -489,8 +496,9 @@ func (h *ActionValidationHandler) writeAuditEntryWithValidation(
 							PrefixedName: req.Target,
 						},
 						UpstreamRequest: UpstreamRequestInfo{
-							RequestID: ctx.RequestID + "-async",
-							ClientID:  ctx.ClientID,
+							RequestID:  ctx.RequestID + "-async",
+							ExternalID: req.ExternalID,
+							ClientID:   ctx.ClientID,
 						},
 						RequestValidation: &AuditValidationInfo{
 							AI: completion.AIDetails,

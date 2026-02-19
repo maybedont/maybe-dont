@@ -524,6 +524,45 @@ func TestHandleActionValidation_AuditLogIncludesClientID(t *testing.T) {
 	assert.Equal(t, "openhands-agent", entries[0].UpstreamRequest.ClientID)
 }
 
+// TestHandleActionValidation_AuditLogSourceIsAction verifies that audit log entries
+// have source set to "action" to distinguish from MCP and CLI entries.
+func TestHandleActionValidation_AuditLogSourceIsAction(t *testing.T) {
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, nil, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "ls"}}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "action", entries[0].Source)
+}
+
+// TestHandleActionValidation_ExternalIDInAuditLog verifies that the external_id field
+// from the request body is included in the audit log for caller-side correlation.
+func TestHandleActionValidation_ExternalIDInAuditLog(t *testing.T) {
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, nil, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash", "external_id": "42"}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "42", entries[0].UpstreamRequest.ExternalID)
+}
+
+// TestHandleActionValidation_ExternalIDOmittedWhenEmpty verifies that when no external_id
+// is provided, the field is omitted from the audit log (empty string).
+func TestHandleActionValidation_ExternalIDOmittedWhenEmpty(t *testing.T) {
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, nil, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "list_files"}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+	assert.Empty(t, entries[0].UpstreamRequest.ExternalID)
+}
+
 // --- Response Format Tests ---
 
 // TestHandleActionValidation_ResponseIncludesServerVersion verifies the server_version

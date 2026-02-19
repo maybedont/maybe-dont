@@ -356,6 +356,7 @@ func (h *CLIValidationHandler) writeAuditEntry(
 
 	now := time.Now().UTC()
 	entry := &AuditEntry{
+		Source:            "cli",
 		ValidationStarted: validationStart.Format(time.RFC3339Nano),
 		CreatedAt:         now.Format(time.RFC3339Nano),
 		CLI: &AuditCLIInfo{
@@ -532,6 +533,7 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 	auditArgs := h.getAuditArguments(req.Arguments)
 
 	entry := &AuditEntry{
+		Source:            "cli",
 		ValidationStarted: validationStart.Format(time.RFC3339Nano),
 		CreatedAt:         now.Format(time.RFC3339Nano),
 		CLI: &AuditCLIInfo{
@@ -563,6 +565,7 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 				// Update audit entry with complete AI results
 				if completion.AIDetails != nil && h.config.AuditWriter != nil {
 					asyncEntry := &AuditEntry{
+						Source:            "cli",
 						ValidationStarted: validationStart.Format(time.RFC3339Nano),
 						CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 						CLI: &AuditCLIInfo{
