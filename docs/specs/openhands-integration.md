@@ -146,13 +146,18 @@ See full plan in the implementation tracking document.
 ## Workflow
 
 1. ~~Implement PR 1 (gateway endpoint)~~ — **Done** → [PR #127](https://github.com/maybedont/maybe-dont/pull/127)
-2. Merge PR 1, tag, release gateway
-3. Fork `OpenHands/software-agent-sdk` to `maybedont` org
-4. Implement PR 2 (MaybeDontAnalyzer) on the fork — see full plan in session plan file
-5. Open PR against `OpenHands/software-agent-sdk`
-6. PR 3: OpenHands docs — MCP settings page + security guide (can start in parallel with PR 2)
-7. PR 4: OpenHands skill (`skills/maybe-dont/SKILL.md`) — after PR 2 merges
-8. Update maybedont.ai/docs with new action validation API reference + OpenHands integration guide
+2. ~~Merge PR 1, tag, release gateway~~ — **Done** → v1.3.0
+3. ~~Fork `OpenHands/software-agent-sdk` to `maybedont` org~~ — **Done**
+4. ~~Implement PR 2 (MaybeDontAnalyzer) on the fork~~ — **Done**
+5. ~~Open PR against `OpenHands/software-agent-sdk`~~ — **Done** → [software-agent-sdk#2142](https://github.com/OpenHands/software-agent-sdk/pull/2142)
+6. ~~PR 3: OpenHands docs — MCP settings page + security guide~~ — **Done** → [docs#350](https://github.com/OpenHands/docs/pull/350)
+7. ~~Update maybedont.ai/docs~~ — **Done** → [maybedont-site#82](https://github.com/maybedont/maybedont-site/pull/82)
+
+**Pending**: PRs 2 and 3 awaiting merge by OpenHands maintainers.
+
+## Deferred
+
+- **OpenHands skill** (`skills/maybe-dont/SKILL.md` in `OpenHands/extensions`) — deferred; existing docs coverage is sufficient
 
 ## Out of Scope (v2)
 

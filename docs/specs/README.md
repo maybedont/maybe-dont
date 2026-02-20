@@ -23,6 +23,7 @@ Each spec should have a `## Status` section near the top with one of these value
 | [xdg-base-directory-support](xdg-base-directory-support.md) | XDG Base Directory conventions for config/state files |
 | [test-pass-rate-history](test-pass-rate-history.md) | Rolling pass rate tracking, policy change markers, and stability reporting for the policy test suite |
 | [release-notes-process](release-notes-process.md) | Versioned release notes (release-notes/v{version}.md) enforced by CI |
+| [openhands-integration](openhands-integration.md) | OpenHands security analyzer integration via `POST /api/v1/action/validate` endpoint |
 
 ### Ready for Implementation
 
@@ -30,7 +31,6 @@ Each spec should have a `## Status` section near the top with one of these value
 |------|-------------|
 | [ai-validation-provider-agnostic](ai-validation-provider-agnostic.md) | Multi-provider AI validation (OpenAI, Anthropic, OpenAI-compatible) |
 | [mcp-sub-command](mcp-sub-command.md) | Move gateway server to `gateway` sub-command, update help text |
-| [openhands-integration](openhands-integration.md) | OpenHands security analyzer integration via `POST /api/v1/action/validate` endpoint |
 | [policy-evaluation-improvements](policy-evaluation-improvements.md) | Analysis of policy/test suite efficacy and phased improvement plan (Phases 1-2 complete, Phases 3-5 remaining) |
 
 ### Draft
