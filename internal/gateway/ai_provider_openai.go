@@ -9,19 +9,15 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 )
 
-// OpenAI API path appended to base URL for the openai provider.
-const openAIChatCompletionsPath = "/chat/completions"
-
 // openAIProvider implements AIProviderClient using the OpenAI REST API.
-// This adapter is used for the "openai" provider (with default or custom base URL).
+// This adapter is used for the "openai" provider.
 type openAIProvider struct {
-	endpoint    string // Full endpoint URL (base + path for openai)
+	endpoint    string // Full endpoint URL
 	apiKey      string
 	model       string
 	parameters  map[string]any
@@ -42,13 +38,10 @@ func newOpenAIProvider(cfg *config.Config) AIProviderClient {
 		endpoint = DefaultOpenAIEndpoint
 	}
 
-	// Append chat completions path to base URL
-	fullEndpoint := strings.TrimSuffix(endpoint, "/") + openAIChatCompletionsPath
-
-	host, path := parseEndpointURL(fullEndpoint)
+	host, path := parseEndpointURL(endpoint)
 
 	return &openAIProvider{
-		endpoint:    fullEndpoint,
+		endpoint:    endpoint,
 		apiKey:      aiCfg.APIKey,
 		model:       aiCfg.Model,
 		parameters:  aiCfg.Parameters,

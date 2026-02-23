@@ -189,8 +189,8 @@ const (
 
 // Default endpoints for known providers.
 const (
-	DefaultOpenAIEndpoint    = "https://api.openai.com/v1"
-	DefaultAnthropicEndpoint = "https://api.anthropic.com/v1"
+	DefaultOpenAIEndpoint    = "https://api.openai.com/v1/chat/completions"
+	DefaultAnthropicEndpoint = "https://api.anthropic.com/v1/messages"
 )
 
 // NewAIProviderClient creates an AIProviderClient based on the configuration.

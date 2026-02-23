@@ -157,21 +157,19 @@ export MAYBE_DONT_VALIDATION_AI_PARAMETERS_TEMPERATURE=0.0
 
 | Provider | Default Endpoint | Endpoint Required? |
 |----------|------------------|-------------------|
-| `openai` | `https://api.openai.com/v1` | No (uses default, can override) |
-| `anthropic` | `https://api.anthropic.com/v1` | No (uses default, can override) |
+| `openai` | `https://api.openai.com/v1/chat/completions` | No (uses default, can override) |
+| `anthropic` | `https://api.anthropic.com/v1/messages` | No (uses default, can override) |
 | `openai_compatible` | None | **Yes** (must specify full URL) |
 
-#### Endpoint Semantics by Provider
+#### Endpoint Semantics
 
-The `endpoint` field has different semantics depending on the provider:
+The `endpoint` field is always the fully qualified API URL for all providers. No path is appended automatically.
 
-| Provider | Endpoint Type | SDK/REST | Description |
-|----------|---------------|----------|-------------|
-| `openai` | Base URL | SDK | SDK appends `/chat/completions`. Example: `https://api.openai.com/v1` |
-| `anthropic` | Base URL | SDK | SDK appends `/messages`. Example: `https://api.anthropic.com/v1` |
-| `openai_compatible` | **Full URL** | REST | Complete URL to the chat completions endpoint. Example: `https://my-proxy.com/v1/chat/completions` |
-
-**Why the difference?** For `openai` and `anthropic`, we use official SDKs that expect a base URL and append their known API paths. For `openai_compatible`, we use direct REST calls to give full control over the URL structure, supporting any OpenAI-compatible endpoint regardless of path conventions.
+| Provider | Default Endpoint | Description |
+|----------|------------------|-------------|
+| `openai` | `https://api.openai.com/v1/chat/completions` | Full URL to the OpenAI chat completions API |
+| `anthropic` | `https://api.anthropic.com/v1/messages` | Full URL to the Anthropic messages API |
+| `openai_compatible` | *(none)* | Full URL to any OpenAI-compatible chat completions endpoint |
 
 Notes:
 - `provider` is required and explicit (no auto-detection from URL). For backward compatibility, if `provider` is unset, default to `openai` and log a deprecation warning.
@@ -195,12 +193,12 @@ validation:
     # endpoint omitted - uses default https://api.openai.com/v1
 ```
 
-**OpenAI with custom proxy (base URL):**
+**OpenAI with custom proxy:**
 ```yaml
 validation:
   ai:
     provider: "openai"
-    endpoint: "https://my-proxy.com/openai/v1"  # SDK appends /chat/completions
+    endpoint: "https://my-proxy.com/openai/v1/chat/completions"
     model: "gpt-4o-mini"
     api_key: "${OPENAI_API_KEY}"
 ```
@@ -212,7 +210,7 @@ validation:
     provider: "anthropic"
     model: "claude-sonnet-4-5-20250929"
     api_key: "${ANTHROPIC_API_KEY}"
-    # endpoint omitted - uses default https://api.anthropic.com/v1
+    # endpoint omitted - uses default https://api.anthropic.com/v1/messages
     parameters:
       max_tokens: 4096  # required for Anthropic, default applied if omitted
 ```
@@ -484,48 +482,32 @@ For future reference, here is the analysis for removing all SDKs and using REST 
 
 #### Decision: SDK for Known Providers, REST for OpenAI-Compatible
 
-Given that SDK binary impact is modest (+4 MB for Anthropic) and reduces code maintenance burden, we will use **official SDKs for known providers** and **direct REST for openai_compatible**:
+All providers use **direct REST calls** for consistency and full control over endpoint URLs:
 
 | Provider | Approach | Rationale |
 |----------|----------|-----------|
-| `openai` | **OpenAI SDK** | Already integrated, lightweight (+0.5 MB, 5 deps) |
+| `openai` | **Direct REST** | Full control over endpoint URL; no SDK path assumptions |
 | `openai_compatible` | **Direct REST** | Full control over URL structure; no path assumptions |
-| `anthropic` | **Anthropic SDK** | Official SDK, +4 MB acceptable vs. ~150 lines custom code |
+| `anthropic` | **Direct REST** | Full control over endpoint URL; no SDK path assumptions |
 
-**Why REST for `openai_compatible`?** The OpenAI SDK's `WithBaseURL()` expects a base URL and appends `/chat/completions`. This doesn't work for endpoints with non-standard path structures. Using direct REST calls for `openai_compatible` gives users full control over the URL.
-
-**Final binary impact:**
-- Current: 35 MB, 72 dependencies
-- After adding Anthropic SDK: 39 MB, 105 dependencies
-
-**Future consideration:** If binary size or dependency count becomes a concern, we can migrate to REST-only (~400 lines of code) to save ~5 MB and 38 dependencies. The provider-agnostic interface design supports this migration path.
+**Why direct REST for all providers?** Direct REST calls give full control over the URL structure, with no SDK path assumptions. The `endpoint` config field is always the fully qualified API URL.
 
 #### Provider Implementation Summary
 
 | Provider | Implementation | API Endpoint | Auth |
 |----------|----------------|--------------|------|
-| `openai` | OpenAI SDK | `https://api.openai.com/v1` (base) | `Authorization: Bearer {key}` |
+| `openai` | Direct REST | `https://api.openai.com/v1/chat/completions` | `Authorization: Bearer {key}` |
 | `openai_compatible` | Direct REST | Full URL from config | `Authorization: Bearer {key}` |
-| `anthropic` | Anthropic SDK | `https://api.anthropic.com/v1` (base) | `x-api-key: {key}` |
+| `anthropic` | Direct REST | `https://api.anthropic.com/v1/messages` | `x-api-key: {key}` |
 
 #### Implementation Details
 
-**OpenAI** (SDK):
+**OpenAI** (Direct REST):
 ```go
-// openai (default endpoint)
-client := openai.NewClient(option.WithAPIKey(apiKey))
-
-// openai with custom base URL (e.g., proxy)
-client := openai.NewClient(
-    option.WithAPIKey(apiKey),
-    option.WithBaseURL(endpoint), // base URL only, SDK appends /chat/completions
-)
-
-// Custom headers passed via SDK options
-client := openai.NewClient(
-    option.WithAPIKey(apiKey),
-    option.WithHeader("X-Custom-Header", "value"),
-)
+// Direct HTTP call to the configured endpoint URL
+req, _ := http.NewRequest("POST", endpoint, body)
+req.Header.Set("Authorization", "Bearer "+apiKey)
+req.Header.Set("Content-Type", "application/json")
 ```
 
 **OpenAI-compatible** (Direct REST):

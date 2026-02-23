@@ -93,12 +93,12 @@ func TestOpenAIProvider_DefaultEndpoint(t *testing.T) {
 	assert.Equal(t, "/v1/chat/completions", info.EndpointPath)
 }
 
-// TestOpenAIProvider_CustomEndpoint verifies that the OpenAI provider appends
-// the chat completions path to a custom endpoint.
+// TestOpenAIProvider_CustomEndpoint verifies that the OpenAI provider uses
+// the configured endpoint as-is without appending any path.
 func TestOpenAIProvider_CustomEndpoint(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Validation.AI.Provider = "openai"
-	cfg.Validation.AI.Endpoint = "https://my-proxy.example.com/openai/v1"
+	cfg.Validation.AI.Endpoint = "https://my-proxy.example.com/openai/v1/chat/completions"
 	cfg.Validation.AI.APIKey = "test-key"
 	cfg.Validation.AI.Model = "gpt-4o-mini"
 
@@ -138,6 +138,22 @@ func TestAnthropicProvider_DefaultEndpoint(t *testing.T) {
 
 	assert.Equal(t, "api.anthropic.com", info.EndpointHost)
 	assert.Equal(t, "/v1/messages", info.EndpointPath)
+}
+
+// TestAnthropicProvider_CustomEndpoint verifies that the Anthropic provider uses
+// the configured endpoint as-is without appending any path.
+func TestAnthropicProvider_CustomEndpoint(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Validation.AI.Provider = "anthropic"
+	cfg.Validation.AI.Endpoint = "https://my-proxy.example.com/anthropic/v1/messages"
+	cfg.Validation.AI.APIKey = "test-key"
+	cfg.Validation.AI.Model = "claude-sonnet-4-5-20250929"
+
+	client := NewAIProviderClient(cfg)
+	info := client.ProviderInfo()
+
+	assert.Equal(t, "my-proxy.example.com", info.EndpointHost)
+	assert.Equal(t, "/anthropic/v1/messages", info.EndpointPath)
 }
 
 func TestOpenAIProvider_Generate_Success(t *testing.T) {
