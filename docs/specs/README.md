@@ -45,6 +45,7 @@ Each spec should have a `## Status` section near the top with one of these value
 | [cli-proxy-for-ai-agents](cli-proxy-for-ai-agents.md) | CLI proxy mode for AI agent integrations |
 | [response-validation-state-changes](response-validation-state-changes.md) | Response validation action semantics |
 | [runtime-action-interception-architecture](runtime-action-interception-architecture.md) | Architecture for intercepting runtime actions |
+| [agent-hook-and-interceptor-integration](agent-hook-and-interceptor-integration.md) | Agent hooks (Claude, Cursor, Cline, Copilot) and MCP interceptors (SEP-1763) as alternatives to gateway proxy |
 
 ### No Status (Legacy)
 
