@@ -41,19 +41,19 @@ Agent hooks provide **deterministic enforcement** — they fire automatically re
 
 ### Comparison Matrix
 
-| Feature | Claude Code | Cursor | Cline | Copilot CLI | VS Code Copilot |
-|---------|------------|--------|-------|-------------|-----------------|
-| Pre-tool hook | `PreToolUse` | `preToolUse`, `beforeShellExecution`, `beforeMCPExecution` | `PreToolUse` | `preToolUse` | `PreToolUse` |
-| Post-tool hook | `PostToolUse` | `postToolUse`, `afterShellExecution`, `afterMCPExecution` | `PostToolUse` | `postToolUse` | `PostToolUse` |
-| Block execution | Exit code 2 or JSON `deny` | Exit code 2 or JSON `deny` | JSON `cancel: true` | Limited | JSON `permissionDecision: deny` |
-| Modify input | JSON `updatedInput` (Cursor) | `updated_input`, `updated_mcp_tool_output` | `contextModification` | No | `updatedInput` |
-| MCP tool matching | `mcp__<server>__<tool>` | Dedicated `beforeMCPExecution` | Tool name match | Tool name match | Tool name match |
-| CLI/Bash matching | `Bash` matcher | Dedicated `beforeShellExecution` | `execute_command` tool | `bash` tool | `Bash` matcher |
-| Hook types | `command`, `prompt`, `agent` | `command` | `command` (shell script) | `command` | `command` |
-| Config location | `.claude/settings.json` | `.cursor/hooks/` | `.clinerules/hooks/` | `.github/hooks/*.json` | `.github/hooks/*.json` |
-| HTTP from hooks | Yes (any shell command) | Yes (fetch in Node/Bun) | Shell commands only | Shell commands only | Shell commands only |
-| Fail-closed | No (non-zero other than 2 = proceed) | Yes (`beforeMCPExecution`, `beforeReadFile`) | No | No | No |
-| Platform | macOS, Linux, Windows | macOS, Linux, Windows | macOS, Linux | macOS, Linux, Windows | macOS, Linux, Windows |
+| Feature | Claude Code | Cursor | Gemini CLI | Cline | Copilot CLI | VS Code Copilot |
+|---------|------------|--------|------------|-------|-------------|-----------------|
+| Pre-tool hook | `PreToolUse` | `preToolUse`, `beforeShellExecution`, `beforeMCPExecution` | `BeforeTool` | `PreToolUse` | `preToolUse` | `PreToolUse` |
+| Post-tool hook | `PostToolUse` | `postToolUse`, `afterShellExecution`, `afterMCPExecution` | `AfterTool` | `PostToolUse` | `postToolUse` | `PostToolUse` |
+| Block execution | Exit code 2 or JSON `deny` | Exit code 2 or JSON `deny` | Exit code 2 or JSON `decision: "deny"` | JSON `cancel: true` | Limited | JSON `permissionDecision: deny` |
+| Modify input | JSON `updatedInput` (Cursor) | `updated_input`, `updated_mcp_tool_output` | `systemMessage` | `contextModification` | No | `updatedInput` |
+| MCP tool matching | `mcp__<server>__<tool>` | Dedicated `beforeMCPExecution` | `mcp_context` in input | Tool name match | Tool name match | Tool name match |
+| CLI/Bash matching | `Bash` matcher | Dedicated `beforeShellExecution` | `tool_name` matcher | `execute_command` tool | `bash` tool | `Bash` matcher |
+| Hook types | `command`, `prompt`, `agent` | `command` | `command` | `command` (shell script) | `command` | `command` |
+| Config location | `.claude/settings.json` | `.cursor/hooks/` | `settings.json` | `.clinerules/hooks/` | `.github/hooks/*.json` | `.github/hooks/*.json` |
+| HTTP from hooks | Yes (any shell command) | Yes (fetch in Node/Bun) | Yes (any shell command) | Shell commands only | Shell commands only | Shell commands only |
+| Fail-closed | No (non-zero other than 2 = proceed) | Yes (`beforeMCPExecution`, `beforeReadFile`) | No | No | No | No |
+| Platform | macOS, Linux, Windows | macOS, Linux, Windows | macOS, Linux, Windows | macOS, Linux | macOS, Linux, Windows | macOS, Linux, Windows |
 
 ### Hook Architecture (All Platforms)
 
@@ -125,6 +125,39 @@ Cursor has **dedicated events** for shell and MCP execution, separate from the g
 **Config:** `.cursor/hooks/` directory
 
 **Reference:** https://cursor.com/docs/agent/hooks
+
+### Gemini CLI Hooks
+
+**Events:** `BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeToolSelection`, `SessionStart`, `SessionEnd`, `Notification`, `PreCompress`
+
+Gemini CLI shipped hooks in v0.26.0 (January 2026). It has dedicated model-layer hooks (`BeforeModel`, `AfterModel`, `BeforeToolSelection`) that other agents don't expose.
+
+**Input (BeforeTool):**
+```json
+{
+  "session_id": "abc123",
+  "cwd": "/path/to/project",
+  "hook_event_name": "BeforeTool",
+  "timestamp": "2026-02-23T14:30:00Z",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "gh repo delete my-repo"
+  },
+  "mcp_context": {}
+}
+```
+
+**Blocking:** Exit code 2 blocks with stderr as reason. Or JSON:
+```json
+{
+  "decision": "deny",
+  "reason": "Destructive GitHub operation blocked by policy"
+}
+```
+
+**Config:** `settings.json` with `hooks` object, same structure as Claude Code (matcher + hooks array)
+
+**Reference:** https://geminicli.com/docs/hooks/reference/
 
 ### Cline Hooks
 
@@ -620,6 +653,15 @@ Each phase is additive — earlier mechanisms continue to work alongside newer o
 - Use `afterMCPExecution` to scan MCP responses (can modify output via `updated_mcp_tool_output`)
 - Config in `.cursor/hooks/` directory
 
+### Gemini CLI
+
+- Use `BeforeTool` with matcher for CLI commands (tool name matching via regex)
+- Use `BeforeTool` for MCP tool calls (`mcp_context` included in input)
+- Use `AfterTool` to inspect tool responses
+- Block with exit code 2 or JSON `{"decision": "deny", "reason": "..."}`
+- Config in `settings.json` with `hooks` object
+- Also has model-layer hooks (`BeforeModel`, `BeforeToolSelection`) not available in other agents
+
 ### Cline
 
 - Use `PreToolUse` matching `execute_command` for CLI commands
@@ -669,6 +711,7 @@ Each phase is additive — earlier mechanisms continue to work alongside newer o
 - [SEP-1763: Interceptors for MCP](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1763) — Draft proposal
 - [Claude Code Hooks Guide](https://code.claude.com/docs/en/hooks-guide)
 - [Cursor Hooks Documentation](https://cursor.com/docs/agent/hooks)
+- [Gemini CLI Hooks Reference](https://geminicli.com/docs/hooks/reference/)
 - [Cline Hook Reference](https://docs.cline.bot/features/hooks/hook-reference)
 - [GitHub Copilot CLI Hooks](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-hooks)
 - [VS Code Agent Hooks](https://code.visualstudio.com/docs/copilot/customization/hooks)
