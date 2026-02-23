@@ -9,17 +9,13 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
 )
 
-// Anthropic API path and version header.
-const (
-	anthropicMessagesPath = "/messages"
-	anthropicVersion      = "2023-06-01"
-)
+// Anthropic API version header.
+const anthropicVersion = "2023-06-01"
 
 // Default max_tokens for Anthropic (required parameter).
 // Kept low because Anthropic counts max_tokens against rate limits (not actual output).
@@ -28,7 +24,7 @@ const anthropicDefaultMaxTokens = 256
 
 // anthropicProvider implements AIProviderClient using the Anthropic REST API.
 type anthropicProvider struct {
-	endpoint   string // Full endpoint URL (base + path)
+	endpoint   string // Full endpoint URL
 	apiKey     string
 	model      string
 	parameters map[string]any
@@ -48,13 +44,10 @@ func newAnthropicProvider(cfg *config.Config) AIProviderClient {
 		endpoint = DefaultAnthropicEndpoint
 	}
 
-	// Append messages path to base URL
-	fullEndpoint := strings.TrimSuffix(endpoint, "/") + anthropicMessagesPath
-
-	host, path := parseEndpointURL(fullEndpoint)
+	host, path := parseEndpointURL(endpoint)
 
 	return &anthropicProvider{
-		endpoint:   fullEndpoint,
+		endpoint:   endpoint,
 		apiKey:     aiCfg.APIKey,
 		model:      aiCfg.Model,
 		parameters: aiCfg.Parameters,

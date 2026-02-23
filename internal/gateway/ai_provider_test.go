@@ -93,12 +93,12 @@ func TestOpenAIProvider_DefaultEndpoint(t *testing.T) {
 	assert.Equal(t, "/v1/chat/completions", info.EndpointPath)
 }
 
-// TestOpenAIProvider_CustomEndpoint verifies that the OpenAI provider appends
-// the chat completions path to a custom endpoint.
+// TestOpenAIProvider_CustomEndpoint verifies that the OpenAI provider uses
+// the configured endpoint as-is without appending any path.
 func TestOpenAIProvider_CustomEndpoint(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Validation.AI.Provider = "openai"
-	cfg.Validation.AI.Endpoint = "https://my-proxy.example.com/openai/v1"
+	cfg.Validation.AI.Endpoint = "https://my-proxy.example.com/openai/v1/chat/completions"
 	cfg.Validation.AI.APIKey = "test-key"
 	cfg.Validation.AI.Model = "gpt-4o-mini"
 
