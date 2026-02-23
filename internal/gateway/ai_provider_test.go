@@ -140,6 +140,22 @@ func TestAnthropicProvider_DefaultEndpoint(t *testing.T) {
 	assert.Equal(t, "/v1/messages", info.EndpointPath)
 }
 
+// TestAnthropicProvider_CustomEndpoint verifies that the Anthropic provider uses
+// the configured endpoint as-is without appending any path.
+func TestAnthropicProvider_CustomEndpoint(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Validation.AI.Provider = "anthropic"
+	cfg.Validation.AI.Endpoint = "https://my-proxy.example.com/anthropic/v1/messages"
+	cfg.Validation.AI.APIKey = "test-key"
+	cfg.Validation.AI.Model = "claude-sonnet-4-5-20250929"
+
+	client := NewAIProviderClient(cfg)
+	info := client.ProviderInfo()
+
+	assert.Equal(t, "my-proxy.example.com", info.EndpointHost)
+	assert.Equal(t, "/anthropic/v1/messages", info.EndpointPath)
+}
+
 func TestOpenAIProvider_Generate_Success(t *testing.T) {
 	// Create test server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -482,21 +482,15 @@ For future reference, here is the analysis for removing all SDKs and using REST 
 
 #### Decision: SDK for Known Providers, REST for OpenAI-Compatible
 
-Given that SDK binary impact is modest (+4 MB for Anthropic) and reduces code maintenance burden, we will use **official SDKs for known providers** and **direct REST for openai_compatible**:
+All providers use **direct REST calls** for consistency and full control over endpoint URLs:
 
 | Provider | Approach | Rationale |
 |----------|----------|-----------|
-| `openai` | **OpenAI SDK** | Already integrated, lightweight (+0.5 MB, 5 deps) |
+| `openai` | **Direct REST** | Full control over endpoint URL; no SDK path assumptions |
 | `openai_compatible` | **Direct REST** | Full control over URL structure; no path assumptions |
-| `anthropic` | **Anthropic SDK** | Official SDK, +4 MB acceptable vs. ~150 lines custom code |
+| `anthropic` | **Direct REST** | Full control over endpoint URL; no SDK path assumptions |
 
-**Why REST for `openai_compatible`?** Direct REST calls give full control over the URL structure, supporting any OpenAI-compatible endpoint regardless of path conventions.
-
-**Final binary impact:**
-- Current: 35 MB, 72 dependencies
-- After adding Anthropic SDK: 39 MB, 105 dependencies
-
-**Future consideration:** If binary size or dependency count becomes a concern, we can migrate to REST-only (~400 lines of code) to save ~5 MB and 38 dependencies. The provider-agnostic interface design supports this migration path.
+**Why direct REST for all providers?** Direct REST calls give full control over the URL structure, with no SDK path assumptions. The `endpoint` config field is always the fully qualified API URL.
 
 #### Provider Implementation Summary
 
