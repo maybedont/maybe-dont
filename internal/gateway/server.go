@@ -683,10 +683,7 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		Logger:                g.logger,
 		Version:               g.version,
 		AuditWriter:           g.auditWriter,
-		CELEngine:             g.policyEngine,
-		AIEngine:              g.aiPolicyEngine,
-		MaxBlockingMs:         g.config.Validation.MaxBlockingMs,
-		MaxRuleEvaluationMs:   g.config.Validation.MaxRuleEvaluationMs,
+		Evaluator:             evaluator,
 		IncludeArgumentValues: g.config.Audit.ShouldIncludeArgumentValues(),
 	})
 	mux.Handle("/api/v1/action/validate", actionHandler)
@@ -806,10 +803,7 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		Logger:                g.logger,
 		Version:               g.version,
 		AuditWriter:           g.auditWriter,
-		CELEngine:             g.policyEngine,
-		AIEngine:              g.aiPolicyEngine,
-		MaxBlockingMs:         g.config.Validation.MaxBlockingMs,
-		MaxRuleEvaluationMs:   g.config.Validation.MaxRuleEvaluationMs,
+		Evaluator:             evaluator,
 		IncludeArgumentValues: g.config.Audit.ShouldIncludeArgumentValues(),
 	})
 	mux.Handle("/api/v1/action/validate", actionHandler)

@@ -724,11 +724,19 @@ func newTestActionHandler(t *testing.T, celEngine *CELPolicyEngine, aiEngine *AI
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
+	var evaluator *PolicyEvaluator
+	if celEngine != nil || aiEngine != nil {
+		evaluator = &PolicyEvaluator{
+			CELEngine: celEngine,
+			AIEngine:  aiEngine,
+			Logger:    sessionLogger,
+		}
+	}
+
 	return NewActionValidationHandler(ActionValidationHandlerConfig{
 		Logger:    sessionLogger,
 		Version:   "1.0.0-test",
-		CELEngine: celEngine,
-		AIEngine:  aiEngine,
+		Evaluator: evaluator,
 	})
 }
 
@@ -743,11 +751,19 @@ func newTestActionHandlerWithCallback(
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
+	var evaluator *PolicyEvaluator
+	if celEngine != nil || aiEngine != nil {
+		evaluator = &PolicyEvaluator{
+			CELEngine: celEngine,
+			AIEngine:  aiEngine,
+			Logger:    sessionLogger,
+		}
+	}
+
 	return NewActionValidationHandler(ActionValidationHandlerConfig{
 		Logger:       sessionLogger,
 		Version:      "1.0.0-test",
-		CELEngine:    celEngine,
-		AIEngine:     aiEngine,
+		Evaluator:    evaluator,
 		OnValidation: onValidation,
 	})
 }
@@ -763,11 +779,19 @@ func newTestActionHandlerWithAudit(
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
+	var evaluator *PolicyEvaluator
+	if celEngine != nil || aiEngine != nil {
+		evaluator = &PolicyEvaluator{
+			CELEngine: celEngine,
+			AIEngine:  aiEngine,
+			Logger:    sessionLogger,
+		}
+	}
+
 	return NewActionValidationHandler(ActionValidationHandlerConfig{
 		Logger:      sessionLogger,
 		Version:     "1.0.0-test",
-		CELEngine:   celEngine,
-		AIEngine:    aiEngine,
+		Evaluator:   evaluator,
 		AuditWriter: auditWriter,
 	})
 }
