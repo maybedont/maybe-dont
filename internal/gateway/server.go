@@ -651,6 +651,16 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		http.Error(w, "Not Found: HTTP transport not enabled. Server configured for SSE transport.", http.StatusNotFound)
 	})
 
+	// Create shared policy evaluator
+	evaluator := &PolicyEvaluator{
+		CELEngine:           g.policyEngine,
+		AIEngine:            g.aiPolicyEngine,
+		ResponseChain:       g.responseValidationChain,
+		MaxBlockingMs:       g.config.Validation.MaxBlockingMs,
+		MaxRuleEvaluationMs: g.config.Validation.MaxRuleEvaluationMs,
+		Logger:              g.logger,
+	}
+
 	// Register CLI validation endpoint
 	cliHandler := NewCLIValidationHandler(CLIValidationHandlerConfig{
 		Enabled:               g.config.CLIRequestValidation.Enabled,
@@ -658,10 +668,7 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		Logger:                g.logger,
 		Version:               g.version,
 		AuditWriter:           g.auditWriter,
-		CELEngine:             g.policyEngine,
-		AIEngine:              g.aiPolicyEngine,
-		MaxBlockingMs:         g.config.Validation.MaxBlockingMs,
-		MaxRuleEvaluationMs:   g.config.Validation.MaxRuleEvaluationMs,
+		Evaluator:             evaluator,
 		IncludeArgumentValues: g.config.Audit.ShouldIncludeArgumentValues(),
 	})
 	mux.Handle("/api/v1/cli/validate", cliHandler)
@@ -767,6 +774,16 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		http.Error(w, "Not Found: SSE transport not enabled. Server configured for HTTP transport.", http.StatusNotFound)
 	})
 
+	// Create shared policy evaluator
+	evaluator := &PolicyEvaluator{
+		CELEngine:           g.policyEngine,
+		AIEngine:            g.aiPolicyEngine,
+		ResponseChain:       g.responseValidationChain,
+		MaxBlockingMs:       g.config.Validation.MaxBlockingMs,
+		MaxRuleEvaluationMs: g.config.Validation.MaxRuleEvaluationMs,
+		Logger:              g.logger,
+	}
+
 	// Register CLI validation endpoint
 	cliHandler := NewCLIValidationHandler(CLIValidationHandlerConfig{
 		Enabled:               g.config.CLIRequestValidation.Enabled,
@@ -774,10 +791,7 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 		Logger:                g.logger,
 		Version:               g.version,
 		AuditWriter:           g.auditWriter,
-		CELEngine:             g.policyEngine,
-		AIEngine:              g.aiPolicyEngine,
-		MaxBlockingMs:         g.config.Validation.MaxBlockingMs,
-		MaxRuleEvaluationMs:   g.config.Validation.MaxRuleEvaluationMs,
+		Evaluator:             evaluator,
 		IncludeArgumentValues: g.config.Audit.ShouldIncludeArgumentValues(),
 	})
 	mux.Handle("/api/v1/cli/validate", cliHandler)
