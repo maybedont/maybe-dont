@@ -139,6 +139,9 @@ type Config struct {
 	// CLIRequestValidation configures validation of CLI commands via REST API.
 	CLIRequestValidation CLIRequestValidationConfig `mapstructure:"cli_request_validation"`
 
+	// Intercept configures the /api/v1/intercept endpoint for agent hook scripts.
+	Intercept InterceptConfig `mapstructure:"intercept"`
+
 	// Downstream MCP servers configuration
 	DownstreamMCPServers map[string]ClientConfig `mapstructure:"downstream_mcp_servers"`
 
@@ -387,6 +390,18 @@ type CLIRequestValidationConfig struct {
 	// Use "*" to validate all commands.
 	// Empty list when enabled=true is a configuration error.
 	ValidateCommands []string `mapstructure:"validate_commands"`
+}
+
+// InterceptConfig configures the /api/v1/intercept endpoint for agent hook scripts.
+type InterceptConfig struct {
+	// Enabled controls whether the intercept endpoint is active.
+	// When false, the endpoint returns 400.
+	Enabled bool `mapstructure:"enabled"`
+
+	// ShellToolNames lists tool names that represent shell/CLI execution.
+	// When a tool with one of these names is intercepted, the gateway parses
+	// the command string and evaluates both cli_expression and mcp_expression.
+	ShellToolNames []string `mapstructure:"shell_tool_names"`
 }
 
 // LoadPoliciesFromFile loads deterministic policies from a file
@@ -1172,6 +1187,11 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("response_validation.cel.mode", "audit_only")
 	v.SetDefault("response_validation.ai.enabled", false)
 	v.SetDefault("response_validation.ai.mode", "audit_only")
+	// Intercept endpoint defaults
+	v.SetDefault("intercept.enabled", true)
+	v.SetDefault("intercept.shell_tool_names", []string{
+		"Bash", "execute_command", "shell", "run_terminal_command", "run_command",
+	})
 
 	// Try to find config file
 	configFileFound := false
