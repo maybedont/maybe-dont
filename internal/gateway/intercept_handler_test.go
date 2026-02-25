@@ -413,6 +413,142 @@ func TestInterceptHandler_ResponsePhase_NoChain(t *testing.T) {
 	assert.Equal(t, "validation", resp.Type)
 }
 
+// --- Audit Logging Tests ---
+
+// TestInterceptHandler_AuditEntry_MCPTool verifies audit entry has source="intercept",
+// Tool field populated with payload.name, and UpstreamRequest with mapped context fields.
+func TestInterceptHandler_AuditEntry_MCPTool(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	evaluator := &PolicyEvaluator{Logger: logger}
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:               true,
+		ShellToolNames:        []string{"Bash"},
+		Logger:                logger,
+		Version:               "1.0.0-test",
+		Evaluator:             evaluator,
+		AuditWriter:           auditWriter,
+		IncludeArgumentValues: true,
+	})
+
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "some_mcp_tool", "arguments": {"key": "value"}}, "context": {"traceId": "trace-123", "sessionId": "session-456"}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "intercept", entry.Source)
+	require.NotNil(t, entry.Tool)
+	assert.Equal(t, "some_mcp_tool", entry.Tool.Name)
+	assert.Equal(t, "some_mcp_tool", entry.Tool.PrefixedName)
+	assert.Equal(t, map[string]any{"key": "value"}, entry.Tool.Params)
+	assert.Nil(t, entry.CLI)
+	assert.Equal(t, "trace-123", entry.UpstreamRequest.ExternalID)
+	assert.Equal(t, "session-456", entry.UpstreamRequest.SessionID)
+	assert.Equal(t, "allow", entry.Action)
+}
+
+// TestInterceptHandler_AuditEntry_ShellTool verifies audit entry has both
+// Tool and CLI fields populated for shell tools.
+func TestInterceptHandler_AuditEntry_ShellTool(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	evaluator := &PolicyEvaluator{Logger: logger}
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:               true,
+		ShellToolNames:        []string{"Bash"},
+		Logger:                logger,
+		Version:               "1.0.0-test",
+		Evaluator:             evaluator,
+		AuditWriter:           auditWriter,
+		IncludeArgumentValues: true,
+	})
+
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "Bash", "arguments": {"command": "echo hello"}}, "config": {"working_directory": "/home/user"}}`
+	_, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "intercept", entry.Source)
+	require.NotNil(t, entry.Tool)
+	assert.Equal(t, "Bash", entry.Tool.Name)
+	require.NotNil(t, entry.CLI)
+	assert.Equal(t, "echo", entry.CLI.Command)
+	assert.Equal(t, []string{"hello"}, entry.CLI.Arguments)
+	assert.Equal(t, "/home/user", entry.CLI.WorkingDirectory)
+}
+
+// TestInterceptHandler_AuditEntry_ContextMapping verifies context.traceId maps
+// to UpstreamRequest.ExternalID and context.sessionId maps to UpstreamRequest.SessionID.
+func TestInterceptHandler_AuditEntry_ContextMapping(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	evaluator := &PolicyEvaluator{Logger: logger}
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:     true,
+		Logger:      logger,
+		Version:     "1.0.0-test",
+		Evaluator:   evaluator,
+		AuditWriter: auditWriter,
+	})
+
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "test_tool"}, "context": {"traceId": "trace-abc", "spanId": "span-def", "sessionId": "session-ghi", "timestamp": "2026-02-24T00:00:00Z"}}`
+	_, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "trace-abc", entry.UpstreamRequest.ExternalID)
+	assert.Equal(t, "session-ghi", entry.UpstreamRequest.SessionID)
+}
+
+// TestInterceptHandler_AuditEntry_PrincipalAsClientID verifies context.principal.id
+// maps to UpstreamRequest.ClientID when X-Maybe-Dont-Client-ID header is not set.
+func TestInterceptHandler_AuditEntry_PrincipalAsClientID(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	evaluator := &PolicyEvaluator{Logger: logger}
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:     true,
+		Logger:      logger,
+		Version:     "1.0.0-test",
+		Evaluator:   evaluator,
+		AuditWriter: auditWriter,
+	})
+
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "test_tool"}, "context": {"principal": {"type": "agent", "id": "claude-code-v1"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/intercept", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No X-Maybe-Dont-Client-ID header
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "claude-code-v1", entry.UpstreamRequest.ClientID)
+}
+
 // --- Test Helpers ---
 
 // stubResponseHandler is a test double that returns preconfigured results.

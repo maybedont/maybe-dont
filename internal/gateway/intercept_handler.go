@@ -217,6 +217,20 @@ func (h *InterceptHandler) handleRequestPhase(
 	start time.Time,
 ) *InterceptResponse {
 	results := h.evaluateRequest(ctx, req)
+
+	action := "allow"
+	actionReason := ""
+	if !results.Allowed {
+		action = "deny"
+		actionReason = string(ActionReasonRequestPolicy)
+	} else if results.AuditModeBypass {
+		actionReason = string(ActionReasonAuditMode)
+	} else if results.FailedOpen {
+		actionReason = string(ActionReasonFailOpen)
+	}
+
+	h.writeRequestAuditEntry(start, valCtx, req, action, actionReason, &results)
+
 	return h.buildValidationResponse(req, valCtx, results, start)
 }
 
@@ -532,6 +546,149 @@ func (h *InterceptHandler) buildValidationResponse(
 			Results:       policyResults,
 		},
 	}
+}
+
+// --- Audit Logging ---
+
+// writeRequestAuditEntry creates and writes an audit entry for request phase evaluations.
+// Shell tools populate both Tool and CLI fields; non-shell tools populate Tool only.
+func (h *InterceptHandler) writeRequestAuditEntry(
+	start time.Time,
+	valCtx *CLIValidationContext,
+	req *InterceptRequest,
+	action string,
+	actionReason string,
+	results *ValidationResults,
+) {
+	if h.config.AuditWriter == nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	entry := &AuditEntry{
+		Source:            "intercept",
+		ValidationStarted: start.Format(time.RFC3339Nano),
+		CreatedAt:         now.Format(time.RFC3339Nano),
+		Tool:              h.buildAuditToolInfo(req),
+		UpstreamRequest:   h.buildUpstreamRequestInfo(valCtx, req),
+		Action:            action,
+		ActionReason:      actionReason,
+		DurationMs:        now.Sub(start).Milliseconds(),
+	}
+
+	// Shell tools also get CLI info
+	if h.isShellTool(req.Payload.Name) {
+		entry.CLI = h.buildAuditCLIInfo(req)
+	}
+
+	// Attach validation details
+	if results != nil && (results.RulesDetails != nil || results.AIDetails != nil) {
+		entry.RequestValidation = &AuditValidationInfo{
+			CEL: results.RulesDetails,
+			AI:  results.AIDetails,
+		}
+	}
+
+	_, _ = h.config.AuditWriter.Write(entry)
+
+	// Handle async AI completion
+	if results != nil && results.AsyncCompletion != nil {
+		WriteAsyncAuditCompletion(h.config.AuditWriter, h.config.Logger, valCtx.RequestID,
+			results.AsyncCompletion, func(completion AsyncCompletion) *AuditEntry {
+				return &AuditEntry{
+					Source:            "intercept",
+					ValidationStarted: start.Format(time.RFC3339Nano),
+					CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+					Tool:              h.buildAuditToolInfo(req),
+					UpstreamRequest: UpstreamRequestInfo{
+						RequestID:  valCtx.RequestID + "-async",
+						ExternalID: h.getTraceID(req),
+						ClientID:   h.resolveClientID(valCtx, req),
+					},
+					RequestValidation: &AuditValidationInfo{
+						AI: completion.AIDetails,
+					},
+					Action:       action,
+					ActionReason: "async_completion",
+					DurationMs:   completion.EvaluationMs,
+				}
+			})
+	}
+}
+
+// buildAuditToolInfo creates the Tool section of an audit entry from the intercept request.
+func (h *InterceptHandler) buildAuditToolInfo(req *InterceptRequest) *AuditToolInfo {
+	var params map[string]any
+	if h.config.IncludeArgumentValues {
+		params = req.Payload.Arguments
+	}
+	return &AuditToolInfo{
+		Name:         req.Payload.Name,
+		PrefixedName: req.Payload.Name,
+		Params:       params,
+	}
+}
+
+// buildAuditCLIInfo creates the CLI section of an audit entry for shell tool calls.
+func (h *InterceptHandler) buildAuditCLIInfo(req *InterceptRequest) *AuditCLIInfo {
+	commandStr, _ := req.Payload.Arguments["command"].(string)
+	parts := strings.Fields(commandStr)
+
+	var command string
+	var args []string
+	if len(parts) > 0 {
+		command = parts[0]
+		args = parts[1:]
+	}
+
+	var workingDir string
+	if req.Config != nil {
+		workingDir = req.Config.WorkingDirectory
+	}
+
+	return &AuditCLIInfo{
+		Command:          command,
+		Arguments:        args,
+		WorkingDirectory: workingDir,
+	}
+}
+
+// buildUpstreamRequestInfo creates the UpstreamRequest section of an audit entry.
+// Maps intercept context fields to the standard upstream request fields.
+func (h *InterceptHandler) buildUpstreamRequestInfo(valCtx *CLIValidationContext, req *InterceptRequest) UpstreamRequestInfo {
+	return UpstreamRequestInfo{
+		RequestID:  valCtx.RequestID,
+		ExternalID: h.getTraceID(req),
+		ClientID:   h.resolveClientID(valCtx, req),
+		SessionID:  h.getSessionID(req),
+	}
+}
+
+// resolveClientID returns the client ID from headers (preferred) or falls back to principal.id.
+func (h *InterceptHandler) resolveClientID(valCtx *CLIValidationContext, req *InterceptRequest) string {
+	if valCtx.ClientID != "" {
+		return valCtx.ClientID
+	}
+	if req.Context != nil && req.Context.Principal != nil {
+		return req.Context.Principal.ID
+	}
+	return ""
+}
+
+// getTraceID extracts the trace ID from the intercept context.
+func (h *InterceptHandler) getTraceID(req *InterceptRequest) string {
+	if req.Context != nil {
+		return req.Context.TraceID
+	}
+	return ""
+}
+
+// getSessionID extracts the session ID from the intercept context.
+func (h *InterceptHandler) getSessionID(req *InterceptRequest) string {
+	if req.Context != nil {
+		return req.Context.SessionID
+	}
+	return ""
 }
 
 func (h *InterceptHandler) extractContext(r *http.Request) *CLIValidationContext {
