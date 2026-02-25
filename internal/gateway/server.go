@@ -689,6 +689,23 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 	mux.Handle("/api/v1/action/validate", actionHandler)
 	g.logger.Info(ctx, "Action validation endpoint registered")
 
+	// Register intercept endpoint
+	interceptHandler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:               g.config.Intercept.Enabled,
+		ShellToolNames:        g.config.Intercept.ShellToolNames,
+		Logger:                g.logger,
+		Version:               g.version,
+		AuditWriter:           g.auditWriter,
+		Evaluator:             evaluator,
+		IncludeArgumentValues: g.config.Audit.ShouldIncludeArgumentValues(),
+	})
+	mux.Handle("/api/v1/intercept", interceptHandler)
+	if g.config.Intercept.Enabled {
+		g.logger.Info(ctx, "Intercept endpoint enabled",
+			zap.Int("shell_tool_names_count", len(g.config.Intercept.ShellToolNames)),
+		)
+	}
+
 	// Wrap with auth middleware
 	handler := AuthMiddleware(g.callerAuthConfig, mux)
 
@@ -808,6 +825,23 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 	})
 	mux.Handle("/api/v1/action/validate", actionHandler)
 	g.logger.Info(ctx, "Action validation endpoint registered")
+
+	// Register intercept endpoint
+	interceptHandler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:               g.config.Intercept.Enabled,
+		ShellToolNames:        g.config.Intercept.ShellToolNames,
+		Logger:                g.logger,
+		Version:               g.version,
+		AuditWriter:           g.auditWriter,
+		Evaluator:             evaluator,
+		IncludeArgumentValues: g.config.Audit.ShouldIncludeArgumentValues(),
+	})
+	mux.Handle("/api/v1/intercept", interceptHandler)
+	if g.config.Intercept.Enabled {
+		g.logger.Info(ctx, "Intercept endpoint enabled",
+			zap.Int("shell_tool_names_count", len(g.config.Intercept.ShellToolNames)),
+		)
+	}
 
 	// Wrap with auth middleware
 	handler := AuthMiddleware(g.callerAuthConfig, mux)
