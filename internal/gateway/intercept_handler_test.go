@@ -1,12 +1,14 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/maybedont/maybe-dont/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -289,7 +291,138 @@ func TestInterceptHandler_ResponseFormat(t *testing.T) {
 	assert.GreaterOrEqual(t, resp.DurationMs, int64(0))
 }
 
+// --- Response Phase Evaluation Tests ---
+
+// TestInterceptHandler_ResponsePhase_Allowed verifies that a response with
+// no policy violations returns type="validation", valid=true.
+func TestInterceptHandler_ResponsePhase_Allowed(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	chain := NewResponseValidationChain(logger, &stubResponseHandler{
+		results: ResponseValidationResults{
+			Allowed: true,
+			Message: "Response approved",
+			Results: []ResponseValidationResult{},
+		},
+	})
+	evaluator := &PolicyEvaluator{
+		ResponseChain: chain,
+		Logger:        logger,
+	}
+	handler := newTestInterceptHandler(t, evaluator)
+
+	body := `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool", "result": {"content": [{"type": "text", "text": "hello world"}]}}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.True(t, resp.Valid)
+	assert.Equal(t, "info", resp.Severity)
+	assert.Equal(t, "validation", resp.Type)
+	assert.Equal(t, "response", resp.Phase)
+	assert.False(t, resp.Modified)
+	assert.Nil(t, resp.Payload)
+}
+
+// TestInterceptHandler_ResponsePhase_Denied verifies that a denied response
+// returns type="validation", valid=false, severity="error".
+func TestInterceptHandler_ResponsePhase_Denied(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	chain := NewResponseValidationChain(logger, &stubResponseHandler{
+		results: ResponseValidationResults{
+			Allowed: false,
+			Message: "Response denied by policy",
+			Results: []ResponseValidationResult{
+				{PolicyName: "deny-response", PolicyType: "cel", Action: "deny"},
+			},
+		},
+	})
+	evaluator := &PolicyEvaluator{
+		ResponseChain: chain,
+		Logger:        logger,
+	}
+	handler := newTestInterceptHandler(t, evaluator)
+
+	body := `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool", "result": {"content": [{"type": "text", "text": "sensitive data"}]}}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.False(t, resp.Valid)
+	assert.Equal(t, "error", resp.Severity)
+	assert.Equal(t, "validation", resp.Type)
+	assert.NotEmpty(t, resp.Messages)
+}
+
+// TestInterceptHandler_ResponsePhase_Redacted verifies that a redacted response
+// returns type="mutation", modified=true, with the redacted payload.
+func TestInterceptHandler_ResponsePhase_Redacted(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	redacted := "[REDACTED]"
+	chain := NewResponseValidationChain(logger, &stubResponseHandler{
+		results: ResponseValidationResults{
+			Allowed:         true,
+			Message:         "Content redacted",
+			RedactedContent: &redacted,
+			Results: []ResponseValidationResult{
+				{PolicyName: "redact-secrets", PolicyType: "cel", Action: "redact", RedactedContent: redacted},
+			},
+		},
+	})
+	evaluator := &PolicyEvaluator{
+		ResponseChain: chain,
+		Logger:        logger,
+	}
+	handler := newTestInterceptHandler(t, evaluator)
+
+	body := `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool", "result": {"content": [{"type": "text", "text": "secret: password123"}]}}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.True(t, resp.Valid)
+	require.Equal(t, "mutation", resp.Type)
+	require.True(t, resp.Modified)
+	require.NotNil(t, resp.Payload)
+	require.NotNil(t, resp.Payload.Result)
+	require.NotEmpty(t, resp.Payload.Result.Content)
+	assert.Equal(t, "[REDACTED]", resp.Payload.Result.Content[0].Text)
+}
+
+// TestInterceptHandler_ResponsePhase_NoChain verifies graceful handling when
+// no response validation chain is configured.
+func TestInterceptHandler_ResponsePhase_NoChain(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	evaluator := &PolicyEvaluator{Logger: logger}
+	handler := newTestInterceptHandler(t, evaluator)
+
+	body := `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool", "result": {"content": [{"type": "text", "text": "hello"}]}}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.True(t, resp.Valid)
+	assert.Equal(t, "info", resp.Severity)
+	assert.Equal(t, "validation", resp.Type)
+}
+
 // --- Test Helpers ---
+
+// stubResponseHandler is a test double that returns preconfigured results.
+type stubResponseHandler struct {
+	results ResponseValidationResults
+}
+
+func (h *stubResponseHandler) HandleResponse(_ context.Context, _ mcp.CallToolRequest, _ *mcp.CallToolResult) (ResponseValidationResults, error) {
+	return h.results, nil
+}
 
 func newTestInterceptHandler(t *testing.T, evaluator *PolicyEvaluator) *InterceptHandler {
 	t.Helper()

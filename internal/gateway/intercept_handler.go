@@ -221,28 +221,121 @@ func (h *InterceptHandler) handleRequestPhase(
 }
 
 // handleResponsePhase evaluates a response-phase intercept through the response validation chain.
-// Placeholder — full implementation in Task 7.
+// Redacted responses return type="mutation" with the modified payload; denials return type="validation".
 func (h *InterceptHandler) handleResponsePhase(
-	_ context.Context,
+	ctx context.Context,
 	valCtx *CLIValidationContext,
 	req *InterceptRequest,
 	start time.Time,
 ) *InterceptResponse {
-	// Placeholder — returns allowed until Task 7
-	return &InterceptResponse{
+	if h.config.Evaluator == nil {
+		return h.buildResponseResult(req, valCtx, ResponseValidationResults{
+			Allowed: true,
+			Message: "No response validation configured",
+		}, start)
+	}
+
+	mcpReq := h.payloadToCallToolRequest(req)
+	mcpResult := h.payloadToCallToolResult(req)
+
+	results, err := h.config.Evaluator.EvaluateResponse(ctx, mcpReq, mcpResult)
+	if err != nil {
+		h.config.Logger.Error(ctx, "Response evaluation failed",
+			zap.String("request_id", valCtx.RequestID),
+			zap.Error(err),
+		)
+		// Fail-open: treat evaluation errors as allowed
+		results.Allowed = true
+		results.Message = "Response evaluation failed, allowing (fail-open)"
+	}
+
+	return h.buildResponseResult(req, valCtx, results, start)
+}
+
+// payloadToCallToolResult converts an InterceptPayload's result to an mcp.CallToolResult.
+func (h *InterceptHandler) payloadToCallToolResult(req *InterceptRequest) *mcp.CallToolResult {
+	result := &mcp.CallToolResult{}
+	if req.Payload.Result == nil {
+		return result
+	}
+	for _, c := range req.Payload.Result.Content {
+		if c.Type == "text" {
+			result.Content = append(result.Content, mcp.TextContent{
+				Type: "text",
+				Text: c.Text,
+			})
+		}
+	}
+	return result
+}
+
+// buildResponseResult maps ResponseValidationResults to an SEP-1763 InterceptResponse.
+// Redacted responses produce type="mutation" with modified=true and the redacted payload.
+func (h *InterceptHandler) buildResponseResult(
+	req *InterceptRequest,
+	valCtx *CLIValidationContext,
+	results ResponseValidationResults,
+	start time.Time,
+) *InterceptResponse {
+	severity := "info"
+	if !results.Allowed {
+		severity = "error"
+	} else if results.AuditModeBypass {
+		severity = "warn"
+	}
+
+	var messages []InterceptMessage
+	if !results.Allowed || results.AuditModeBypass {
+		messages = append(messages, InterceptMessage{
+			Message:  results.Message,
+			Severity: severity,
+		})
+	}
+	if messages == nil {
+		messages = []InterceptMessage{}
+	}
+
+	policyResults := make([]InterceptPolicyResult, 0, len(results.Results))
+	for _, r := range results.Results {
+		policyResults = append(policyResults, InterceptPolicyResult{
+			PolicyName: r.PolicyName,
+			PolicyType: r.PolicyType,
+			Action:     string(r.Action),
+			Message:    r.Message,
+		})
+	}
+
+	resp := &InterceptResponse{
 		Interceptor: "maybe-dont",
 		Type:        "validation",
 		Phase:       req.Phase,
-		Valid:       true,
-		Severity:    "info",
-		Messages:    []InterceptMessage{},
+		Valid:       results.Allowed,
+		Severity:    severity,
+		Messages:    messages,
 		DurationMs:  time.Since(start).Milliseconds(),
 		Info: InterceptInfo{
 			RequestID:     valCtx.RequestID,
 			ServerVersion: h.config.Version,
-			Results:       []InterceptPolicyResult{},
+			Results:       policyResults,
 		},
 	}
+
+	// Redaction produces a mutation response with the modified payload
+	if results.RedactedContent != nil {
+		resp.Type = "mutation"
+		resp.Modified = true
+		resp.Payload = &InterceptPayload{
+			Name:      req.Payload.Name,
+			Arguments: req.Payload.Arguments,
+			Result: &InterceptResult{
+				Content: []InterceptContent{
+					{Type: "text", Text: *results.RedactedContent},
+				},
+			},
+		}
+	}
+
+	return resp
 }
 
 // evaluateRequest routes request evaluation based on whether the tool is a shell tool.
