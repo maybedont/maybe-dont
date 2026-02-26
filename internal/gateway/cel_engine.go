@@ -241,6 +241,14 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
+		// Skip policies without MCP expression (CLI-only rules)
+		if policy.MCPExpression == "" {
+			e.logger.Debug(ctx, "Skipping policy without MCP expression",
+				zap.String("name", policy.Name),
+			)
+			continue
+		}
+
 		// Track timing for this policy evaluation
 		ruleStart := time.Now()
 

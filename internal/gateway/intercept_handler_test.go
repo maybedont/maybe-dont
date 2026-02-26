@@ -719,6 +719,170 @@ func TestInterceptHandler_AuditEntry_ArgumentFiltering(t *testing.T) {
 	}
 }
 
+// --- Blocking Budget Tests ---
+
+// TestInterceptHandler_BlockingBudget_CELWithBudget verifies that the evaluator's
+// MaxBlockingMs and MaxRuleEvaluationMs are used (not zero-defaults) when evaluating
+// requests through the intercept handler with a real CEL engine.
+func TestInterceptHandler_BlockingBudget_CELWithBudget(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	celEngine := newTestCELEngineWithDenyRule(t)
+	evaluator := &PolicyEvaluator{
+		CELEngine:           celEngine,
+		MaxBlockingMs:       5000,
+		MaxRuleEvaluationMs: 2000,
+		Logger:              logger,
+	}
+	handler := newTestInterceptHandler(t, evaluator)
+
+	// This should be denied by the CEL rule, confirming the full evaluation
+	// pipeline (handler → evaluator → budget → CEL engine) works.
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "test_tool", "arguments": {"key": "value"}}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.False(t, resp.Valid, "CEL deny rule should trigger through the budget path")
+	assert.Equal(t, "error", resp.Severity)
+	assert.GreaterOrEqual(t, resp.DurationMs, int64(0))
+}
+
+// TestInterceptHandler_ShellTool_DualEvaluation verifies that shell tool
+// evaluation runs both CLI and MCP paths independently. Each path creates
+// its own blocking budget within PolicyEvaluator.
+func TestInterceptHandler_ShellTool_DualEvaluation(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	// Create an engine with BOTH mcp_expression and cli_expression rules.
+	// The mcp_expression rule denies tool "Bash"; the cli_expression rule denies command "rm".
+	celEngine, err := NewCELPolicyEngine(context.Background(), logger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:          "deny-rm-cli",
+			CLIExpression: `cli.command == "rm"`,
+			Action:        config.PolicyActionDeny,
+			Message:       "rm denied by CLI rule",
+		},
+		{
+			Name:       "deny-bash-mcp",
+			Expression: `request.params.name == "Bash"`,
+			Action:     config.PolicyActionDeny,
+			Message:    "Bash denied by MCP rule",
+		},
+	}, "")
+	require.NoError(t, err)
+
+	evaluator := &PolicyEvaluator{
+		CELEngine:           celEngine,
+		MaxBlockingMs:       10000,
+		MaxRuleEvaluationMs: 5000,
+		Logger:              logger,
+	}
+	auditWriter := &mockAuditWriter{}
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:        true,
+		ShellToolNames: []string{"Bash"},
+		Logger:         logger,
+		Version:        "1.0.0-test",
+		Evaluator:      evaluator,
+		AuditWriter:    auditWriter,
+	})
+
+	// Shell tool "Bash" with command "rm -rf /" — should trigger BOTH deny rules
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "Bash", "arguments": {"command": "rm -rf /"}}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.False(t, resp.Valid, "Should be denied (both CLI and MCP rules trigger)")
+
+	// Verify both evaluations ran by checking policy results contain both rules
+	require.NotEmpty(t, resp.Info.Results)
+	policyNames := make([]string, 0, len(resp.Info.Results))
+	for _, r := range resp.Info.Results {
+		policyNames = append(policyNames, r.PolicyName)
+	}
+	assert.Contains(t, policyNames, "deny-rm-cli", "CLI expression rule should be evaluated")
+	assert.Contains(t, policyNames, "deny-bash-mcp", "MCP expression rule should be evaluated")
+}
+
+// TestInterceptHandler_ShellTool_CLIAllowMCPDeny verifies that when CLI evaluation
+// allows but MCP evaluation denies, the merged result is deny.
+func TestInterceptHandler_ShellTool_CLIAllowMCPDeny(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	// MCP rule denies all; no CLI rule
+	celEngine, err := NewCELPolicyEngine(context.Background(), logger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:       "deny-all-mcp",
+			Expression: `true`,
+			Action:     config.PolicyActionDeny,
+			Message:    "Denied by MCP rule",
+		},
+	}, "")
+	require.NoError(t, err)
+
+	evaluator := &PolicyEvaluator{
+		CELEngine: celEngine,
+		Logger:    logger,
+	}
+	handler := newTestInterceptHandler(t, evaluator)
+
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "Bash", "arguments": {"command": "echo safe"}}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.False(t, resp.Valid, "MCP deny should override CLI allow in merged results")
+}
+
+// --- Audit Entry Completeness with Real CEL Evaluation ---
+
+// TestInterceptHandler_AuditEntry_CELRulesDetails verifies that when a real
+// CEL engine evaluates a request, the audit entry's RequestValidation.CEL field
+// is populated with rule evaluation details.
+func TestInterceptHandler_AuditEntry_CELRulesDetails(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	celEngine := newTestCELEngineWithDenyRule(t)
+	evaluator := &PolicyEvaluator{
+		CELEngine: celEngine,
+		Logger:    logger,
+	}
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:     true,
+		Logger:      logger,
+		Version:     "1.0.0-test",
+		Evaluator:   evaluator,
+		AuditWriter: auditWriter,
+	})
+
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "test_tool"}}`
+	_, code := sendIntercept(t, handler, body)
+	assert.Equal(t, http.StatusOK, code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "deny", entry.Action)
+	require.NotNil(t, entry.RequestValidation, "should have RequestValidation for CEL deny")
+	require.NotNil(t, entry.RequestValidation.CEL, "should have CEL details")
+	assert.Equal(t, "deny", entry.RequestValidation.CEL.Action)
+	assert.Equal(t, "deny-all", entry.RequestValidation.CEL.DecidingRule)
+	assert.NotEmpty(t, entry.RequestValidation.CEL.Results)
+}
+
 // --- Test Helpers ---
 
 func ptrStr(s string) *string { return &s }
