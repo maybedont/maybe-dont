@@ -883,6 +883,115 @@ func TestInterceptHandler_AuditEntry_CELRulesDetails(t *testing.T) {
 	assert.NotEmpty(t, entry.RequestValidation.CEL.Results)
 }
 
+// TestInterceptHandler_ShellTool_AuditMergesRulesDetails verifies that when a shell
+// tool triggers both CLI and MCP CEL evaluation, the audit entry contains merged
+// RulesDetails with rule results from both evaluation paths.
+func TestInterceptHandler_ShellTool_AuditMergesRulesDetails(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	// Create CEL engine with both CLI-expression and MCP-expression rules
+	celEngine, err := NewCELPolicyEngine(context.Background(), logger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:          "deny-rm-cli",
+			CLIExpression: `cli.command == "rm"`,
+			Action:        config.PolicyActionDeny,
+			Message:       "rm denied",
+		},
+		{
+			Name:       "deny-bash-mcp",
+			Expression: `request.params.name == "Bash"`,
+			Action:     config.PolicyActionDeny,
+			Message:    "Bash denied",
+		},
+	}, "")
+	require.NoError(t, err)
+
+	evaluator := &PolicyEvaluator{
+		CELEngine:           celEngine,
+		MaxBlockingMs:       10000,
+		MaxRuleEvaluationMs: 5000,
+		Logger:              logger,
+	}
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:        true,
+		ShellToolNames: []string{"Bash"},
+		Logger:         logger,
+		Version:        "1.0.0-test",
+		Evaluator:      evaluator,
+		AuditWriter:    auditWriter,
+	})
+
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "Bash", "arguments": {"command": "rm -rf /"}}}`
+	_, code := sendIntercept(t, handler, body)
+	assert.Equal(t, http.StatusOK, code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "deny", entry.Action)
+	assert.Equal(t, "intercept", entry.Source)
+	require.NotNil(t, entry.RequestValidation, "should have RequestValidation")
+	require.NotNil(t, entry.RequestValidation.CEL, "should have CEL details")
+
+	// The merged RulesDetails should contain results from BOTH evaluation paths
+	ruleNames := make([]string, 0, len(entry.RequestValidation.CEL.Results))
+	for _, r := range entry.RequestValidation.CEL.Results {
+		ruleNames = append(ruleNames, r.Rule)
+	}
+	assert.Contains(t, ruleNames, "deny-rm-cli", "CLI rule result should be in audit")
+	assert.Contains(t, ruleNames, "deny-bash-mcp", "MCP rule result should be in audit")
+	assert.Equal(t, "deny", entry.RequestValidation.CEL.Action)
+}
+
+// TestInterceptHandler_FailedOpen_ActionReason verifies that when a policy evaluation
+// fails open, the audit entry's action_reason reflects the fail-open condition.
+func TestInterceptHandler_FailedOpen_ActionReason(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	// Create a CEL engine with a rule that will cause a runtime error
+	celEngine, err := NewCELPolicyEngine(context.Background(), logger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:       "runtime-error",
+			Expression: `request.params.arguments.nonexistent.deep_field == "crash"`,
+			Action:     config.PolicyActionDeny,
+			Message:    "should not reach here",
+		},
+	}, "")
+	require.NoError(t, err)
+
+	evaluator := &PolicyEvaluator{
+		CELEngine: celEngine,
+		Logger:    logger,
+	}
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:     true,
+		Logger:      logger,
+		Version:     "1.0.0-test",
+		Evaluator:   evaluator,
+		AuditWriter: auditWriter,
+	})
+
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "test_tool"}}`
+	_, code := sendIntercept(t, handler, body)
+	assert.Equal(t, http.StatusOK, code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "allow", entry.Action, "fail-open should result in allow")
+	assert.Equal(t, "fail_open", entry.ActionReason, "should have fail_open action reason")
+}
+
 // --- mergeShellResults Edge Case Tests ---
 
 // TestMergeShellResults_BothDeny verifies that when both CLI and MCP evaluations

@@ -182,6 +182,9 @@ func mergeEngineResults(final *ValidationResults, engine ValidationResults) {
 	if engine.AuditModeBypass {
 		final.AuditModeBypass = true
 	}
+	if engine.FailedOpen {
+		final.FailedOpen = true
+	}
 
 	// If engine denies and it's not audit-only, update final result
 	if !engine.Allowed && !engine.AuditModeBypass {
