@@ -883,6 +883,269 @@ func TestInterceptHandler_AuditEntry_CELRulesDetails(t *testing.T) {
 	assert.NotEmpty(t, entry.RequestValidation.CEL.Results)
 }
 
+// --- mergeShellResults Edge Case Tests ---
+
+// TestMergeShellResults_BothDeny verifies that when both CLI and MCP evaluations
+// deny, the merged result uses the CLI message (first writer wins).
+func TestMergeShellResults_BothDeny(t *testing.T) {
+	handler := newTestInterceptHandler(t, nil)
+
+	cliResults := ValidationResults{
+		Allowed:   false,
+		Message:   "rm denied by CLI rule",
+		Results:   []ValidationResult{{PolicyName: "deny-rm-cli", Action: config.PolicyActionDeny, Message: "rm denied by CLI rule"}},
+		DenyCount: 1,
+	}
+	mcpResults := ValidationResults{
+		Allowed:   false,
+		Message:   "Bash denied by MCP rule",
+		Results:   []ValidationResult{{PolicyName: "deny-bash-mcp", Action: config.PolicyActionDeny, Message: "Bash denied by MCP rule"}},
+		DenyCount: 1,
+	}
+
+	merged := handler.mergeShellResults(cliResults, mcpResults)
+
+	assert.False(t, merged.Allowed, "merged should be denied")
+	assert.Equal(t, "rm denied by CLI rule", merged.Message, "CLI message should take precedence (first writer)")
+	assert.Equal(t, 2, merged.DenyCount, "deny counts should sum")
+	assert.Len(t, merged.Results, 2, "should contain results from both sides")
+	assert.False(t, merged.AuditModeBypass, "no audit bypass when denied")
+}
+
+// TestMergeShellResults_CLIAllowMCPDeny verifies MCP deny overrides CLI allow.
+func TestMergeShellResults_CLIAllowMCPDeny(t *testing.T) {
+	handler := newTestInterceptHandler(t, nil)
+
+	cliResults := ValidationResults{
+		Allowed:    true,
+		Message:    "CLI allowed",
+		AllowCount: 1,
+	}
+	mcpResults := ValidationResults{
+		Allowed:   false,
+		Message:   "MCP denied",
+		DenyCount: 1,
+	}
+
+	merged := handler.mergeShellResults(cliResults, mcpResults)
+
+	assert.False(t, merged.Allowed)
+	assert.Equal(t, "MCP denied", merged.Message, "MCP deny message should be used when CLI allows")
+}
+
+// TestMergeShellResults_AuditBypassOverriddenByDeny verifies that AuditModeBypass
+// from one side is cleared when the other side has an enforced deny.
+func TestMergeShellResults_AuditBypassOverriddenByDeny(t *testing.T) {
+	handler := newTestInterceptHandler(t, nil)
+
+	tests := []struct {
+		name    string
+		cli     ValidationResults
+		mcp     ValidationResults
+		wantAMB bool
+	}{
+		{
+			name: "CLI audit_only bypass cleared by MCP enforced deny",
+			cli: ValidationResults{
+				Allowed:         true,
+				AuditModeBypass: true,
+			},
+			mcp: ValidationResults{
+				Allowed: false,
+				Message: "denied by MCP",
+			},
+			wantAMB: false,
+		},
+		{
+			name: "MCP audit_only bypass cleared by CLI enforced deny",
+			cli: ValidationResults{
+				Allowed: false,
+				Message: "denied by CLI",
+			},
+			mcp: ValidationResults{
+				Allowed:         true,
+				AuditModeBypass: true,
+			},
+			wantAMB: false,
+		},
+		{
+			name: "Both audit_only bypass preserved when both allow",
+			cli: ValidationResults{
+				Allowed:         true,
+				AuditModeBypass: true,
+			},
+			mcp: ValidationResults{
+				Allowed:         true,
+				AuditModeBypass: true,
+			},
+			wantAMB: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged := handler.mergeShellResults(tt.cli, tt.mcp)
+			assert.Equal(t, tt.wantAMB, merged.AuditModeBypass)
+		})
+	}
+}
+
+// TestMergeShellResults_FailedOpenPropagated verifies that FailedOpen from either
+// side is propagated to the merged result.
+func TestMergeShellResults_FailedOpenPropagated(t *testing.T) {
+	handler := newTestInterceptHandler(t, nil)
+
+	tests := []struct {
+		name string
+		cli  ValidationResults
+		mcp  ValidationResults
+		want bool
+	}{
+		{
+			name: "CLI failed open propagated",
+			cli:  ValidationResults{Allowed: true, FailedOpen: true},
+			mcp:  ValidationResults{Allowed: true},
+			want: true,
+		},
+		{
+			name: "MCP failed open propagated",
+			cli:  ValidationResults{Allowed: true},
+			mcp:  ValidationResults{Allowed: true, FailedOpen: true},
+			want: true,
+		},
+		{
+			name: "both failed open",
+			cli:  ValidationResults{Allowed: true, FailedOpen: true},
+			mcp:  ValidationResults{Allowed: true, FailedOpen: true},
+			want: true,
+		},
+		{
+			name: "neither failed open",
+			cli:  ValidationResults{Allowed: true},
+			mcp:  ValidationResults{Allowed: true},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged := handler.mergeShellResults(tt.cli, tt.mcp)
+			assert.Equal(t, tt.want, merged.FailedOpen)
+		})
+	}
+}
+
+// TestMergeShellResults_RulesDetailsMerged verifies that RulesDetails from both
+// CLI and MCP evaluations are merged (not overwritten).
+func TestMergeShellResults_RulesDetailsMerged(t *testing.T) {
+	handler := newTestInterceptHandler(t, nil)
+
+	cliResults := ValidationResults{
+		Allowed: true,
+		RulesDetails: &AuditRulesResult{
+			Action:       "allow",
+			EvaluationMs: 5,
+			Results: []AuditRulesRuleResult{
+				{Rule: "cli-rule-1", Action: "allow", Result: "allow", EvaluationMs: 5},
+			},
+		},
+	}
+	mcpResults := ValidationResults{
+		Allowed: false,
+		Message: "denied by MCP",
+		RulesDetails: &AuditRulesResult{
+			Action:       "deny",
+			DecidingRule: "mcp-rule-1",
+			EvaluationMs: 10,
+			Results: []AuditRulesRuleResult{
+				{Rule: "mcp-rule-1", Action: "deny", Result: "deny", EvaluationMs: 10},
+			},
+		},
+	}
+
+	merged := handler.mergeShellResults(cliResults, mcpResults)
+
+	require.NotNil(t, merged.RulesDetails, "merged should have RulesDetails")
+	assert.Len(t, merged.RulesDetails.Results, 2, "should contain rule results from both CLI and MCP")
+
+	ruleNames := make([]string, 0, len(merged.RulesDetails.Results))
+	for _, r := range merged.RulesDetails.Results {
+		ruleNames = append(ruleNames, r.Rule)
+	}
+	assert.Contains(t, ruleNames, "cli-rule-1", "CLI rule result should be preserved")
+	assert.Contains(t, ruleNames, "mcp-rule-1", "MCP rule result should be preserved")
+}
+
+// TestMergeShellResults_AIDetailsMerged verifies that AIDetails from both
+// CLI and MCP evaluations are merged (not overwritten).
+func TestMergeShellResults_AIDetailsMerged(t *testing.T) {
+	handler := newTestInterceptHandler(t, nil)
+
+	cliResults := ValidationResults{
+		Allowed: true,
+		AIDetails: &AuditAIResult{
+			Action:       "allow",
+			EvaluationMs: 100,
+			Results: []AuditAIRuleResult{
+				{Rule: "cli-ai-rule", Action: "allow", Result: "allow"},
+			},
+		},
+	}
+	mcpResults := ValidationResults{
+		Allowed: true,
+		AIDetails: &AuditAIResult{
+			Action:       "allow",
+			EvaluationMs: 200,
+			Results: []AuditAIRuleResult{
+				{Rule: "mcp-ai-rule", Action: "allow", Result: "allow"},
+			},
+		},
+	}
+
+	merged := handler.mergeShellResults(cliResults, mcpResults)
+
+	require.NotNil(t, merged.AIDetails, "merged should have AIDetails")
+	assert.Len(t, merged.AIDetails.Results, 2, "should contain AI results from both CLI and MCP")
+}
+
+// TestMergeShellResults_EmptyCommand verifies behavior when shell tool has empty
+// or missing command string. The merge should still work with whatever results
+// the evaluators produce.
+func TestMergeShellResults_EmptyCommand(t *testing.T) {
+	handler := newTestInterceptHandler(t, nil)
+
+	// Both allow with empty results (what happens with an empty command)
+	cliResults := ValidationResults{Allowed: true, Message: "No matching policies"}
+	mcpResults := ValidationResults{Allowed: true, Message: "No matching policies"}
+
+	merged := handler.mergeShellResults(cliResults, mcpResults)
+
+	assert.True(t, merged.Allowed)
+	assert.NotEmpty(t, merged.Message, "should have a default message")
+}
+
+// TestMergeShellResults_CountAggregation verifies AllowCount and DenyCount
+// are properly summed from both sides.
+func TestMergeShellResults_CountAggregation(t *testing.T) {
+	handler := newTestInterceptHandler(t, nil)
+
+	cliResults := ValidationResults{
+		Allowed:    true,
+		AllowCount: 3,
+		DenyCount:  1,
+	}
+	mcpResults := ValidationResults{
+		Allowed:    true,
+		AllowCount: 2,
+		DenyCount:  0,
+	}
+
+	merged := handler.mergeShellResults(cliResults, mcpResults)
+
+	assert.Equal(t, 5, merged.AllowCount, "allow counts should sum")
+	assert.Equal(t, 1, merged.DenyCount, "deny counts should sum")
+}
+
 // --- Test Helpers ---
 
 func ptrStr(s string) *string { return &s }

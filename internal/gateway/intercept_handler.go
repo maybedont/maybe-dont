@@ -445,47 +445,49 @@ func (h *InterceptHandler) payloadToCallToolRequest(req *InterceptRequest) mcp.C
 
 // mergeShellResults combines CLI and MCP evaluation results.
 // If either evaluation denies, the merged result is a deny.
+// RulesDetails and AIDetails from both sides are merged by concatenating
+// individual rule results so the audit trail is complete.
 func (h *InterceptHandler) mergeShellResults(cliResults, mcpResults ValidationResults) ValidationResults {
 	merged := ValidationResults{
 		Allowed: true,
 	}
 
-	// Merge CLI results
+	// Merge per-policy results and counts from both evaluations
 	merged.Results = append(merged.Results, cliResults.Results...)
-	merged.AllowCount += cliResults.AllowCount
-	merged.DenyCount += cliResults.DenyCount
-	if cliResults.RulesDetails != nil {
-		merged.RulesDetails = cliResults.RulesDetails
+	merged.Results = append(merged.Results, mcpResults.Results...)
+	merged.AllowCount = cliResults.AllowCount + mcpResults.AllowCount
+	merged.DenyCount = cliResults.DenyCount + mcpResults.DenyCount
+
+	// Propagate FailedOpen from either side
+	if cliResults.FailedOpen || mcpResults.FailedOpen {
+		merged.FailedOpen = true
 	}
-	if cliResults.AIDetails != nil {
-		merged.AIDetails = cliResults.AIDetails
-	}
-	if cliResults.AsyncCompletion != nil {
-		merged.AsyncCompletion = cliResults.AsyncCompletion
-	}
-	if cliResults.AuditModeBypass {
+
+	// Merge AuditModeBypass (set if either side bypassed)
+	if cliResults.AuditModeBypass || mcpResults.AuditModeBypass {
 		merged.AuditModeBypass = true
 	}
+
+	// Merge RulesDetails: concatenate rule results from both evaluations
+	merged.RulesDetails = mergeAuditRulesResults(cliResults.RulesDetails, mcpResults.RulesDetails)
+
+	// Merge AIDetails: concatenate rule results from both evaluations
+	merged.AIDetails = mergeAuditAIResults(cliResults.AIDetails, mcpResults.AIDetails)
+
+	// Async completion: prefer MCP, fall back to CLI. When both are present,
+	// only one is captured — this is acceptable because async completions are
+	// for audit_only AI evaluation and losing one follow-up entry is low-risk.
+	if mcpResults.AsyncCompletion != nil {
+		merged.AsyncCompletion = mcpResults.AsyncCompletion
+	} else if cliResults.AsyncCompletion != nil {
+		merged.AsyncCompletion = cliResults.AsyncCompletion
+	}
+
+	// Determine allowed/denied: if either evaluation denies, the merged result is deny.
+	// CLI message takes precedence (first writer wins).
 	if !cliResults.Allowed {
 		merged.Allowed = false
 		merged.Message = cliResults.Message
-	}
-
-	// Merge MCP results
-	merged.Results = append(merged.Results, mcpResults.Results...)
-	merged.AllowCount += mcpResults.AllowCount
-	merged.DenyCount += mcpResults.DenyCount
-	if mcpResults.RulesDetails != nil {
-		merged.RulesDetails = mcpResults.RulesDetails
-	}
-	if mcpResults.AIDetails != nil {
-		merged.AIDetails = mcpResults.AIDetails
-	}
-	if mcpResults.AsyncCompletion != nil {
-		merged.AsyncCompletion = mcpResults.AsyncCompletion
-	}
-	if mcpResults.AuditModeBypass {
-		merged.AuditModeBypass = true
 	}
 	if !mcpResults.Allowed {
 		merged.Allowed = false
@@ -494,7 +496,7 @@ func (h *InterceptHandler) mergeShellResults(cliResults, mcpResults ValidationRe
 		}
 	}
 
-	// Clear AuditModeBypass if enforced deny overrides it
+	// Clear AuditModeBypass if an enforced deny overrides it
 	if !merged.Allowed {
 		merged.AuditModeBypass = false
 	}
@@ -507,6 +509,80 @@ func (h *InterceptHandler) mergeShellResults(cliResults, mcpResults ValidationRe
 			merged.Message = "Tool call denied by policy"
 		}
 	}
+
+	return merged
+}
+
+// mergeAuditRulesResults combines RulesDetails from two evaluations by concatenating
+// their rule results. Returns nil if both inputs are nil.
+func mergeAuditRulesResults(a, b *AuditRulesResult) *AuditRulesResult {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+
+	merged := &AuditRulesResult{
+		Results: append(a.Results, b.Results...),
+	}
+
+	// Use the most restrictive action (deny > allow)
+	if a.Action == "deny" || b.Action == "deny" {
+		merged.Action = "deny"
+	} else {
+		merged.Action = a.Action
+	}
+
+	// Use first non-empty deciding rule
+	if a.DecidingRule != "" {
+		merged.DecidingRule = a.DecidingRule
+		merged.Reason = a.Reason
+	} else if b.DecidingRule != "" {
+		merged.DecidingRule = b.DecidingRule
+		merged.Reason = b.Reason
+	}
+
+	// Sum timing
+	merged.BlockedMs = a.BlockedMs + b.BlockedMs
+	merged.EvaluationMs = a.EvaluationMs + b.EvaluationMs
+
+	return merged
+}
+
+// mergeAuditAIResults combines AIDetails from two evaluations by concatenating
+// their rule results. Returns nil if both inputs are nil.
+func mergeAuditAIResults(a, b *AuditAIResult) *AuditAIResult {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+
+	merged := &AuditAIResult{
+		Results: append(a.Results, b.Results...),
+	}
+
+	// Use the most restrictive action (deny > allow)
+	if a.Action == "deny" || b.Action == "deny" {
+		merged.Action = "deny"
+	} else {
+		merged.Action = a.Action
+	}
+
+	// Use first non-empty deciding rule
+	if a.DecidingRule != "" {
+		merged.DecidingRule = a.DecidingRule
+		merged.Reason = a.Reason
+	} else if b.DecidingRule != "" {
+		merged.DecidingRule = b.DecidingRule
+		merged.Reason = b.Reason
+	}
+
+	// Sum timing
+	merged.BlockedMs = a.BlockedMs + b.BlockedMs
+	merged.EvaluationMs = a.EvaluationMs + b.EvaluationMs
 
 	return merged
 }
