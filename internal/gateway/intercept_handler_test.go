@@ -549,7 +549,179 @@ func TestInterceptHandler_AuditEntry_PrincipalAsClientID(t *testing.T) {
 	assert.Equal(t, "claude-code-v1", entry.UpstreamRequest.ClientID)
 }
 
+// TestInterceptHandler_AuditEntry_ResponsePhase verifies that response phase
+// evaluation produces an audit entry with ResponseValidation populated (not RequestValidation),
+// and the correct action/actionReason for denied responses.
+func TestInterceptHandler_AuditEntry_ResponsePhase(t *testing.T) {
+	tests := []struct {
+		name           string
+		results        ResponseValidationResults
+		expectAction   string
+		expectReason   string
+		expectRespVal  bool
+		expectRedacted bool
+	}{
+		{
+			name: "allowed response",
+			results: ResponseValidationResults{
+				Allowed: true,
+				Message: "Response OK",
+				Results: []ResponseValidationResult{},
+			},
+			expectAction:  "allow",
+			expectRespVal: false, // no rules details
+		},
+		{
+			name: "denied response",
+			results: ResponseValidationResults{
+				Allowed: false,
+				Message: "Response denied",
+				Results: []ResponseValidationResult{
+					{PolicyName: "deny-secrets", PolicyType: "cel", Action: "deny"},
+				},
+				RulesDetails: &AuditRulesResult{
+					Action:       "deny",
+					DecidingRule: "deny-secrets",
+				},
+			},
+			expectAction:  "deny",
+			expectReason:  "response_policy",
+			expectRespVal: true,
+		},
+		{
+			name: "redacted response",
+			results: ResponseValidationResults{
+				Allowed:         true,
+				Message:         "Content redacted",
+				RedactedContent: ptrStr("[REDACTED]"),
+				Results: []ResponseValidationResult{
+					{PolicyName: "redact-secrets", PolicyType: "cel", Action: "redact"},
+				},
+				RulesDetails: &AuditRulesResult{
+					Action:       "redact",
+					DecidingRule: "redact-secrets",
+				},
+			},
+			expectAction:   "redact",
+			expectRespVal:  true,
+			expectRedacted: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := config.NewSessionLogger(zaptest.NewLogger(t))
+			chain := NewResponseValidationChain(logger, &stubResponseHandler{results: tt.results})
+			evaluator := &PolicyEvaluator{
+				ResponseChain: chain,
+				Logger:        logger,
+			}
+			auditWriter := &mockAuditWriter{}
+
+			handler := NewInterceptHandler(InterceptHandlerConfig{
+				Enabled:     true,
+				Logger:      logger,
+				Version:     "1.0.0-test",
+				Evaluator:   evaluator,
+				AuditWriter: auditWriter,
+			})
+
+			body := `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool", "result": {"content": [{"type": "text", "text": "some content"}]}}}`
+			_, code := sendIntercept(t, handler, body)
+			assert.Equal(t, http.StatusOK, code)
+
+			entries := auditWriter.getEntries()
+			require.Len(t, entries, 1, "response phase should produce exactly one audit entry")
+
+			entry := entries[0]
+			assert.Equal(t, "intercept", entry.Source)
+			assert.Equal(t, tt.expectAction, entry.Action)
+			assert.Equal(t, tt.expectReason, entry.ActionReason)
+			assert.Nil(t, entry.RequestValidation, "response phase should not set RequestValidation")
+
+			if tt.expectRespVal {
+				require.NotNil(t, entry.ResponseValidation, "should have ResponseValidation")
+				require.NotNil(t, entry.ResponseValidation.CEL, "should have CEL details")
+			} else {
+				assert.Nil(t, entry.ResponseValidation)
+			}
+		})
+	}
+}
+
+// TestInterceptHandler_AuditEntry_ArgumentFiltering verifies that
+// IncludeArgumentValues=false suppresses params in the audit entry.
+func TestInterceptHandler_AuditEntry_ArgumentFiltering(t *testing.T) {
+	tests := []struct {
+		name         string
+		includeArgs  bool
+		expectParams bool
+		toolName     string
+		body         string
+		description  string
+	}{
+		{
+			name:         "MCP tool with args included",
+			includeArgs:  true,
+			expectParams: true,
+			toolName:     "some_tool",
+			body:         `{"event": "tools/call", "phase": "request", "payload": {"name": "some_tool", "arguments": {"secret": "password123"}}}`,
+			description:  "When IncludeArgumentValues=true, params should be populated",
+		},
+		{
+			name:         "MCP tool with args excluded",
+			includeArgs:  false,
+			expectParams: false,
+			toolName:     "some_tool",
+			body:         `{"event": "tools/call", "phase": "request", "payload": {"name": "some_tool", "arguments": {"secret": "password123"}}}`,
+			description:  "When IncludeArgumentValues=false, params should be nil",
+		},
+		{
+			name:         "shell tool with args excluded",
+			includeArgs:  false,
+			expectParams: false,
+			toolName:     "Bash",
+			body:         `{"event": "tools/call", "phase": "request", "payload": {"name": "Bash", "arguments": {"command": "echo secret"}}}`,
+			description:  "Shell tool params should also respect IncludeArgumentValues",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := config.NewSessionLogger(zaptest.NewLogger(t))
+			evaluator := &PolicyEvaluator{Logger: logger}
+			auditWriter := &mockAuditWriter{}
+
+			handler := NewInterceptHandler(InterceptHandlerConfig{
+				Enabled:               true,
+				ShellToolNames:        []string{"Bash"},
+				Logger:                logger,
+				Version:               "1.0.0-test",
+				Evaluator:             evaluator,
+				AuditWriter:           auditWriter,
+				IncludeArgumentValues: tt.includeArgs,
+			})
+
+			_, code := sendIntercept(t, handler, tt.body)
+			assert.Equal(t, http.StatusOK, code)
+
+			entries := auditWriter.getEntries()
+			require.Len(t, entries, 1)
+
+			entry := entries[0]
+			require.NotNil(t, entry.Tool)
+			if tt.expectParams {
+				assert.NotNil(t, entry.Tool.Params, tt.description)
+			} else {
+				assert.Nil(t, entry.Tool.Params, tt.description)
+			}
+		})
+	}
+}
+
 // --- Test Helpers ---
+
+func ptrStr(s string) *string { return &s }
 
 // stubResponseHandler is a test double that returns preconfigured results.
 type stubResponseHandler struct {

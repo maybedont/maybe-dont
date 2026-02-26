@@ -263,6 +263,21 @@ func (h *InterceptHandler) handleResponsePhase(
 		results.Message = "Response evaluation failed, allowing (fail-open)"
 	}
 
+	action := "allow"
+	actionReason := ""
+	if !results.Allowed {
+		action = "deny"
+		actionReason = string(ActionReasonResponsePolicy)
+	} else if results.RedactedContent != nil {
+		action = "redact"
+	} else if results.AuditModeBypass {
+		actionReason = string(ActionReasonAuditMode)
+	} else if results.FailedOpen {
+		actionReason = string(ActionReasonFailOpen)
+	}
+
+	h.writeResponseAuditEntry(start, valCtx, req, action, actionReason, &results)
+
 	return h.buildResponseResult(req, valCtx, results, start)
 }
 
@@ -606,6 +621,66 @@ func (h *InterceptHandler) writeRequestAuditEntry(
 						ClientID:   h.resolveClientID(valCtx, req),
 					},
 					RequestValidation: &AuditValidationInfo{
+						AI: completion.AIDetails,
+					},
+					Action:       action,
+					ActionReason: "async_completion",
+					DurationMs:   completion.EvaluationMs,
+				}
+			})
+	}
+}
+
+// writeResponseAuditEntry creates and writes an audit entry for response phase evaluations.
+func (h *InterceptHandler) writeResponseAuditEntry(
+	start time.Time,
+	valCtx *CLIValidationContext,
+	req *InterceptRequest,
+	action string,
+	actionReason string,
+	results *ResponseValidationResults,
+) {
+	if h.config.AuditWriter == nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	entry := &AuditEntry{
+		Source:            "intercept",
+		ValidationStarted: start.Format(time.RFC3339Nano),
+		CreatedAt:         now.Format(time.RFC3339Nano),
+		Tool:              h.buildAuditToolInfo(req),
+		UpstreamRequest:   h.buildUpstreamRequestInfo(valCtx, req),
+		Action:            action,
+		ActionReason:      actionReason,
+		DurationMs:        now.Sub(start).Milliseconds(),
+	}
+
+	// Attach response validation details
+	if results != nil && (results.RulesDetails != nil || results.AIDetails != nil) {
+		entry.ResponseValidation = &AuditValidationInfo{
+			CEL: results.RulesDetails,
+			AI:  results.AIDetails,
+		}
+	}
+
+	_, _ = h.config.AuditWriter.Write(entry)
+
+	// Handle async AI completion
+	if results != nil && results.AsyncCompletion != nil {
+		WriteAsyncAuditCompletion(h.config.AuditWriter, h.config.Logger, valCtx.RequestID,
+			results.AsyncCompletion, func(completion AsyncCompletion) *AuditEntry {
+				return &AuditEntry{
+					Source:            "intercept",
+					ValidationStarted: start.Format(time.RFC3339Nano),
+					CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+					Tool:              h.buildAuditToolInfo(req),
+					UpstreamRequest: UpstreamRequestInfo{
+						RequestID:  valCtx.RequestID + "-async",
+						ExternalID: h.getTraceID(req),
+						ClientID:   h.resolveClientID(valCtx, req),
+					},
+					ResponseValidation: &AuditValidationInfo{
 						AI: completion.AIDetails,
 					},
 					Action:       action,
