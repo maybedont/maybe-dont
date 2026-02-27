@@ -23,6 +23,27 @@ type PolicyEvaluator struct {
 // EvaluateToolCall evaluates an MCP tool call against request policies.
 // Creates a blocking budget, calls CEL then AI engines, merges results.
 func (e *PolicyEvaluator) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest) ValidationResults {
+	return e.evaluateToolCallWithBudget(ctx, req, nil)
+}
+
+// EvaluateCLICommand evaluates a CLI command against request policies.
+func (e *PolicyEvaluator) EvaluateCLICommand(ctx context.Context, req *CLIValidationRequest) ValidationResults {
+	return e.evaluateCLICommandWithBudget(ctx, req, nil)
+}
+
+// EvaluateShellCommand evaluates a shell tool as both a CLI command and an MCP tool call
+// under a single shared blocking budget, ensuring the combined evaluation respects the
+// configured MaxBlockingMs limit.
+func (e *PolicyEvaluator) EvaluateShellCommand(ctx context.Context, cliReq *CLIValidationRequest, mcpReq mcp.CallToolRequest) (cliResults, mcpResults ValidationResults) {
+	budget := e.newBlockingBudget()
+	cliResults = e.evaluateCLICommandWithBudget(ctx, cliReq, budget)
+	mcpResults = e.evaluateToolCallWithBudget(ctx, mcpReq, budget)
+	return cliResults, mcpResults
+}
+
+// evaluateToolCallWithBudget is the internal implementation that accepts an optional budget.
+// If budget is nil, a new one is created.
+func (e *PolicyEvaluator) evaluateToolCallWithBudget(ctx context.Context, req mcp.CallToolRequest, budget *BlockingBudget) ValidationResults {
 	if e.CELEngine == nil && e.AIEngine == nil {
 		return ValidationResults{
 			Results: []ValidationResult{},
@@ -31,7 +52,9 @@ func (e *PolicyEvaluator) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 		}
 	}
 
-	budget := e.newBlockingBudget()
+	if budget == nil {
+		budget = e.newBlockingBudget()
+	}
 
 	var finalResults ValidationResults
 	finalResults.Allowed = true
@@ -67,8 +90,9 @@ func (e *PolicyEvaluator) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 	return finalResults
 }
 
-// EvaluateCLICommand evaluates a CLI command against request policies.
-func (e *PolicyEvaluator) EvaluateCLICommand(ctx context.Context, req *CLIValidationRequest) ValidationResults {
+// evaluateCLICommandWithBudget is the internal implementation that accepts an optional budget.
+// If budget is nil, a new one is created.
+func (e *PolicyEvaluator) evaluateCLICommandWithBudget(ctx context.Context, req *CLIValidationRequest, budget *BlockingBudget) ValidationResults {
 	if e.CELEngine == nil && e.AIEngine == nil {
 		return ValidationResults{
 			Results: []ValidationResult{},
@@ -77,7 +101,9 @@ func (e *PolicyEvaluator) EvaluateCLICommand(ctx context.Context, req *CLIValida
 		}
 	}
 
-	budget := e.newBlockingBudget()
+	if budget == nil {
+		budget = e.newBlockingBudget()
+	}
 
 	var finalResults ValidationResults
 	finalResults.Allowed = true
@@ -89,6 +115,7 @@ func (e *PolicyEvaluator) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				zap.Error(err),
 				zap.String("command", req.Command),
 			)
+			finalResults.FailedOpen = true
 		} else {
 			mergeEngineResults(&finalResults, celResults)
 		}
@@ -101,6 +128,7 @@ func (e *PolicyEvaluator) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				zap.Error(err),
 				zap.String("command", req.Command),
 			)
+			finalResults.FailedOpen = true
 		} else {
 			mergeEngineResults(&finalResults, aiResults)
 		}

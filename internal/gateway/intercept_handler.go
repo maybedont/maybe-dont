@@ -144,47 +144,47 @@ func (h *InterceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := h.extractContext(r)
 
 	if !h.config.Enabled {
-		h.writeError(w, http.StatusBadRequest, "Intercept endpoint not enabled")
+		h.writeError(w, http.StatusBadRequest, "intercept_disabled", "Intercept endpoint not enabled")
 		return
 	}
 
 	// Validate Content-Type
 	contentType := r.Header.Get("Content-Type")
 	if !strings.HasPrefix(contentType, "application/json") {
-		h.writeError(w, http.StatusBadRequest, "Content-Type must be application/json")
+		h.writeError(w, http.StatusBadRequest, "invalid_content_type", "Content-Type must be application/json")
 		return
 	}
 
 	// Parse request body
 	var req InterceptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		h.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON: "+err.Error())
 		return
 	}
 
 	// Validate required fields
 	if req.Event == "" {
-		h.writeError(w, http.StatusBadRequest, "event field is required")
+		h.writeError(w, http.StatusBadRequest, "invalid_request", "event field is required")
 		return
 	}
 	if req.Event != "tools/call" {
-		h.writeError(w, http.StatusBadRequest, "Unsupported event type: only tools/call is supported")
+		h.writeError(w, http.StatusBadRequest, "unsupported_event", "Unsupported event type: only tools/call is supported")
 		return
 	}
 	if req.Phase == "" {
-		h.writeError(w, http.StatusBadRequest, "phase field is required")
+		h.writeError(w, http.StatusBadRequest, "invalid_request", "phase field is required")
 		return
 	}
 	if req.Phase != "request" && req.Phase != "response" {
-		h.writeError(w, http.StatusBadRequest, "phase must be request or response")
+		h.writeError(w, http.StatusBadRequest, "invalid_phase", "phase must be request or response")
 		return
 	}
 	if req.Payload.Name == "" {
-		h.writeError(w, http.StatusBadRequest, "payload.name is required")
+		h.writeError(w, http.StatusBadRequest, "missing_tool_name", "payload.name is required")
 		return
 	}
 	if req.Phase == "response" && req.Payload.Result == nil {
-		h.writeError(w, http.StatusBadRequest, "payload.result is required for response phase")
+		h.writeError(w, http.StatusBadRequest, "missing_result", "payload.result is required for response phase")
 		return
 	}
 
@@ -195,12 +195,15 @@ func (h *InterceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		zap.String("tool", req.Payload.Name),
 	)
 
+	// Attach request ID to context so downstream loggers (CEL engine, AI engine) include it
+	reqCtx := context.WithValue(r.Context(), config.RequestIDKey, ctx.RequestID)
+
 	var resp *InterceptResponse
 	switch req.Phase {
 	case "request":
-		resp = h.handleRequestPhase(r.Context(), ctx, &req, start)
+		resp = h.handleRequestPhase(r, reqCtx, ctx, &req, start)
 	case "response":
-		resp = h.handleResponsePhase(r.Context(), ctx, &req, start)
+		resp = h.handleResponsePhase(r, reqCtx, ctx, &req, start)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -211,6 +214,7 @@ func (h *InterceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // handleRequestPhase evaluates a request-phase intercept through the policy engines.
 // Shell tools trigger CLI command parsing; everything else is evaluated as an MCP tool call.
 func (h *InterceptHandler) handleRequestPhase(
+	r *http.Request,
 	ctx context.Context,
 	valCtx *CLIValidationContext,
 	req *InterceptRequest,
@@ -229,7 +233,7 @@ func (h *InterceptHandler) handleRequestPhase(
 		actionReason = string(ActionReasonFailOpen)
 	}
 
-	h.writeRequestAuditEntry(start, valCtx, req, action, actionReason, &results)
+	h.writeRequestAuditEntry(r, start, valCtx, req, action, actionReason, &results)
 
 	return h.buildValidationResponse(req, valCtx, results, start)
 }
@@ -237,6 +241,7 @@ func (h *InterceptHandler) handleRequestPhase(
 // handleResponsePhase evaluates a response-phase intercept through the response validation chain.
 // Redacted responses return type="mutation" with the modified payload; denials return type="validation".
 func (h *InterceptHandler) handleResponsePhase(
+	r *http.Request,
 	ctx context.Context,
 	valCtx *CLIValidationContext,
 	req *InterceptRequest,
@@ -276,7 +281,7 @@ func (h *InterceptHandler) handleResponsePhase(
 		actionReason = string(ActionReasonFailOpen)
 	}
 
-	h.writeResponseAuditEntry(start, valCtx, req, action, actionReason, &results)
+	h.writeResponseAuditEntry(r, start, valCtx, req, action, actionReason, &results)
 
 	return h.buildResponseResult(req, valCtx, results, start)
 }
@@ -392,36 +397,14 @@ func (h *InterceptHandler) isShellTool(name string) bool {
 }
 
 // evaluateShellCommand parses a shell tool's command string and evaluates it
-// as both a CLI command (cli_expression) and an MCP tool call (mcp_expression).
+// as both a CLI command (cli_expression) and an MCP tool call (mcp_expression)
+// under a single shared blocking budget.
 func (h *InterceptHandler) evaluateShellCommand(ctx context.Context, req *InterceptRequest) ValidationResults {
-	// Parse command from arguments
-	commandStr, _ := req.Payload.Arguments["command"].(string)
-	parts := strings.Fields(commandStr)
+	cliReq := h.parseShellCommand(req)
+	mcpReq := h.payloadToCallToolRequest(req)
 
-	var command string
-	var args []string
-	if len(parts) > 0 {
-		command = parts[0]
-		args = parts[1:]
-	}
-
-	// Extract working directory from request config
-	var workingDir string
-	if req.Config != nil {
-		workingDir = req.Config.WorkingDirectory
-	}
-
-	cliReq := &CLIValidationRequest{
-		Command:          command,
-		Arguments:        args,
-		WorkingDirectory: workingDir,
-	}
-
-	// Evaluate CLI expressions
-	cliResults := h.config.Evaluator.EvaluateCLICommand(ctx, cliReq)
-
-	// Also evaluate MCP expressions against the tool call
-	mcpResults := h.config.Evaluator.EvaluateToolCall(ctx, h.payloadToCallToolRequest(req))
+	// Use shared budget so CLI + MCP evaluation together respects MaxBlockingMs
+	cliResults, mcpResults := h.config.Evaluator.EvaluateShellCommand(ctx, cliReq, mcpReq)
 
 	// Merge: if either denies, the final result is deny
 	return h.mergeShellResults(cliResults, mcpResults)
@@ -644,6 +627,7 @@ func (h *InterceptHandler) buildValidationResponse(
 // writeRequestAuditEntry creates and writes an audit entry for request phase evaluations.
 // Shell tools populate both Tool and CLI fields; non-shell tools populate Tool only.
 func (h *InterceptHandler) writeRequestAuditEntry(
+	r *http.Request,
 	start time.Time,
 	valCtx *CLIValidationContext,
 	req *InterceptRequest,
@@ -661,7 +645,7 @@ func (h *InterceptHandler) writeRequestAuditEntry(
 		ValidationStarted: start.Format(time.RFC3339Nano),
 		CreatedAt:         now.Format(time.RFC3339Nano),
 		Tool:              h.buildAuditToolInfo(req),
-		UpstreamRequest:   h.buildUpstreamRequestInfo(valCtx, req),
+		UpstreamRequest:   h.buildUpstreamRequestInfo(r, valCtx, req),
 		Action:            action,
 		ActionReason:      actionReason,
 		DurationMs:        now.Sub(start).Milliseconds(),
@@ -709,6 +693,7 @@ func (h *InterceptHandler) writeRequestAuditEntry(
 
 // writeResponseAuditEntry creates and writes an audit entry for response phase evaluations.
 func (h *InterceptHandler) writeResponseAuditEntry(
+	r *http.Request,
 	start time.Time,
 	valCtx *CLIValidationContext,
 	req *InterceptRequest,
@@ -726,7 +711,7 @@ func (h *InterceptHandler) writeResponseAuditEntry(
 		ValidationStarted: start.Format(time.RFC3339Nano),
 		CreatedAt:         now.Format(time.RFC3339Nano),
 		Tool:              h.buildAuditToolInfo(req),
-		UpstreamRequest:   h.buildUpstreamRequestInfo(valCtx, req),
+		UpstreamRequest:   h.buildUpstreamRequestInfo(r, valCtx, req),
 		Action:            action,
 		ActionReason:      actionReason,
 		DurationMs:        now.Sub(start).Milliseconds(),
@@ -768,20 +753,30 @@ func (h *InterceptHandler) writeResponseAuditEntry(
 }
 
 // buildAuditToolInfo creates the Tool section of an audit entry from the intercept request.
+// If the payload name is prefixed (e.g., "github__create_issue"), the bare name is extracted.
 func (h *InterceptHandler) buildAuditToolInfo(req *InterceptRequest) *AuditToolInfo {
 	var params map[string]any
 	if h.config.IncludeArgumentValues {
 		params = req.Payload.Arguments
 	}
+
+	prefixedName := req.Payload.Name
+	bareName := prefixedName
+	if _, original, err := ParsePrefixedName(prefixedName); err == nil {
+		bareName = original
+	}
+
 	return &AuditToolInfo{
-		Name:         req.Payload.Name,
-		PrefixedName: req.Payload.Name,
+		Name:         bareName,
+		PrefixedName: prefixedName,
 		Params:       params,
 	}
 }
 
-// buildAuditCLIInfo creates the CLI section of an audit entry for shell tool calls.
-func (h *InterceptHandler) buildAuditCLIInfo(req *InterceptRequest) *AuditCLIInfo {
+// parseShellCommand extracts the CLI command, arguments, and working directory
+// from an intercept request's payload. Used by both evaluation and audit logging
+// to ensure consistency between what is validated and what is recorded.
+func (h *InterceptHandler) parseShellCommand(req *InterceptRequest) *CLIValidationRequest {
 	commandStr, _ := req.Payload.Arguments["command"].(string)
 	parts := strings.Fields(commandStr)
 
@@ -797,21 +792,33 @@ func (h *InterceptHandler) buildAuditCLIInfo(req *InterceptRequest) *AuditCLIInf
 		workingDir = req.Config.WorkingDirectory
 	}
 
-	return &AuditCLIInfo{
+	return &CLIValidationRequest{
 		Command:          command,
 		Arguments:        args,
 		WorkingDirectory: workingDir,
 	}
 }
 
+// buildAuditCLIInfo creates the CLI section of an audit entry for shell tool calls.
+func (h *InterceptHandler) buildAuditCLIInfo(req *InterceptRequest) *AuditCLIInfo {
+	parsed := h.parseShellCommand(req)
+	return &AuditCLIInfo{
+		Command:          parsed.Command,
+		Arguments:        parsed.Arguments,
+		WorkingDirectory: parsed.WorkingDirectory,
+	}
+}
+
 // buildUpstreamRequestInfo creates the UpstreamRequest section of an audit entry.
 // Maps intercept context fields to the standard upstream request fields.
-func (h *InterceptHandler) buildUpstreamRequestInfo(valCtx *CLIValidationContext, req *InterceptRequest) UpstreamRequestInfo {
+func (h *InterceptHandler) buildUpstreamRequestInfo(r *http.Request, valCtx *CLIValidationContext, req *InterceptRequest) UpstreamRequestInfo {
 	return UpstreamRequestInfo{
 		RequestID:  valCtx.RequestID,
 		ExternalID: h.getTraceID(req),
 		ClientID:   h.resolveClientID(valCtx, req),
 		SessionID:  h.getSessionID(req),
+		ClientIP:   r.RemoteAddr,
+		UserAgent:  r.Header.Get("User-Agent"),
 	}
 }
 
@@ -862,8 +869,22 @@ func (h *InterceptHandler) extractContext(r *http.Request) *CLIValidationContext
 	return ctx
 }
 
-func (h *InterceptHandler) writeError(w http.ResponseWriter, status int, message string) {
+// InterceptError is the error response body for the intercept endpoint.
+type InterceptError struct {
+	// Error is a machine-readable error code.
+	// Values: "intercept_disabled", "invalid_content_type", "invalid_request",
+	// "unsupported_event", "invalid_phase", "missing_tool_name", "missing_result"
+	Error string `json:"error"`
+
+	// Message is a human-readable description of the error.
+	Message string `json:"message"`
+}
+
+func (h *InterceptHandler) writeError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(InterceptError{
+		Error:   code,
+		Message: message,
+	})
 }

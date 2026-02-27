@@ -1296,8 +1296,8 @@ func sendIntercept(t *testing.T, handler *InterceptHandler, body string) (string
 func assertInterceptError(t *testing.T, w *httptest.ResponseRecorder, contains string) {
 	t.Helper()
 
-	var errResp map[string]string
+	var errResp InterceptError
 	err := json.Unmarshal(w.Body.Bytes(), &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp["error"], contains)
+	assert.Contains(t, errResp.Message, contains)
 }
