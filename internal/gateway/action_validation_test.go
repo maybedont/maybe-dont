@@ -595,6 +595,111 @@ func TestHandleActionValidation_ExternalIDOmittedWhenEmpty(t *testing.T) {
 	assert.Empty(t, entries[0].UpstreamRequest.ExternalID)
 }
 
+// --- Audit Correlation Field Tests ---
+
+// TestHandleActionValidation_AuditCorrelationFields verifies that all correlation fields
+// (request_id, client_ip, user_agent, external_id, client_id) are correctly captured
+// in audit entries from HTTP headers and request body fields.
+func TestHandleActionValidation_AuditCorrelationFields(t *testing.T) {
+	tests := []struct {
+		name           string
+		body           string
+		headers        map[string]string
+		wantRequestID  string
+		wantClientID   string
+		wantExternalID string
+		wantClientIP   string
+		wantUserAgent  string
+		wantAutoGenID  bool
+	}{
+		{
+			name: "all correlation fields from headers and body",
+			body: `{"target": "execute_bash", "actor": "body-actor", "external_id": "ext-123"}`,
+			headers: map[string]string{
+				"X-Request-ID":           "action-req-id-001",
+				"X-Maybe-Dont-Client-ID": "header-client-id",
+				"User-Agent":             "openhands-agent/3.0",
+			},
+			wantRequestID:  "action-req-id-001",
+			wantClientID:   "header-client-id",
+			wantExternalID: "ext-123",
+			wantClientIP:   "10.0.0.1:9999",
+			wantUserAgent:  "openhands-agent/3.0",
+		},
+		{
+			name: "client_id falls back to actor when header absent",
+			body: `{"target": "list_files", "actor": "fallback-agent"}`,
+			headers: map[string]string{
+				"X-Request-ID": "action-req-id-002",
+			},
+			wantRequestID: "action-req-id-002",
+			wantClientID:  "fallback-agent",
+			wantClientIP:  "10.0.0.1:9999",
+		},
+		{
+			name:          "auto-generated request_id when no header",
+			body:          `{"target": "list_files"}`,
+			headers:       map[string]string{},
+			wantAutoGenID: true,
+			wantClientIP:  "10.0.0.1:9999",
+		},
+		{
+			name: "user_agent captured from header",
+			body: `{"target": "list_files"}`,
+			headers: map[string]string{
+				"X-Request-ID": "action-req-id-003",
+				"User-Agent":   "custom-agent/1.0",
+			},
+			wantRequestID: "action-req-id-003",
+			wantUserAgent: "custom-agent/1.0",
+			wantClientIP:  "10.0.0.1:9999",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auditWriter := &mockAuditWriter{}
+			handler := newTestActionHandlerWithAudit(t, nil, nil, auditWriter)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = "10.0.0.1:9999"
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			entries := auditWriter.getEntries()
+			require.Len(t, entries, 1)
+
+			entry := entries[0]
+			assert.Equal(t, "action", entry.Source)
+
+			if tt.wantAutoGenID {
+				assert.Len(t, entry.UpstreamRequest.RequestID, 32, "auto-generated ID should be 32-char hex")
+			} else {
+				assert.Equal(t, tt.wantRequestID, entry.UpstreamRequest.RequestID)
+			}
+
+			if tt.wantClientID != "" {
+				assert.Equal(t, tt.wantClientID, entry.UpstreamRequest.ClientID)
+			}
+			if tt.wantExternalID != "" {
+				assert.Equal(t, tt.wantExternalID, entry.UpstreamRequest.ExternalID)
+			}
+			if tt.wantClientIP != "" {
+				assert.Equal(t, tt.wantClientIP, entry.UpstreamRequest.ClientIP)
+			}
+			if tt.wantUserAgent != "" {
+				assert.Equal(t, tt.wantUserAgent, entry.UpstreamRequest.UserAgent)
+			}
+		})
+	}
+}
+
 // --- Response Format Tests ---
 
 // TestHandleActionValidation_ResponseIncludesServerVersion verifies the server_version

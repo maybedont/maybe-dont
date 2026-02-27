@@ -845,6 +845,159 @@ func TestInterceptHandler_ShellTool_CLIAllowMCPDeny(t *testing.T) {
 	assert.False(t, resp.Valid, "MCP deny should override CLI allow in merged results")
 }
 
+// --- Audit Correlation Field Tests ---
+
+// TestInterceptHandler_AuditCorrelationFields verifies that all correlation fields
+// (request_id, client_ip, user_agent, session_id, external_id, client_id) are
+// correctly captured in audit entries from HTTP request headers and intercept context.
+func TestInterceptHandler_AuditCorrelationFields(t *testing.T) {
+	tests := []struct {
+		name           string
+		body           string
+		headers        map[string]string
+		wantRequestID  string
+		wantClientID   string
+		wantSessionID  string
+		wantExternalID string
+		wantClientIP   string
+		wantUserAgent  string
+		wantAutoGenID  bool // true if we expect an auto-generated request ID
+		needsEvaluator bool // true if test needs a PolicyEvaluator (e.g., response phase)
+	}{
+		{
+			name: "all correlation fields from headers and context",
+			body: `{
+				"event": "tools/call",
+				"phase": "request",
+				"payload": {"name": "test_tool"},
+				"context": {
+					"principal": {"type": "user", "id": "context-principal-id"},
+					"traceId": "trace-abc-123",
+					"sessionId": "session-xyz-789"
+				}
+			}`,
+			headers: map[string]string{
+				"X-Request-ID":           "req-correlation-test",
+				"X-Maybe-Dont-Client-ID": "header-client-id",
+				"User-Agent":             "test-agent/2.0",
+			},
+			wantRequestID:  "req-correlation-test",
+			wantClientID:   "header-client-id",
+			wantSessionID:  "session-xyz-789",
+			wantExternalID: "trace-abc-123",
+			wantClientIP:   "192.0.2.1:1234",
+			wantUserAgent:  "test-agent/2.0",
+		},
+		{
+			name: "client_id falls back to principal.id when header absent",
+			body: `{
+				"event": "tools/call",
+				"phase": "request",
+				"payload": {"name": "test_tool"},
+				"context": {
+					"principal": {"type": "agent", "id": "principal-fallback-id"}
+				}
+			}`,
+			headers:       map[string]string{},
+			wantClientID:  "principal-fallback-id",
+			wantAutoGenID: true,
+		},
+		{
+			name: "auto-generated request_id when no header",
+			body: `{
+				"event": "tools/call",
+				"phase": "request",
+				"payload": {"name": "test_tool"}
+			}`,
+			headers:       map[string]string{},
+			wantAutoGenID: true,
+		},
+		{
+			name: "response phase captures correlation fields",
+			body: `{
+				"event": "tools/call",
+				"phase": "response",
+				"payload": {
+					"name": "test_tool",
+					"result": {"content": [{"type": "text", "text": "ok"}]}
+				},
+				"context": {
+					"traceId": "resp-trace-456",
+					"sessionId": "resp-session-789"
+				}
+			}`,
+			headers: map[string]string{
+				"X-Request-ID": "resp-req-id",
+				"User-Agent":   "resp-agent/1.0",
+			},
+			wantRequestID:  "resp-req-id",
+			wantSessionID:  "resp-session-789",
+			wantExternalID: "resp-trace-456",
+			wantUserAgent:  "resp-agent/1.0",
+			wantClientIP:   "192.0.2.1:1234",
+			needsEvaluator: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auditWriter := &mockAuditWriter{}
+			logger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+			cfg := InterceptHandlerConfig{
+				Enabled:     true,
+				Logger:      logger,
+				Version:     "1.0.0-test",
+				AuditWriter: auditWriter,
+			}
+			// Response phase requires an evaluator to reach the audit write path
+			if tt.needsEvaluator {
+				cfg.Evaluator = &PolicyEvaluator{Logger: logger}
+			}
+			handler := NewInterceptHandler(cfg)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/intercept", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = "192.0.2.1:1234"
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			entries := auditWriter.getEntries()
+			require.Len(t, entries, 1)
+
+			entry := entries[0]
+			assert.Equal(t, "intercept", entry.Source)
+
+			if tt.wantAutoGenID {
+				assert.Len(t, entry.UpstreamRequest.RequestID, 32, "auto-generated ID should be 32-char hex")
+			} else {
+				assert.Equal(t, tt.wantRequestID, entry.UpstreamRequest.RequestID)
+			}
+
+			if tt.wantClientID != "" {
+				assert.Equal(t, tt.wantClientID, entry.UpstreamRequest.ClientID)
+			}
+			if tt.wantSessionID != "" {
+				assert.Equal(t, tt.wantSessionID, entry.UpstreamRequest.SessionID)
+			}
+			if tt.wantExternalID != "" {
+				assert.Equal(t, tt.wantExternalID, entry.UpstreamRequest.ExternalID)
+			}
+			if tt.wantClientIP != "" {
+				assert.Equal(t, tt.wantClientIP, entry.UpstreamRequest.ClientIP)
+			}
+			if tt.wantUserAgent != "" {
+				assert.Equal(t, tt.wantUserAgent, entry.UpstreamRequest.UserAgent)
+			}
+		})
+	}
+}
+
 // --- Audit Entry Completeness with Real CEL Evaluation ---
 
 // TestInterceptHandler_AuditEntry_CELRulesDetails verifies that when a real

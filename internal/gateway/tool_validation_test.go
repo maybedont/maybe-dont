@@ -28,6 +28,7 @@ func (m *MockValidationHandler) HandleToolCall(context.Context, mcp.CallToolRequ
 	results := ValidationResults{
 		Results: []ValidationResult{m.expectedResult},
 		Allowed: m.shouldAllow,
+		Message: m.expectedResult.Message,
 	}
 
 	if m.shouldAllow {
@@ -342,6 +343,47 @@ func TestValidationChain_AuditModeBypassPropagation(t *testing.T) {
 	assert.True(t, results.Allowed, "Should be allowed despite audit_only deny")
 	assert.True(t, results.AuditModeBypass, "AuditModeBypass flag should propagate")
 	assert.Equal(t, config.PolicyActionDeny, results.RecommendedAction, "RecommendedAction should be deny")
+}
+
+// TestValidationChain_AuditModeBypassClearedOnEnforcedDeny verifies that when
+// one handler sets AuditModeBypass (audit-only deny) but another handler issues
+// an enforced deny, the AuditModeBypass flag is cleared. Without this fix, the
+// chain could report Allowed=false and AuditModeBypass=true simultaneously.
+func TestValidationChain_AuditModeBypassClearedOnEnforcedDeny(t *testing.T) {
+	// First handler: audit-only deny (sets AuditModeBypass=true, allows)
+	auditOnlyHandler := &MockValidationHandlerWithFlags{
+		name:              "audit-only-handler",
+		shouldAllow:       true,
+		allowCount:        1,
+		auditModeBypass:   true,
+		recommendedAction: config.PolicyActionDeny,
+	}
+
+	// Second handler: enforced deny (actually blocks)
+	enforcedDenyHandler := &MockValidationHandler{
+		name:        "enforced-deny-handler",
+		shouldAllow: false,
+		expectedResult: ValidationResult{
+			PolicyName: "enforced-deny",
+			PolicyType: "mock",
+			Action:     config.PolicyActionDeny,
+			Message:    "Enforced deny",
+		},
+	}
+
+	chain := NewToolValidationChain(auditOnlyHandler, enforcedDenyHandler)
+
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "test_tool"},
+	}
+
+	results, err := chain.Handle(context.Background(), req)
+	require.NoError(t, err)
+
+	assert.False(t, results.Allowed, "Should be denied by enforced deny handler")
+	assert.False(t, results.AuditModeBypass, "AuditModeBypass must be cleared when an enforced deny overrides it")
+	assert.Equal(t, config.PolicyActionDeny, results.RecommendedAction)
 }
 
 // MockValidationHandlerWithFlags extends MockValidationHandler to support

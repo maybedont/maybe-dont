@@ -182,6 +182,10 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.Allowed = false
 		finalResults.Message = denyMessage
 		finalResults.RecommendedAction = config.PolicyActionDeny
+		// An enforced deny overrides any audit-mode bypass — the request was
+		// actually denied, so no bypass occurred. This matches finalizeResults
+		// in PolicyEvaluator.
+		finalResults.AuditModeBypass = false
 	} else if foundAllow {
 		finalResults.Allowed = true
 		finalResults.Message = allowMessage
