@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
-	"go.uber.org/zap"
 )
 
 // CLIValidationRequest represents a CLI command validation request sent to the gateway.
@@ -188,7 +186,7 @@ func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Validate Content-Type (accept with charset parameters like "application/json; charset=utf-8")
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+	if !hasJSONContentType(r) {
 		h.writeError(w, http.StatusBadRequest, "invalid_content_type",
 			"Content-Type must be application/json")
 		return
@@ -286,27 +284,8 @@ func (h *CLIValidationHandler) getClientVersion(req *CLIValidationRequest) strin
 }
 
 // extractContext extracts request ID and client ID from HTTP headers.
-// If X-Request-ID is not provided, a 32-character hex string is generated.
 func (h *CLIValidationHandler) extractContext(r *http.Request) *CLIValidationContext {
-	ctx := &CLIValidationContext{
-		RequestID: r.Header.Get("X-Request-ID"),
-		ClientID:  r.Header.Get("X-Maybe-Dont-Client-ID"),
-	}
-
-	// Generate request ID if not provided
-	if ctx.RequestID == "" {
-		id, err := GenerateRequestID()
-		if err != nil {
-			// Log the error - this indicates a serious system problem (crypto/rand failure)
-			h.config.Logger.Logger().Warn("failed to generate request ID, using fallback",
-				zap.Error(err))
-			ctx.RequestID = "00000000000000000000000000000000"
-		} else {
-			ctx.RequestID = id
-		}
-	}
-
-	return ctx
+	return extractHTTPContext(r, h.config.Logger)
 }
 
 // writeError writes a JSON error response.
@@ -425,13 +404,8 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 		}
 	}
 
-	// Determine action reason
-	actionReason := ""
-	if results.AuditModeBypass {
-		actionReason = string(ActionReasonAuditMode)
-	} else if results.FailedOpen {
-		actionReason = string(ActionReasonFailOpen)
-	}
+	// Determine action reason (CLI uses no deny reason — the deny action is self-explanatory)
+	actionReason := DeriveAuditActionReason(results.Allowed, results.AuditModeBypass, results.FailedOpen, "")
 
 	// Get arguments to log based on config (full or sanitized)
 	auditArgs := h.getAuditArguments(req.Arguments)

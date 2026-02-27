@@ -700,6 +700,104 @@ func TestHandleActionValidation_AuditCorrelationFields(t *testing.T) {
 	}
 }
 
+// --- Audit Entry Completeness Tests ---
+
+// TestHandleActionValidation_AuditEntry_CELRulesDetails verifies that when a real
+// CEL engine evaluates an action request, the audit entry's RequestValidation.CEL
+// field is populated with rule evaluation details including rule name and timing.
+func TestHandleActionValidation_AuditEntry_CELRulesDetails(t *testing.T) {
+	celEngine := newTestCELEngineWithDenyRule(t)
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, celEngine, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /"}}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "deny", entry.Action)
+	require.NotNil(t, entry.RequestValidation, "should have RequestValidation for CEL deny")
+	require.NotNil(t, entry.RequestValidation.CEL, "should have CEL details")
+	assert.Equal(t, "deny", entry.RequestValidation.CEL.Action)
+	assert.Equal(t, "deny-all", entry.RequestValidation.CEL.DecidingRule)
+	assert.NotEmpty(t, entry.RequestValidation.CEL.Results)
+	assert.Greater(t, entry.RequestValidation.CEL.Results[0].EvaluationMs, int64(-1),
+		"per-rule duration should be non-negative")
+}
+
+// TestHandleActionValidation_AuditEntry_FailedOpen verifies that when a CEL rule
+// causes a runtime error and fails open, the audit entry's action_reason is "fail_open".
+func TestHandleActionValidation_AuditEntry_FailedOpen(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	celEngine, err := NewCELPolicyEngine(t.Context(), sessionLogger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:       "runtime-error",
+			Expression: `request.params.arguments.nonexistent.deep == "crash"`,
+			Action:     config.PolicyActionDeny,
+			Message:    "should not reach here",
+		},
+	}, "")
+	require.NoError(t, err)
+
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, celEngine, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "list_files"}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "allow", entry.Action, "fail-open should result in allow")
+	assert.Equal(t, "fail_open", entry.ActionReason, "should have fail_open action reason")
+}
+
+// TestHandleActionValidation_AuditEntry_AuditModeBypass verifies that when a CEL rule
+// is in audit_only mode and would deny, the audit entry's action_reason is "audit_mode".
+func TestHandleActionValidation_AuditEntry_AuditModeBypass(t *testing.T) {
+	celEngine := newTestCELEngineWithAuditOnlyDenyRule(t)
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, celEngine, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /"}}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "allow", entry.Action, "audit_only mode should still allow")
+	assert.Equal(t, "audit_mode", entry.ActionReason, "should have audit_mode action reason")
+}
+
+// TestHandleActionValidation_AuditEntry_TimingFields verifies that validation timing
+// fields (validation_started, created_at, duration_ms) and per-rule evaluation_ms
+// are populated with valid values in audit entries.
+func TestHandleActionValidation_AuditEntry_TimingFields(t *testing.T) {
+	celEngine := newTestCELEngineWithDenyRule(t)
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, celEngine, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash"}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.NotEmpty(t, entry.ValidationStarted, "ValidationStarted should be set")
+	assert.NotEmpty(t, entry.CreatedAt, "CreatedAt should be set")
+	assert.GreaterOrEqual(t, entry.DurationMs, int64(0), "DurationMs should be non-negative")
+
+	require.NotNil(t, entry.RequestValidation)
+	require.NotNil(t, entry.RequestValidation.CEL)
+	assert.GreaterOrEqual(t, entry.RequestValidation.CEL.EvaluationMs, int64(0),
+		"CEL evaluation_ms should be non-negative")
+}
+
 // --- Response Format Tests ---
 
 // TestHandleActionValidation_ResponseIncludesServerVersion verifies the server_version

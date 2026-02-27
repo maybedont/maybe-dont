@@ -370,6 +370,233 @@ func TestAuditEntry_ToolAndCLIMutuallyExclusive(t *testing.T) {
 	assert.NotContains(t, string(cliData), `"tool":{`)
 }
 
+func TestAuditContext_NewAuditContext(t *testing.T) {
+	// Tests that NewAuditContext populates all fields correctly including
+	// UpstreamRequestInfo, tool identity, and temporal fields.
+	tests := []struct {
+		name         string
+		prefixed     string
+		client       string
+		tool         string
+		sessionID    string
+		clientIP     string
+		requestID    string
+		wantSource   string
+		wantToolName string
+	}{
+		{
+			name:         "standard_tool_call",
+			prefixed:     "github__create_issue",
+			client:       "github",
+			tool:         "create_issue",
+			sessionID:    "sess-123",
+			clientIP:     "127.0.0.1",
+			requestID:    "req-456",
+			wantSource:   "mcp",
+			wantToolName: "create_issue",
+		},
+		{
+			name:         "empty_session_and_ip",
+			prefixed:     "aws__describe_instances",
+			client:       "aws",
+			tool:         "describe_instances",
+			sessionID:    "",
+			clientIP:     "",
+			requestID:    "req-789",
+			wantSource:   "mcp",
+			wantToolName: "describe_instances",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := NewAuditContext(tt.prefixed, tt.client, tt.tool, tt.sessionID, tt.clientIP, tt.requestID)
+			entry := ctx.Entry()
+
+			// Source is always "mcp" for MCP audit contexts
+			assert.Equal(t, tt.wantSource, entry.Source)
+
+			// Tool identity
+			require.NotNil(t, entry.Tool)
+			assert.Equal(t, tt.wantToolName, entry.Tool.Name)
+			assert.Equal(t, tt.client, entry.Tool.Client)
+			assert.Equal(t, tt.prefixed, entry.Tool.PrefixedName)
+
+			// Upstream request info
+			assert.Equal(t, tt.requestID, entry.UpstreamRequest.RequestID)
+			assert.Equal(t, tt.sessionID, entry.UpstreamRequest.SessionID)
+			assert.Equal(t, tt.clientIP, entry.UpstreamRequest.ClientIP)
+
+			// Temporal: ValidationStarted should be populated
+			assert.NotEmpty(t, entry.ValidationStarted)
+
+			// CreatedAt should NOT be set until Finalize
+			assert.Empty(t, entry.CreatedAt)
+		})
+	}
+}
+
+func TestAuditContext_SetActions(t *testing.T) {
+	// Tests that SetActions correctly records recommended action, actual action,
+	// and action reason for various scenarios.
+	tests := []struct {
+		name             string
+		recommended      string
+		actual           string
+		reason           ActionReason
+		wantRecommended  string
+		wantActual       string
+		wantActionReason string
+	}{
+		{
+			name:             "allow_no_reason",
+			recommended:      "allow",
+			actual:           "allow",
+			reason:           "",
+			wantRecommended:  "allow",
+			wantActual:       "allow",
+			wantActionReason: "",
+		},
+		{
+			name:             "deny_request_policy",
+			recommended:      "deny",
+			actual:           "deny",
+			reason:           ActionReasonRequestPolicy,
+			wantRecommended:  "deny",
+			wantActual:       "deny",
+			wantActionReason: "request_policy",
+		},
+		{
+			name:             "deny_response_policy",
+			recommended:      "deny",
+			actual:           "deny",
+			reason:           ActionReasonResponsePolicy,
+			wantRecommended:  "deny",
+			wantActual:       "deny",
+			wantActionReason: "response_policy",
+		},
+		{
+			name:             "audit_mode_bypass",
+			recommended:      "deny",
+			actual:           "allow",
+			reason:           ActionReasonAuditMode,
+			wantRecommended:  "deny",
+			wantActual:       "allow",
+			wantActionReason: "audit_mode",
+		},
+		{
+			name:             "fail_open",
+			recommended:      "",
+			actual:           "allow",
+			reason:           ActionReasonFailOpen,
+			wantRecommended:  "",
+			wantActual:       "allow",
+			wantActionReason: "fail_open",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := NewAuditContext("test__tool", "test", "tool", "sess", "127.0.0.1", "req-1")
+			ctx.SetActions(tt.recommended, tt.actual, tt.reason)
+
+			entry := ctx.Entry()
+			assert.Equal(t, tt.wantRecommended, entry.RecommendedAction)
+			assert.Equal(t, tt.wantActual, entry.Action)
+			assert.Equal(t, tt.wantActionReason, entry.ActionReason)
+		})
+	}
+}
+
+func TestAuditContext_Finalize(t *testing.T) {
+	// Tests that Finalize() sets CreatedAt and DurationMs correctly.
+	ctx := NewAuditContext("github__create_issue", "github", "create_issue", "sess-1", "127.0.0.1", "req-1")
+	ctx.SetActions("allow", "allow", "")
+
+	entry := ctx.Finalize()
+
+	// CreatedAt should now be populated
+	assert.NotEmpty(t, entry.CreatedAt)
+
+	// DurationMs should be >= 0 (test runs fast so could be 0)
+	assert.GreaterOrEqual(t, entry.DurationMs, int64(0))
+
+	// ValidationStarted should still be populated
+	assert.NotEmpty(t, entry.ValidationStarted)
+}
+
+func TestAuditContext_FinalizeAsync(t *testing.T) {
+	// Tests that FinalizeAsync() waits for async AI results and populates
+	// both request and response AI validation sections.
+	ctx := NewAuditContext("github__create_issue", "github", "create_issue", "sess-1", "127.0.0.1", "req-1")
+
+	// Set up async request AI completion
+	reqCh := make(chan AsyncCompletion, 1)
+	reqCh <- AsyncCompletion{
+		AIDetails: &AuditAIResult{
+			Action:       "allow",
+			EvaluationMs: 500,
+			Results: []AuditAIRuleResult{
+				{Rule: "test-req-rule", Action: "deny", Result: "allow", EvaluationMs: 500},
+			},
+		},
+		EvaluationMs: 500,
+	}
+	ctx.SetRequestAIResultsAsync(reqCh)
+
+	// Set up async response AI completion
+	respCh := make(chan AsyncCompletion, 1)
+	respCh <- AsyncCompletion{
+		AIDetails: &AuditAIResult{
+			Action:       "deny",
+			EvaluationMs: 300,
+			DecidingRule: "block-secrets",
+			Reason:       "Response contains API key",
+			Results: []AuditAIRuleResult{
+				{Rule: "block-secrets", Action: "deny", Result: "deny", EvaluationMs: 300},
+			},
+		},
+		EvaluationMs: 300,
+	}
+	ctx.SetResponseAIResultsAsync(respCh)
+
+	assert.True(t, ctx.HasAsyncWork())
+
+	entry := ctx.FinalizeAsync()
+
+	// Request AI validation should be populated from the channel
+	require.NotNil(t, entry.RequestValidation)
+	require.NotNil(t, entry.RequestValidation.AI)
+	assert.Equal(t, "allow", entry.RequestValidation.AI.Action)
+	assert.Len(t, entry.RequestValidation.AI.Results, 1)
+
+	// Response AI validation should be populated from the channel
+	require.NotNil(t, entry.ResponseValidation)
+	require.NotNil(t, entry.ResponseValidation.AI)
+	assert.Equal(t, "deny", entry.ResponseValidation.AI.Action)
+	assert.Equal(t, "block-secrets", entry.ResponseValidation.AI.DecidingRule)
+
+	// Finalize fields should be set
+	assert.NotEmpty(t, entry.CreatedAt)
+	assert.GreaterOrEqual(t, entry.DurationMs, int64(0))
+}
+
+func TestAuditContext_FinalizeAsync_NilAIDetails(t *testing.T) {
+	// Tests that FinalizeAsync() gracefully handles nil AIDetails in completions,
+	// leaving the validation sections unset.
+	ctx := NewAuditContext("test__tool", "test", "tool", "sess-1", "127.0.0.1", "req-1")
+
+	reqCh := make(chan AsyncCompletion, 1)
+	reqCh <- AsyncCompletion{AIDetails: nil, EvaluationMs: 100}
+	ctx.SetRequestAIResultsAsync(reqCh)
+
+	entry := ctx.FinalizeAsync()
+
+	// Request validation should remain nil because AIDetails was nil
+	assert.Nil(t, entry.RequestValidation)
+	assert.NotEmpty(t, entry.CreatedAt)
+}
+
 func TestAuditEntry_EarlyTerminationScenarios(t *testing.T) {
 	t.Run("early_termination_deny", func(t *testing.T) {
 		// Simulate early termination: first rule denies, second rule still running

@@ -444,6 +444,81 @@ func TestCELValidationHandler_FailOpenOnRuntimeError(t *testing.T) {
 	assert.Contains(t, results.Message, "fail-open", "Message should indicate fail-open")
 }
 
+// TestDeriveAuditActionReason verifies that the shared action reason derivation
+// function produces the correct result for all combinations of validation flags
+// and deny reasons used by CLI, Action, and Intercept handlers.
+func TestDeriveAuditActionReason(t *testing.T) {
+	tests := []struct {
+		name            string
+		allowed         bool
+		auditModeBypass bool
+		failedOpen      bool
+		denyReason      ActionReason
+		want            string
+	}{
+		{
+			name:       "allowed with no special conditions → empty",
+			allowed:    true,
+			denyReason: ActionReasonRequestPolicy,
+			want:       "",
+		},
+		{
+			name:       "denied with request_policy reason",
+			allowed:    false,
+			denyReason: ActionReasonRequestPolicy,
+			want:       "request_policy",
+		},
+		{
+			name:       "denied with response_policy reason",
+			allowed:    false,
+			denyReason: ActionReasonResponsePolicy,
+			want:       "response_policy",
+		},
+		{
+			name:       "denied with empty deny reason (CLI/Action style)",
+			allowed:    false,
+			denyReason: "",
+			want:       "",
+		},
+		{
+			name:            "audit_mode bypass takes precedence over fail_open",
+			allowed:         true,
+			auditModeBypass: true,
+			failedOpen:      true,
+			denyReason:      ActionReasonRequestPolicy,
+			want:            "audit_mode",
+		},
+		{
+			name:       "fail_open when allowed and no audit bypass",
+			allowed:    true,
+			failedOpen: true,
+			denyReason: ActionReasonRequestPolicy,
+			want:       "fail_open",
+		},
+		{
+			name:            "denied overrides audit_mode (deny reason wins)",
+			allowed:         false,
+			auditModeBypass: true,
+			denyReason:      ActionReasonRequestPolicy,
+			want:            "request_policy",
+		},
+		{
+			name:       "denied overrides fail_open (deny reason wins)",
+			allowed:    false,
+			failedOpen: true,
+			denyReason: ActionReasonResponsePolicy,
+			want:       "response_policy",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DeriveAuditActionReason(tt.allowed, tt.auditModeBypass, tt.failedOpen, tt.denyReason)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // TestActionReasonTypeString verifies ActionReason type string conversion works correctly.
 func TestActionReasonTypeString(t *testing.T) {
 	tests := []struct {

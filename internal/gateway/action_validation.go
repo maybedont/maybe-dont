@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/maybedont/maybe-dont/internal/config"
-	"go.uber.org/zap"
 )
 
 // RiskLevel represents the security risk level of an action.
@@ -141,7 +139,7 @@ func (h *ActionValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 
 	// Validate Content-Type (accept with charset parameters like "application/json; charset=utf-8")
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+	if !hasJSONContentType(r) {
 		h.writeError(w, http.StatusBadRequest, "invalid_content_type",
 			"Content-Type must be application/json")
 		return
@@ -275,26 +273,8 @@ func (h *ActionValidationHandler) convertToResults(results ValidationResults) []
 }
 
 // extractContext extracts request ID and client ID from HTTP headers.
-// If X-Request-ID is not provided, a 32-character hex string is generated.
 func (h *ActionValidationHandler) extractContext(r *http.Request) *CLIValidationContext {
-	ctx := &CLIValidationContext{
-		RequestID: r.Header.Get("X-Request-ID"),
-		ClientID:  r.Header.Get("X-Maybe-Dont-Client-ID"),
-	}
-
-	// Generate request ID if not provided
-	if ctx.RequestID == "" {
-		id, err := GenerateRequestID()
-		if err != nil {
-			h.config.Logger.Logger().Warn("failed to generate request ID, using fallback",
-				zap.Error(err))
-			ctx.RequestID = "00000000000000000000000000000000"
-		} else {
-			ctx.RequestID = id
-		}
-	}
-
-	return ctx
+	return extractHTTPContext(r, h.config.Logger)
 }
 
 // writeError writes a JSON error response.
@@ -330,18 +310,8 @@ func (h *ActionValidationHandler) writeAuditEntryWithValidation(
 		}
 	}
 
-	// Determine action reason
-	// AuditModeBypass only applies when the final action is allow (the deny was bypassed).
-	// When the final action is deny (from an enforced rule), AuditModeBypass may still be set
-	// from a different engine's audit_only deny, but the reason should reflect the enforced deny.
-	actionReason := ""
-	if !results.Allowed {
-		// Final action is deny — the reason is the policy, not audit_mode
-	} else if results.AuditModeBypass {
-		actionReason = string(ActionReasonAuditMode)
-	} else if results.FailedOpen {
-		actionReason = string(ActionReasonFailOpen)
-	}
+	// Determine action reason (Action uses no deny reason — the deny action is self-explanatory)
+	actionReason := DeriveAuditActionReason(results.Allowed, results.AuditModeBypass, results.FailedOpen, "")
 
 	// Build action info for the audit entry
 	// Reuse the Tool field with a synthetic tool name from the action target

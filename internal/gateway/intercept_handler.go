@@ -149,8 +149,7 @@ func (h *InterceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate Content-Type
-	contentType := r.Header.Get("Content-Type")
-	if !strings.HasPrefix(contentType, "application/json") {
+	if !hasJSONContentType(r) {
 		h.writeError(w, http.StatusBadRequest, "invalid_content_type", "Content-Type must be application/json")
 		return
 	}
@@ -223,15 +222,10 @@ func (h *InterceptHandler) handleRequestPhase(
 	results := h.evaluateRequest(ctx, req)
 
 	action := "allow"
-	actionReason := ""
 	if !results.Allowed {
 		action = "deny"
-		actionReason = string(ActionReasonRequestPolicy)
-	} else if results.AuditModeBypass {
-		actionReason = string(ActionReasonAuditMode)
-	} else if results.FailedOpen {
-		actionReason = string(ActionReasonFailOpen)
 	}
+	actionReason := DeriveAuditActionReason(results.Allowed, results.AuditModeBypass, results.FailedOpen, ActionReasonRequestPolicy)
 
 	h.writeRequestAuditEntry(r, start, valCtx, req, action, actionReason, &results)
 
@@ -269,17 +263,12 @@ func (h *InterceptHandler) handleResponsePhase(
 	}
 
 	action := "allow"
-	actionReason := ""
 	if !results.Allowed {
 		action = "deny"
-		actionReason = string(ActionReasonResponsePolicy)
 	} else if results.RedactedContent != nil {
 		action = "redact"
-	} else if results.AuditModeBypass {
-		actionReason = string(ActionReasonAuditMode)
-	} else if results.FailedOpen {
-		actionReason = string(ActionReasonFailOpen)
 	}
+	actionReason := DeriveAuditActionReason(results.Allowed, results.AuditModeBypass, results.FailedOpen, ActionReasonResponsePolicy)
 
 	h.writeResponseAuditEntry(r, start, valCtx, req, action, actionReason, &results)
 
@@ -850,23 +839,7 @@ func (h *InterceptHandler) getSessionID(req *InterceptRequest) string {
 }
 
 func (h *InterceptHandler) extractContext(r *http.Request) *CLIValidationContext {
-	ctx := &CLIValidationContext{
-		RequestID: r.Header.Get("X-Request-ID"),
-		ClientID:  r.Header.Get("X-Maybe-Dont-Client-ID"),
-	}
-
-	if ctx.RequestID == "" {
-		id, err := GenerateRequestID()
-		if err != nil {
-			h.config.Logger.Logger().Warn("failed to generate request ID, using fallback",
-				zap.Error(err))
-			ctx.RequestID = "00000000000000000000000000000000"
-		} else {
-			ctx.RequestID = id
-		}
-	}
-
-	return ctx
+	return extractHTTPContext(r, h.config.Logger)
 }
 
 // InterceptError is the error response body for the intercept endpoint.

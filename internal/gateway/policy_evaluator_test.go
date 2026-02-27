@@ -262,6 +262,41 @@ func TestWriteAsyncAuditCompletion_NilAIDetails(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
+// TestWriteAsyncAuditCompletion_NilWriter verifies that a nil AuditWriter
+// does not cause a panic when a valid completion arrives.
+func TestWriteAsyncAuditCompletion_NilWriter(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	completionCh := make(chan AsyncCompletion, 1)
+	completionCh <- AsyncCompletion{
+		AIDetails:    &AuditAIResult{Action: "allow", EvaluationMs: 200},
+		EvaluationMs: 200,
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Should not panic with nil writer
+	WriteAsyncAuditCompletion(
+		nil, // nil writer
+		logger,
+		"test-request-id",
+		completionCh,
+		func(completion AsyncCompletion) *AuditEntry {
+			return &AuditEntry{
+				Source: "test",
+				RequestValidation: &AuditValidationInfo{
+					AI: completion.AIDetails,
+				},
+			}
+		},
+		func() { wg.Done() },
+	)
+
+	wg.Wait()
+	// If we reach here without panic, the test passes
+}
+
 // newTestCELEngineWithCLIDenyRule creates a CEL engine with a deny rule
 // that uses cli_expression to match any CLI command.
 func newTestCELEngineWithCLIDenyRule(t *testing.T) *CELPolicyEngine {
