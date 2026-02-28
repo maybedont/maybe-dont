@@ -502,7 +502,9 @@ The intercept endpoint returns structured error responses for malformed requests
 | 400 | `missing_payload_name` | Required `payload.name` field is empty |
 | 400 | `response_phase_missing_result` | Response phase requires `payload.result` |
 | 415 | `invalid_content_type` | `Content-Type` is not `application/json` |
-| 500 | `internal_error` | Response validation engine error |
+
+> **Note:** Response validation engine errors fail open (HTTP 200 with `valid=true`),
+> consistent with the gateway's fail-open philosophy. No 500 status is returned.
 
 Error response body:
 ```json

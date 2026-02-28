@@ -140,24 +140,28 @@ func TestHandleActionValidation_BadRequests(t *testing.T) {
 		name          string
 		body          string
 		contentType   string
+		wantStatus    int
 		wantErrorCode string
 	}{
 		{
 			name:          "missing target",
 			body:          `{"action_type": "tool_call", "target": ""}`,
 			contentType:   "application/json",
+			wantStatus:    http.StatusBadRequest,
 			wantErrorCode: "missing_target",
 		},
 		{
 			name:          "invalid content type",
 			body:          `{"target": "execute_bash"}`,
 			contentType:   "text/plain",
+			wantStatus:    http.StatusUnsupportedMediaType,
 			wantErrorCode: "invalid_content_type",
 		},
 		{
 			name:          "invalid JSON",
 			body:          `{invalid json}`,
 			contentType:   "application/json",
+			wantStatus:    http.StatusBadRequest,
 			wantErrorCode: "invalid_request",
 		},
 	}
@@ -172,7 +176,7 @@ func TestHandleActionValidation_BadRequests(t *testing.T) {
 
 			handler.ServeHTTP(w, req)
 
-			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Equal(t, tt.wantStatus, w.Code)
 
 			var errResp ActionValidationError
 			err := json.Unmarshal(w.Body.Bytes(), &errResp)

@@ -189,7 +189,8 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.Policy, topLevelMode co
 	return nil
 }
 
-// EvaluateToolCall evaluates a tool call request against all policies.
+// EvaluateToolCall evaluates a tool call request against policies that have an MCP expression.
+// Policies with only a CLI expression are skipped (they can only match CLI commands).
 // The optional budget parameter enables blocking time tracking for cumulative budget management.
 // When budget is nil, no blocking time is tracked.
 func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest, budget *BlockingBudget) (ValidationResults, error) {

@@ -148,9 +148,9 @@ func (h *InterceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate Content-Type
+	// Validate Content-Type (415 per RFC 7231 §6.5.13)
 	if !hasJSONContentType(r) {
-		h.writeError(w, http.StatusBadRequest, "invalid_content_type", "Content-Type must be application/json")
+		h.writeError(w, http.StatusUnsupportedMediaType, "invalid_content_type", "Content-Type must be application/json")
 		return
 	}
 
@@ -161,9 +161,9 @@ func (h *InterceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required fields
+	// Validate required fields (error codes align with spec error table)
 	if req.Event == "" {
-		h.writeError(w, http.StatusBadRequest, "invalid_request", "event field is required")
+		h.writeError(w, http.StatusBadRequest, "missing_event", "event field is required")
 		return
 	}
 	if req.Event != "tools/call" {
@@ -171,7 +171,7 @@ func (h *InterceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Phase == "" {
-		h.writeError(w, http.StatusBadRequest, "invalid_request", "phase field is required")
+		h.writeError(w, http.StatusBadRequest, "missing_phase", "phase field is required")
 		return
 	}
 	if req.Phase != "request" && req.Phase != "response" {
@@ -179,11 +179,11 @@ func (h *InterceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Payload.Name == "" {
-		h.writeError(w, http.StatusBadRequest, "missing_tool_name", "payload.name is required")
+		h.writeError(w, http.StatusBadRequest, "missing_payload_name", "payload.name is required")
 		return
 	}
 	if req.Phase == "response" && req.Payload.Result == nil {
-		h.writeError(w, http.StatusBadRequest, "missing_result", "payload.result is required for response phase")
+		h.writeError(w, http.StatusBadRequest, "response_phase_missing_result", "payload.result is required for response phase")
 		return
 	}
 
@@ -292,6 +292,58 @@ func (h *InterceptHandler) payloadToCallToolResult(req *InterceptRequest) *mcp.C
 	return result
 }
 
+// interceptResponseInputs captures the common fields needed to build an InterceptResponse.
+// Both ValidationResults and ResponseValidationResults provide these values.
+type interceptResponseInputs struct {
+	allowed         bool
+	auditModeBypass bool
+	message         string
+	policyResults   []InterceptPolicyResult
+}
+
+// buildBaseResponse builds an InterceptResponse from common validation inputs.
+// Both request-phase and response-phase results use this to avoid duplicating
+// severity computation, message construction, and response assembly.
+func (h *InterceptHandler) buildBaseResponse(
+	req *InterceptRequest,
+	valCtx *CLIValidationContext,
+	inputs interceptResponseInputs,
+	start time.Time,
+) *InterceptResponse {
+	severity := "info"
+	if !inputs.allowed {
+		severity = "error"
+	} else if inputs.auditModeBypass {
+		severity = "warn"
+	}
+
+	var messages []InterceptMessage
+	if !inputs.allowed || inputs.auditModeBypass {
+		messages = append(messages, InterceptMessage{
+			Message:  inputs.message,
+			Severity: severity,
+		})
+	}
+	if messages == nil {
+		messages = []InterceptMessage{}
+	}
+
+	return &InterceptResponse{
+		Interceptor: "maybe-dont",
+		Type:        "validation",
+		Phase:       req.Phase,
+		Valid:       inputs.allowed,
+		Severity:    severity,
+		Messages:    messages,
+		DurationMs:  time.Since(start).Milliseconds(),
+		Info: InterceptInfo{
+			RequestID:     valCtx.RequestID,
+			ServerVersion: h.config.Version,
+			Results:       inputs.policyResults,
+		},
+	}
+}
+
 // buildResponseResult maps ResponseValidationResults to an SEP-1763 InterceptResponse.
 // Redacted responses produce type="mutation" with modified=true and the redacted payload.
 func (h *InterceptHandler) buildResponseResult(
@@ -300,24 +352,6 @@ func (h *InterceptHandler) buildResponseResult(
 	results ResponseValidationResults,
 	start time.Time,
 ) *InterceptResponse {
-	severity := "info"
-	if !results.Allowed {
-		severity = "error"
-	} else if results.AuditModeBypass {
-		severity = "warn"
-	}
-
-	var messages []InterceptMessage
-	if !results.Allowed || results.AuditModeBypass {
-		messages = append(messages, InterceptMessage{
-			Message:  results.Message,
-			Severity: severity,
-		})
-	}
-	if messages == nil {
-		messages = []InterceptMessage{}
-	}
-
 	policyResults := make([]InterceptPolicyResult, 0, len(results.Results))
 	for _, r := range results.Results {
 		policyResults = append(policyResults, InterceptPolicyResult{
@@ -328,20 +362,12 @@ func (h *InterceptHandler) buildResponseResult(
 		})
 	}
 
-	resp := &InterceptResponse{
-		Interceptor: "maybe-dont",
-		Type:        "validation",
-		Phase:       req.Phase,
-		Valid:       results.Allowed,
-		Severity:    severity,
-		Messages:    messages,
-		DurationMs:  time.Since(start).Milliseconds(),
-		Info: InterceptInfo{
-			RequestID:     valCtx.RequestID,
-			ServerVersion: h.config.Version,
-			Results:       policyResults,
-		},
-	}
+	resp := h.buildBaseResponse(req, valCtx, interceptResponseInputs{
+		allowed:         results.Allowed,
+		auditModeBypass: results.AuditModeBypass,
+		message:         results.Message,
+		policyResults:   policyResults,
+	}, start)
 
 	// Redaction produces a mutation response with the modified payload
 	if results.RedactedContent != nil {
@@ -396,7 +422,7 @@ func (h *InterceptHandler) evaluateShellCommand(ctx context.Context, req *Interc
 	cliResults, mcpResults := h.config.Evaluator.EvaluateShellCommand(ctx, cliReq, mcpReq)
 
 	// Merge: if either denies, the final result is deny
-	return h.mergeShellResults(cliResults, mcpResults)
+	return mergeShellResults(cliResults, mcpResults)
 }
 
 // evaluateToolCall converts the payload to an MCP tool call request and evaluates it.
@@ -419,7 +445,7 @@ func (h *InterceptHandler) payloadToCallToolRequest(req *InterceptRequest) mcp.C
 // If either evaluation denies, the merged result is a deny.
 // RulesDetails and AIDetails from both sides are merged by concatenating
 // individual rule results so the audit trail is complete.
-func (h *InterceptHandler) mergeShellResults(cliResults, mcpResults ValidationResults) ValidationResults {
+func mergeShellResults(cliResults, mcpResults ValidationResults) ValidationResults {
 	merged := ValidationResults{
 		Allowed: true,
 	}
@@ -446,14 +472,8 @@ func (h *InterceptHandler) mergeShellResults(cliResults, mcpResults ValidationRe
 	// Merge AIDetails: concatenate rule results from both evaluations
 	merged.AIDetails = mergeAuditAIResults(cliResults.AIDetails, mcpResults.AIDetails)
 
-	// Async completion: prefer MCP, fall back to CLI. When both are present,
-	// only one is captured — this is acceptable because async completions are
-	// for audit_only AI evaluation and losing one follow-up entry is low-risk.
-	if mcpResults.AsyncCompletion != nil {
-		merged.AsyncCompletion = mcpResults.AsyncCompletion
-	} else if cliResults.AsyncCompletion != nil {
-		merged.AsyncCompletion = cliResults.AsyncCompletion
-	}
+	// Async completion: merge both channels when present so no audit data is lost.
+	merged.AsyncCompletion = mergeAsyncCompletions(cliResults.AsyncCompletion, mcpResults.AsyncCompletion)
 
 	// Determine allowed/denied: if either evaluation denies, the merged result is deny.
 	// CLI message takes precedence (first writer wins).
@@ -495,8 +515,9 @@ func mergeAuditRulesResults(a, b *AuditRulesResult) *AuditRulesResult {
 		return a
 	}
 
+	// Clone a.Results to avoid mutating the input slice's backing array
 	merged := &AuditRulesResult{
-		Results: append(a.Results, b.Results...),
+		Results: append(slices.Clone(a.Results), b.Results...),
 	}
 
 	// Use the most restrictive action (deny > allow)
@@ -532,8 +553,9 @@ func mergeAuditAIResults(a, b *AuditAIResult) *AuditAIResult {
 		return a
 	}
 
+	// Clone a.Results to avoid mutating the input slice's backing array
 	merged := &AuditAIResult{
-		Results: append(a.Results, b.Results...),
+		Results: append(slices.Clone(a.Results), b.Results...),
 	}
 
 	// Use the most restrictive action (deny > allow)
@@ -559,6 +581,42 @@ func mergeAuditAIResults(a, b *AuditAIResult) *AuditAIResult {
 	return merged
 }
 
+// mergeAsyncCompletions combines two async completion channels into one.
+// When both channels are present, a goroutine waits on both and merges
+// their AI details into a single completion. When only one is present,
+// it is returned directly. Returns nil if both are nil.
+func mergeAsyncCompletions(cli, mcp <-chan AsyncCompletion) <-chan AsyncCompletion {
+	if cli == nil && mcp == nil {
+		return nil
+	}
+	if cli == nil {
+		return mcp
+	}
+	if mcp == nil {
+		return cli
+	}
+
+	// Both channels are present — merge their results into a single channel
+	merged := make(chan AsyncCompletion, 1)
+	go func() {
+		defer close(merged)
+
+		var cliCompletion, mcpCompletion AsyncCompletion
+		cliCompletion = <-cli
+		mcpCompletion = <-mcp
+
+		// Merge AI details from both completions
+		combinedAI := mergeAuditAIResults(cliCompletion.AIDetails, mcpCompletion.AIDetails)
+
+		merged <- AsyncCompletion{
+			AIDetails:    combinedAI,
+			EvaluationMs: cliCompletion.EvaluationMs + mcpCompletion.EvaluationMs,
+		}
+	}()
+
+	return merged
+}
+
 // buildValidationResponse maps ValidationResults to an SEP-1763 InterceptResponse.
 func (h *InterceptHandler) buildValidationResponse(
 	req *InterceptRequest,
@@ -566,25 +624,6 @@ func (h *InterceptHandler) buildValidationResponse(
 	results ValidationResults,
 	start time.Time,
 ) *InterceptResponse {
-	valid := results.Allowed
-	severity := "info"
-	if !results.Allowed {
-		severity = "error"
-	} else if results.AuditModeBypass {
-		severity = "warn"
-	}
-
-	var messages []InterceptMessage
-	if !results.Allowed || results.AuditModeBypass {
-		messages = append(messages, InterceptMessage{
-			Message:  results.Message,
-			Severity: severity,
-		})
-	}
-	if messages == nil {
-		messages = []InterceptMessage{}
-	}
-
 	policyResults := make([]InterceptPolicyResult, 0, len(results.Results))
 	for _, r := range results.Results {
 		policyResults = append(policyResults, InterceptPolicyResult{
@@ -595,20 +634,12 @@ func (h *InterceptHandler) buildValidationResponse(
 		})
 	}
 
-	return &InterceptResponse{
-		Interceptor: "maybe-dont",
-		Type:        "validation",
-		Phase:       req.Phase,
-		Valid:       valid,
-		Severity:    severity,
-		Messages:    messages,
-		DurationMs:  time.Since(start).Milliseconds(),
-		Info: InterceptInfo{
-			RequestID:     ctx.RequestID,
-			ServerVersion: h.config.Version,
-			Results:       policyResults,
-		},
-	}
+	return h.buildBaseResponse(req, ctx, interceptResponseInputs{
+		allowed:         results.Allowed,
+		auditModeBypass: results.AuditModeBypass,
+		message:         results.Message,
+		policyResults:   policyResults,
+	}, start)
 }
 
 // --- Audit Logging ---
@@ -789,11 +820,17 @@ func (h *InterceptHandler) parseShellCommand(req *InterceptRequest) *CLIValidati
 }
 
 // buildAuditCLIInfo creates the CLI section of an audit entry for shell tool calls.
+// When IncludeArgumentValues is false, argument values are sanitized to prevent
+// sensitive data (tokens, passwords) from appearing in the audit log.
 func (h *InterceptHandler) buildAuditCLIInfo(req *InterceptRequest) *AuditCLIInfo {
 	parsed := h.parseShellCommand(req)
+	args := parsed.Arguments
+	if !h.config.IncludeArgumentValues {
+		args = extractCLIArgumentFlags(args)
+	}
 	return &AuditCLIInfo{
 		Command:          parsed.Command,
-		Arguments:        parsed.Arguments,
+		Arguments:        args,
 		WorkingDirectory: parsed.WorkingDirectory,
 	}
 }
@@ -846,7 +883,8 @@ func (h *InterceptHandler) extractContext(r *http.Request) *CLIValidationContext
 type InterceptError struct {
 	// Error is a machine-readable error code.
 	// Values: "intercept_disabled", "invalid_content_type", "invalid_request",
-	// "unsupported_event", "invalid_phase", "missing_tool_name", "missing_result"
+	// "missing_event", "unsupported_event", "missing_phase", "invalid_phase",
+	// "missing_payload_name", "response_phase_missing_result"
 	Error string `json:"error"`
 
 	// Message is a human-readable description of the error.

@@ -313,7 +313,7 @@ func TestHandleCLIValidation_WildcardMatchesAll(t *testing.T) {
 }
 
 // TestHandleCLIValidation_InvalidContentType verifies that when Content-Type is not
-// application/json, the handler returns a 400 error with "invalid_content_type" error code.
+// application/json, the handler returns a 415 error with "invalid_content_type" error code.
 func TestHandleCLIValidation_InvalidContentType(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
@@ -332,7 +332,7 @@ func TestHandleCLIValidation_InvalidContentType(t *testing.T) {
 
 	handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusUnsupportedMediaType, w.Code)
 
 	var errResp CLIValidationError
 	err := json.Unmarshal(w.Body.Bytes(), &errResp)

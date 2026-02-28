@@ -17,111 +17,127 @@ import (
 
 // --- Input Validation Tests ---
 
-// TestInterceptHandler_InvalidContentType verifies 400 on non-JSON content type.
-func TestInterceptHandler_InvalidContentType(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
+// TestInterceptHandler_InputValidation verifies that malformed or invalid requests
+// return the correct HTTP status code, machine-readable error code (matching the spec
+// error table), and a descriptive message.
+func TestInterceptHandler_InputValidation(t *testing.T) {
+	tests := []struct {
+		name            string
+		body            string
+		contentType     string
+		enabled         bool
+		wantStatus      int
+		wantErrorCode   string
+		wantMsgContains string
+	}{
+		{
+			name:            "invalid content type returns 415",
+			body:            "not json",
+			contentType:     "text/plain",
+			enabled:         true,
+			wantStatus:      http.StatusUnsupportedMediaType,
+			wantErrorCode:   "invalid_content_type",
+			wantMsgContains: "Content-Type",
+		},
+		{
+			name:            "malformed JSON returns 400",
+			body:            "{invalid",
+			contentType:     "application/json",
+			enabled:         true,
+			wantStatus:      http.StatusBadRequest,
+			wantErrorCode:   "invalid_request",
+			wantMsgContains: "Invalid JSON",
+		},
+		{
+			name:            "missing event returns 400",
+			body:            `{"phase": "request", "payload": {"name": "test_tool"}}`,
+			contentType:     "application/json",
+			enabled:         true,
+			wantStatus:      http.StatusBadRequest,
+			wantErrorCode:   "missing_event",
+			wantMsgContains: "event",
+		},
+		{
+			name:            "unsupported event returns 400",
+			body:            `{"event": "resources/read", "phase": "request", "payload": {"name": "test_tool"}}`,
+			contentType:     "application/json",
+			enabled:         true,
+			wantStatus:      http.StatusBadRequest,
+			wantErrorCode:   "unsupported_event",
+			wantMsgContains: "tools/call",
+		},
+		{
+			name:            "missing phase returns 400",
+			body:            `{"event": "tools/call", "payload": {"name": "test_tool"}}`,
+			contentType:     "application/json",
+			enabled:         true,
+			wantStatus:      http.StatusBadRequest,
+			wantErrorCode:   "missing_phase",
+			wantMsgContains: "phase",
+		},
+		{
+			name:            "invalid phase returns 400",
+			body:            `{"event": "tools/call", "phase": "invalid", "payload": {"name": "test_tool"}}`,
+			contentType:     "application/json",
+			enabled:         true,
+			wantStatus:      http.StatusBadRequest,
+			wantErrorCode:   "invalid_phase",
+			wantMsgContains: "phase",
+		},
+		{
+			name:            "missing payload name returns 400",
+			body:            `{"event": "tools/call", "phase": "request", "payload": {}}`,
+			contentType:     "application/json",
+			enabled:         true,
+			wantStatus:      http.StatusBadRequest,
+			wantErrorCode:   "missing_payload_name",
+			wantMsgContains: "name",
+		},
+		{
+			name:            "response phase missing result returns 400",
+			body:            `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool"}}`,
+			contentType:     "application/json",
+			enabled:         true,
+			wantStatus:      http.StatusBadRequest,
+			wantErrorCode:   "response_phase_missing_result",
+			wantMsgContains: "result",
+		},
+		{
+			name:            "disabled endpoint returns 400",
+			body:            `{"event": "tools/call", "phase": "request", "payload": {"name": "test_tool"}}`,
+			contentType:     "application/json",
+			enabled:         false,
+			wantStatus:      http.StatusBadRequest,
+			wantErrorCode:   "intercept_disabled",
+			wantMsgContains: "not enabled",
+		},
+	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/intercept", strings.NewReader("not json"))
-	req.Header.Set("Content-Type", "text/plain")
-	w := httptest.NewRecorder()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := config.NewSessionLogger(zaptest.NewLogger(t))
+			handler := NewInterceptHandler(InterceptHandlerConfig{
+				Enabled:        tt.enabled,
+				ShellToolNames: []string{"Bash", "execute_command"},
+				Logger:         logger,
+				Version:        "1.0.0-test",
+			})
 
-	handler.ServeHTTP(w, req)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/intercept", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", tt.contentType)
+			w := httptest.NewRecorder()
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assertInterceptError(t, w, "Content-Type must be application/json")
-}
+			handler.ServeHTTP(w, req)
 
-// TestInterceptHandler_InvalidJSON verifies 400 on malformed JSON.
-func TestInterceptHandler_InvalidJSON(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
+			assert.Equal(t, tt.wantStatus, w.Code)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/intercept", strings.NewReader("{invalid"))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// TestInterceptHandler_MissingEvent verifies 400 when event field is empty.
-func TestInterceptHandler_MissingEvent(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-	body := `{"phase": "request", "payload": {"name": "test_tool"}}`
-
-	resp, code := sendIntercept(t, handler, body)
-	assert.Equal(t, http.StatusBadRequest, code)
-	assert.Contains(t, resp, "event")
-}
-
-// TestInterceptHandler_UnsupportedEvent verifies 400 when event is not "tools/call".
-func TestInterceptHandler_UnsupportedEvent(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-	body := `{"event": "resources/read", "phase": "request", "payload": {"name": "test_tool"}}`
-
-	resp, code := sendIntercept(t, handler, body)
-	assert.Equal(t, http.StatusBadRequest, code)
-	assert.Contains(t, resp, "tools/call")
-}
-
-// TestInterceptHandler_MissingPhase verifies 400 when phase field is empty.
-func TestInterceptHandler_MissingPhase(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-	body := `{"event": "tools/call", "payload": {"name": "test_tool"}}`
-
-	resp, code := sendIntercept(t, handler, body)
-	assert.Equal(t, http.StatusBadRequest, code)
-	assert.Contains(t, resp, "phase")
-}
-
-// TestInterceptHandler_InvalidPhase verifies 400 when phase is not "request" or "response".
-func TestInterceptHandler_InvalidPhase(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-	body := `{"event": "tools/call", "phase": "invalid", "payload": {"name": "test_tool"}}`
-
-	resp, code := sendIntercept(t, handler, body)
-	assert.Equal(t, http.StatusBadRequest, code)
-	assert.Contains(t, resp, "phase")
-}
-
-// TestInterceptHandler_MissingPayloadName verifies 400 when payload.name is empty.
-func TestInterceptHandler_MissingPayloadName(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-	body := `{"event": "tools/call", "phase": "request", "payload": {}}`
-
-	resp, code := sendIntercept(t, handler, body)
-	assert.Equal(t, http.StatusBadRequest, code)
-	assert.Contains(t, resp, "name")
-}
-
-// TestInterceptHandler_ResponsePhaseMissingResult verifies 400 when phase is
-// "response" but payload.result is not provided.
-func TestInterceptHandler_ResponsePhaseMissingResult(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-	body := `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool"}}`
-
-	resp, code := sendIntercept(t, handler, body)
-	assert.Equal(t, http.StatusBadRequest, code)
-	assert.Contains(t, resp, "result")
-}
-
-// TestInterceptHandler_Disabled verifies 400 when intercept is not enabled.
-func TestInterceptHandler_Disabled(t *testing.T) {
-	logger := config.NewSessionLogger(zaptest.NewLogger(t))
-	handler := NewInterceptHandler(InterceptHandlerConfig{
-		Enabled: false,
-		Logger:  logger,
-	})
-
-	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "test_tool"}}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/intercept", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assertInterceptError(t, w, "not enabled")
+			var errResp InterceptError
+			err := json.Unmarshal(w.Body.Bytes(), &errResp)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantErrorCode, errResp.Error, "error code should match spec")
+			assert.Contains(t, errResp.Message, tt.wantMsgContains)
+		})
+	}
 }
 
 // TestInterceptHandler_ValidRequestReturns200 verifies that a valid request phase
@@ -1150,8 +1166,6 @@ func TestInterceptHandler_FailedOpen_ActionReason(t *testing.T) {
 // TestMergeShellResults_BothDeny verifies that when both CLI and MCP evaluations
 // deny, the merged result uses the CLI message (first writer wins).
 func TestMergeShellResults_BothDeny(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-
 	cliResults := ValidationResults{
 		Allowed:   false,
 		Message:   "rm denied by CLI rule",
@@ -1165,7 +1179,7 @@ func TestMergeShellResults_BothDeny(t *testing.T) {
 		DenyCount: 1,
 	}
 
-	merged := handler.mergeShellResults(cliResults, mcpResults)
+	merged := mergeShellResults(cliResults, mcpResults)
 
 	assert.False(t, merged.Allowed, "merged should be denied")
 	assert.Equal(t, "rm denied by CLI rule", merged.Message, "CLI message should take precedence (first writer)")
@@ -1176,8 +1190,6 @@ func TestMergeShellResults_BothDeny(t *testing.T) {
 
 // TestMergeShellResults_CLIAllowMCPDeny verifies MCP deny overrides CLI allow.
 func TestMergeShellResults_CLIAllowMCPDeny(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-
 	cliResults := ValidationResults{
 		Allowed:    true,
 		Message:    "CLI allowed",
@@ -1189,7 +1201,7 @@ func TestMergeShellResults_CLIAllowMCPDeny(t *testing.T) {
 		DenyCount: 1,
 	}
 
-	merged := handler.mergeShellResults(cliResults, mcpResults)
+	merged := mergeShellResults(cliResults, mcpResults)
 
 	assert.False(t, merged.Allowed)
 	assert.Equal(t, "MCP denied", merged.Message, "MCP deny message should be used when CLI allows")
@@ -1198,8 +1210,6 @@ func TestMergeShellResults_CLIAllowMCPDeny(t *testing.T) {
 // TestMergeShellResults_AuditBypassOverriddenByDeny verifies that AuditModeBypass
 // from one side is cleared when the other side has an enforced deny.
 func TestMergeShellResults_AuditBypassOverriddenByDeny(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-
 	tests := []struct {
 		name    string
 		cli     ValidationResults
@@ -1246,7 +1256,7 @@ func TestMergeShellResults_AuditBypassOverriddenByDeny(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			merged := handler.mergeShellResults(tt.cli, tt.mcp)
+			merged := mergeShellResults(tt.cli, tt.mcp)
 			assert.Equal(t, tt.wantAMB, merged.AuditModeBypass)
 		})
 	}
@@ -1255,8 +1265,6 @@ func TestMergeShellResults_AuditBypassOverriddenByDeny(t *testing.T) {
 // TestMergeShellResults_FailedOpenPropagated verifies that FailedOpen from either
 // side is propagated to the merged result.
 func TestMergeShellResults_FailedOpenPropagated(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-
 	tests := []struct {
 		name string
 		cli  ValidationResults
@@ -1291,7 +1299,7 @@ func TestMergeShellResults_FailedOpenPropagated(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			merged := handler.mergeShellResults(tt.cli, tt.mcp)
+			merged := mergeShellResults(tt.cli, tt.mcp)
 			assert.Equal(t, tt.want, merged.FailedOpen)
 		})
 	}
@@ -1300,8 +1308,6 @@ func TestMergeShellResults_FailedOpenPropagated(t *testing.T) {
 // TestMergeShellResults_RulesDetailsMerged verifies that RulesDetails from both
 // CLI and MCP evaluations are merged (not overwritten).
 func TestMergeShellResults_RulesDetailsMerged(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-
 	cliResults := ValidationResults{
 		Allowed: true,
 		RulesDetails: &AuditRulesResult{
@@ -1325,7 +1331,7 @@ func TestMergeShellResults_RulesDetailsMerged(t *testing.T) {
 		},
 	}
 
-	merged := handler.mergeShellResults(cliResults, mcpResults)
+	merged := mergeShellResults(cliResults, mcpResults)
 
 	require.NotNil(t, merged.RulesDetails, "merged should have RulesDetails")
 	assert.Len(t, merged.RulesDetails.Results, 2, "should contain rule results from both CLI and MCP")
@@ -1341,8 +1347,6 @@ func TestMergeShellResults_RulesDetailsMerged(t *testing.T) {
 // TestMergeShellResults_AIDetailsMerged verifies that AIDetails from both
 // CLI and MCP evaluations are merged (not overwritten).
 func TestMergeShellResults_AIDetailsMerged(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-
 	cliResults := ValidationResults{
 		Allowed: true,
 		AIDetails: &AuditAIResult{
@@ -1364,7 +1368,7 @@ func TestMergeShellResults_AIDetailsMerged(t *testing.T) {
 		},
 	}
 
-	merged := handler.mergeShellResults(cliResults, mcpResults)
+	merged := mergeShellResults(cliResults, mcpResults)
 
 	require.NotNil(t, merged.AIDetails, "merged should have AIDetails")
 	assert.Len(t, merged.AIDetails.Results, 2, "should contain AI results from both CLI and MCP")
@@ -1374,13 +1378,11 @@ func TestMergeShellResults_AIDetailsMerged(t *testing.T) {
 // or missing command string. The merge should still work with whatever results
 // the evaluators produce.
 func TestMergeShellResults_EmptyCommand(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-
 	// Both allow with empty results (what happens with an empty command)
 	cliResults := ValidationResults{Allowed: true, Message: "No matching policies"}
 	mcpResults := ValidationResults{Allowed: true, Message: "No matching policies"}
 
-	merged := handler.mergeShellResults(cliResults, mcpResults)
+	merged := mergeShellResults(cliResults, mcpResults)
 
 	assert.True(t, merged.Allowed)
 	assert.NotEmpty(t, merged.Message, "should have a default message")
@@ -1389,8 +1391,6 @@ func TestMergeShellResults_EmptyCommand(t *testing.T) {
 // TestMergeShellResults_CountAggregation verifies AllowCount and DenyCount
 // are properly summed from both sides.
 func TestMergeShellResults_CountAggregation(t *testing.T) {
-	handler := newTestInterceptHandler(t, nil)
-
 	cliResults := ValidationResults{
 		Allowed:    true,
 		AllowCount: 3,
@@ -1402,10 +1402,150 @@ func TestMergeShellResults_CountAggregation(t *testing.T) {
 		DenyCount:  0,
 	}
 
-	merged := handler.mergeShellResults(cliResults, mcpResults)
+	merged := mergeShellResults(cliResults, mcpResults)
 
 	assert.Equal(t, 5, merged.AllowCount, "allow counts should sum")
 	assert.Equal(t, 1, merged.DenyCount, "deny counts should sum")
+}
+
+// TestMergeAsyncCompletions verifies that when both CLI and MCP evaluations
+// produce async completions, both are merged into a single completion.
+func TestMergeAsyncCompletions(t *testing.T) {
+	tests := []struct {
+		name          string
+		cli           *AuditAIResult
+		mcp           *AuditAIResult
+		wantResults   int
+		wantTotalMs   int64
+		wantNilResult bool
+	}{
+		{
+			name: "both present — results merged",
+			cli: &AuditAIResult{
+				Results:      []AuditAIRuleResult{{Rule: "cli-rule", Action: "allow"}},
+				EvaluationMs: 100,
+			},
+			mcp: &AuditAIResult{
+				Results:      []AuditAIRuleResult{{Rule: "mcp-rule", Action: "deny"}},
+				EvaluationMs: 200,
+			},
+			wantResults: 2,
+			wantTotalMs: 300,
+		},
+		{
+			name: "only CLI present",
+			cli: &AuditAIResult{
+				Results:      []AuditAIRuleResult{{Rule: "cli-only"}},
+				EvaluationMs: 50,
+			},
+			wantResults: 1,
+			wantTotalMs: 50,
+		},
+		{
+			name: "only MCP present",
+			mcp: &AuditAIResult{
+				Results:      []AuditAIRuleResult{{Rule: "mcp-only"}},
+				EvaluationMs: 75,
+			},
+			wantResults: 1,
+			wantTotalMs: 75,
+		},
+		{
+			name:          "neither present",
+			wantNilResult: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cliCh, mcpCh chan AsyncCompletion
+
+			if tt.cli != nil {
+				cliCh = make(chan AsyncCompletion, 1)
+				cliCh <- AsyncCompletion{AIDetails: tt.cli, EvaluationMs: tt.cli.EvaluationMs}
+			}
+			if tt.mcp != nil {
+				mcpCh = make(chan AsyncCompletion, 1)
+				mcpCh <- AsyncCompletion{AIDetails: tt.mcp, EvaluationMs: tt.mcp.EvaluationMs}
+			}
+
+			var cliRecv, mcpRecv <-chan AsyncCompletion
+			if cliCh != nil {
+				cliRecv = cliCh
+			}
+			if mcpCh != nil {
+				mcpRecv = mcpCh
+			}
+
+			result := mergeAsyncCompletions(cliRecv, mcpRecv)
+
+			if tt.wantNilResult {
+				assert.Nil(t, result)
+				return
+			}
+
+			require.NotNil(t, result)
+			completion := <-result
+			require.NotNil(t, completion.AIDetails)
+			assert.Len(t, completion.AIDetails.Results, tt.wantResults)
+			assert.Equal(t, tt.wantTotalMs, completion.EvaluationMs)
+		})
+	}
+}
+
+// --- buildAuditCLIInfo Argument Sanitization Tests ---
+
+// TestInterceptHandler_BuildAuditCLIInfo_SanitizesArguments verifies that when
+// IncludeArgumentValues is false, CLI arguments are sanitized to prevent sensitive
+// data (tokens, passwords) from appearing in the audit log.
+func TestInterceptHandler_BuildAuditCLIInfo_SanitizesArguments(t *testing.T) {
+	tests := []struct {
+		name                  string
+		includeArgumentValues bool
+		command               string
+		wantArgs              []string
+	}{
+		{
+			name:                  "sanitized when IncludeArgumentValues is false",
+			includeArgumentValues: false,
+			command:               "gh auth login --token secret123",
+			wantArgs:              []string{"auth", "login", "--token", "[value]"},
+		},
+		{
+			name:                  "full args when IncludeArgumentValues is true",
+			includeArgumentValues: true,
+			command:               "gh auth login --token secret123",
+			wantArgs:              []string{"auth", "login", "--token", "secret123"},
+		},
+		{
+			name:                  "flag=value sanitized",
+			includeArgumentValues: false,
+			command:               "curl --header=Authorization:Bearer-xyz http://example.com",
+			wantArgs:              []string{"--header", "http://example.com"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := config.NewSessionLogger(zaptest.NewLogger(t))
+			handler := NewInterceptHandler(InterceptHandlerConfig{
+				Enabled:               true,
+				ShellToolNames:        []string{"Bash"},
+				Logger:                logger,
+				IncludeArgumentValues: tt.includeArgumentValues,
+			})
+
+			req := &InterceptRequest{
+				Payload: InterceptPayload{
+					Name:      "Bash",
+					Arguments: map[string]any{"command": tt.command},
+				},
+			}
+
+			cliInfo := handler.buildAuditCLIInfo(req)
+			assert.Equal(t, tt.wantArgs, cliInfo.Arguments)
+		})
+	}
 }
 
 // --- Test Helpers ---
@@ -1444,13 +1584,4 @@ func sendIntercept(t *testing.T, handler *InterceptHandler, body string) (string
 	handler.ServeHTTP(w, req)
 
 	return w.Body.String(), w.Code
-}
-
-func assertInterceptError(t *testing.T, w *httptest.ResponseRecorder, contains string) {
-	t.Helper()
-
-	var errResp InterceptError
-	err := json.Unmarshal(w.Body.Bytes(), &errResp)
-	require.NoError(t, err)
-	assert.Contains(t, errResp.Message, contains)
 }

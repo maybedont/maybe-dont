@@ -185,9 +185,9 @@ func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validate Content-Type (accept with charset parameters like "application/json; charset=utf-8")
+	// Validate Content-Type (415 per RFC 7231 §6.5.13; accepts charset parameters)
 	if !hasJSONContentType(r) {
-		h.writeError(w, http.StatusBadRequest, "invalid_content_type",
+		h.writeError(w, http.StatusUnsupportedMediaType, "invalid_content_type",
 			"Content-Type must be application/json")
 		return
 	}
