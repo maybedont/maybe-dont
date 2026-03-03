@@ -23,6 +23,25 @@ const (
 	ActionReasonFailOpen ActionReason = "fail_open"
 )
 
+// DeriveAuditActionReason computes the action_reason for an audit entry based on
+// validation result flags. denyReason is used when the result is denied; pass ""
+// if no specific deny reason should be recorded (e.g., CLI/Action handlers where
+// the deny action itself is self-explanatory).
+//
+// Priority: denied → denyReason, audit_mode bypass → "audit_mode", fail_open → "fail_open".
+func DeriveAuditActionReason(allowed, auditModeBypass, failedOpen bool, denyReason ActionReason) string {
+	if !allowed {
+		return string(denyReason)
+	}
+	if auditModeBypass {
+		return string(ActionReasonAuditMode)
+	}
+	if failedOpen {
+		return string(ActionReasonFailOpen)
+	}
+	return ""
+}
+
 // ValidationResult represents the result of a single validation check
 type ValidationResult struct {
 	PolicyName string              `json:"policy_name"`
@@ -182,6 +201,10 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.Allowed = false
 		finalResults.Message = denyMessage
 		finalResults.RecommendedAction = config.PolicyActionDeny
+		// An enforced deny overrides any audit-mode bypass — the request was
+		// actually denied, so no bypass occurred. This matches finalizeResults
+		// in PolicyEvaluator.
+		finalResults.AuditModeBypass = false
 	} else if foundAllow {
 		finalResults.Allowed = true
 		finalResults.Message = allowMessage

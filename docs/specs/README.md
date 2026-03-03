@@ -24,6 +24,7 @@ Each spec should have a `## Status` section near the top with one of these value
 | [test-pass-rate-history](test-pass-rate-history.md) | Rolling pass rate tracking, policy change markers, and stability reporting for the policy test suite |
 | [release-notes-process](release-notes-process.md) | Versioned release notes (release-notes/v{version}.md) enforced by CI |
 | [openhands-integration](openhands-integration.md) | OpenHands security analyzer integration via `POST /api/v1/action/validate` endpoint |
+| [agent-hook-and-interceptor-integration](agent-hook-and-interceptor-integration.md) | Agent hooks and `POST /api/v1/intercept` endpoint for hook-based integrations (hook scripts and MCP interceptors are future work) |
 
 ### Ready for Implementation
 
@@ -45,7 +46,6 @@ Each spec should have a `## Status` section near the top with one of these value
 | [cli-proxy-for-ai-agents](cli-proxy-for-ai-agents.md) | CLI proxy mode for AI agent integrations |
 | [response-validation-state-changes](response-validation-state-changes.md) | Response validation action semantics |
 | [runtime-action-interception-architecture](runtime-action-interception-architecture.md) | Architecture for intercepting runtime actions |
-| [agent-hook-and-interceptor-integration](agent-hook-and-interceptor-integration.md) | Agent hooks (Claude, Cursor, Cline, Copilot) and MCP interceptors (SEP-1763) as alternatives to gateway proxy |
 
 ### No Status (Legacy)
 

@@ -3,8 +3,10 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/maybedont/maybe-dont/internal/config"
+	"go.uber.org/zap"
 )
 
 // contextKey is a custom type for context keys to avoid collisions
@@ -144,4 +146,35 @@ func GetServiceCredentials(ctx context.Context, clientName string) (*ClientCrede
 	}
 
 	return allCreds.GetClient(clientName)
+}
+
+// extractHTTPContext extracts request ID and client ID from HTTP headers.
+// If X-Request-ID is not provided, a 32-character hex string is generated.
+// This is the shared implementation used by all HTTP validation handlers
+// (CLI, action, intercept).
+func extractHTTPContext(r *http.Request, logger *config.SessionLogger) *CLIValidationContext {
+	ctx := &CLIValidationContext{
+		RequestID: r.Header.Get("X-Request-ID"),
+		ClientID:  r.Header.Get("X-Maybe-Dont-Client-ID"),
+	}
+
+	if ctx.RequestID == "" {
+		id, err := GenerateRequestID()
+		if err != nil {
+			// Log the error — this indicates a serious system problem (crypto/rand failure)
+			logger.Logger().Warn("failed to generate request ID, using fallback",
+				zap.Error(err))
+			ctx.RequestID = "00000000000000000000000000000000"
+		} else {
+			ctx.RequestID = id
+		}
+	}
+
+	return ctx
+}
+
+// hasJSONContentType checks if the request Content-Type starts with "application/json".
+// This accepts charset parameters like "application/json; charset=utf-8".
+func hasJSONContentType(r *http.Request) bool {
+	return strings.HasPrefix(r.Header.Get("Content-Type"), "application/json")
 }

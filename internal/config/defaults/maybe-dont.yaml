@@ -106,6 +106,23 @@ native_tools:
   list_sessions:
     enabled: true
 
+# Intercept Endpoint
+# Validates tool calls and CLI commands from agent hook scripts via REST API.
+# Agents send tool call details before/after execution for policy evaluation.
+intercept:
+  # Enable the /api/v1/intercept REST endpoint
+  enabled: true
+
+  # Tool names that represent shell/CLI execution.
+  # When a tool with one of these names is intercepted, the gateway parses
+  # the command string and evaluates both cli_expression and mcp_expression.
+  shell_tool_names:
+    - "Bash"
+    - "execute_command"
+    - "shell"
+    - "run_terminal_command"
+    - "run_command"
+
 # CLI Request Validation
 # Validates CLI commands from AI agents via REST API endpoint.
 # See docs/specs/cli-proxy-for-ai-agents.md for details.

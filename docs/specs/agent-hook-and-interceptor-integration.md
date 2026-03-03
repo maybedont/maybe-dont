@@ -1,7 +1,7 @@
 # Agent Hook and MCP Interceptor Integration
 
 ## Status
-**Draft**
+**Implemented** (intercept endpoint shipped; hook scripts and MCP interceptor integration are future work)
 
 ## Overview
 
@@ -488,6 +488,33 @@ For mutation responses (redaction):
 | `durationMs` | number | Total evaluation time in milliseconds | Direct match |
 | `info` | object | Maybe Don't-specific metadata (request_id, server_version, per-policy results) | Maps to `info: Record<string, unknown>` |
 
+#### Error Responses
+
+The intercept endpoint returns structured error responses for malformed requests:
+
+| HTTP Status | Error Code | Condition |
+|-------------|-----------|-----------|
+| 400 | `intercept_disabled` | Intercept endpoint is not enabled |
+| 400 | `invalid_request` | Malformed JSON body or decoding failure |
+| 400 | `missing_event` | Required `event` field is empty |
+| 400 | `unsupported_event` | `event` is not a supported type (only `tools/call` currently) |
+| 400 | `missing_phase` | Required `phase` field is empty |
+| 400 | `invalid_phase` | `phase` is not `"request"` or `"response"` |
+| 400 | `missing_payload_name` | Required `payload.name` field is empty (also returned when `payload` is null or omitted) |
+| 400 | `response_phase_missing_result` | Response phase requires `payload.result` |
+| 415 | `invalid_content_type` | `Content-Type` is not `application/json` |
+
+> **Note:** Response validation engine errors fail open (HTTP 200 with `valid=true`),
+> consistent with the gateway's fail-open philosophy. No 500 status is returned.
+
+Error response body:
+```json
+{
+  "error": "missing_event",
+  "message": "Required field 'event' is empty"
+}
+```
+
 #### Severity Mapping
 
 | Scenario | `valid` | `severity` | Hook Action |
@@ -505,6 +532,15 @@ The gateway routes evaluation internally based on the payload:
 3. **Response phase:** Evaluate with response validation rules (CEL response + AI response)
 
 This keeps the routing logic server-side — hook scripts send what the agent gives them without needing to know which evaluation path applies.
+
+#### Shell Tool Dual-Evaluation Detail
+
+When a shell tool is detected, the gateway uses `EvaluateShellCommand()` which runs the request through **two separate evaluation paths** and merges the results:
+
+1. **CLI evaluation:** The command string is parsed into `command` and `arguments`, then evaluated against `cli_expression` rules via `EvaluateCLICommand()`
+2. **MCP evaluation:** The same tool call is evaluated against `mcp_expression` rules via `EvaluateToolCall()`, with CLI-only policies (those with only `cli_expression` and no `mcp_expression`) skipped
+
+The results from both paths are merged: if either path denies, the combined result is denied. Both paths' audit details (CEL rule results, AI results) are preserved in the merged result. This ensures that a rule with both `cli_expression` and `mcp_expression` evaluates correctly regardless of how the tool call arrives.
 
 ### Configuration
 

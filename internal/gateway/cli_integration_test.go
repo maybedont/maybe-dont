@@ -40,13 +40,18 @@ func setupCLIIntegrationTest(t *testing.T, policies []config.Policy, topLevelMod
 
 	auditWriter := &mockAuditWriter{}
 
+	evaluator := &PolicyEvaluator{
+		CELEngine: celEngine,
+		Logger:    sessionLogger,
+	}
+
 	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
 		Enabled:               true,
 		ValidateCommands:      validateCommands,
 		Logger:                sessionLogger,
 		Version:               "test-1.0.0",
 		AuditWriter:           auditWriter,
-		CELEngine:             celEngine,
+		Evaluator:             evaluator,
 		IncludeArgumentValues: true,
 	})
 
@@ -457,12 +462,17 @@ func TestCLIValidation_Integration_RequestIDInLogs(t *testing.T) {
 	}, "")
 	require.NoError(t, err)
 
+	evaluator := &PolicyEvaluator{
+		CELEngine: celEngine,
+		Logger:    sessionLogger,
+	}
+
 	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
 		Enabled:               true,
 		ValidateCommands:      []string{"*"},
 		Logger:                sessionLogger,
 		Version:               "test-1.0.0",
-		CELEngine:             celEngine,
+		Evaluator:             evaluator,
 		IncludeArgumentValues: true,
 	})
 

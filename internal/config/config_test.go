@@ -3400,3 +3400,34 @@ func TestAuditIncludeArgumentValues_EnvVarOverride(t *testing.T) {
 
 	require.False(t, cfg.Audit.ShouldIncludeArgumentValues())
 }
+
+// TestInterceptConfigDefaults verifies that intercept config loads with
+// correct defaults: enabled=true, default shell tool names.
+func TestInterceptConfigDefaults(t *testing.T) {
+	viper.Reset()
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.True(t, cfg.Intercept.Enabled)
+	require.NotEmpty(t, cfg.Intercept.ShellToolNames)
+	require.Contains(t, cfg.Intercept.ShellToolNames, "Bash")
+	require.Contains(t, cfg.Intercept.ShellToolNames, "execute_command")
+}
+
+// TestInterceptConfigEnvOverride verifies that intercept config can be
+// overridden via MAYBE_DONT_INTERCEPT_ENABLED env var.
+func TestInterceptConfigEnvOverride(t *testing.T) {
+	viper.Reset()
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	t.Setenv("MAYBE_DONT_INTERCEPT_ENABLED", "false")
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+
+	require.False(t, cfg.Intercept.Enabled)
+}

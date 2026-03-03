@@ -45,12 +45,20 @@ This produces wrapped output:
 
 ```go
 type AuditEntry struct {
+    // Source identifies which validation path produced this entry:
+    // "mcp" (MCP gateway tool call), "cli" (CLI proxy validation),
+    // "action" (action validation endpoint), "intercept" (intercept endpoint)
+    Source string `json:"source,omitempty"`
+
     // Temporal fields - all in RFC3339Nano format
     ValidationStarted string `json:"validation_started"` // When we received the tool call and began validation
     CreatedAt         string `json:"created_at"`         // When this audit entry was finalized and written
 
-    // Tool call information (identity + execution details)
-    Tool AuditToolInfo `json:"tool"`
+    // Tool is populated for MCP tool calls and action validations (nil for CLI validations)
+    Tool *AuditToolInfo `json:"tool,omitempty"`
+
+    // CLI is populated for CLI command validations (nil for MCP tool calls and action validations)
+    CLI *AuditCLIInfo `json:"cli,omitempty"`
 
     // Upstream request metadata (about the incoming request, not the tool call)
     UpstreamRequest UpstreamRequestInfo `json:"upstream_request"`
@@ -60,8 +68,9 @@ type AuditEntry struct {
     ResponseValidation *AuditValidationInfo `json:"response_validation,omitempty"`
 
     // Actions
-    RecommendedAction string `json:"recommended_action"`
+    RecommendedAction string `json:"recommended_action,omitempty"` // Omitted when fail-open prevents complete evaluation
     Action            string `json:"action"`
+    ActionReason      string `json:"action_reason,omitempty"` // request_policy, response_policy, audit_mode, fail_open
 
     // Timing
     DurationMs     int64 `json:"duration_ms"`       // Total wall-clock time from validation_started to created_at
@@ -81,18 +90,28 @@ type AuditToolInfo struct {
     DurationMs *int64                 `json:"duration_ms,omitempty"` // Downstream call duration (omitted if denied)
 }
 
-// UpstreamRequestInfo contains metadata about the incoming request
-type UpstreamRequestInfo struct {
-    RequestID string `json:"id,omitempty"`
-    SessionID string `json:"session_id,omitempty"`
-    ClientIP  string `json:"client_ip,omitempty"`
-    UserAgent string `json:"user_agent,omitempty"` // User-Agent header from incoming request
+// AuditCLIInfo contains information about a CLI command validation
+type AuditCLIInfo struct {
+    Command          string         `json:"command"`
+    Arguments        []string       `json:"arguments"`
+    WorkingDirectory string         `json:"working_directory,omitempty"`
+    ClientInfo       *CLIClientInfo `json:"client_info,omitempty"`
 }
 
-// AuditValidationInfo contains validation results for rules and AI policies
+// UpstreamRequestInfo contains metadata about the incoming request
+type UpstreamRequestInfo struct {
+    RequestID  string `json:"id,omitempty"`
+    ExternalID string `json:"external_id,omitempty"` // Caller-provided correlation ID (e.g., OpenHands action.id)
+    ClientID   string `json:"client_id,omitempty"`   // Caller identifier for audit attribution (from X-Maybe-Dont-Client-ID header)
+    SessionID  string `json:"session_id,omitempty"`
+    ClientIP   string `json:"client_ip,omitempty"`
+    UserAgent  string `json:"user_agent,omitempty"` // User-Agent header from incoming request
+}
+
+// AuditValidationInfo contains validation results for CEL and AI policies
 type AuditValidationInfo struct {
-    Rules *AuditRulesResult `json:"rules,omitempty"` // Deterministic rule evaluation (was "cel")
-    AI    *AuditAIResult    `json:"ai,omitempty"`    // AI-powered validation
+    CEL *AuditRulesResult `json:"cel,omitempty"` // Deterministic CEL rule evaluation
+    AI  *AuditAIResult    `json:"ai,omitempty"`  // AI-powered validation
 }
 ```
 
@@ -159,9 +178,10 @@ type AuditRulesRuleResult struct {
 
 ### Example Output
 
-**Successful tool call:**
+**Successful tool call (MCP gateway):**
 ```json
 {
+  "source": "mcp",
   "validation_started": "2026-01-15T10:30:00.000000000Z",
   "created_at": "2026-01-15T10:30:01.100000000Z",
   "tool": {
@@ -197,10 +217,6 @@ type AuditRulesRuleResult struct {
       ]
     }
   },
-  "response": {
-    "content_items": 1,
-    "is_error": false
-  },
   "recommended_action": "allow",
   "action": "allow",
   "duration_ms": 1100,
@@ -213,9 +229,10 @@ In this example:
 - `total_blocked_ms` (850ms) = cel.blocked (5) + ai.blocked (695) + tool.duration (150)
 - Gateway overhead = 850 - 150 = 700ms
 
-**Denied before tool call:**
+**Denied before tool call (MCP gateway):**
 ```json
 {
+  "source": "mcp",
   "validation_started": "2026-01-15T10:31:00.000000000Z",
   "created_at": "2026-01-15T10:31:00.010000000Z",
   "tool": {
@@ -244,12 +261,84 @@ In this example:
   },
   "recommended_action": "deny",
   "action": "deny",
+  "action_reason": "request_policy",
   "duration_ms": 10,
   "total_blocked_ms": 2
 }
 ```
 
 Note: `tool.called_at` and `tool.duration_ms` are omitted since the downstream tool was never invoked.
+
+**CLI validation (audit-mode bypass):**
+```json
+{
+  "source": "cli",
+  "validation_started": "2026-01-15T10:32:00.000000000Z",
+  "created_at": "2026-01-15T10:32:00.008000000Z",
+  "cli": {
+    "command": "gh",
+    "arguments": ["repo", "delete", "my-repo"],
+    "working_directory": "/home/user/project"
+  },
+  "upstream_request": {
+    "id": "req-ghi789",
+    "client_id": "claude-code",
+    "client_ip": "127.0.0.1",
+    "user_agent": "maybe-dont-cli/1.3.0"
+  },
+  "request_validation": {
+    "cel": {
+      "action": "deny",
+      "blocked_ms": 1,
+      "evaluation_ms": 1,
+      "deciding_rule": "block_destructive",
+      "reason": "Destructive operations blocked",
+      "results": [
+        {"rule": "block_destructive", "action": "deny", "mode": "audit_only", "result": "deny", "evaluation_ms": 1}
+      ]
+    }
+  },
+  "action": "allow",
+  "action_reason": "audit_mode",
+  "duration_ms": 8,
+  "total_blocked_ms": 0
+}
+```
+
+**Intercept endpoint (response phase with redaction):**
+```json
+{
+  "source": "intercept",
+  "validation_started": "2026-01-15T10:33:00.000000000Z",
+  "created_at": "2026-01-15T10:33:00.320000000Z",
+  "tool": {
+    "name": "search_code",
+    "prefixed_name": "search_code"
+  },
+  "upstream_request": {
+    "id": "req-jkl012",
+    "external_id": "hook-trace-456",
+    "client_id": "claude-code",
+    "client_ip": "127.0.0.1"
+  },
+  "response_validation": {
+    "cel": {
+      "action": "redact",
+      "blocked_ms": 3,
+      "evaluation_ms": 3,
+      "deciding_rule": "redact_api_keys",
+      "reason": "API key detected in response",
+      "results": [
+        {"rule": "redact_api_keys", "action": "redact", "result": "redact", "evaluation_ms": 3}
+      ]
+    }
+  },
+  "action": "redact",
+  "action_reason": "response_policy",
+  "duration_ms": 320,
+  "total_blocked_ms": 0
+}
+```
 
 ## Configuration
 

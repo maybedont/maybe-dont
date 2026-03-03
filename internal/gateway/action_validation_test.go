@@ -140,24 +140,28 @@ func TestHandleActionValidation_BadRequests(t *testing.T) {
 		name          string
 		body          string
 		contentType   string
+		wantStatus    int
 		wantErrorCode string
 	}{
 		{
 			name:          "missing target",
 			body:          `{"action_type": "tool_call", "target": ""}`,
 			contentType:   "application/json",
+			wantStatus:    http.StatusBadRequest,
 			wantErrorCode: "missing_target",
 		},
 		{
 			name:          "invalid content type",
 			body:          `{"target": "execute_bash"}`,
 			contentType:   "text/plain",
+			wantStatus:    http.StatusUnsupportedMediaType,
 			wantErrorCode: "invalid_content_type",
 		},
 		{
 			name:          "invalid JSON",
 			body:          `{invalid json}`,
 			contentType:   "application/json",
+			wantStatus:    http.StatusBadRequest,
 			wantErrorCode: "invalid_request",
 		},
 	}
@@ -172,7 +176,7 @@ func TestHandleActionValidation_BadRequests(t *testing.T) {
 
 			handler.ServeHTTP(w, req)
 
-			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Equal(t, tt.wantStatus, w.Code)
 
 			var errResp ActionValidationError
 			err := json.Unmarshal(w.Body.Bytes(), &errResp)
@@ -595,6 +599,209 @@ func TestHandleActionValidation_ExternalIDOmittedWhenEmpty(t *testing.T) {
 	assert.Empty(t, entries[0].UpstreamRequest.ExternalID)
 }
 
+// --- Audit Correlation Field Tests ---
+
+// TestHandleActionValidation_AuditCorrelationFields verifies that all correlation fields
+// (request_id, client_ip, user_agent, external_id, client_id) are correctly captured
+// in audit entries from HTTP headers and request body fields.
+func TestHandleActionValidation_AuditCorrelationFields(t *testing.T) {
+	tests := []struct {
+		name           string
+		body           string
+		headers        map[string]string
+		wantRequestID  string
+		wantClientID   string
+		wantExternalID string
+		wantClientIP   string
+		wantUserAgent  string
+		wantAutoGenID  bool
+	}{
+		{
+			name: "all correlation fields from headers and body",
+			body: `{"target": "execute_bash", "actor": "body-actor", "external_id": "ext-123"}`,
+			headers: map[string]string{
+				"X-Request-ID":           "action-req-id-001",
+				"X-Maybe-Dont-Client-ID": "header-client-id",
+				"User-Agent":             "openhands-agent/3.0",
+			},
+			wantRequestID:  "action-req-id-001",
+			wantClientID:   "header-client-id",
+			wantExternalID: "ext-123",
+			wantClientIP:   "10.0.0.1:9999",
+			wantUserAgent:  "openhands-agent/3.0",
+		},
+		{
+			name: "client_id falls back to actor when header absent",
+			body: `{"target": "list_files", "actor": "fallback-agent"}`,
+			headers: map[string]string{
+				"X-Request-ID": "action-req-id-002",
+			},
+			wantRequestID: "action-req-id-002",
+			wantClientID:  "fallback-agent",
+			wantClientIP:  "10.0.0.1:9999",
+		},
+		{
+			name:          "auto-generated request_id when no header",
+			body:          `{"target": "list_files"}`,
+			headers:       map[string]string{},
+			wantAutoGenID: true,
+			wantClientIP:  "10.0.0.1:9999",
+		},
+		{
+			name: "user_agent captured from header",
+			body: `{"target": "list_files"}`,
+			headers: map[string]string{
+				"X-Request-ID": "action-req-id-003",
+				"User-Agent":   "custom-agent/1.0",
+			},
+			wantRequestID: "action-req-id-003",
+			wantUserAgent: "custom-agent/1.0",
+			wantClientIP:  "10.0.0.1:9999",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auditWriter := &mockAuditWriter{}
+			handler := newTestActionHandlerWithAudit(t, nil, nil, auditWriter)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/action/validate", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = "10.0.0.1:9999"
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			entries := auditWriter.getEntries()
+			require.Len(t, entries, 1)
+
+			entry := entries[0]
+			assert.Equal(t, "action", entry.Source)
+
+			if tt.wantAutoGenID {
+				assert.Len(t, entry.UpstreamRequest.RequestID, 32, "auto-generated ID should be 32-char hex")
+			} else {
+				assert.Equal(t, tt.wantRequestID, entry.UpstreamRequest.RequestID)
+			}
+
+			if tt.wantClientID != "" {
+				assert.Equal(t, tt.wantClientID, entry.UpstreamRequest.ClientID)
+			}
+			if tt.wantExternalID != "" {
+				assert.Equal(t, tt.wantExternalID, entry.UpstreamRequest.ExternalID)
+			}
+			if tt.wantClientIP != "" {
+				assert.Equal(t, tt.wantClientIP, entry.UpstreamRequest.ClientIP)
+			}
+			if tt.wantUserAgent != "" {
+				assert.Equal(t, tt.wantUserAgent, entry.UpstreamRequest.UserAgent)
+			}
+		})
+	}
+}
+
+// --- Audit Entry Completeness Tests ---
+
+// TestHandleActionValidation_AuditEntry_CELRulesDetails verifies that when a real
+// CEL engine evaluates an action request, the audit entry's RequestValidation.CEL
+// field is populated with rule evaluation details including rule name and timing.
+func TestHandleActionValidation_AuditEntry_CELRulesDetails(t *testing.T) {
+	celEngine := newTestCELEngineWithDenyRule(t)
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, celEngine, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /"}}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "deny", entry.Action)
+	require.NotNil(t, entry.RequestValidation, "should have RequestValidation for CEL deny")
+	require.NotNil(t, entry.RequestValidation.CEL, "should have CEL details")
+	assert.Equal(t, "deny", entry.RequestValidation.CEL.Action)
+	assert.Equal(t, "deny-all", entry.RequestValidation.CEL.DecidingRule)
+	assert.NotEmpty(t, entry.RequestValidation.CEL.Results)
+	assert.Greater(t, entry.RequestValidation.CEL.Results[0].EvaluationMs, int64(-1),
+		"per-rule duration should be non-negative")
+}
+
+// TestHandleActionValidation_AuditEntry_FailedOpen verifies that when a CEL rule
+// causes a runtime error and fails open, the audit entry's action_reason is "fail_open".
+func TestHandleActionValidation_AuditEntry_FailedOpen(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	celEngine, err := NewCELPolicyEngine(t.Context(), sessionLogger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:       "runtime-error",
+			Expression: `request.params.arguments.nonexistent.deep == "crash"`,
+			Action:     config.PolicyActionDeny,
+			Message:    "should not reach here",
+		},
+	}, "")
+	require.NoError(t, err)
+
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, celEngine, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "list_files"}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "allow", entry.Action, "fail-open should result in allow")
+	assert.Equal(t, "fail_open", entry.ActionReason, "should have fail_open action reason")
+}
+
+// TestHandleActionValidation_AuditEntry_AuditModeBypass verifies that when a CEL rule
+// is in audit_only mode and would deny, the audit entry's action_reason is "audit_mode".
+func TestHandleActionValidation_AuditEntry_AuditModeBypass(t *testing.T) {
+	celEngine := newTestCELEngineWithAuditOnlyDenyRule(t)
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, celEngine, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "rm -rf /"}}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "allow", entry.Action, "audit_only mode should still allow")
+	assert.Equal(t, "audit_mode", entry.ActionReason, "should have audit_mode action reason")
+}
+
+// TestHandleActionValidation_AuditEntry_TimingFields verifies that validation timing
+// fields (validation_started, created_at, duration_ms) and per-rule evaluation_ms
+// are populated with valid values in audit entries.
+func TestHandleActionValidation_AuditEntry_TimingFields(t *testing.T) {
+	celEngine := newTestCELEngineWithDenyRule(t)
+	auditWriter := &mockAuditWriter{}
+	handler := newTestActionHandlerWithAudit(t, celEngine, nil, auditWriter)
+
+	_ = sendActionValidation(t, handler, `{"target": "execute_bash"}`)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.NotEmpty(t, entry.ValidationStarted, "ValidationStarted should be set")
+	assert.NotEmpty(t, entry.CreatedAt, "CreatedAt should be set")
+	assert.GreaterOrEqual(t, entry.DurationMs, int64(0), "DurationMs should be non-negative")
+
+	require.NotNil(t, entry.RequestValidation)
+	require.NotNil(t, entry.RequestValidation.CEL)
+	assert.GreaterOrEqual(t, entry.RequestValidation.CEL.EvaluationMs, int64(0),
+		"CEL evaluation_ms should be non-negative")
+}
+
 // --- Response Format Tests ---
 
 // TestHandleActionValidation_ResponseIncludesServerVersion verifies the server_version
@@ -724,11 +931,19 @@ func newTestActionHandler(t *testing.T, celEngine *CELPolicyEngine, aiEngine *AI
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
+	var evaluator *PolicyEvaluator
+	if celEngine != nil || aiEngine != nil {
+		evaluator = &PolicyEvaluator{
+			CELEngine: celEngine,
+			AIEngine:  aiEngine,
+			Logger:    sessionLogger,
+		}
+	}
+
 	return NewActionValidationHandler(ActionValidationHandlerConfig{
 		Logger:    sessionLogger,
 		Version:   "1.0.0-test",
-		CELEngine: celEngine,
-		AIEngine:  aiEngine,
+		Evaluator: evaluator,
 	})
 }
 
@@ -743,11 +958,19 @@ func newTestActionHandlerWithCallback(
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
+	var evaluator *PolicyEvaluator
+	if celEngine != nil || aiEngine != nil {
+		evaluator = &PolicyEvaluator{
+			CELEngine: celEngine,
+			AIEngine:  aiEngine,
+			Logger:    sessionLogger,
+		}
+	}
+
 	return NewActionValidationHandler(ActionValidationHandlerConfig{
 		Logger:       sessionLogger,
 		Version:      "1.0.0-test",
-		CELEngine:    celEngine,
-		AIEngine:     aiEngine,
+		Evaluator:    evaluator,
 		OnValidation: onValidation,
 	})
 }
@@ -763,11 +986,19 @@ func newTestActionHandlerWithAudit(
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
 
+	var evaluator *PolicyEvaluator
+	if celEngine != nil || aiEngine != nil {
+		evaluator = &PolicyEvaluator{
+			CELEngine: celEngine,
+			AIEngine:  aiEngine,
+			Logger:    sessionLogger,
+		}
+	}
+
 	return NewActionValidationHandler(ActionValidationHandlerConfig{
 		Logger:      sessionLogger,
 		Version:     "1.0.0-test",
-		CELEngine:   celEngine,
-		AIEngine:    aiEngine,
+		Evaluator:   evaluator,
 		AuditWriter: auditWriter,
 	})
 }

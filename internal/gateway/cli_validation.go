@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/maybedont/maybe-dont/internal/config"
-	"go.uber.org/zap"
 )
 
 // CLIValidationRequest represents a CLI command validation request sent to the gateway.
@@ -154,21 +152,9 @@ type CLIValidationHandlerConfig struct {
 	// This is primarily used for testing to capture the validation context.
 	OnValidation func(*CLIValidationContext)
 
-	// CELEngine is the CEL policy engine for deterministic rule evaluation.
-	// If nil, CEL validation is skipped.
-	CELEngine *CELPolicyEngine
-
-	// AIEngine is the AI policy engine for context-aware validation.
-	// If nil, AI validation is skipped.
-	AIEngine *AIPolicyEngine
-
-	// MaxBlockingMs is the maximum cumulative time to block a request
-	// waiting for all validation decisions (default: 90000ms).
-	MaxBlockingMs int
-
-	// MaxRuleEvaluationMs is the maximum time for any single rule evaluation
-	// (default: 45000ms).
-	MaxRuleEvaluationMs int
+	// Evaluator is the shared policy evaluation engine for request validation.
+	// If nil, no policy evaluation is performed (all requests allowed).
+	Evaluator *PolicyEvaluator
 
 	// IncludeArgumentValues controls whether full argument values are included in audit entries.
 	// When true (default), full values are included. When false, only flag names are included.
@@ -199,9 +185,9 @@ func (h *CLIValidationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validate Content-Type (accept with charset parameters like "application/json; charset=utf-8")
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-		h.writeError(w, http.StatusBadRequest, "invalid_content_type",
+	// Validate Content-Type (415 per RFC 7231 §6.5.13; accepts charset parameters)
+	if !hasJSONContentType(r) {
+		h.writeError(w, http.StatusUnsupportedMediaType, "invalid_content_type",
 			"Content-Type must be application/json")
 		return
 	}
@@ -298,27 +284,8 @@ func (h *CLIValidationHandler) getClientVersion(req *CLIValidationRequest) strin
 }
 
 // extractContext extracts request ID and client ID from HTTP headers.
-// If X-Request-ID is not provided, a 32-character hex string is generated.
 func (h *CLIValidationHandler) extractContext(r *http.Request) *CLIValidationContext {
-	ctx := &CLIValidationContext{
-		RequestID: r.Header.Get("X-Request-ID"),
-		ClientID:  r.Header.Get("X-Maybe-Dont-Client-ID"),
-	}
-
-	// Generate request ID if not provided
-	if ctx.RequestID == "" {
-		id, err := GenerateRequestID()
-		if err != nil {
-			// Log the error - this indicates a serious system problem (crypto/rand failure)
-			h.config.Logger.Logger().Warn("failed to generate request ID, using fallback",
-				zap.Error(err))
-			ctx.RequestID = "00000000000000000000000000000000"
-		} else {
-			ctx.RequestID = id
-		}
-	}
-
-	return ctx
+	return extractHTTPContext(r, h.config.Logger)
 }
 
 // writeError writes a JSON error response.
@@ -383,104 +350,14 @@ func (h *CLIValidationHandler) writeAuditEntry(
 // evaluatePolicies runs the CLI command through CEL and AI policy engines.
 // Returns combined validation results from all configured engines.
 func (h *CLIValidationHandler) evaluatePolicies(ctx context.Context, req *CLIValidationRequest) ValidationResults {
-	// If no engines configured, allow by default
-	if h.config.CELEngine == nil && h.config.AIEngine == nil {
+	if h.config.Evaluator == nil {
 		return ValidationResults{
 			Results: []ValidationResult{},
 			Allowed: true,
 			Message: "No validation policies configured",
 		}
 	}
-
-	// Create blocking budget for validation timing
-	maxBlockingMs := h.config.MaxBlockingMs
-	if maxBlockingMs == 0 {
-		maxBlockingMs = 90000 // Default 90s
-	}
-	budget := NewBlockingBudget(int64(maxBlockingMs))
-
-	var finalResults ValidationResults
-	finalResults.Allowed = true // Start with allow, any deny will flip this
-
-	// Evaluate CEL policies if engine is configured
-	if h.config.CELEngine != nil {
-		celResults, err := h.config.CELEngine.EvaluateCLICommand(ctx, req, budget)
-		if err != nil {
-			h.config.Logger.Error(ctx, "CEL CLI validation failed",
-				zap.Error(err),
-				zap.String("command", req.Command),
-			)
-			// Continue with fail-open behavior
-		} else {
-			finalResults.Results = append(finalResults.Results, celResults.Results...)
-			finalResults.AllowCount += celResults.AllowCount
-			finalResults.DenyCount += celResults.DenyCount
-			if celResults.RulesDetails != nil {
-				finalResults.RulesDetails = celResults.RulesDetails
-			}
-			if celResults.AuditModeBypass {
-				finalResults.AuditModeBypass = true
-			}
-			// If CEL denies and it's not audit-only, update final result
-			if !celResults.Allowed && !celResults.AuditModeBypass {
-				finalResults.Allowed = false
-				if finalResults.Message == "" {
-					finalResults.Message = celResults.Message
-				}
-			}
-		}
-	}
-
-	// Evaluate AI policies if engine is configured
-	if h.config.AIEngine != nil {
-		aiResults, err := h.config.AIEngine.EvaluateCLICommand(ctx, req, budget)
-		if err != nil {
-			h.config.Logger.Error(ctx, "AI CLI validation failed",
-				zap.Error(err),
-				zap.String("command", req.Command),
-			)
-			// Continue with fail-open behavior
-		} else {
-			finalResults.Results = append(finalResults.Results, aiResults.Results...)
-			finalResults.AllowCount += aiResults.AllowCount
-			finalResults.DenyCount += aiResults.DenyCount
-			if aiResults.AIDetails != nil {
-				finalResults.AIDetails = aiResults.AIDetails
-			}
-			// Capture async completion channel for audit logging
-			if aiResults.AsyncCompletion != nil {
-				finalResults.AsyncCompletion = aiResults.AsyncCompletion
-			}
-			if aiResults.AuditModeBypass {
-				finalResults.AuditModeBypass = true
-			}
-			// If AI denies and it's not audit-only, update final result
-			if !aiResults.Allowed && !aiResults.AuditModeBypass {
-				finalResults.Allowed = false
-				if finalResults.Message == "" {
-					finalResults.Message = aiResults.Message
-				}
-			}
-		}
-	}
-
-	// AuditModeBypass only applies when the final action is allow (the deny was bypassed).
-	// If an enforced deny from any engine overrides it, clear the bypass flag —
-	// the request was denied, no bypass occurred.
-	if !finalResults.Allowed {
-		finalResults.AuditModeBypass = false
-	}
-
-	// Set default message if none set
-	if finalResults.Message == "" {
-		if finalResults.Allowed {
-			finalResults.Message = "Command approved by policy"
-		} else {
-			finalResults.Message = "Command denied by policy"
-		}
-	}
-
-	return finalResults
+	return h.config.Evaluator.EvaluateCLICommand(ctx, req)
 }
 
 // convertToResults converts ValidationResults to CLIPolicyResult slice for the response.
@@ -527,13 +404,8 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 		}
 	}
 
-	// Determine action reason
-	actionReason := ""
-	if results.AuditModeBypass {
-		actionReason = string(ActionReasonAuditMode)
-	} else if results.FailedOpen {
-		actionReason = string(ActionReasonFailOpen)
-	}
+	// Determine action reason (CLI uses no deny reason — the deny action is self-explanatory)
+	actionReason := DeriveAuditActionReason(results.Allowed, results.AuditModeBypass, results.FailedOpen, "")
 
 	// Get arguments to log based on config (full or sanitized)
 	auditArgs := h.getAuditArguments(req.Arguments)
@@ -565,40 +437,29 @@ func (h *CLIValidationHandler) writeAuditEntryWithValidation(
 
 	// Handle async AI completion for audit logging
 	if results.AsyncCompletion != nil {
-		go func() {
-			select {
-			case completion := <-results.AsyncCompletion:
-				// Update audit entry with complete AI results
-				if completion.AIDetails != nil && h.config.AuditWriter != nil {
-					asyncEntry := &AuditEntry{
-						Source:            "cli",
-						ValidationStarted: validationStart.Format(time.RFC3339Nano),
-						CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
-						CLI: &AuditCLIInfo{
-							Command:          req.Command,
-							Arguments:        auditArgs,
-							WorkingDirectory: req.WorkingDirectory,
-							ClientInfo:       req.ClientInfo,
-						},
-						UpstreamRequest: UpstreamRequestInfo{
-							RequestID: ctx.RequestID + "-async",
-							ClientID:  ctx.ClientID,
-						},
-						RequestValidation: &AuditValidationInfo{
-							AI: completion.AIDetails,
-						},
-						Action:       action,
-						ActionReason: "async_completion",
-						DurationMs:   completion.EvaluationMs,
-					}
-					_, _ = h.config.AuditWriter.Write(asyncEntry)
+		WriteAsyncAuditCompletion(h.config.AuditWriter, h.config.Logger, ctx.RequestID,
+			results.AsyncCompletion, func(completion AsyncCompletion) *AuditEntry {
+				return &AuditEntry{
+					Source:            "cli",
+					ValidationStarted: validationStart.Format(time.RFC3339Nano),
+					CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+					CLI: &AuditCLIInfo{
+						Command:          req.Command,
+						Arguments:        auditArgs,
+						WorkingDirectory: req.WorkingDirectory,
+						ClientInfo:       req.ClientInfo,
+					},
+					UpstreamRequest: UpstreamRequestInfo{
+						RequestID: ctx.RequestID + "-async",
+						ClientID:  ctx.ClientID,
+					},
+					RequestValidation: &AuditValidationInfo{
+						AI: completion.AIDetails,
+					},
+					Action:       action,
+					ActionReason: "async_completion",
+					DurationMs:   completion.EvaluationMs,
 				}
-			case <-time.After(5 * time.Minute):
-				// Timeout waiting for async completion — use detached context since
-				// the HTTP request context is cancelled after ServeHTTP returns.
-				logCtx := context.WithValue(context.Background(), config.RequestIDKey, ctx.RequestID)
-				h.config.Logger.Debug(logCtx, "Timeout waiting for async AI completion")
-			}
-		}()
+			})
 	}
 }

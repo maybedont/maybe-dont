@@ -28,6 +28,7 @@ func (m *MockValidationHandler) HandleToolCall(context.Context, mcp.CallToolRequ
 	results := ValidationResults{
 		Results: []ValidationResult{m.expectedResult},
 		Allowed: m.shouldAllow,
+		Message: m.expectedResult.Message,
 	}
 
 	if m.shouldAllow {
@@ -344,6 +345,47 @@ func TestValidationChain_AuditModeBypassPropagation(t *testing.T) {
 	assert.Equal(t, config.PolicyActionDeny, results.RecommendedAction, "RecommendedAction should be deny")
 }
 
+// TestValidationChain_AuditModeBypassClearedOnEnforcedDeny verifies that when
+// one handler sets AuditModeBypass (audit-only deny) but another handler issues
+// an enforced deny, the AuditModeBypass flag is cleared. Without this fix, the
+// chain could report Allowed=false and AuditModeBypass=true simultaneously.
+func TestValidationChain_AuditModeBypassClearedOnEnforcedDeny(t *testing.T) {
+	// First handler: audit-only deny (sets AuditModeBypass=true, allows)
+	auditOnlyHandler := &MockValidationHandlerWithFlags{
+		name:              "audit-only-handler",
+		shouldAllow:       true,
+		allowCount:        1,
+		auditModeBypass:   true,
+		recommendedAction: config.PolicyActionDeny,
+	}
+
+	// Second handler: enforced deny (actually blocks)
+	enforcedDenyHandler := &MockValidationHandler{
+		name:        "enforced-deny-handler",
+		shouldAllow: false,
+		expectedResult: ValidationResult{
+			PolicyName: "enforced-deny",
+			PolicyType: "mock",
+			Action:     config.PolicyActionDeny,
+			Message:    "Enforced deny",
+		},
+	}
+
+	chain := NewToolValidationChain(auditOnlyHandler, enforcedDenyHandler)
+
+	req := mcp.CallToolRequest{
+		Request: mcp.Request{Method: "tools/call"},
+		Params:  mcp.CallToolParams{Name: "test_tool"},
+	}
+
+	results, err := chain.Handle(context.Background(), req)
+	require.NoError(t, err)
+
+	assert.False(t, results.Allowed, "Should be denied by enforced deny handler")
+	assert.False(t, results.AuditModeBypass, "AuditModeBypass must be cleared when an enforced deny overrides it")
+	assert.Equal(t, config.PolicyActionDeny, results.RecommendedAction)
+}
+
 // MockValidationHandlerWithFlags extends MockValidationHandler to support
 // testing FailedOpen and AuditModeBypass flag propagation.
 type MockValidationHandlerWithFlags struct {
@@ -400,6 +442,81 @@ func TestCELValidationHandler_FailOpenOnRuntimeError(t *testing.T) {
 	assert.True(t, results.Allowed, "Should fail-open and allow")
 	assert.True(t, results.FailedOpen, "FailedOpen flag should be set")
 	assert.Contains(t, results.Message, "fail-open", "Message should indicate fail-open")
+}
+
+// TestDeriveAuditActionReason verifies that the shared action reason derivation
+// function produces the correct result for all combinations of validation flags
+// and deny reasons used by CLI, Action, and Intercept handlers.
+func TestDeriveAuditActionReason(t *testing.T) {
+	tests := []struct {
+		name            string
+		allowed         bool
+		auditModeBypass bool
+		failedOpen      bool
+		denyReason      ActionReason
+		want            string
+	}{
+		{
+			name:       "allowed with no special conditions → empty",
+			allowed:    true,
+			denyReason: ActionReasonRequestPolicy,
+			want:       "",
+		},
+		{
+			name:       "denied with request_policy reason",
+			allowed:    false,
+			denyReason: ActionReasonRequestPolicy,
+			want:       "request_policy",
+		},
+		{
+			name:       "denied with response_policy reason",
+			allowed:    false,
+			denyReason: ActionReasonResponsePolicy,
+			want:       "response_policy",
+		},
+		{
+			name:       "denied with empty deny reason (CLI/Action style)",
+			allowed:    false,
+			denyReason: "",
+			want:       "",
+		},
+		{
+			name:            "audit_mode bypass takes precedence over fail_open",
+			allowed:         true,
+			auditModeBypass: true,
+			failedOpen:      true,
+			denyReason:      ActionReasonRequestPolicy,
+			want:            "audit_mode",
+		},
+		{
+			name:       "fail_open when allowed and no audit bypass",
+			allowed:    true,
+			failedOpen: true,
+			denyReason: ActionReasonRequestPolicy,
+			want:       "fail_open",
+		},
+		{
+			name:            "denied overrides audit_mode (deny reason wins)",
+			allowed:         false,
+			auditModeBypass: true,
+			denyReason:      ActionReasonRequestPolicy,
+			want:            "request_policy",
+		},
+		{
+			name:       "denied overrides fail_open (deny reason wins)",
+			allowed:    false,
+			failedOpen: true,
+			denyReason: ActionReasonResponsePolicy,
+			want:       "response_policy",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DeriveAuditActionReason(tt.allowed, tt.auditModeBypass, tt.failedOpen, tt.denyReason)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 // TestActionReasonTypeString verifies ActionReason type string conversion works correctly.

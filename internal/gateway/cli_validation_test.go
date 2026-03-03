@@ -313,7 +313,7 @@ func TestHandleCLIValidation_WildcardMatchesAll(t *testing.T) {
 }
 
 // TestHandleCLIValidation_InvalidContentType verifies that when Content-Type is not
-// application/json, the handler returns a 400 error with "invalid_content_type" error code.
+// application/json, the handler returns a 415 error with "invalid_content_type" error code.
 func TestHandleCLIValidation_InvalidContentType(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	sessionLogger := config.NewSessionLogger(logger)
@@ -332,7 +332,7 @@ func TestHandleCLIValidation_InvalidContentType(t *testing.T) {
 
 	handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusUnsupportedMediaType, w.Code)
 
 	var errResp CLIValidationError
 	err := json.Unmarshal(w.Body.Bytes(), &errResp)
@@ -819,4 +819,188 @@ func TestHandleCLIValidation_AuditArgumentRedaction(t *testing.T) {
 			assert.Equal(t, tt.expectedAuditArgs, entries[0].CLI.Arguments)
 		})
 	}
+}
+
+// TestHandleCLIValidation_AuditEntry_CELRulesDetails verifies that when a real
+// CEL engine evaluates a CLI command, the audit entry's RequestValidation.CEL field
+// is populated with rule evaluation details including rule names and timing.
+func TestHandleCLIValidation_AuditEntry_CELRulesDetails(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+	celEngine := newTestCELEngineWithCLIDenyRule(t)
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		AuditWriter:      auditWriter,
+		Evaluator: &PolicyEvaluator{
+			CELEngine: celEngine,
+			Logger:    sessionLogger,
+		},
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["repo", "delete"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "deny", entry.Action)
+	require.NotNil(t, entry.RequestValidation, "should have RequestValidation for CEL deny")
+	require.NotNil(t, entry.RequestValidation.CEL, "should have CEL details")
+	assert.Equal(t, "deny", entry.RequestValidation.CEL.Action)
+	assert.Equal(t, "deny-all-cli", entry.RequestValidation.CEL.DecidingRule)
+	assert.NotEmpty(t, entry.RequestValidation.CEL.Results)
+	assert.Greater(t, entry.RequestValidation.CEL.Results[0].EvaluationMs, int64(-1),
+		"per-rule duration should be non-negative")
+}
+
+// TestHandleCLIValidation_AuditEntry_FailedOpen verifies that when a CEL rule
+// causes a runtime error and fails open, the audit entry's action_reason is "fail_open".
+func TestHandleCLIValidation_AuditEntry_FailedOpen(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	// Create a CEL engine with a rule that causes a runtime error
+	celEngine, err := NewCELPolicyEngine(t.Context(), sessionLogger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:          "runtime-error",
+			CLIExpression: `cli.arguments[99] == "crash"`,
+			Action:        config.PolicyActionDeny,
+			Message:       "should not reach here",
+		},
+	}, "")
+	require.NoError(t, err)
+
+	auditWriter := &mockAuditWriter{}
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		AuditWriter:      auditWriter,
+		Evaluator: &PolicyEvaluator{
+			CELEngine: celEngine,
+			Logger:    sessionLogger,
+		},
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["pr", "list"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "allow", entry.Action, "fail-open should result in allow")
+	assert.Equal(t, "fail_open", entry.ActionReason, "should have fail_open action reason")
+}
+
+// TestHandleCLIValidation_AuditEntry_AuditModeBypass verifies that when a CEL rule
+// is in audit_only mode and would deny, the audit entry's action_reason is "audit_mode".
+func TestHandleCLIValidation_AuditEntry_AuditModeBypass(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+
+	// Create a CEL engine with a CLI deny rule in audit_only mode
+	celEngine, err := NewCELPolicyEngine(t.Context(), sessionLogger)
+	require.NoError(t, err)
+	err = celEngine.LoadPolicies([]config.Policy{
+		{
+			Name:          "audit-deny-cli",
+			CLIExpression: "true",
+			Action:        config.PolicyActionDeny,
+			Message:       "Would deny but in audit mode",
+		},
+	}, config.PolicyModeAuditOnly)
+	require.NoError(t, err)
+
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		AuditWriter:      auditWriter,
+		Evaluator: &PolicyEvaluator{
+			CELEngine: celEngine,
+			Logger:    sessionLogger,
+		},
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["repo", "delete"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.Equal(t, "allow", entry.Action, "audit_only mode should still allow")
+	assert.Equal(t, "audit_mode", entry.ActionReason, "should have audit_mode action reason")
+}
+
+// TestHandleCLIValidation_AuditEntry_TimingFields verifies that validation timing
+// fields (validation_started, created_at, duration_ms) and per-rule evaluation_ms
+// are populated with positive values in audit entries.
+func TestHandleCLIValidation_AuditEntry_TimingFields(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	sessionLogger := config.NewSessionLogger(logger)
+	celEngine := newTestCELEngineWithCLIDenyRule(t)
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+		Enabled:          true,
+		ValidateCommands: []string{"*"},
+		Logger:           sessionLogger,
+		Version:          "1.0.0",
+		AuditWriter:      auditWriter,
+		Evaluator: &PolicyEvaluator{
+			CELEngine: celEngine,
+			Logger:    sessionLogger,
+		},
+	})
+
+	reqBody := `{"command": "gh", "arguments": ["repo", "delete"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+
+	entry := entries[0]
+	assert.NotEmpty(t, entry.ValidationStarted, "ValidationStarted should be set")
+	assert.NotEmpty(t, entry.CreatedAt, "CreatedAt should be set")
+	assert.GreaterOrEqual(t, entry.DurationMs, int64(0), "DurationMs should be non-negative")
+
+	// Verify per-rule timing in CEL details
+	require.NotNil(t, entry.RequestValidation)
+	require.NotNil(t, entry.RequestValidation.CEL)
+	assert.GreaterOrEqual(t, entry.RequestValidation.CEL.EvaluationMs, int64(0),
+		"CEL evaluation_ms should be non-negative")
 }
