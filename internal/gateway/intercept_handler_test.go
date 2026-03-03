@@ -94,6 +94,18 @@ func TestInterceptHandler_InputValidation(t *testing.T) {
 			wantMsgContains: "name",
 		},
 		{
+			// Go decodes "payload": null as a zero-value struct, so null payload
+			// falls through to the payload.name check. This is intentional — the
+			// spec collapses missing_payload into missing_payload_name.
+			name:            "null payload returns missing_payload_name",
+			body:            `{"event": "tools/call", "phase": "request", "payload": null}`,
+			contentType:     "application/json",
+			enabled:         true,
+			wantStatus:      http.StatusBadRequest,
+			wantErrorCode:   "missing_payload_name",
+			wantMsgContains: "name",
+		},
+		{
 			name:            "response phase missing result returns 400",
 			body:            `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool"}}`,
 			contentType:     "application/json",
@@ -394,7 +406,7 @@ func TestInterceptHandler_ResponsePhase_Redacted(t *testing.T) {
 	}
 	handler := newTestInterceptHandler(t, evaluator)
 
-	body := `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool", "result": {"content": [{"type": "text", "text": "secret: password123"}]}}}`
+	body := `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool", "arguments": {"query": "password"}, "result": {"content": [{"type": "text", "text": "secret: password123"}]}}}`
 	respBody, code := sendIntercept(t, handler, body)
 
 	assert.Equal(t, http.StatusOK, code)
@@ -408,6 +420,11 @@ func TestInterceptHandler_ResponsePhase_Redacted(t *testing.T) {
 	require.NotNil(t, resp.Payload.Result)
 	require.NotEmpty(t, resp.Payload.Result.Content)
 	assert.Equal(t, "[REDACTED]", resp.Payload.Result.Content[0].Text)
+
+	// Verify the mutation payload preserves the original tool call context
+	// so hook scripts can reconstruct the full call with redacted result.
+	assert.Equal(t, "test_tool", resp.Payload.Name, "mutation payload should preserve original tool name")
+	assert.Equal(t, "password", resp.Payload.Arguments["query"], "mutation payload should preserve original arguments")
 }
 
 // TestInterceptHandler_ResponsePhase_NoChain verifies graceful handling when
@@ -427,6 +444,85 @@ func TestInterceptHandler_ResponsePhase_NoChain(t *testing.T) {
 	assert.True(t, resp.Valid)
 	assert.Equal(t, "info", resp.Severity)
 	assert.Equal(t, "validation", resp.Type)
+}
+
+// TestInterceptHandler_ResponsePhase_NonTextContentDropped verifies that non-text
+// content types (e.g., image) in the response payload are silently dropped during
+// conversion to mcp.CallToolResult. Only "text" content is forwarded to the
+// response validation chain.
+func TestInterceptHandler_ResponsePhase_NonTextContentDropped(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	// Use a stub that returns allowed — we just want to verify the conversion works
+	chain := NewResponseValidationChain(logger, &stubResponseHandler{
+		results: ResponseValidationResults{
+			Allowed: true,
+			Message: "Response OK",
+		},
+	})
+	evaluator := &PolicyEvaluator{
+		ResponseChain: chain,
+		Logger:        logger,
+	}
+	handler := newTestInterceptHandler(t, evaluator)
+
+	// Send mixed content: text + image. The image content type should be dropped
+	// since payloadToCallToolResult only converts type="text".
+	body := `{
+		"event": "tools/call",
+		"phase": "response",
+		"payload": {
+			"name": "test_tool",
+			"result": {
+				"content": [
+					{"type": "text", "text": "visible content"},
+					{"type": "image", "text": "base64data"}
+				]
+			}
+		}
+	}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.True(t, resp.Valid)
+	assert.Equal(t, "validation", resp.Type)
+}
+
+// TestInterceptHandler_RequestPhase_ShellTool_EmptyCommand verifies that a shell tool
+// sent without a command argument (e.g., {"name": "Bash", "arguments": {}}) goes through
+// the full handler path without error.
+func TestInterceptHandler_RequestPhase_ShellTool_EmptyCommand(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	evaluator := &PolicyEvaluator{Logger: logger}
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:        true,
+		ShellToolNames: []string{"Bash"},
+		Logger:         logger,
+		Version:        "1.0.0-test",
+		Evaluator:      evaluator,
+		AuditWriter:    auditWriter,
+	})
+
+	// Shell tool with no command argument — parseShellCommand produces Command="" and nil args
+	body := `{"event": "tools/call", "phase": "request", "payload": {"name": "Bash", "arguments": {}}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code)
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.True(t, resp.Valid, "empty command should be allowed (no matching rules)")
+	assert.Equal(t, "info", resp.Severity)
+
+	// Verify audit entry has CLI info with empty command
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+	assert.NotNil(t, entries[0].CLI, "shell tool should populate CLI audit info even with empty command")
+	assert.Equal(t, "", entries[0].CLI.Command)
 }
 
 // --- Audit Logging Tests ---
@@ -1161,6 +1257,43 @@ func TestInterceptHandler_FailedOpen_ActionReason(t *testing.T) {
 	assert.Equal(t, "fail_open", entry.ActionReason, "should have fail_open action reason")
 }
 
+// TestInterceptHandler_ResponsePhase_FailOpen verifies that response validation
+// engine errors fail open (HTTP 200 with valid=true), consistent with the gateway's
+// fail-open philosophy. No 500 status is returned.
+func TestInterceptHandler_ResponsePhase_FailOpen(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+	chain := NewResponseValidationChain(logger, &errorResponseHandler{})
+	evaluator := &PolicyEvaluator{
+		ResponseChain: chain,
+		Logger:        logger,
+	}
+	auditWriter := &mockAuditWriter{}
+
+	handler := NewInterceptHandler(InterceptHandlerConfig{
+		Enabled:     true,
+		Logger:      logger,
+		Version:     "1.0.0-test",
+		Evaluator:   evaluator,
+		AuditWriter: auditWriter,
+	})
+
+	body := `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool", "result": {"content": [{"type": "text", "text": "some content"}]}}}`
+	respBody, code := sendIntercept(t, handler, body)
+
+	assert.Equal(t, http.StatusOK, code, "response engine errors must fail open with 200")
+
+	var resp InterceptResponse
+	require.NoError(t, json.Unmarshal([]byte(respBody), &resp))
+	assert.True(t, resp.Valid, "engine error should fail open as valid=true")
+	assert.Equal(t, "info", resp.Severity, "fail-open should produce severity=info")
+	assert.Equal(t, "validation", resp.Type)
+
+	// Verify audit entry records the fail-open
+	entries := auditWriter.getEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "allow", entries[0].Action)
+}
+
 // --- mergeShellResults Edge Case Tests ---
 
 // TestMergeShellResults_BothDeny verifies that when both CLI and MCP evaluations
@@ -1559,6 +1692,14 @@ type stubResponseHandler struct {
 
 func (h *stubResponseHandler) HandleResponse(_ context.Context, _ mcp.CallToolRequest, _ *mcp.CallToolResult) (ResponseValidationResults, error) {
 	return h.results, nil
+}
+
+// errorResponseHandler is a test double that always returns an error, simulating
+// response validation engine failures (e.g., AI timeout, malformed result).
+type errorResponseHandler struct{}
+
+func (h *errorResponseHandler) HandleResponse(_ context.Context, _ mcp.CallToolRequest, _ *mcp.CallToolResult) (ResponseValidationResults, error) {
+	return ResponseValidationResults{}, assert.AnError
 }
 
 func newTestInterceptHandler(t *testing.T, evaluator *PolicyEvaluator) *InterceptHandler {

@@ -884,7 +884,8 @@ type InterceptError struct {
 	// Error is a machine-readable error code.
 	// Values: "intercept_disabled", "invalid_content_type", "invalid_request",
 	// "missing_event", "unsupported_event", "missing_phase", "invalid_phase",
-	// "missing_payload_name", "response_phase_missing_result"
+	// "missing_payload_name" (also returned when payload is null/omitted),
+	// "response_phase_missing_result"
 	Error string `json:"error"`
 
 	// Message is a human-readable description of the error.

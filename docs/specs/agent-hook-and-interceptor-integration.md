@@ -494,12 +494,13 @@ The intercept endpoint returns structured error responses for malformed requests
 
 | HTTP Status | Error Code | Condition |
 |-------------|-----------|-----------|
+| 400 | `intercept_disabled` | Intercept endpoint is not enabled |
 | 400 | `invalid_request` | Malformed JSON body or decoding failure |
 | 400 | `missing_event` | Required `event` field is empty |
+| 400 | `unsupported_event` | `event` is not a supported type (only `tools/call` currently) |
 | 400 | `missing_phase` | Required `phase` field is empty |
 | 400 | `invalid_phase` | `phase` is not `"request"` or `"response"` |
-| 400 | `missing_payload` | Required `payload` field is null |
-| 400 | `missing_payload_name` | Required `payload.name` field is empty |
+| 400 | `missing_payload_name` | Required `payload.name` field is empty (also returned when `payload` is null or omitted) |
 | 400 | `response_phase_missing_result` | Response phase requires `payload.result` |
 | 415 | `invalid_content_type` | `Content-Type` is not `application/json` |
 
