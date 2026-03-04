@@ -11,22 +11,29 @@ import (
 
 // ListSessionsResponse is the response for the list_sessions tool
 type ListSessionsResponse struct {
-	Sessions      []SessionInfo `json:"sessions"`
-	TotalSessions int           `json:"total_sessions"`
+	Sessions             []SessionInfo `json:"sessions"`
+	ActiveSessionCount   int           `json:"active_session_count"`
+	InactiveSessionCount int           `json:"inactive_session_count"`
+	TotalSessions        int           `json:"total_sessions"`
 }
 
 // getListSessionsToolDefinition returns the MCP tool definition for list_sessions
 func (h *NativeToolsHandler) getListSessionsToolDefinition() mcp.Tool {
 	return mcp.Tool{
 		Name:         ToolListSessions,
-		Description:  "[EXPERIMENTAL] List all active upstream client sessions connected to this gateway, including their session IDs and connected downstream clients.",
+		Description:  "[EXPERIMENTAL] List active upstream client sessions connected to this gateway. By default only sessions with downstream clients are shown; inactive sessions are reported as a count. Set include_inactive to true to include all sessions.",
 		DeferLoading: true,
 		Annotations: mcp.ToolAnnotation{
 			ReadOnlyHint: boolPtr(true),
 		},
 		InputSchema: mcp.ToolInputSchema{
-			Type:       "object",
-			Properties: map[string]interface{}{},
+			Type: "object",
+			Properties: map[string]any{
+				"include_inactive": map[string]any{
+					"type":        "boolean",
+					"description": "When true, include sessions with no downstream clients connected. Defaults to false.",
+				},
+			},
 		},
 	}
 }
@@ -41,8 +48,34 @@ func (h *NativeToolsHandler) handleListSessions(ctx context.Context, req mcp.Cal
 		return mcp.NewToolResultError("Internal error: session provider not available"), nil
 	}
 
-	// Get active sessions
-	sessions := h.sessionProvider.GetActiveSessions()
+	// Parse include_inactive parameter
+	includeInactive := false
+	if args, ok := req.Params.Arguments.(map[string]any); ok {
+		if val, exists := args["include_inactive"]; exists {
+			if b, ok := val.(bool); ok {
+				includeInactive = b
+			}
+		}
+	}
+
+	// Get all sessions
+	allSessions := h.sessionProvider.GetActiveSessions()
+
+	// Separate active (has downstream clients) from inactive
+	var active, inactive []SessionInfo
+	for _, s := range allSessions {
+		if s.HasDownstreamClients() {
+			active = append(active, s)
+		} else {
+			inactive = append(inactive, s)
+		}
+	}
+
+	// Choose which sessions to include in the response
+	sessions := active
+	if includeInactive {
+		sessions = allSessions
+	}
 
 	// Sort sessions by ID for consistent output
 	sort.Slice(sessions, func(i, j int) bool {
@@ -50,8 +83,10 @@ func (h *NativeToolsHandler) handleListSessions(ctx context.Context, req mcp.Cal
 	})
 
 	response := ListSessionsResponse{
-		Sessions:      sessions,
-		TotalSessions: len(sessions),
+		Sessions:             sessions,
+		ActiveSessionCount:   len(active),
+		InactiveSessionCount: len(inactive),
+		TotalSessions:        len(allSessions),
 	}
 
 	// Marshal response to JSON
@@ -61,8 +96,10 @@ func (h *NativeToolsHandler) handleListSessions(ctx context.Context, req mcp.Cal
 		return mcp.NewToolResultError("Failed to format response"), nil
 	}
 
-	h.logger.Info(ctx, "Listed active sessions",
-		zap.Int("session_count", len(sessions)))
+	h.logger.Info(ctx, "Listed sessions",
+		zap.Int("active", len(active)),
+		zap.Int("inactive", len(inactive)),
+		zap.Bool("include_inactive", includeInactive))
 
 	return mcp.NewToolResultText(string(jsonBytes)), nil
 }
