@@ -87,19 +87,26 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 	// and eliminates race conditions between async discovery and lazy discovery.
 }
 
-// onSessionUnregister handles upstream client session cleanup
+// onSessionUnregister handles upstream client session cleanup.
+//
+// For Streamable HTTP transport, the SDK may unregister sessions when GET (listening)
+// connections close, even though the session is still valid for POST requests.
+// There is also a race condition in the SDK where a GET connection arriving immediately
+// after initialize can arm cleanup defers that destroy the session prematurely.
+//
+// To avoid losing downstream client connections due to transient SDK unregister events,
+// we intentionally do NOT close downstream clients here. The idle session timeout
+// (SessionManager.cleanupExpiredSessions) handles resource cleanup when sessions are
+// truly abandoned.
 func (g *Gateway) onSessionUnregister(ctx context.Context, session server.ClientSession) {
 	sessionID := session.SessionID()
-	g.logger.Info(ctx, "Upstream session unregistered", zap.String("session_id", sessionID))
 
-	// Close downstream clients for this session
-	if err := g.clientManager.CloseSessionClients(ctx, sessionID); err != nil {
-		g.logger.Error(ctx, "Failed to close downstream clients for session",
-			zap.String("session_id", sessionID),
-			zap.Error(err))
-	}
-
-	g.logger.Info(ctx, "Downstream clients closed for session", zap.String("session_id", sessionID))
+	// Log session state for diagnostics
+	clientNames := g.clientManager.GetSessionClientNames(sessionID)
+	g.logger.Info(ctx, "Upstream session unregistered (downstream clients preserved for reconnection)",
+		zap.String("session_id", sessionID),
+		zap.Int("downstream_client_count", len(clientNames)),
+		zap.Strings("downstream_clients", clientNames))
 }
 
 // jsonRPCRequest is used to parse just the method from a JSON-RPC request
