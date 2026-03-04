@@ -105,6 +105,9 @@ func TestLazyDiscovery_WorksWithBackgroundContext(t *testing.T) {
 	require.True(t, hasRequestID, "Request ID should be preserved in new context")
 	assert.Equal(t, "original-request-id", asyncRequestID)
 
+	// Create session first (mimics onSessionRegister)
+	mustCreateSession(t, cm.sessionManager, "test-session")
+
 	// CreateSessionClients should work with the background context
 	result, err := cm.CreateSessionClients(asyncCtx, "test-session")
 	// No clients configured, so result should be empty but no error

@@ -165,9 +165,11 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 		zap.String("session_id", sessionID),
 		zap.Int("client_count", len(configs)))
 
-	// Get or create the session (CreateSession is idempotent — returns existing
-	// session if one was already created by onSessionRegister).
-	session := cm.sessionManager.CreateSession(sessionID)
+	// Retrieve the session — it must already exist (created by onSessionRegister).
+	session, ok := cm.sessionManager.GetSession(sessionID)
+	if !ok {
+		return nil, fmt.Errorf("session %q not found — expected onSessionRegister to create it", sessionID)
+	}
 
 	// Refresh client metadata from the discovery request context.
 	// onSessionRegister stores these initially; this updates them in case
@@ -253,7 +255,12 @@ func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionI
 	if !exists {
 		cm.logger.Debug(ctx, "Session not found, creating new session for discovery",
 			zap.String("session_id", sessionID))
-		session = cm.sessionManager.CreateSession(sessionID)
+		var err error
+		session, err = cm.sessionManager.CreateSession(sessionID)
+		if err != nil {
+			// Race: another goroutine created it between our GetSession and CreateSession
+			session, _ = cm.sessionManager.GetSession(sessionID)
+		}
 	}
 
 	// Check if client already exists in session

@@ -20,12 +20,21 @@ func newTestLogger(t *testing.T) *config.SessionLogger {
 	return config.NewSessionLogger(logger)
 }
 
+// mustCreateSession is a test helper that calls CreateSession and fails the test on error.
+func mustCreateSession(t *testing.T, sm *SessionManager, id string) *Session {
+	t.Helper()
+	session, err := sm.CreateSession(id)
+	require.NoError(t, err, "CreateSession(%q) should not fail", id)
+	return session
+}
+
 func TestSessionManager_CreateSession(t *testing.T) {
 	logger := newTestLogger(t)
 	sm := NewSessionManager(logger)
 
 	// Create a session
-	session := sm.CreateSession("session-1")
+	session, err := sm.CreateSession("session-1")
+	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "session-1", session.ID)
 
@@ -38,29 +47,31 @@ func TestSessionManager_CreateSession(t *testing.T) {
 	assert.Equal(t, session, retrieved)
 }
 
-// TestSessionManager_CreateSession_Idempotent verifies that CreateSession returns the
-// existing session when called with the same ID, preserving downstream clients and metadata.
-// This prevents onSessionRegister (SDK re-registration) from wiping out an active session.
-func TestSessionManager_CreateSession_Idempotent(t *testing.T) {
+// TestSessionManager_CreateSession_DuplicateErrors verifies that CreateSession returns
+// an error when called with a session ID that already exists. This ensures we surface
+// unexpected duplicate registrations rather than silently reusing or overwriting sessions.
+func TestSessionManager_CreateSession_DuplicateErrors(t *testing.T) {
 	logger := newTestLogger(t)
 	sm := NewSessionManager(logger)
 
 	// Create session and populate it with metadata and a downstream client
-	session := sm.CreateSession("session-1")
+	session := mustCreateSession(t, sm, "session-1")
 	session.SetClientIP("192.168.1.100")
 	session.SetUserAgent("Claude-Code/1.0.0")
 	session.SetClient("github", &SessionClientInfo{Name: "github"})
 
-	// Call CreateSession again with the same ID — should return existing session
-	second := sm.CreateSession("session-1")
+	// Call CreateSession again with the same ID — should error
+	second, err := sm.CreateSession("session-1")
+	require.Error(t, err, "CreateSession should fail for duplicate session ID")
+	assert.Nil(t, second)
+	assert.Contains(t, err.Error(), "already exists")
 
-	// Must be the exact same session object, not a new one
-	assert.Same(t, session, second)
-
-	// All metadata and clients must be preserved
-	assert.Equal(t, "192.168.1.100", second.GetClientIP())
-	assert.Equal(t, "Claude-Code/1.0.0", second.GetUserAgent())
-	client, ok := second.GetClient("github")
+	// Original session must be untouched
+	original, ok := sm.GetSession("session-1")
+	require.True(t, ok)
+	assert.Equal(t, "192.168.1.100", original.GetClientIP())
+	assert.Equal(t, "Claude-Code/1.0.0", original.GetUserAgent())
+	client, ok := original.GetClient("github")
 	require.True(t, ok)
 	assert.Equal(t, "github", client.Name)
 }
@@ -70,8 +81,8 @@ func TestSessionManager_MultipleSessionsAreIsolated(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create two sessions
-	session1 := sm.CreateSession("session-1")
-	session2 := sm.CreateSession("session-2")
+	session1 := mustCreateSession(t, sm, "session-1")
+	session2 := mustCreateSession(t, sm, "session-2")
 
 	// Add clients to each session
 	client1 := &SessionClientInfo{Name: "client-for-session-1"}
@@ -99,7 +110,7 @@ func TestSessionManager_DeleteSession(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a session
-	sm.CreateSession("session-1")
+	mustCreateSession(t, sm, "session-1")
 	assert.True(t, sm.HasSession("session-1"))
 
 	// Delete it
@@ -115,7 +126,7 @@ func TestSessionManager_GetSessionClient(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create session and add client
-	sm.CreateSession("session-1")
+	mustCreateSession(t, sm, "session-1")
 	clientInfo := &SessionClientInfo{Name: "aws"}
 	sm.SetSessionClient("session-1", "aws", clientInfo)
 
@@ -210,7 +221,7 @@ func TestClientManager_SessionClientRetrieval(t *testing.T) {
 	cm := NewClientManager(ctx, logger)
 
 	// Manually create a session with a client (bypassing actual MCP connection)
-	cm.sessionManager.CreateSession("test-session")
+	mustCreateSession(t, cm.sessionManager, "test-session")
 	cm.sessionManager.SetSessionClient("test-session", "aws", &SessionClientInfo{
 		Name: "aws",
 		Config: config.ClientConfig{
@@ -238,7 +249,7 @@ func TestClientManager_CloseSessionClients(t *testing.T) {
 	cm := NewClientManager(ctx, logger)
 
 	// Create a session
-	cm.sessionManager.CreateSession("test-session")
+	mustCreateSession(t, cm.sessionManager, "test-session")
 	ok := cm.sessionManager.SetSessionClient("test-session", "test", &SessionClientInfo{
 		Name:   "test",
 		Client: nil, // No actual client to close
@@ -269,8 +280,8 @@ func TestMultipleUpstreamSessions_IsolatedDownstreamClients(t *testing.T) {
 	session2ID := "upstream-session-2"
 
 	// Create sessions (simulating what onSessionRegister does)
-	cm.sessionManager.CreateSession(session1ID)
-	cm.sessionManager.CreateSession(session2ID)
+	mustCreateSession(t, cm.sessionManager, session1ID)
+	mustCreateSession(t, cm.sessionManager, session2ID)
 
 	// Add different downstream clients to each session
 	// (simulating what CreateSessionClients would do)
@@ -354,7 +365,7 @@ func TestSessionManager_SetSessionClientRejectsDeletedSession(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create a session
-	sm.CreateSession("test-session")
+	mustCreateSession(t, sm, "test-session")
 
 	// Add a client - should succeed
 	ok := sm.SetSessionClient("test-session", "client1", &SessionClientInfo{Name: "client1"})
@@ -380,7 +391,7 @@ func TestSessionManager_SetSessionClientRejectsClosingSession(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create a session
-	session := sm.CreateSession("test-session")
+	session := mustCreateSession(t, sm, "test-session")
 
 	// Manually mark session as closing (simulates DeleteSession in progress)
 	session.mu.Lock()
@@ -406,7 +417,7 @@ func TestSessionCleanup_RaceCondition(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create and immediately delete a session
-	sm.CreateSession("test-session")
+	mustCreateSession(t, sm, "test-session")
 	err := sm.DeleteSession(ctx, "test-session")
 	require.NoError(t, err)
 
@@ -430,7 +441,7 @@ func TestSessionCleanup_ConcurrentDeleteAndSetClient(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create session
-	sm.CreateSession("test-session")
+	mustCreateSession(t, sm, "test-session")
 
 	// Run concurrent operations
 	const numGoroutines = 100
@@ -542,8 +553,8 @@ func TestSessionManager_CleanupExpiredSessions(t *testing.T) {
 	defer sm.StopCleanup()
 
 	// Create two sessions
-	session1 := sm.CreateSession("session-1")
-	sm.CreateSession("session-2")
+	session1 := mustCreateSession(t, sm, "session-1")
+	mustCreateSession(t, sm, "session-2")
 
 	// Wait past the timeout
 	time.Sleep(150 * time.Millisecond)
@@ -567,7 +578,7 @@ func TestSessionManager_GetSessionTouchesActivity(t *testing.T) {
 	defer sm.StopCleanup()
 
 	// Create a session
-	session := sm.CreateSession("test-session")
+	session := mustCreateSession(t, sm, "test-session")
 	initialActivity := session.LastActivity()
 
 	// Wait a bit
@@ -588,7 +599,7 @@ func TestSessionManager_GetSessionClientTouchesActivity(t *testing.T) {
 	defer sm.StopCleanup()
 
 	// Create a session and add a client
-	session := sm.CreateSession("test-session")
+	session := mustCreateSession(t, sm, "test-session")
 	clientInfo := &SessionClientInfo{Name: "test-client"}
 	session.SetClient("test-client", clientInfo)
 
@@ -704,7 +715,7 @@ func TestClientManager_HasSession(t *testing.T) {
 	assert.False(t, cm.HasSession("session-2"))
 
 	// Create a session via the session manager
-	cm.sessionManager.CreateSession("session-1")
+	mustCreateSession(t, cm.sessionManager, "session-1")
 
 	// Now should have session-1 but not session-2
 	assert.True(t, cm.HasSession("session-1"))
@@ -725,7 +736,7 @@ func TestClientManager_GetActiveSessions_ReturnsClientMetadata(t *testing.T) {
 	defer func() { _ = cm.Close(ctx) }()
 
 	// Create a session and set metadata (in the correct order - session first, then metadata)
-	cm.sessionManager.CreateSession("session-123")
+	mustCreateSession(t, cm.sessionManager, "session-123")
 	cm.SetSessionClientIP("session-123", "192.168.1.100")
 	cm.SetSessionUserAgent("session-123", "Claude-Code/1.0.0")
 
@@ -740,7 +751,7 @@ func TestClientManager_GetActiveSessions_ReturnsClientMetadata(t *testing.T) {
 	})
 
 	// Create a second session with different metadata
-	cm.sessionManager.CreateSession("session-456")
+	mustCreateSession(t, cm.sessionManager, "session-456")
 	cm.SetSessionClientIP("session-456", "10.0.0.50")
 	cm.SetSessionUserAgent("session-456", "MCP-Client/2.0")
 
@@ -803,7 +814,7 @@ func TestClientManager_SetSessionClientIP_RequiresExistingSession(t *testing.T) 
 	cm.SetSessionUserAgent("session-123", "Claude-Code/1.0.0")
 
 	// Now create the session
-	cm.sessionManager.CreateSession("session-123")
+	mustCreateSession(t, cm.sessionManager, "session-123")
 
 	// Add a downstream client
 	cm.sessionManager.SetSessionClient("session-123", "github", &SessionClientInfo{
@@ -838,7 +849,7 @@ func TestClientManager_CreateSessionClients_PreservesExistingSession(t *testing.
 	require.NoError(t, err)
 
 	// Step 1: Create session first and set metadata (mimics onSessionRegister flow)
-	cm.sessionManager.CreateSession("session-123")
+	mustCreateSession(t, cm.sessionManager, "session-123")
 	cm.SetSessionClientIP("session-123", "192.168.1.100")
 	cm.SetSessionUserAgent("session-123", "Claude-Code/1.0.0")
 
@@ -868,9 +879,27 @@ func TestClientManager_CreateSessionClients_PreservesExistingSession(t *testing.
 	assert.Equal(t, "Claude-Code/1.0.0", sessions[0].UserAgent)
 }
 
+// TestCreateSessionClients_RequiresExistingSession verifies that CreateSessionClients
+// fails when the session doesn't exist (onSessionRegister should have created it).
+func TestCreateSessionClients_RequiresExistingSession(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	err := cm.InitializeClients(ctx, map[string]config.ClientConfig{})
+	require.NoError(t, err)
+
+	// Don't create session — simulate missing onSessionRegister
+	_, err = cm.CreateSessionClients(ctx, "nonexistent-session")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
 // TestCreateSessionClients_StoresMetadataFromContext verifies that CreateSessionClients
-// stores IP and User-Agent from the request context when creating a new session.
-// This ensures metadata is captured even when the session didn't exist before discovery.
+// refreshes IP and User-Agent from the request context onto an existing session.
+// The session is created by onSessionRegister; CreateSessionClients updates metadata
+// from the discovery request which may have more current values.
 func TestCreateSessionClients_StoresMetadataFromContext(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)
@@ -880,17 +909,20 @@ func TestCreateSessionClients_StoresMetadataFromContext(t *testing.T) {
 	err := cm.InitializeClients(ctx, map[string]config.ClientConfig{})
 	require.NoError(t, err)
 
+	// Create session without metadata (mimics onSessionRegister with no IP/UA in context)
+	mustCreateSession(t, cm.sessionManager, "new-session")
+
 	// Build a context with IP and User-Agent (mimics HTTP middleware enrichment)
 	ctxWithMeta := WithClientIP(ctx, "10.0.0.1")
 	ctxWithMeta = WithUserAgent(ctxWithMeta, "TestAgent/1.0")
 
-	// Session does not exist yet — CreateSessionClients should create it and store metadata
+	// CreateSessionClients should store IP/UA from the request context
 	result, err := cm.CreateSessionClients(ctxWithMeta, "new-session")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
 	session, exists := cm.sessionManager.GetSession("new-session")
-	require.True(t, exists, "Session should exist after CreateSessionClients")
+	require.True(t, exists)
 	assert.Equal(t, "10.0.0.1", session.GetClientIP(), "IP should be stored from context")
 	assert.Equal(t, "TestAgent/1.0", session.GetUserAgent(), "User-Agent should be stored from context")
 }
@@ -909,7 +941,7 @@ func TestCreateSessionClients_RefreshesMetadataFromContext(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 1: Create session with initial metadata (mimics onSessionRegister)
-	cm.sessionManager.CreateSession("session-1")
+	mustCreateSession(t, cm.sessionManager, "session-1")
 	cm.SetSessionClientIP("session-1", "192.168.1.1")
 	cm.SetSessionUserAgent("session-1", "OldAgent/1.0")
 
@@ -937,7 +969,7 @@ func TestSessionLifecycle_NonAuthSetup(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Step 1: onSessionRegister creates session (idempotent)
-	session := sm.CreateSession("session-no-auth")
+	session := mustCreateSession(t, sm, "session-no-auth")
 	session.SetClientIP("10.0.0.1")
 	session.SetUserAgent("Claude-Code/1.0.0")
 
@@ -967,25 +999,25 @@ func TestSessionLifecycle_PhantomSessionsFromGetCycling(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Real session: created by onSessionRegister, then gets downstream clients via discovery
-	realSession := sm.CreateSession("real-session")
+	realSession := mustCreateSession(t, sm, "real-session")
 	realSession.SetClientIP("10.0.0.1")
 	realSession.SetUserAgent("Claude-Code/1.0.0")
 	realSession.SetClient("github", &SessionClientInfo{Name: "github"})
 
 	// Phantom sessions: created by onSessionRegister for GET cycling, never get clients
-	phantom1 := sm.CreateSession("phantom-1")
+	phantom1 := mustCreateSession(t, sm, "phantom-1")
 	phantom1.SetClientIP("10.0.0.1")
 
-	phantom2 := sm.CreateSession("phantom-2")
+	phantom2 := mustCreateSession(t, sm, "phantom-2")
 	phantom2.SetClientIP("10.0.0.1")
 
-	// Re-registration of real session (idempotent — must NOT overwrite)
-	sameSession := sm.CreateSession("real-session")
-	assert.Same(t, realSession, sameSession, "Idempotent CreateSession must return same object")
+	// Re-registration of real session — CreateSession should error (duplicate)
+	_, err := sm.CreateSession("real-session")
+	require.Error(t, err, "CreateSession should error for duplicate session ID")
 
-	// Real session's downstream client must be preserved
-	client, ok := sameSession.GetClient("github")
-	require.True(t, ok, "Downstream client must survive re-registration")
+	// Real session must be untouched
+	client, ok := realSession.GetClient("github")
+	require.True(t, ok, "Downstream client must survive duplicate CreateSession attempt")
 	assert.Equal(t, "github", client.Name)
 
 	// All 3 sessions exist

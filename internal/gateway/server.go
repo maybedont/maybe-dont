@@ -41,9 +41,12 @@ func (g *Gateway) initServer(ctx context.Context) error {
 
 // onSessionRegister handles new upstream client sessions.
 //
-// Creates the session in SessionManager (idempotent — safe if session already exists)
-// and stores client metadata (IP, User-Agent) immediately. Tool discovery is deferred
-// until the client calls tools/list (lazy discovery).
+// Creates the session in SessionManager and stores client metadata (IP, User-Agent)
+// immediately. Tool discovery is deferred until the client calls tools/list.
+//
+// If the session already exists (unexpected — the SDK should generate unique IDs),
+// we log a warning and refresh metadata on the existing session rather than failing
+// the registration, since this callback has no error return.
 //
 // Note: The SDK may fire this callback for transient GET connections that never lead
 // to tool discovery. These "phantom" sessions are lightweight and cleaned up by idle
@@ -67,9 +70,22 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 
 	g.logger.Info(ctx, "New upstream session registered", logFields...)
 
-	// Create session (idempotent — returns existing session if one exists,
-	// preserving any downstream clients and metadata from a prior registration).
-	s := g.clientManager.sessionManager.CreateSession(sessionID)
+	s, err := g.clientManager.sessionManager.CreateSession(sessionID)
+	if err != nil {
+		// Session already exists. This is unexpected — the SDK should generate unique IDs.
+		// Log a warning and refresh metadata on the existing session.
+		g.logger.Warn(ctx, "Session already exists during registration, refreshing metadata",
+			zap.String("session_id", sessionID),
+			zap.Error(err))
+
+		s, _ = g.clientManager.sessionManager.GetSession(sessionID)
+		if s == nil {
+			// Shouldn't happen — CreateSession said it exists but GetSession can't find it
+			g.logger.Error(ctx, "Session reported as existing but not found",
+				zap.String("session_id", sessionID))
+			return
+		}
+	}
 
 	// Store client metadata from the request context
 	if hasClientIP && clientIP != "" {

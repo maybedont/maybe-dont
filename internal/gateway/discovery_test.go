@@ -334,6 +334,9 @@ func TestCreateSessionClients_ReturnsPassThroughDiscoveryResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Create session first (mimics onSessionRegister)
+	mustCreateSession(t, cm.sessionManager, "test-session")
+
 	// CreateSessionClients will fail to connect (echo isn't MCP), but that's expected
 	result, err := cm.CreateSessionClients(ctx, "test-session")
 

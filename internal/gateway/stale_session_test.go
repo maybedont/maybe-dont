@@ -121,7 +121,7 @@ func TestOnRequestInitialization_ValidSession(t *testing.T) {
 
 	// Create the session in our SessionManager BEFORE the request
 	validSessionID := "valid-session-12345"
-	cm.sessionManager.CreateSession(validSessionID)
+	mustCreateSession(t, cm.sessionManager, validSessionID)
 
 	// Create a minimal Gateway
 	g := &Gateway{
@@ -363,7 +363,7 @@ func TestCreateSingleSessionClient_UsesExistingSession(t *testing.T) {
 
 	// Create session first
 	validSessionID := "valid-session-12345"
-	cm.sessionManager.CreateSession(validSessionID)
+	mustCreateSession(t, cm.sessionManager, validSessionID)
 
 	// Verify session exists
 	assert.True(t, cm.HasSession(validSessionID), "Session should exist")
