@@ -41,15 +41,18 @@ func (g *Gateway) initServer(ctx context.Context) error {
 
 // onSessionRegister handles new upstream client sessions.
 //
-// Session creation is deferred to CreateSessionClients (triggered by tools/list)
-// to avoid creating phantom sessions for transient SDK registrations that never
-// lead to tool discovery (e.g., GET connection cycling on Cloud Run).
+// Creates the session in SessionManager (idempotent — safe if session already exists)
+// and stores client metadata (IP, User-Agent) immediately. Tool discovery is deferred
+// until the client calls tools/list (lazy discovery).
 //
-// If the session already exists (re-registration of an active session), metadata
-// is updated from the current request context.
+// Note: The SDK may fire this callback for transient GET connections that never lead
+// to tool discovery. These "phantom" sessions are lightweight and cleaned up by idle
+// timeout. They are filtered from list_sessions output by default.
 func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSession) {
 	sessionID := session.SessionID()
 
+	clientIP, hasClientIP := GetClientIP(ctx)
+	userAgent, hasUserAgent := GetUserAgent(ctx)
 	caller, hasCaller := GetCaller(ctx)
 	hasCredentials := g.hasPassThroughCredentials(ctx)
 
@@ -64,17 +67,16 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 
 	g.logger.Info(ctx, "New upstream session registered", logFields...)
 
-	// If the session already exists (e.g., re-registration after GET reconnect),
-	// refresh metadata from the current request context.
-	if existing, ok := g.clientManager.sessionManager.GetSession(sessionID); ok {
-		clientIP, hasClientIP := GetClientIP(ctx)
-		userAgent, hasUserAgent := GetUserAgent(ctx)
-		if hasClientIP && clientIP != "" {
-			existing.SetClientIP(clientIP)
-		}
-		if hasUserAgent && userAgent != "" {
-			existing.SetUserAgent(userAgent)
-		}
+	// Create session (idempotent — returns existing session if one exists,
+	// preserving any downstream clients and metadata from a prior registration).
+	s := g.clientManager.sessionManager.CreateSession(sessionID)
+
+	// Store client metadata from the request context
+	if hasClientIP && clientIP != "" {
+		s.SetClientIP(clientIP)
+	}
+	if hasUserAgent && userAgent != "" {
+		s.SetUserAgent(userAgent)
 	}
 }
 

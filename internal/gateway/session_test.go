@@ -790,8 +790,8 @@ func TestClientManager_GetActiveSessions_ReturnsClientMetadata(t *testing.T) {
 // SetSessionClientIP and SetSessionUserAgent silently fail when called before
 // the session exists. This tests the low-level API behavior.
 //
-// Note: Session creation is deferred to CreateSessionClients (not onSessionRegister),
-// so these methods should only be called after the session has been created.
+// Note: Gateway.onSessionRegister creates the session (idempotent) before calling
+// these methods, so in practice this race condition is avoided.
 func TestClientManager_SetSessionClientIP_RequiresExistingSession(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)
@@ -866,4 +866,134 @@ func TestClientManager_CreateSessionClients_PreservesExistingSession(t *testing.
 	assert.Equal(t, "session-123", sessions[0].SessionID)
 	assert.Equal(t, "192.168.1.100", sessions[0].ClientIP)
 	assert.Equal(t, "Claude-Code/1.0.0", sessions[0].UserAgent)
+}
+
+// TestCreateSessionClients_StoresMetadataFromContext verifies that CreateSessionClients
+// stores IP and User-Agent from the request context when creating a new session.
+// This ensures metadata is captured even when the session didn't exist before discovery.
+func TestCreateSessionClients_StoresMetadataFromContext(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	err := cm.InitializeClients(ctx, map[string]config.ClientConfig{})
+	require.NoError(t, err)
+
+	// Build a context with IP and User-Agent (mimics HTTP middleware enrichment)
+	ctxWithMeta := WithClientIP(ctx, "10.0.0.1")
+	ctxWithMeta = WithUserAgent(ctxWithMeta, "TestAgent/1.0")
+
+	// Session does not exist yet — CreateSessionClients should create it and store metadata
+	result, err := cm.CreateSessionClients(ctxWithMeta, "new-session")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	session, exists := cm.sessionManager.GetSession("new-session")
+	require.True(t, exists, "Session should exist after CreateSessionClients")
+	assert.Equal(t, "10.0.0.1", session.GetClientIP(), "IP should be stored from context")
+	assert.Equal(t, "TestAgent/1.0", session.GetUserAgent(), "User-Agent should be stored from context")
+}
+
+// TestCreateSessionClients_RefreshesMetadataFromContext verifies that CreateSessionClients
+// updates IP and User-Agent on an existing session from the discovery request context.
+// This handles the case where onSessionRegister stored initial metadata and discovery
+// runs with a more recent request that may have updated values.
+func TestCreateSessionClients_RefreshesMetadataFromContext(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	err := cm.InitializeClients(ctx, map[string]config.ClientConfig{})
+	require.NoError(t, err)
+
+	// Step 1: Create session with initial metadata (mimics onSessionRegister)
+	cm.sessionManager.CreateSession("session-1")
+	cm.SetSessionClientIP("session-1", "192.168.1.1")
+	cm.SetSessionUserAgent("session-1", "OldAgent/1.0")
+
+	// Step 2: Call CreateSessionClients with updated metadata in context
+	ctxWithMeta := WithClientIP(ctx, "192.168.1.2")
+	ctxWithMeta = WithUserAgent(ctxWithMeta, "NewAgent/2.0")
+
+	result, err := cm.CreateSessionClients(ctxWithMeta, "session-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Metadata should be refreshed from the discovery context
+	session, exists := cm.sessionManager.GetSession("session-1")
+	require.True(t, exists)
+	assert.Equal(t, "192.168.1.2", session.GetClientIP(), "IP should be refreshed from discovery context")
+	assert.Equal(t, "NewAgent/2.0", session.GetUserAgent(), "User-Agent should be refreshed from discovery context")
+}
+
+// TestSessionLifecycle_NonAuthSetup verifies the full session lifecycle for a setup
+// without pass-through auth: onSessionRegister creates the session, and native tools
+// (which validate session existence) work correctly even though CreateSessionClients
+// may never be called.
+func TestSessionLifecycle_NonAuthSetup(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Step 1: onSessionRegister creates session (idempotent)
+	session := sm.CreateSession("session-no-auth")
+	session.SetClientIP("10.0.0.1")
+	session.SetUserAgent("Claude-Code/1.0.0")
+
+	// Step 2: Session must be visible to HasSession (used by native tool validateSession)
+	assert.True(t, sm.HasSession("session-no-auth"),
+		"Session should exist for native tool validation even without pass-through discovery")
+
+	// Step 3: GetSession should return the session with metadata
+	retrieved, ok := sm.GetSession("session-no-auth")
+	require.True(t, ok)
+	assert.Equal(t, "10.0.0.1", retrieved.GetClientIP())
+	assert.Equal(t, "Claude-Code/1.0.0", retrieved.GetUserAgent())
+
+	// Step 4: Session has no downstream clients (non-auth uses global clients)
+	assert.Empty(t, retrieved.GetAllClients(),
+		"Non-auth sessions have no per-session downstream clients")
+}
+
+// TestSessionLifecycle_PhantomSessionsFromGetCycling verifies the behavior of phantom
+// sessions created by SDK re-registration during GET connection cycling:
+// - Multiple unique session IDs get created (one per GET cycle)
+// - They have metadata but no downstream clients
+// - The real session (with downstream clients) is not affected
+// - GetActiveSessions returns all of them
+func TestSessionLifecycle_PhantomSessionsFromGetCycling(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Real session: created by onSessionRegister, then gets downstream clients via discovery
+	realSession := sm.CreateSession("real-session")
+	realSession.SetClientIP("10.0.0.1")
+	realSession.SetUserAgent("Claude-Code/1.0.0")
+	realSession.SetClient("github", &SessionClientInfo{Name: "github"})
+
+	// Phantom sessions: created by onSessionRegister for GET cycling, never get clients
+	phantom1 := sm.CreateSession("phantom-1")
+	phantom1.SetClientIP("10.0.0.1")
+
+	phantom2 := sm.CreateSession("phantom-2")
+	phantom2.SetClientIP("10.0.0.1")
+
+	// Re-registration of real session (idempotent — must NOT overwrite)
+	sameSession := sm.CreateSession("real-session")
+	assert.Same(t, realSession, sameSession, "Idempotent CreateSession must return same object")
+
+	// Real session's downstream client must be preserved
+	client, ok := sameSession.GetClient("github")
+	require.True(t, ok, "Downstream client must survive re-registration")
+	assert.Equal(t, "github", client.Name)
+
+	// All 3 sessions exist
+	assert.True(t, sm.HasSession("real-session"))
+	assert.True(t, sm.HasSession("phantom-1"))
+	assert.True(t, sm.HasSession("phantom-2"))
+
+	// Phantom sessions have no downstream clients
+	assert.Empty(t, phantom1.GetAllClients())
+	assert.Empty(t, phantom2.GetAllClients())
 }

@@ -165,11 +165,13 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 		zap.String("session_id", sessionID),
 		zap.Int("client_count", len(configs)))
 
-	// Get or create the session (CreateSession is idempotent).
+	// Get or create the session (CreateSession is idempotent — returns existing
+	// session if one was already created by onSessionRegister).
 	session := cm.sessionManager.CreateSession(sessionID)
 
-	// Store client metadata from the request context. This is the primary path
-	// for setting IP/UA since onSessionRegister defers session creation to here.
+	// Refresh client metadata from the discovery request context.
+	// onSessionRegister stores these initially; this updates them in case
+	// the discovery request has more current values.
 	clientIP, hasClientIP := GetClientIP(ctx)
 	userAgent, hasUserAgent := GetUserAgent(ctx)
 	if hasClientIP && clientIP != "" {
