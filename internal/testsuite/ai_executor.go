@@ -27,6 +27,7 @@ type AITestRunner struct {
 	retryDelayMs      int
 	rateLimiter       *RateLimiter
 	strictPolicyMatch bool
+	includeDisabled   bool
 }
 
 // ProviderClientFactoryFunc creates an AIProviderClient from a ModelConfig.
@@ -35,7 +36,7 @@ type ProviderClientFactoryFunc func(model ModelConfig) (gateway.AIProviderClient
 
 // NewAITestRunner creates a runner for AI policy tests against a specific model.
 // If factory is non-nil, it is used to create the provider client instead of the default.
-func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *config.SessionLogger, rateLimiter *RateLimiter, factory ProviderClientFactoryFunc) (*AITestRunner, error) {
+func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *config.SessionLogger, rateLimiter *RateLimiter, factory ProviderClientFactoryFunc, includeDisabled bool) (*AITestRunner, error) {
 	// Create provider client from model config (or use injected factory)
 	createClient := createProviderClient
 	if factory != nil {
@@ -56,6 +57,7 @@ func NewAITestRunner(model ModelConfig, suite *Suite, suiteDir string, logger *c
 		retryDelayMs:      suite.Execution.RetryDelayMs,
 		rateLimiter:       rateLimiter,
 		strictPolicyMatch: suite.Acceptance.IsStrictPolicyMatch(),
+		includeDisabled:   includeDisabled,
 	}
 
 	// Set defaults
@@ -407,10 +409,10 @@ func (r *AITestRunner) evaluateRequestPolicies(ctx context.Context, tc TestCase)
 	// Build the request context for AI evaluation
 	reqContext := buildRequestContext(tc.Request)
 
-	// Collect enabled policies
+	// Collect enabled policies (or all policies when includeDisabled is set)
 	var enabledPolicies []config.AIPolicy
 	for _, policy := range r.policies {
-		if policy.IsEnabled() {
+		if policy.IsEnabled() || r.includeDisabled {
 			enabledPolicies = append(enabledPolicies, policy)
 		}
 	}
@@ -504,10 +506,10 @@ func (r *AITestRunner) evaluateResponsePolicies(ctx context.Context, tc TestCase
 	// Build the response context for AI evaluation
 	respContext := buildResponseContext(tc.Request, tc.Response)
 
-	// Collect enabled policies
+	// Collect enabled policies (or all policies when includeDisabled is set)
 	var enabledPolicies []config.AIResponsePolicy
 	for _, policy := range r.responsePolicies {
-		if policy.IsEnabled() {
+		if policy.IsEnabled() || r.includeDisabled {
 			enabledPolicies = append(enabledPolicies, policy)
 		}
 	}
