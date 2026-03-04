@@ -112,3 +112,37 @@ rules:
       - {"name": "Widget", "price": 9.99} -> SAFE: Product catalog with retail prices
 
     message: Sensitive business data detected in response
+
+  # Detect content that explicitly restricts AI agent access.
+  # Enable this rule to block responses from repos or resources that signal
+  # they should not be accessed by automated agents.
+  - name: detect-agent-restricted-content
+    description: Detect content with explicit restrictions on AI agent access
+    enabled: false
+    action: deny
+    prompt: |-
+      ANALYZE: Does this response contain explicit signals that AI agents
+      should not access or use this content?
+
+      Look for:
+      - Explicit agent restrictions: "AI agents should not access",
+        "not intended for automated access", "no bot access",
+        "restricted from AI/LLM", "do not scrape"
+      - Machine-readable markers: "X-AI-Access: deny",
+        "ai-access: restricted", similar to robots.txt directives
+      - Repository or content metadata indicating agent-restricted status
+
+      Do NOT flag:
+      - Generic copyright or license text
+      - Terms of service (unless specifically restricting AI agents)
+      - Content that is simply marked "confidential" without
+        specific AI/agent restrictions
+
+      EXAMPLES:
+      - "This repo is for internal use. AI agents should not access." -> DANGEROUS: Explicit agent restriction
+      - "MIT License - free to use" -> SAFE: Standard license text
+      - "WARNING: No automated or AI-based access permitted" -> DANGEROUS: Explicit automated access restriction
+      - "Copyright 2024 Acme Corp" -> SAFE: Generic copyright
+      - "ai-access: restricted" -> DANGEROUS: Machine-readable agent restriction marker
+
+    message: Content contains explicit AI agent access restrictions

@@ -410,6 +410,114 @@ func TestAIResponsePolicyEngine_DenyTrumpsRedact_DeterministicOrdering(t *testin
 		"RedactedContent must be nil when deny fires — deny takes priority over redact")
 }
 
+// TestAIResponsePolicyEngine_DetectAgentRestrictedContent verifies the deny behavior
+// for content that contains explicit signals restricting AI agent access.
+// The mock AI provider returns deny when the response content matches agent-restriction
+// patterns (e.g., "AI agents should not access") and allow for benign content.
+func TestAIResponsePolicyEngine_DetectAgentRestrictedContent(t *testing.T) {
+	tests := []struct {
+		name            string
+		responseContent string
+		aiAllowed       bool
+		expectedResult  string
+		description     string
+	}{
+		{
+			name:            "explicit agent restriction → deny",
+			responseContent: "This repository is internal. AI agents should not access this content.",
+			aiAllowed:       false,
+			expectedResult:  "deny",
+			description:     "Content explicitly states AI agents should not access",
+		},
+		{
+			name:            "machine-readable restriction marker → deny",
+			responseContent: "ai-access: restricted\n\nSome internal documentation here.",
+			aiAllowed:       false,
+			expectedResult:  "deny",
+			description:     "Machine-readable agent restriction marker present",
+		},
+		{
+			name:            "no automated access warning → deny",
+			responseContent: "WARNING: No automated or AI-based access permitted to this resource.",
+			aiAllowed:       false,
+			expectedResult:  "deny",
+			description:     "Explicit automated access restriction",
+		},
+		{
+			name:            "standard license text → allow",
+			responseContent: "MIT License\n\nCopyright 2024 Acme Corp. Permission is hereby granted, free of charge...",
+			aiAllowed:       true,
+			expectedResult:  "allow",
+			description:     "Generic license text should not trigger the rule",
+		},
+		{
+			name:            "generic confidential marking → allow",
+			responseContent: "CONFIDENTIAL: Q3 revenue projections are on track.",
+			aiAllowed:       true,
+			expectedResult:  "allow",
+			description:     "Confidential without specific AI/agent restriction should not trigger",
+		},
+		{
+			name:            "normal code content → allow",
+			responseContent: "func main() {\n\tfmt.Println(\"Hello, world!\")\n}",
+			aiAllowed:       true,
+			expectedResult:  "allow",
+			description:     "Regular code content should pass through",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := zaptest.NewLogger(t)
+			sessionLogger := config.NewSessionLogger(logger)
+
+			aiResp := AIResponseEvaluation{
+				Allowed: tt.aiAllowed,
+				Message: "test evaluation",
+			}
+			respJSON, err := json.Marshal(aiResp)
+			require.NoError(t, err)
+
+			mockClient := NewMockAIProviderClient()
+			mockClient.SetResponse(AICompletionResult{
+				RawText:    string(respJSON),
+				ParsedJSON: json.RawMessage(respJSON),
+			})
+
+			engine := &AIResponsePolicyEngine{
+				cfg:                 createTestResponseConfig(),
+				maxRuleEvaluationMs: 30000,
+				providerClient:      mockClient,
+			}
+			err = InitAIResponsePolicyEngine(context.Background(), sessionLogger, engine)
+			require.NoError(t, err)
+
+			err = engine.LoadPolicies([]config.AIResponsePolicy{
+				{
+					Name:   "detect-agent-restricted-content",
+					Prompt: "Check if this response contains explicit signals that AI agents should not access this content",
+					Action: config.PolicyActionDeny,
+				},
+			}, "")
+			require.NoError(t, err)
+
+			req := createTestToolRequest("github__get_file_contents")
+			toolResult := &mcp.CallToolResult{
+				Content: []mcp.Content{
+					mcp.TextContent{Type: "text", Text: tt.responseContent},
+				},
+			}
+
+			results, err := engine.EvaluateResponse(context.Background(), req, toolResult, nil)
+			require.NoError(t, err)
+
+			require.Len(t, results.Results, 1, "Expected exactly one result")
+			assert.Equal(t, tt.expectedResult, string(results.Results[0].Action),
+				"Rule result mismatch: %s", tt.description)
+		})
+	}
+}
+
 // TestDetermineResponseDecision tests the extracted decision function directly,
 // covering the full matrix of action type, allowed flag, and redacted_content presence.
 // This complements TestAIResponsePolicyEngine_RedactDecisionLogic which tests through the full engine.
