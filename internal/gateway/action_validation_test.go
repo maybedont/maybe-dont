@@ -1251,6 +1251,12 @@ func TestActionValidation_CrossEngineTruthTable(t *testing.T) {
 				aiEngine = nil
 			}
 
+			// Wait for async audit goroutines to finish before the subtest's
+			// testing.T is invalidated, preventing a data race on the test logger.
+			if aiEngine != nil {
+				t.Cleanup(aiEngine.WaitForAsync)
+			}
+
 			handler := newTestActionHandler(t, celEngine, aiEngine)
 			resp := sendActionValidation(t, handler, `{"target": "execute_bash", "parameters": {"command": "test"}}`)
 

@@ -31,6 +31,12 @@ type AIResponsePolicyEngine struct {
 	cfg                 *config.Config   // Full config needed for AIProviderClient factory
 	providerClient      AIProviderClient // Provider-agnostic AI client
 	maxRuleEvaluationMs int              // Max time for any single rule to complete
+	asyncWg             sync.WaitGroup   // Tracks background goroutines that collect async audit results
+}
+
+// WaitForAsync blocks until all background audit-collection goroutines have finished.
+func (e *AIResponsePolicyEngine) WaitForAsync() {
+	e.asyncWg.Wait()
 }
 
 // InitAIResponsePolicyEngine initializes the AI response policy engine
@@ -324,7 +330,9 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 			sessionID = sid
 		}
 
+		e.asyncWg.Add(1)
 		go func() {
+			defer e.asyncWg.Done()
 			defer close(completionChan)
 
 			// Create a context with request_id and session_id for async logging
@@ -437,7 +445,9 @@ func (e *AIResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.C
 					sessionID = sid
 				}
 
+				e.asyncWg.Add(1)
 				go func() {
+					defer e.asyncWg.Done()
 					defer close(completionChan)
 
 					// Create a context with request_id and session_id for async logging
