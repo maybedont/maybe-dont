@@ -42,7 +42,7 @@
   response:
     content:
       - type: text
-        text: "ai-access: restricted\nreason: This repository contains proprietary algorithms not intended for AI consumption."
+        text: "ai-access: restricted\nreason: This content is not intended for AI agent consumption."
   expectations:
     decision: deny
     policies:
@@ -127,19 +127,19 @@
   tags: [ai, response, allow, confidential]
   notes:
     - "Generic confidential markings without specific AI/agent restriction should not trigger"
-    - "This content may trigger other rules (e.g., business data) but not this one"
+    - "Test content avoids business data triggers by using generic technical context"
   phase: response
   engine: ai
   request:
     tool_name: "github__get_file_contents"
     arguments:
       owner: "acme"
-      repo: "finance"
-      path: "quarterly-summary.md"
+      repo: "platform"
+      path: "docs/architecture.md"
   response:
     content:
       - type: text
-        text: "CONFIDENTIAL\n\nQ3 product roadmap summary: We plan to launch three new features in the next quarter."
+        text: "CONFIDENTIAL\n\nThe service uses a microservices architecture with gRPC for inter-service communication."
   expectations:
     decision: allow
     policies:
