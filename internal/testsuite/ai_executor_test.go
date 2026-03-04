@@ -479,4 +479,139 @@ func TestEvaluateResponsePolicies_DenyTrumpsRedact(t *testing.T) {
 	}
 }
 
+// TestAITestRunner_IncludeDisabledPolicies verifies that disabled AI policies are
+// skipped by default but included when includeDisabled is set. This is a regression
+// test for the bug where --include-disabled only affected CEL engines.
+func TestAITestRunner_IncludeDisabledPolicies(t *testing.T) {
+	disabledBool := false
+
+	// Mock that always returns "deny" so we can detect whether the policy ran
+	makeMock := func() *gateway.MockAIProviderClient {
+		mock := gateway.NewMockAIProviderClient()
+		resp := gateway.AIResponse{Allowed: false, Message: "blocked"}
+		respJSON, _ := json.Marshal(resp)
+		mock.SetResponse(gateway.AICompletionResult{
+			RawText:    string(respJSON),
+			ParsedJSON: json.RawMessage(respJSON),
+		})
+		return mock
+	}
+
+	t.Run("request policies: disabled policy skipped by default", func(t *testing.T) {
+		runner := &AITestRunner{
+			model:          ModelConfig{Provider: "openai", Model: "test"},
+			providerClient: makeMock(),
+			policies: []config.AIPolicy{
+				{Name: "disabled-rule", Prompt: "Check this", Action: config.PolicyActionDeny, Enabled: &disabledBool},
+			},
+			includeDisabled: false,
+			timeoutMs:       30000,
+		}
+
+		tc := TestCase{
+			CaseID:  "test-disabled-skip",
+			Phase:   "request",
+			Request: RequestConfig{ToolName: "test_tool"},
+		}
+
+		result, err := runner.evaluateRequestPolicies(context.Background(), tc)
+		assert.NoError(t, err)
+		assert.Equal(t, "allow", result.decision, "disabled policy should be skipped, resulting in allow")
+		assert.Empty(t, result.policyResults, "no policies should have been evaluated")
+	})
+
+	t.Run("request policies: disabled policy included with includeDisabled", func(t *testing.T) {
+		runner := &AITestRunner{
+			model:          ModelConfig{Provider: "openai", Model: "test"},
+			providerClient: makeMock(),
+			policies: []config.AIPolicy{
+				{Name: "disabled-rule", Prompt: "Check this", Action: config.PolicyActionDeny, Enabled: &disabledBool},
+			},
+			includeDisabled: true,
+			timeoutMs:       30000,
+		}
+
+		tc := TestCase{
+			CaseID:  "test-disabled-include",
+			Phase:   "request",
+			Request: RequestConfig{ToolName: "test_tool"},
+		}
+
+		result, err := runner.evaluateRequestPolicies(context.Background(), tc)
+		assert.NoError(t, err)
+		assert.Equal(t, "deny", result.decision, "disabled policy should run and deny when includeDisabled is set")
+		assert.Len(t, result.policyResults, 1, "one policy should have been evaluated")
+		assert.Equal(t, "disabled-rule", result.policyResults[0].policyName)
+	})
+
+	t.Run("response policies: disabled policy skipped by default", func(t *testing.T) {
+		respMock := gateway.NewMockAIProviderClient()
+		resp := gateway.AIResponseEvaluation{Allowed: false, Message: "blocked"}
+		respJSON, _ := json.Marshal(resp)
+		respMock.SetResponse(gateway.AICompletionResult{
+			RawText:    string(respJSON),
+			ParsedJSON: json.RawMessage(respJSON),
+		})
+
+		runner := &AITestRunner{
+			model:          ModelConfig{Provider: "openai", Model: "test"},
+			providerClient: respMock,
+			responsePolicies: []config.AIResponsePolicy{
+				{Name: "disabled-resp-rule", Prompt: "Check response", Action: config.PolicyActionDeny, Enabled: &disabledBool},
+			},
+			includeDisabled: false,
+			timeoutMs:       30000,
+		}
+
+		tc := TestCase{
+			CaseID:  "test-resp-disabled-skip",
+			Phase:   "response",
+			Request: RequestConfig{ToolName: "test_tool"},
+			Response: &ResponseConfig{
+				Content: []ContentItem{{Type: "text", Text: "test content"}},
+			},
+		}
+
+		result, err := runner.evaluateResponsePolicies(context.Background(), tc)
+		assert.NoError(t, err)
+		assert.Equal(t, "allow", result.decision, "disabled response policy should be skipped")
+		assert.Empty(t, result.policyResults, "no policies should have been evaluated")
+	})
+
+	t.Run("response policies: disabled policy included with includeDisabled", func(t *testing.T) {
+		respMock := gateway.NewMockAIProviderClient()
+		resp := gateway.AIResponseEvaluation{Allowed: false, Message: "blocked"}
+		respJSON, _ := json.Marshal(resp)
+		respMock.SetResponse(gateway.AICompletionResult{
+			RawText:    string(respJSON),
+			ParsedJSON: json.RawMessage(respJSON),
+		})
+
+		runner := &AITestRunner{
+			model:          ModelConfig{Provider: "openai", Model: "test"},
+			providerClient: respMock,
+			responsePolicies: []config.AIResponsePolicy{
+				{Name: "disabled-resp-rule", Prompt: "Check response", Action: config.PolicyActionDeny, Enabled: &disabledBool},
+			},
+			includeDisabled: true,
+			timeoutMs:       30000,
+		}
+
+		tc := TestCase{
+			CaseID:  "test-resp-disabled-include",
+			Phase:   "response",
+			Request: RequestConfig{ToolName: "test_tool"},
+			Response: &ResponseConfig{
+				Content: []ContentItem{{Type: "text", Text: "test content"}},
+			},
+		}
+
+		result, err := runner.evaluateResponsePolicies(context.Background(), tc)
+		assert.NoError(t, err)
+		assert.Equal(t, "deny", result.decision, "disabled response policy should run when includeDisabled is set")
+		assert.Len(t, result.policyResults, 1, "one policy should have been evaluated")
+		assert.Equal(t, "disabled-resp-rule", result.policyResults[0].policyName)
+	})
+}
+
 // TestResolveEnvVar is in runner_test.go
