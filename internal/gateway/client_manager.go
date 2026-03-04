@@ -165,11 +165,18 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 		zap.String("session_id", sessionID),
 		zap.Int("client_count", len(configs)))
 
-	// Get or create the session.
-	// The session may already exist if it was created by onSessionRegister
-	// to store client metadata (IP, User-Agent) before async discovery started.
-	if _, exists := cm.sessionManager.GetSession(sessionID); !exists {
-		cm.sessionManager.CreateSession(sessionID)
+	// Get or create the session (CreateSession is idempotent).
+	session := cm.sessionManager.CreateSession(sessionID)
+
+	// Store client metadata from the request context. This is the primary path
+	// for setting IP/UA since onSessionRegister defers session creation to here.
+	clientIP, hasClientIP := GetClientIP(ctx)
+	userAgent, hasUserAgent := GetUserAgent(ctx)
+	if hasClientIP && clientIP != "" {
+		session.SetClientIP(clientIP)
+	}
+	if hasUserAgent && userAgent != "" {
+		session.SetUserAgent(userAgent)
 	}
 
 	result := &SessionDiscoveryResult{

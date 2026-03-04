@@ -253,10 +253,16 @@ func (sm *SessionManager) GetSessionTimeout() time.Duration {
 	return sm.sessionTimeout
 }
 
-// CreateSession creates a new session
+// CreateSession creates a new session or returns the existing one if it already exists.
+// This is idempotent to prevent overwriting an existing session's downstream clients
+// and metadata when the SDK re-registers a session (e.g., GET reconnection cycling).
 func (sm *SessionManager) CreateSession(sessionID string) *Session {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	if existing, ok := sm.sessions[sessionID]; ok {
+		return existing
+	}
 
 	session := NewSession(sessionID)
 	sm.sessions[sessionID] = session

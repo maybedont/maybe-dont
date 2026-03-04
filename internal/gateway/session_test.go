@@ -38,6 +38,33 @@ func TestSessionManager_CreateSession(t *testing.T) {
 	assert.Equal(t, session, retrieved)
 }
 
+// TestSessionManager_CreateSession_Idempotent verifies that CreateSession returns the
+// existing session when called with the same ID, preserving downstream clients and metadata.
+// This prevents onSessionRegister (SDK re-registration) from wiping out an active session.
+func TestSessionManager_CreateSession_Idempotent(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Create session and populate it with metadata and a downstream client
+	session := sm.CreateSession("session-1")
+	session.SetClientIP("192.168.1.100")
+	session.SetUserAgent("Claude-Code/1.0.0")
+	session.SetClient("github", &SessionClientInfo{Name: "github"})
+
+	// Call CreateSession again with the same ID — should return existing session
+	second := sm.CreateSession("session-1")
+
+	// Must be the exact same session object, not a new one
+	assert.Same(t, session, second)
+
+	// All metadata and clients must be preserved
+	assert.Equal(t, "192.168.1.100", second.GetClientIP())
+	assert.Equal(t, "Claude-Code/1.0.0", second.GetUserAgent())
+	client, ok := second.GetClient("github")
+	require.True(t, ok)
+	assert.Equal(t, "github", client.Name)
+}
+
 func TestSessionManager_MultipleSessionsAreIsolated(t *testing.T) {
 	logger := newTestLogger(t)
 	sm := NewSessionManager(logger)
@@ -763,8 +790,8 @@ func TestClientManager_GetActiveSessions_ReturnsClientMetadata(t *testing.T) {
 // SetSessionClientIP and SetSessionUserAgent silently fail when called before
 // the session exists. This tests the low-level API behavior.
 //
-// Note: The Gateway.onSessionRegister now creates the session synchronously
-// before calling these methods, so in practice this race condition is avoided.
+// Note: Session creation is deferred to CreateSessionClients (not onSessionRegister),
+// so these methods should only be called after the session has been created.
 func TestClientManager_SetSessionClientIP_RequiresExistingSession(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)

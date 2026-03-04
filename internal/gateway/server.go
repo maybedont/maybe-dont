@@ -40,51 +40,42 @@ func (g *Gateway) initServer(ctx context.Context) error {
 }
 
 // onSessionRegister handles new upstream client sessions.
-// Session metadata (client IP, user agent, caller) is stored immediately.
-// Tool discovery is deferred until the client calls tools/list (lazy discovery).
+//
+// Session creation is deferred to CreateSessionClients (triggered by tools/list)
+// to avoid creating phantom sessions for transient SDK registrations that never
+// lead to tool discovery (e.g., GET connection cycling on Cloud Run).
+//
+// If the session already exists (re-registration of an active session), metadata
+// is updated from the current request context.
 func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSession) {
 	sessionID := session.SessionID()
 
-	// Extract values from context for metadata storage
-	clientIP, hasClientIP := GetClientIP(ctx)
-	userAgent, hasUserAgent := GetUserAgent(ctx)
 	caller, hasCaller := GetCaller(ctx)
-
-	// Determine if this session has credentials (helps identify initialization vs SSE sessions)
 	hasCredentials := g.hasPassThroughCredentials(ctx)
 
-	// Build log fields - always include session_id and has_credentials
+	// Build log fields
 	logFields := []zap.Field{
 		zap.String("session_id", sessionID),
 		zap.Bool("has_credentials", hasCredentials),
 	}
-	// Include caller in log if present (for audit correlation)
 	if hasCaller && caller != "" {
 		logFields = append(logFields, zap.String("caller", caller))
 	}
 
 	g.logger.Info(ctx, "New upstream session registered", logFields...)
 
-	// Create the session synchronously so we can store client metadata immediately.
-	g.clientManager.sessionManager.CreateSession(sessionID)
-
-	// Store client metadata in session immediately (this is fast, no network I/O)
-	if hasClientIP && clientIP != "" {
-		g.clientManager.SetSessionClientIP(sessionID, clientIP)
+	// If the session already exists (e.g., re-registration after GET reconnect),
+	// refresh metadata from the current request context.
+	if existing, ok := g.clientManager.sessionManager.GetSession(sessionID); ok {
+		clientIP, hasClientIP := GetClientIP(ctx)
+		userAgent, hasUserAgent := GetUserAgent(ctx)
+		if hasClientIP && clientIP != "" {
+			existing.SetClientIP(clientIP)
+		}
+		if hasUserAgent && userAgent != "" {
+			existing.SetUserAgent(userAgent)
+		}
 	}
-	if hasUserAgent && userAgent != "" {
-		g.clientManager.SetSessionUserAgent(sessionID, userAgent)
-	}
-	if (hasClientIP && clientIP != "") || (hasUserAgent && userAgent != "") {
-		g.logger.Debug(ctx, "Stored client metadata for session",
-			zap.String("session_id", sessionID),
-			zap.String("client_ip", clientIP),
-			zap.String("user_agent", userAgent))
-	}
-
-	// Tool discovery is now fully lazy - it will happen when the client calls tools/list.
-	// This avoids redundant discovery work for sessions that may never need tools,
-	// and eliminates race conditions between async discovery and lazy discovery.
 }
 
 // onSessionUnregister handles upstream client session cleanup.
