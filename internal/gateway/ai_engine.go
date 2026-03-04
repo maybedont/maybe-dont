@@ -75,6 +75,14 @@ type AIPolicyEngine struct {
 	cfg                 *config.Config // Full config needed for AIProviderClient factory
 	maxRuleEvaluationMs int
 	providerClient      AIProviderClient
+	asyncWg             sync.WaitGroup // Tracks background goroutines that collect async audit results
+}
+
+// WaitForAsync blocks until all background audit-collection goroutines have finished.
+// Used by Gateway.Stop() to ensure no audit writes are lost during shutdown,
+// and by tests to prevent data races on testing.T.
+func (e *AIPolicyEngine) WaitForAsync() {
+	e.asyncWg.Wait()
 }
 
 // InitAIPolicyEngine creates a new AI policy engine
@@ -332,7 +340,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 		}
 
 		// Start background goroutine to collect all results
+		e.asyncWg.Add(1)
 		go func() {
+			defer e.asyncWg.Done()
 			defer close(completionChan)
 
 			// Create a context with request_id and session_id for async logging
@@ -485,7 +495,9 @@ func (e *AIPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolR
 				capturedBlockedMs := blockedMs
 				capturedRequestID := lastRequestID
 
+				e.asyncWg.Add(1)
 				go func() {
+					defer e.asyncWg.Done()
 					defer close(completionChan)
 
 					asyncResults := capturedResults
@@ -856,7 +868,9 @@ func (e *AIPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValidat
 		}
 
 		// Start background goroutine to collect all results
+		e.asyncWg.Add(1)
 		go func() {
+			defer e.asyncWg.Done()
 			defer close(completionChan)
 
 			// Create a context with request_id and session_id for async logging
@@ -1007,7 +1021,9 @@ func (e *AIPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValidat
 				capturedBlockedMs := blockedMs
 				capturedRequestID := lastRequestID
 
+				e.asyncWg.Add(1)
 				go func() {
+					defer e.asyncWg.Done()
 					defer close(completionChan)
 
 					asyncResults := capturedResults

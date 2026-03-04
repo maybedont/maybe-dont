@@ -69,6 +69,7 @@ func TestAsyncValidation_AllAuditOnlyReturnsImmediately(t *testing.T) {
 	// Create mock client with slow response to simulate real AI call
 	mockClient := createAsyncTestMock(500*time.Millisecond, true, "Approved")
 	engine := createAsyncTestEngine(mockClient, 30000)
+	t.Cleanup(engine.WaitForAsync)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -176,6 +177,7 @@ func TestAsyncValidation_MixedModePolicies(t *testing.T) {
 	// Create mock client
 	mockClient := createAsyncTestMock(100*time.Millisecond, true, "Approved")
 	engine := createAsyncTestEngine(mockClient, 30000)
+	t.Cleanup(engine.WaitForAsync)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -314,6 +316,7 @@ func TestAsyncCompletion_ChannelDeliversCorrectResults(t *testing.T) {
 
 	mockClient := createAsyncTestMock(50*time.Millisecond, false, "Suspicious activity")
 	engine := createAsyncTestEngine(mockClient, 30000)
+	t.Cleanup(engine.WaitForAsync)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -360,6 +363,7 @@ func TestAsyncValidation_ResponseEngine_AllAuditOnly(t *testing.T) {
 
 	mockClient := createAsyncTestMock(200*time.Millisecond, true, "Safe response")
 	engine := createAsyncTestResponseEngine(mockClient, 30000)
+	t.Cleanup(engine.WaitForAsync)
 	err := InitAIResponsePolicyEngine(context.Background(), sessionLogger, engine)
 	require.NoError(t, err)
 
@@ -427,6 +431,7 @@ func TestAsyncValidation_FullChainWithCELAndAI(t *testing.T) {
 	// Create AI engine with audit_only policy
 	mockClient := createAsyncTestMock(100*time.Millisecond, true, "Approved")
 	aiEngine := createAsyncTestEngine(mockClient, 30000)
+	t.Cleanup(aiEngine.WaitForAsync)
 	err = InitAIPolicyEngine(sessionLogger, aiEngine)
 	require.NoError(t, err)
 	err = aiEngine.LoadPolicies([]config.AIPolicy{
@@ -643,6 +648,7 @@ func TestAsyncValidation_AllAuditOnlyWritesAuditLog(t *testing.T) {
 	// Create AI engine with audit_only policy
 	mockClient := createAsyncTestMock(50*time.Millisecond, false, "Would deny")
 	aiEngine := createAsyncTestEngine(mockClient, 30000)
+	t.Cleanup(aiEngine.WaitForAsync)
 	err = InitAIPolicyEngine(sessionLogger, aiEngine)
 	require.NoError(t, err)
 	err = aiEngine.LoadPolicies([]config.AIPolicy{

@@ -631,6 +631,7 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 		// This test verifies the engine uses the shared budget's remaining time,
 		// not its own maxBlockingMs field
 		engine := createTestAIPolicyEngine(30000)
+		t.Cleanup(engine.WaitForAsync)
 		err := InitAIPolicyEngine(sessionLogger, engine)
 		require.NoError(t, err)
 
@@ -1435,6 +1436,7 @@ func TestAIPolicyEngine_EvaluateCLICommand_AuditOnlyReturnsImmediately(t *testin
 	sessionLogger := config.NewSessionLogger(logger)
 
 	engine := createTestAIPolicyEngine(5000)
+	t.Cleanup(engine.WaitForAsync)
 	err := InitAIPolicyEngine(sessionLogger, engine)
 	require.NoError(t, err)
 

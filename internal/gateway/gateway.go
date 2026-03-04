@@ -352,6 +352,14 @@ func (g *Gateway) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Wait for AI engine async goroutines to finish collecting audit results
+	if g.aiPolicyEngine != nil {
+		g.aiPolicyEngine.WaitForAsync()
+	}
+	if g.aiResponsePolicyEngine != nil {
+		g.aiResponsePolicyEngine.WaitForAsync()
+	}
+
 	// Wait for pending async audit writes to complete before closing the writer
 	g.logger.Debug(ctx, "Waiting for pending async audit writes to complete")
 	g.pendingAuditWrites.Wait()
