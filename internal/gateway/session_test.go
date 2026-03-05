@@ -20,12 +20,21 @@ func newTestLogger(t *testing.T) *config.SessionLogger {
 	return config.NewSessionLogger(logger)
 }
 
+// mustCreateSession is a test helper that calls CreateSession and fails the test on error.
+func mustCreateSession(t *testing.T, sm *SessionManager, id string) *Session {
+	t.Helper()
+	session, err := sm.CreateSession(id)
+	require.NoError(t, err, "CreateSession(%q) should not fail", id)
+	return session
+}
+
 func TestSessionManager_CreateSession(t *testing.T) {
 	logger := newTestLogger(t)
 	sm := NewSessionManager(logger)
 
 	// Create a session
-	session := sm.CreateSession("session-1")
+	session, err := sm.CreateSession("session-1")
+	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "session-1", session.ID)
 
@@ -38,13 +47,42 @@ func TestSessionManager_CreateSession(t *testing.T) {
 	assert.Equal(t, session, retrieved)
 }
 
+// TestSessionManager_CreateSession_DuplicateErrors verifies that CreateSession returns
+// an error when called with a session ID that already exists. This ensures we surface
+// unexpected duplicate registrations rather than silently reusing or overwriting sessions.
+func TestSessionManager_CreateSession_DuplicateErrors(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Create session and populate it with metadata and a downstream client
+	session := mustCreateSession(t, sm, "session-1")
+	session.SetClientIP("192.168.1.100")
+	session.SetUserAgent("Claude-Code/1.0.0")
+	session.SetClient("github", &SessionClientInfo{Name: "github"})
+
+	// Call CreateSession again with the same ID — should error
+	second, err := sm.CreateSession("session-1")
+	require.Error(t, err, "CreateSession should fail for duplicate session ID")
+	assert.Nil(t, second)
+	assert.Contains(t, err.Error(), "already exists")
+
+	// Original session must be untouched
+	original, ok := sm.GetSession("session-1")
+	require.True(t, ok)
+	assert.Equal(t, "192.168.1.100", original.GetClientIP())
+	assert.Equal(t, "Claude-Code/1.0.0", original.GetUserAgent())
+	client, ok := original.GetClient("github")
+	require.True(t, ok)
+	assert.Equal(t, "github", client.Name)
+}
+
 func TestSessionManager_MultipleSessionsAreIsolated(t *testing.T) {
 	logger := newTestLogger(t)
 	sm := NewSessionManager(logger)
 
 	// Create two sessions
-	session1 := sm.CreateSession("session-1")
-	session2 := sm.CreateSession("session-2")
+	session1 := mustCreateSession(t, sm, "session-1")
+	session2 := mustCreateSession(t, sm, "session-2")
 
 	// Add clients to each session
 	client1 := &SessionClientInfo{Name: "client-for-session-1"}
@@ -72,7 +110,7 @@ func TestSessionManager_DeleteSession(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a session
-	sm.CreateSession("session-1")
+	mustCreateSession(t, sm, "session-1")
 	assert.True(t, sm.HasSession("session-1"))
 
 	// Delete it
@@ -88,7 +126,7 @@ func TestSessionManager_GetSessionClient(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create session and add client
-	sm.CreateSession("session-1")
+	mustCreateSession(t, sm, "session-1")
 	clientInfo := &SessionClientInfo{Name: "aws"}
 	sm.SetSessionClient("session-1", "aws", clientInfo)
 
@@ -119,7 +157,7 @@ func TestSessionManager_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			sessionID := string(rune('a'+id%26)) + "-" + string(rune('0'+id%10))
-			sm.CreateSession(sessionID)
+			_, _ = sm.CreateSession(sessionID)
 			sm.SetSessionClient(sessionID, "client", &SessionClientInfo{Name: "test"})
 		}(i)
 	}
@@ -183,7 +221,7 @@ func TestClientManager_SessionClientRetrieval(t *testing.T) {
 	cm := NewClientManager(ctx, logger)
 
 	// Manually create a session with a client (bypassing actual MCP connection)
-	cm.sessionManager.CreateSession("test-session")
+	mustCreateSession(t, cm.sessionManager, "test-session")
 	cm.sessionManager.SetSessionClient("test-session", "aws", &SessionClientInfo{
 		Name: "aws",
 		Config: config.ClientConfig{
@@ -211,7 +249,7 @@ func TestClientManager_CloseSessionClients(t *testing.T) {
 	cm := NewClientManager(ctx, logger)
 
 	// Create a session
-	cm.sessionManager.CreateSession("test-session")
+	mustCreateSession(t, cm.sessionManager, "test-session")
 	ok := cm.sessionManager.SetSessionClient("test-session", "test", &SessionClientInfo{
 		Name:   "test",
 		Client: nil, // No actual client to close
@@ -242,8 +280,8 @@ func TestMultipleUpstreamSessions_IsolatedDownstreamClients(t *testing.T) {
 	session2ID := "upstream-session-2"
 
 	// Create sessions (simulating what onSessionRegister does)
-	cm.sessionManager.CreateSession(session1ID)
-	cm.sessionManager.CreateSession(session2ID)
+	mustCreateSession(t, cm.sessionManager, session1ID)
+	mustCreateSession(t, cm.sessionManager, session2ID)
 
 	// Add different downstream clients to each session
 	// (simulating what CreateSessionClients would do)
@@ -327,7 +365,7 @@ func TestSessionManager_SetSessionClientRejectsDeletedSession(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create a session
-	sm.CreateSession("test-session")
+	mustCreateSession(t, sm, "test-session")
 
 	// Add a client - should succeed
 	ok := sm.SetSessionClient("test-session", "client1", &SessionClientInfo{Name: "client1"})
@@ -353,7 +391,7 @@ func TestSessionManager_SetSessionClientRejectsClosingSession(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create a session
-	session := sm.CreateSession("test-session")
+	session := mustCreateSession(t, sm, "test-session")
 
 	// Manually mark session as closing (simulates DeleteSession in progress)
 	session.mu.Lock()
@@ -379,7 +417,7 @@ func TestSessionCleanup_RaceCondition(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create and immediately delete a session
-	sm.CreateSession("test-session")
+	mustCreateSession(t, sm, "test-session")
 	err := sm.DeleteSession(ctx, "test-session")
 	require.NoError(t, err)
 
@@ -403,7 +441,7 @@ func TestSessionCleanup_ConcurrentDeleteAndSetClient(t *testing.T) {
 	sm := NewSessionManager(logger)
 
 	// Create session
-	sm.CreateSession("test-session")
+	mustCreateSession(t, sm, "test-session")
 
 	// Run concurrent operations
 	const numGoroutines = 100
@@ -494,6 +532,23 @@ func TestSession_ClientIPAndUserAgent(t *testing.T) {
 	assert.Equal(t, "MCP-Client/2.0", session.GetUserAgent())
 }
 
+// TestSession_Connected verifies the connected state follows the SetConnected/IsConnected pattern:
+// default false, set true, verify, set false, verify.
+func TestSession_Connected(t *testing.T) {
+	session := NewSession("test-session")
+
+	// New session should default to disconnected
+	assert.False(t, session.IsConnected())
+
+	// Mark as connected
+	session.SetConnected(true)
+	assert.True(t, session.IsConnected())
+
+	// Mark as disconnected
+	session.SetConnected(false)
+	assert.False(t, session.IsConnected())
+}
+
 func TestSession_IsExpired(t *testing.T) {
 	session := NewSession("test-session")
 
@@ -515,8 +570,8 @@ func TestSessionManager_CleanupExpiredSessions(t *testing.T) {
 	defer sm.StopCleanup()
 
 	// Create two sessions
-	session1 := sm.CreateSession("session-1")
-	sm.CreateSession("session-2")
+	session1 := mustCreateSession(t, sm, "session-1")
+	mustCreateSession(t, sm, "session-2")
 
 	// Wait past the timeout
 	time.Sleep(150 * time.Millisecond)
@@ -540,7 +595,7 @@ func TestSessionManager_GetSessionTouchesActivity(t *testing.T) {
 	defer sm.StopCleanup()
 
 	// Create a session
-	session := sm.CreateSession("test-session")
+	session := mustCreateSession(t, sm, "test-session")
 	initialActivity := session.LastActivity()
 
 	// Wait a bit
@@ -561,7 +616,7 @@ func TestSessionManager_GetSessionClientTouchesActivity(t *testing.T) {
 	defer sm.StopCleanup()
 
 	// Create a session and add a client
-	session := sm.CreateSession("test-session")
+	session := mustCreateSession(t, sm, "test-session")
 	clientInfo := &SessionClientInfo{Name: "test-client"}
 	session.SetClient("test-client", clientInfo)
 
@@ -677,7 +732,7 @@ func TestClientManager_HasSession(t *testing.T) {
 	assert.False(t, cm.HasSession("session-2"))
 
 	// Create a session via the session manager
-	cm.sessionManager.CreateSession("session-1")
+	mustCreateSession(t, cm.sessionManager, "session-1")
 
 	// Now should have session-1 but not session-2
 	assert.True(t, cm.HasSession("session-1"))
@@ -698,7 +753,7 @@ func TestClientManager_GetActiveSessions_ReturnsClientMetadata(t *testing.T) {
 	defer func() { _ = cm.Close(ctx) }()
 
 	// Create a session and set metadata (in the correct order - session first, then metadata)
-	cm.sessionManager.CreateSession("session-123")
+	mustCreateSession(t, cm.sessionManager, "session-123")
 	cm.SetSessionClientIP("session-123", "192.168.1.100")
 	cm.SetSessionUserAgent("session-123", "Claude-Code/1.0.0")
 
@@ -713,7 +768,7 @@ func TestClientManager_GetActiveSessions_ReturnsClientMetadata(t *testing.T) {
 	})
 
 	// Create a second session with different metadata
-	cm.sessionManager.CreateSession("session-456")
+	mustCreateSession(t, cm.sessionManager, "session-456")
 	cm.SetSessionClientIP("session-456", "10.0.0.50")
 	cm.SetSessionUserAgent("session-456", "MCP-Client/2.0")
 
@@ -763,8 +818,8 @@ func TestClientManager_GetActiveSessions_ReturnsClientMetadata(t *testing.T) {
 // SetSessionClientIP and SetSessionUserAgent silently fail when called before
 // the session exists. This tests the low-level API behavior.
 //
-// Note: The Gateway.onSessionRegister now creates the session synchronously
-// before calling these methods, so in practice this race condition is avoided.
+// Note: Gateway.onSessionRegister creates the session (idempotent) before calling
+// these methods, so in practice this race condition is avoided.
 func TestClientManager_SetSessionClientIP_RequiresExistingSession(t *testing.T) {
 	ctx := context.Background()
 	logger := newTestLogger(t)
@@ -776,7 +831,7 @@ func TestClientManager_SetSessionClientIP_RequiresExistingSession(t *testing.T) 
 	cm.SetSessionUserAgent("session-123", "Claude-Code/1.0.0")
 
 	// Now create the session
-	cm.sessionManager.CreateSession("session-123")
+	mustCreateSession(t, cm.sessionManager, "session-123")
 
 	// Add a downstream client
 	cm.sessionManager.SetSessionClient("session-123", "github", &SessionClientInfo{
@@ -811,7 +866,7 @@ func TestClientManager_CreateSessionClients_PreservesExistingSession(t *testing.
 	require.NoError(t, err)
 
 	// Step 1: Create session first and set metadata (mimics onSessionRegister flow)
-	cm.sessionManager.CreateSession("session-123")
+	mustCreateSession(t, cm.sessionManager, "session-123")
 	cm.SetSessionClientIP("session-123", "192.168.1.100")
 	cm.SetSessionUserAgent("session-123", "Claude-Code/1.0.0")
 
@@ -839,4 +894,271 @@ func TestClientManager_CreateSessionClients_PreservesExistingSession(t *testing.
 	assert.Equal(t, "session-123", sessions[0].SessionID)
 	assert.Equal(t, "192.168.1.100", sessions[0].ClientIP)
 	assert.Equal(t, "Claude-Code/1.0.0", sessions[0].UserAgent)
+}
+
+// TestCreateSessionClients_RequiresExistingSession verifies that CreateSessionClients
+// fails when the session doesn't exist (onSessionRegister should have created it).
+func TestCreateSessionClients_RequiresExistingSession(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	err := cm.InitializeClients(ctx, map[string]config.ClientConfig{})
+	require.NoError(t, err)
+
+	// Don't create session — simulate missing onSessionRegister
+	_, err = cm.CreateSessionClients(ctx, "nonexistent-session")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// TestCreateSessionClients_StoresMetadataFromContext verifies that CreateSessionClients
+// refreshes IP and User-Agent from the request context onto an existing session.
+// The session is created by onSessionRegister; CreateSessionClients updates metadata
+// from the discovery request which may have more current values.
+func TestCreateSessionClients_StoresMetadataFromContext(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	err := cm.InitializeClients(ctx, map[string]config.ClientConfig{})
+	require.NoError(t, err)
+
+	// Create session without metadata (mimics onSessionRegister with no IP/UA in context)
+	mustCreateSession(t, cm.sessionManager, "new-session")
+
+	// Build a context with IP and User-Agent (mimics HTTP middleware enrichment)
+	ctxWithMeta := WithClientIP(ctx, "10.0.0.1")
+	ctxWithMeta = WithUserAgent(ctxWithMeta, "TestAgent/1.0")
+
+	// CreateSessionClients should store IP/UA from the request context
+	result, err := cm.CreateSessionClients(ctxWithMeta, "new-session")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	session, exists := cm.sessionManager.GetSession("new-session")
+	require.True(t, exists)
+	assert.Equal(t, "10.0.0.1", session.GetClientIP(), "IP should be stored from context")
+	assert.Equal(t, "TestAgent/1.0", session.GetUserAgent(), "User-Agent should be stored from context")
+}
+
+// TestCreateSessionClients_RefreshesMetadataFromContext verifies that CreateSessionClients
+// updates IP and User-Agent on an existing session from the discovery request context.
+// This handles the case where onSessionRegister stored initial metadata and discovery
+// runs with a more recent request that may have updated values.
+func TestCreateSessionClients_RefreshesMetadataFromContext(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	err := cm.InitializeClients(ctx, map[string]config.ClientConfig{})
+	require.NoError(t, err)
+
+	// Step 1: Create session with initial metadata (mimics onSessionRegister)
+	mustCreateSession(t, cm.sessionManager, "session-1")
+	cm.SetSessionClientIP("session-1", "192.168.1.1")
+	cm.SetSessionUserAgent("session-1", "OldAgent/1.0")
+
+	// Step 2: Call CreateSessionClients with updated metadata in context
+	ctxWithMeta := WithClientIP(ctx, "192.168.1.2")
+	ctxWithMeta = WithUserAgent(ctxWithMeta, "NewAgent/2.0")
+
+	result, err := cm.CreateSessionClients(ctxWithMeta, "session-1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Metadata should be refreshed from the discovery context
+	session, exists := cm.sessionManager.GetSession("session-1")
+	require.True(t, exists)
+	assert.Equal(t, "192.168.1.2", session.GetClientIP(), "IP should be refreshed from discovery context")
+	assert.Equal(t, "NewAgent/2.0", session.GetUserAgent(), "User-Agent should be refreshed from discovery context")
+}
+
+// TestSessionLifecycle_NonAuthSetup verifies the full session lifecycle for a setup
+// without pass-through auth: onSessionRegister creates the session, and native tools
+// (which validate session existence) work correctly even though CreateSessionClients
+// may never be called.
+func TestSessionLifecycle_NonAuthSetup(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Step 1: onSessionRegister creates session (idempotent)
+	session := mustCreateSession(t, sm, "session-no-auth")
+	session.SetClientIP("10.0.0.1")
+	session.SetUserAgent("Claude-Code/1.0.0")
+
+	// Step 2: Session must be visible to HasSession (used by native tool validateSession)
+	assert.True(t, sm.HasSession("session-no-auth"),
+		"Session should exist for native tool validation even without pass-through discovery")
+
+	// Step 3: GetSession should return the session with metadata
+	retrieved, ok := sm.GetSession("session-no-auth")
+	require.True(t, ok)
+	assert.Equal(t, "10.0.0.1", retrieved.GetClientIP())
+	assert.Equal(t, "Claude-Code/1.0.0", retrieved.GetUserAgent())
+
+	// Step 4: Session has no downstream clients (non-auth uses global clients)
+	assert.Empty(t, retrieved.GetAllClients(),
+		"Non-auth sessions have no per-session downstream clients")
+}
+
+// TestSessionLifecycle_PhantomSessionsFromGetCycling verifies the behavior of phantom
+// sessions created by SDK re-registration during GET connection cycling:
+// - Multiple unique session IDs get created (one per GET cycle)
+// - They have metadata but no downstream clients
+// - The real session (with downstream clients) is not affected
+// - GetActiveSessions returns all of them
+func TestSessionLifecycle_PhantomSessionsFromGetCycling(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Real session: created by onSessionRegister, then gets downstream clients via discovery
+	realSession := mustCreateSession(t, sm, "real-session")
+	realSession.SetClientIP("10.0.0.1")
+	realSession.SetUserAgent("Claude-Code/1.0.0")
+	realSession.SetClient("github", &SessionClientInfo{Name: "github"})
+
+	// Phantom sessions: created by onSessionRegister for GET cycling, never get clients
+	phantom1 := mustCreateSession(t, sm, "phantom-1")
+	phantom1.SetClientIP("10.0.0.1")
+
+	phantom2 := mustCreateSession(t, sm, "phantom-2")
+	phantom2.SetClientIP("10.0.0.1")
+
+	// Re-registration of real session — CreateSession should error (duplicate)
+	_, err := sm.CreateSession("real-session")
+	require.Error(t, err, "CreateSession should error for duplicate session ID")
+
+	// Real session must be untouched
+	client, ok := realSession.GetClient("github")
+	require.True(t, ok, "Downstream client must survive duplicate CreateSession attempt")
+	assert.Equal(t, "github", client.Name)
+
+	// All 3 sessions exist
+	assert.True(t, sm.HasSession("real-session"))
+	assert.True(t, sm.HasSession("phantom-1"))
+	assert.True(t, sm.HasSession("phantom-2"))
+
+	// Phantom sessions have no downstream clients
+	assert.Empty(t, phantom1.GetAllClients())
+	assert.Empty(t, phantom2.GetAllClients())
+}
+
+// TestClientManager_GetActiveSessions_ReturnsConnectedState verifies that GetActiveSessions
+// populates the Connected field from session.IsConnected(). This is the bridge between
+// the session-level connected state (set by onSessionRegister/onSessionUnregister) and
+// the SessionInfo returned to list_sessions.
+func TestClientManager_GetActiveSessions_ReturnsConnectedState(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// Create two sessions: one connected, one disconnected
+	connectedSession := mustCreateSession(t, cm.sessionManager, "connected-session")
+	connectedSession.SetConnected(true)
+	connectedSession.SetClientIP("10.0.0.1")
+
+	disconnectedSession := mustCreateSession(t, cm.sessionManager, "disconnected-session")
+	disconnectedSession.SetConnected(false)
+	disconnectedSession.SetClientIP("10.0.0.2")
+
+	sessions := cm.GetActiveSessions()
+	require.Len(t, sessions, 2)
+
+	// Find sessions by ID (order is not guaranteed)
+	sessionsByID := make(map[string]SessionInfo)
+	for _, s := range sessions {
+		sessionsByID[s.SessionID] = s
+	}
+
+	assert.True(t, sessionsByID["connected-session"].Connected,
+		"Connected session should have Connected=true in SessionInfo")
+	assert.False(t, sessionsByID["disconnected-session"].Connected,
+		"Disconnected session should have Connected=false in SessionInfo")
+}
+
+// TestSessionLifecycle_ConnectedState simulates the full session register/unregister
+// lifecycle and verifies the connected state transitions correctly:
+// 1. onSessionRegister creates session and sets Connected=true
+// 2. Session is visible as connected
+// 3. onSessionUnregister sets Connected=false
+// 4. Session is still present but marked as disconnected
+func TestSessionLifecycle_ConnectedState(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Step 1: Simulate onSessionRegister — create session and mark connected
+	session := mustCreateSession(t, sm, "lifecycle-session")
+	session.SetClientIP("10.0.0.1")
+	session.SetUserAgent("Claude-Code/1.0.0")
+	session.SetConnected(true)
+
+	// Step 2: Verify session is connected
+	assert.True(t, session.IsConnected(), "Session should be connected after register")
+
+	// Step 3: Simulate onSessionUnregister — mark disconnected
+	retrieved, ok := sm.GetSession("lifecycle-session")
+	require.True(t, ok)
+	retrieved.SetConnected(false)
+
+	// Step 4: Session still exists but is disconnected
+	assert.True(t, sm.HasSession("lifecycle-session"),
+		"Session should still exist after unregister")
+	assert.False(t, session.IsConnected(),
+		"Session should be disconnected after unregister")
+
+	// Step 5: Simulate re-registration (new GET connection)
+	session.SetConnected(true)
+	assert.True(t, session.IsConnected(),
+		"Session should be reconnected after re-register")
+}
+
+// TestSessionLifecycle_ConnectedWithPhantomSessions verifies that connected state
+// correctly distinguishes real sessions from phantom sessions in the same setup
+// that list_sessions would see.
+func TestSessionLifecycle_ConnectedWithPhantomSessions(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// Real session: connected with downstream clients
+	realSession := mustCreateSession(t, cm.sessionManager, "real-session")
+	realSession.SetConnected(true)
+	realSession.SetClientIP("10.0.0.1")
+	realSession.SetClient("github", &SessionClientInfo{Name: "github"})
+
+	// Phantom session: was connected then disconnected (GET cycling), no downstream clients
+	phantomSession := mustCreateSession(t, cm.sessionManager, "phantom-session")
+	phantomSession.SetConnected(true)  // Initially connected
+	phantomSession.SetConnected(false) // Then disconnected by GET close
+
+	// Connected session without downstream clients (just registered, discovery pending)
+	pendingSession := mustCreateSession(t, cm.sessionManager, "pending-session")
+	pendingSession.SetConnected(true)
+	pendingSession.SetClientIP("10.0.0.2")
+
+	sessions := cm.GetActiveSessions()
+	require.Len(t, sessions, 3)
+
+	sessionsByID := make(map[string]SessionInfo)
+	for _, s := range sessions {
+		sessionsByID[s.SessionID] = s
+	}
+
+	// Real session: connected, has downstream clients
+	assert.True(t, sessionsByID["real-session"].Connected)
+	assert.Len(t, sessionsByID["real-session"].DownstreamClients, 1)
+
+	// Phantom session: disconnected, no downstream clients
+	assert.False(t, sessionsByID["phantom-session"].Connected)
+	assert.Empty(t, sessionsByID["phantom-session"].DownstreamClients)
+
+	// Pending session: connected, no downstream clients yet
+	assert.True(t, sessionsByID["pending-session"].Connected)
+	assert.Empty(t, sessionsByID["pending-session"].DownstreamClients)
 }

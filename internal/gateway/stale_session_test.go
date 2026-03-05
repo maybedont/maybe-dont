@@ -121,7 +121,7 @@ func TestOnRequestInitialization_ValidSession(t *testing.T) {
 
 	// Create the session in our SessionManager BEFORE the request
 	validSessionID := "valid-session-12345"
-	cm.sessionManager.CreateSession(validSessionID)
+	mustCreateSession(t, cm.sessionManager, validSessionID)
 
 	// Create a minimal Gateway
 	g := &Gateway{
@@ -363,7 +363,7 @@ func TestCreateSingleSessionClient_UsesExistingSession(t *testing.T) {
 
 	// Create session first
 	validSessionID := "valid-session-12345"
-	cm.sessionManager.CreateSession(validSessionID)
+	mustCreateSession(t, cm.sessionManager, validSessionID)
 
 	// Verify session exists
 	assert.True(t, cm.HasSession(validSessionID), "Session should exist")
@@ -392,6 +392,180 @@ func TestCreateSingleSessionClient_UsesExistingSession(t *testing.T) {
 	// The number of clients might be the same (if creation failed) or +1 (if succeeded)
 	// The key is that we didn't create a duplicate session
 	_ = initialClients // Acknowledge we checked initial state
+}
+
+// TestCreateSingleSessionClient_SetsClientMetadata verifies that CreateSingleSessionClient
+// always sets Client IP and User-Agent from the request context. This is critical because
+// auto-created sessions (e.g., after server restart) bypass onSessionRegister and would
+// otherwise have empty metadata, causing list_sessions to show "—" for IP/User-Agent.
+func TestCreateSingleSessionClient_SetsClientMetadata(t *testing.T) {
+	tests := []struct {
+		name            string
+		preCreateSesion bool   // whether to create the session before calling CreateSingleSessionClient
+		existingIP      string // IP set on pre-created session (only used when preCreateSession=true)
+		existingUA      string // User-Agent set on pre-created session
+		ctxIP           string // IP in the request context
+		ctxUA           string // User-Agent in the request context
+		expectedIP      string // expected IP on the session after the call
+		expectedUA      string // expected User-Agent on the session after the call
+	}{
+		{
+			name:       "auto-created session gets metadata from context",
+			ctxIP:      "73.14.239.89",
+			ctxUA:      "claude-code/2.1.68 (cli)",
+			expectedIP: "73.14.239.89",
+			expectedUA: "claude-code/2.1.68 (cli)",
+		},
+		{
+			name:            "existing session metadata refreshed from context",
+			preCreateSesion: true,
+			existingIP:      "10.0.0.1",
+			existingUA:      "old-agent/1.0",
+			ctxIP:           "73.14.239.89",
+			ctxUA:           "claude-code/2.1.68 (cli)",
+			expectedIP:      "73.14.239.89",
+			expectedUA:      "claude-code/2.1.68 (cli)",
+		},
+		{
+			name:            "existing metadata preserved when context has no IP/UA",
+			preCreateSesion: true,
+			existingIP:      "10.0.0.1",
+			existingUA:      "old-agent/1.0",
+			ctxIP:           "",
+			ctxUA:           "",
+			expectedIP:      "10.0.0.1",
+			expectedUA:      "old-agent/1.0",
+		},
+		{
+			name:       "auto-created session with empty context has no metadata",
+			ctxIP:      "",
+			ctxUA:      "",
+			expectedIP: "",
+			expectedUA: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := newTestLogger(t)
+			ctx := context.Background()
+
+			cm := NewClientManager(ctx, logger)
+			defer func() { _ = cm.Close(ctx) }()
+
+			sessionID := "test-session-metadata"
+
+			if tt.preCreateSesion {
+				session := mustCreateSession(t, cm.sessionManager, sessionID)
+				if tt.existingIP != "" {
+					session.SetClientIP(tt.existingIP)
+				}
+				if tt.existingUA != "" {
+					session.SetUserAgent(tt.existingUA)
+				}
+			}
+
+			// Build context with IP/UA
+			reqCtx := ctx
+			if tt.ctxIP != "" {
+				reqCtx = WithClientIP(reqCtx, tt.ctxIP)
+			}
+			if tt.ctxUA != "" {
+				reqCtx = WithUserAgent(reqCtx, tt.ctxUA)
+			}
+
+			cfg := config.ClientConfig{
+				Type:    "stdio",
+				Command: "nonexistent-command-that-will-fail",
+			}
+
+			// Call will fail on client creation (command not found), but
+			// session metadata should still be set.
+			_, _ = cm.CreateSingleSessionClient(reqCtx, sessionID, "test-client", cfg)
+
+			// Verify session metadata and connected state
+			session, exists := cm.sessionManager.GetSession(sessionID)
+			require.True(t, exists, "Session should exist after CreateSingleSessionClient")
+			assert.Equal(t, tt.expectedIP, session.GetClientIP(), "Client IP mismatch")
+			assert.Equal(t, tt.expectedUA, session.GetUserAgent(), "User-Agent mismatch")
+			assert.True(t, session.IsConnected(), "Session should be connected — a client is actively sending requests")
+		})
+	}
+}
+
+// TestCreateSessionClients_SetsClientMetadata verifies that CreateSessionClients
+// sets Client IP and User-Agent from the request context on the session.
+func TestCreateSessionClients_SetsClientMetadata(t *testing.T) {
+	tests := []struct {
+		name       string
+		existingIP string
+		existingUA string
+		ctxIP      string
+		ctxUA      string
+		expectedIP string
+		expectedUA string
+	}{
+		{
+			name:       "metadata set from context",
+			ctxIP:      "73.14.239.89",
+			ctxUA:      "claude-code/2.1.68 (cli)",
+			expectedIP: "73.14.239.89",
+			expectedUA: "claude-code/2.1.68 (cli)",
+		},
+		{
+			name:       "metadata refreshed from context",
+			existingIP: "10.0.0.1",
+			existingUA: "old-agent/1.0",
+			ctxIP:      "73.14.239.89",
+			ctxUA:      "claude-code/2.1.68 (cli)",
+			expectedIP: "73.14.239.89",
+			expectedUA: "claude-code/2.1.68 (cli)",
+		},
+		{
+			name:       "existing metadata preserved when context empty",
+			existingIP: "10.0.0.1",
+			existingUA: "old-agent/1.0",
+			ctxIP:      "",
+			ctxUA:      "",
+			expectedIP: "10.0.0.1",
+			expectedUA: "old-agent/1.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := newTestLogger(t)
+			ctx := context.Background()
+
+			cm := NewClientManager(ctx, logger)
+			defer func() { _ = cm.Close(ctx) }()
+
+			sessionID := "test-session-metadata"
+			session := mustCreateSession(t, cm.sessionManager, sessionID)
+			if tt.existingIP != "" {
+				session.SetClientIP(tt.existingIP)
+			}
+			if tt.existingUA != "" {
+				session.SetUserAgent(tt.existingUA)
+			}
+
+			// Build context with IP/UA
+			reqCtx := ctx
+			if tt.ctxIP != "" {
+				reqCtx = WithClientIP(reqCtx, tt.ctxIP)
+			}
+			if tt.ctxUA != "" {
+				reqCtx = WithUserAgent(reqCtx, tt.ctxUA)
+			}
+
+			// CreateSessionClients will fail (no real downstream servers configured)
+			// but should still set metadata before attempting client creation.
+			_, _ = cm.CreateSessionClients(reqCtx, sessionID)
+
+			assert.Equal(t, tt.expectedIP, session.GetClientIP(), "Client IP mismatch")
+			assert.Equal(t, tt.expectedUA, session.GetUserAgent(), "User-Agent mismatch")
+		})
+	}
 }
 
 // TestOnRequestInitialization_MessageTypes tests that both json.RawMessage

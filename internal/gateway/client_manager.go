@@ -165,11 +165,22 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 		zap.String("session_id", sessionID),
 		zap.Int("client_count", len(configs)))
 
-	// Get or create the session.
-	// The session may already exist if it was created by onSessionRegister
-	// to store client metadata (IP, User-Agent) before async discovery started.
-	if _, exists := cm.sessionManager.GetSession(sessionID); !exists {
-		cm.sessionManager.CreateSession(sessionID)
+	// Retrieve the session — it must already exist (created by onSessionRegister).
+	session, ok := cm.sessionManager.GetSession(sessionID)
+	if !ok {
+		return nil, fmt.Errorf("session %q not found — expected onSessionRegister to create it", sessionID)
+	}
+
+	// Refresh client metadata from the discovery request context.
+	// onSessionRegister stores these initially; this updates them in case
+	// the discovery request has more current values.
+	clientIP, hasClientIP := GetClientIP(ctx)
+	userAgent, hasUserAgent := GetUserAgent(ctx)
+	if hasClientIP && clientIP != "" {
+		session.SetClientIP(clientIP)
+	}
+	if hasUserAgent && userAgent != "" {
+		session.SetUserAgent(userAgent)
 	}
 
 	result := &SessionDiscoveryResult{
@@ -244,8 +255,32 @@ func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionI
 	if !exists {
 		cm.logger.Debug(ctx, "Session not found, creating new session for discovery",
 			zap.String("session_id", sessionID))
-		session = cm.sessionManager.CreateSession(sessionID)
+		var err error
+		session, err = cm.sessionManager.CreateSession(sessionID)
+		if err != nil {
+			// Race: another goroutine created it between our GetSession and CreateSession
+			session, _ = cm.sessionManager.GetSession(sessionID)
+			if session == nil {
+				return nil, fmt.Errorf("session %q disappeared during creation race", sessionID)
+			}
+		}
 	}
+
+	// Set client metadata from the request context.
+	// This is essential when auto-creating sessions (above) since onSessionRegister
+	// never ran for them. For existing sessions, this refreshes metadata in case
+	// the current request has more current values (e.g., different proxy IP).
+	clientIP, hasClientIP := GetClientIP(ctx)
+	userAgent, hasUserAgent := GetUserAgent(ctx)
+	if hasClientIP && clientIP != "" {
+		session.SetClientIP(clientIP)
+	}
+	if hasUserAgent && userAgent != "" {
+		session.SetUserAgent(userAgent)
+	}
+
+	// A client is actively sending us requests, so the session is connected.
+	session.SetConnected(true)
 
 	// Check if client already exists in session
 	if existingClient, ok := session.GetClient(clientName); ok && existingClient != nil && existingClient.Client != nil {
@@ -550,6 +585,7 @@ func (cm *ClientManager) GetActiveSessions() []SessionInfo {
 			SessionID:         sessionID,
 			ClientIP:          session.GetClientIP(),
 			UserAgent:         session.GetUserAgent(),
+			Connected:         session.IsConnected(),
 			DownstreamClients: downstreamClients,
 		})
 	}

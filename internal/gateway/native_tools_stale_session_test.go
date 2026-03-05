@@ -110,7 +110,7 @@ func TestNativeTools_ValidSession_Integration(t *testing.T) {
 
 	// Create a valid session in the SessionManager BEFORE making the request
 	validSessionID := "valid-session-integration-test"
-	cm.sessionManager.CreateSession(validSessionID)
+	mustCreateSession(t, cm.sessionManager, validSessionID)
 
 	// Verify session exists
 	assert.True(t, cm.HasSession(validSessionID), "Session should exist")
@@ -221,7 +221,7 @@ func TestNativeTools_SessionExpiredAfterCreation_Integration(t *testing.T) {
 
 	// Create a session
 	sessionID := "session-will-expire"
-	cm.sessionManager.CreateSession(sessionID)
+	mustCreateSession(t, cm.sessionManager, sessionID)
 	assert.True(t, cm.HasSession(sessionID), "Session should exist after creation")
 
 	// Create context with the session

@@ -41,6 +41,7 @@ type SessionInfo struct {
 	SessionID         string                 `json:"session_id"`
 	ClientIP          string                 `json:"client_ip,omitempty"`
 	UserAgent         string                 `json:"user_agent,omitempty"`
+	Connected         bool                   `json:"connected"`
 	DownstreamClients []DownstreamClientInfo `json:"downstream_clients"`
 }
 

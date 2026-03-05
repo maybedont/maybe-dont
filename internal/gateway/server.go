@@ -40,66 +40,91 @@ func (g *Gateway) initServer(ctx context.Context) error {
 }
 
 // onSessionRegister handles new upstream client sessions.
-// Session metadata (client IP, user agent, caller) is stored immediately.
-// Tool discovery is deferred until the client calls tools/list (lazy discovery).
+//
+// Creates the session in SessionManager and stores client metadata (IP, User-Agent)
+// immediately. Tool discovery is deferred until the client calls tools/list.
+//
+// If the session already exists (unexpected — the SDK should generate unique IDs),
+// we log a warning and refresh metadata on the existing session rather than failing
+// the registration, since this callback has no error return.
+//
+// Note: The SDK may fire this callback for transient GET connections that never lead
+// to tool discovery. These "phantom" sessions are lightweight and cleaned up by idle
+// timeout. They are filtered from list_sessions output by default.
 func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSession) {
 	sessionID := session.SessionID()
 
-	// Extract values from context for metadata storage
 	clientIP, hasClientIP := GetClientIP(ctx)
 	userAgent, hasUserAgent := GetUserAgent(ctx)
 	caller, hasCaller := GetCaller(ctx)
-
-	// Determine if this session has credentials (helps identify initialization vs SSE sessions)
 	hasCredentials := g.hasPassThroughCredentials(ctx)
 
-	// Build log fields - always include session_id and has_credentials
+	// Build log fields
 	logFields := []zap.Field{
 		zap.String("session_id", sessionID),
 		zap.Bool("has_credentials", hasCredentials),
 	}
-	// Include caller in log if present (for audit correlation)
 	if hasCaller && caller != "" {
 		logFields = append(logFields, zap.String("caller", caller))
 	}
 
 	g.logger.Info(ctx, "New upstream session registered", logFields...)
 
-	// Create the session synchronously so we can store client metadata immediately.
-	g.clientManager.sessionManager.CreateSession(sessionID)
-
-	// Store client metadata in session immediately (this is fast, no network I/O)
-	if hasClientIP && clientIP != "" {
-		g.clientManager.SetSessionClientIP(sessionID, clientIP)
-	}
-	if hasUserAgent && userAgent != "" {
-		g.clientManager.SetSessionUserAgent(sessionID, userAgent)
-	}
-	if (hasClientIP && clientIP != "") || (hasUserAgent && userAgent != "") {
-		g.logger.Debug(ctx, "Stored client metadata for session",
-			zap.String("session_id", sessionID),
-			zap.String("client_ip", clientIP),
-			zap.String("user_agent", userAgent))
-	}
-
-	// Tool discovery is now fully lazy - it will happen when the client calls tools/list.
-	// This avoids redundant discovery work for sessions that may never need tools,
-	// and eliminates race conditions between async discovery and lazy discovery.
-}
-
-// onSessionUnregister handles upstream client session cleanup
-func (g *Gateway) onSessionUnregister(ctx context.Context, session server.ClientSession) {
-	sessionID := session.SessionID()
-	g.logger.Info(ctx, "Upstream session unregistered", zap.String("session_id", sessionID))
-
-	// Close downstream clients for this session
-	if err := g.clientManager.CloseSessionClients(ctx, sessionID); err != nil {
-		g.logger.Error(ctx, "Failed to close downstream clients for session",
+	s, err := g.clientManager.sessionManager.CreateSession(sessionID)
+	if err != nil {
+		// Session already exists. This is unexpected — the SDK should generate unique IDs.
+		// Log a warning and refresh metadata on the existing session.
+		g.logger.Warn(ctx, "Session already exists during registration, refreshing metadata",
 			zap.String("session_id", sessionID),
 			zap.Error(err))
+
+		s, _ = g.clientManager.sessionManager.GetSession(sessionID)
+		if s == nil {
+			// Shouldn't happen — CreateSession said it exists but GetSession can't find it
+			g.logger.Error(ctx, "Session reported as existing but not found",
+				zap.String("session_id", sessionID))
+			return
+		}
 	}
 
-	g.logger.Info(ctx, "Downstream clients closed for session", zap.String("session_id", sessionID))
+	// Store client metadata from the request context
+	if hasClientIP && clientIP != "" {
+		s.SetClientIP(clientIP)
+	}
+	if hasUserAgent && userAgent != "" {
+		s.SetUserAgent(userAgent)
+	}
+
+	// Mark session as connected (has an active SSE connection)
+	s.SetConnected(true)
+}
+
+// onSessionUnregister handles upstream client session cleanup.
+//
+// For Streamable HTTP transport, the SDK may unregister sessions when GET (listening)
+// connections close, even though the session is still valid for POST requests.
+// There is also a race condition in the SDK where a GET connection arriving immediately
+// after initialize can arm cleanup defers that destroy the session prematurely.
+//
+// To avoid losing downstream client connections due to transient SDK unregister events,
+// we intentionally do NOT close downstream clients here. The idle session timeout
+// (SessionManager.cleanupExpiredSessions) handles resource cleanup when sessions are
+// truly abandoned.
+func (g *Gateway) onSessionUnregister(ctx context.Context, session server.ClientSession) {
+	sessionID := session.SessionID()
+
+	// Mark session as disconnected (SSE connection closed)
+	s, ok := g.clientManager.sessionManager.GetSession(sessionID)
+	if ok {
+		s.SetConnected(false)
+	}
+
+	// Log session state for diagnostics
+	clientNames := g.clientManager.GetSessionClientNames(sessionID)
+	g.logger.Info(ctx, "Upstream session unregistered (downstream clients preserved for reconnection)",
+		zap.String("session_id", sessionID),
+		zap.Int("downstream_client_count", len(clientNames)),
+		zap.Strings("downstream_clients", clientNames))
 }
 
 // jsonRPCRequest is used to parse just the method from a JSON-RPC request
@@ -625,11 +650,10 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
 
-	// Create SSE server with auth extraction context function
+	// Create SSE server — context enrichment is handled by mcpContextMiddleware below
 	sseSrv := server.NewSSEServer(srv,
 		server.WithSSEEndpoint("/sse"),
 		server.WithMessageEndpoint("/message"),
-		server.WithSSEContextFunc(g.extractAuthFromRequest),
 	)
 
 	g.server = srv
@@ -641,10 +665,11 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 			zap.Strings("allowed_values", g.callerAuthConfig.OriginalValues()))
 	}
 
-	// Create mux and mount both SSE endpoints
+	// Create mux and mount both SSE endpoints, wrapped with context enrichment middleware.
+	// This ensures both SSE and message handlers get enriched context.
 	mux := http.NewServeMux()
-	mux.Handle("/sse", sseSrv.SSEHandler())
-	mux.Handle("/message", sseSrv.MessageHandler())
+	mux.Handle("/sse", g.mcpContextMiddleware(sseSrv.SSEHandler()))
+	mux.Handle("/message", g.mcpContextMiddleware(sseSrv.MessageHandler()))
 
 	// Add helpful 404 for HTTP endpoint when SSE transport is active
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
@@ -767,7 +792,6 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 	// Note: We set the endpoint path but will mount it ourselves on a mux
 	mcpHandler := server.NewStreamableHTTPServer(srv,
 		server.WithEndpointPath("/mcp"),
-		server.WithHTTPContextFunc(g.extractAuthFromRequest),
 	)
 
 	g.server = srv
@@ -779,9 +803,11 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 			zap.Strings("allowed_values", g.callerAuthConfig.OriginalValues()))
 	}
 
-	// Create mux and mount the MCP handler
+	// Create mux and mount the MCP handler, wrapped with context enrichment middleware.
+	// This ensures both GET (SSE listen) and POST (JSON-RPC) requests get enriched context,
+	// which is needed because the SDK's WithHTTPContextFunc only runs on POST, not GET.
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/mcp", g.mcpContextMiddleware(mcpHandler))
 
 	// Add helpful 404 for SSE endpoint when HTTP transport is active
 	mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
@@ -920,6 +946,18 @@ func (g *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.C
 		return nil, err
 	}
 	return result, nil
+}
+
+// mcpContextMiddleware wraps an HTTP handler with context enrichment.
+// This replaces the SDK's WithHTTPContextFunc/WithSSEContextFunc callbacks, which
+// only run on POST requests. By using middleware, both GET (SSE listen) and POST
+// (JSON-RPC) requests get enriched context, ensuring onSessionRegister has access
+// to client IP, User-Agent, and other request metadata.
+func (g *Gateway) mcpContextMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := g.extractAuthFromRequest(r.Context(), r)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // extractAuthFromRequest prepares the context with request metadata needed for downstream calls.

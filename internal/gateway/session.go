@@ -37,13 +37,14 @@ type SessionClientInfo struct {
 // Session represents an upstream client session with its downstream clients
 type Session struct {
 	ID           string
-	ClientIP     string // IP address of the upstream client
-	UserAgent    string // User-Agent header from the upstream client
 	CreatedAt    time.Time
+	clientIP     string // IP address of the upstream client
+	userAgent    string // User-Agent header from the upstream client
 	lastActivity time.Time
 	mu           sync.RWMutex
 	clients      map[string]*SessionClientInfo // clientName -> downstream client for this session
 	closing      bool                          // true if session is being closed, prevents new clients
+	connected    bool                          // true if the MCP SDK has an active SSE connection
 }
 
 // NewSession creates a new session
@@ -82,28 +83,42 @@ func (s *Session) IsExpired(timeout time.Duration) bool {
 func (s *Session) SetClientIP(ip string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.ClientIP = ip
+	s.clientIP = ip
 }
 
 // GetClientIP returns the client IP address for this session
 func (s *Session) GetClientIP() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ClientIP
+	return s.clientIP
 }
 
 // SetUserAgent sets the User-Agent header for this session
 func (s *Session) SetUserAgent(userAgent string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.UserAgent = userAgent
+	s.userAgent = userAgent
 }
 
 // GetUserAgent returns the User-Agent header for this session
 func (s *Session) GetUserAgent() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.UserAgent
+	return s.userAgent
+}
+
+// SetConnected sets whether the MCP SDK has an active SSE connection for this session
+func (s *Session) SetConnected(connected bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connected = connected
+}
+
+// IsConnected returns whether the MCP SDK has an active SSE connection for this session
+func (s *Session) IsConnected() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.connected
 }
 
 // GetClient returns a downstream client for this session
@@ -253,14 +268,19 @@ func (sm *SessionManager) GetSessionTimeout() time.Duration {
 	return sm.sessionTimeout
 }
 
-// CreateSession creates a new session
-func (sm *SessionManager) CreateSession(sessionID string) *Session {
+// CreateSession creates a new session. Returns an error if a session with the
+// given ID already exists — callers should use GetSession for existing sessions.
+func (sm *SessionManager) CreateSession(sessionID string) (*Session, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	if _, ok := sm.sessions[sessionID]; ok {
+		return nil, fmt.Errorf("session %q already exists", sessionID)
+	}
+
 	session := NewSession(sessionID)
 	sm.sessions[sessionID] = session
-	return session
+	return session, nil
 }
 
 // GetSession retrieves a session by ID and updates its last activity time
