@@ -157,7 +157,7 @@ func TestSessionManager_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			sessionID := string(rune('a'+id%26)) + "-" + string(rune('0'+id%10))
-			sm.CreateSession(sessionID)
+			_, _ = sm.CreateSession(sessionID)
 			sm.SetSessionClient(sessionID, "client", &SessionClientInfo{Name: "test"})
 		}(i)
 	}
