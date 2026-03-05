@@ -1,3 +1,16 @@
+## v1.4.0 (2026-03-05)
+
+### Feat
+
+- add AI response rule for agent-restricted content (#136)
+- add POST /api/v1/intercept endpoint for agent hook validation (#134)
+
+### Fix
+
+- session affinity — context enrichment and connected state (#137)
+- data race in AI engine async audit goroutines (#135)
+- use endpoint config as fully qualified URL (#132)
+
 ## v1.3.0 (2026-02-19)
 
 ### Feat
