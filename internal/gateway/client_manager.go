@@ -279,6 +279,9 @@ func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionI
 		session.SetUserAgent(userAgent)
 	}
 
+	// A client is actively sending us requests, so the session is connected.
+	session.SetConnected(true)
+
 	// Check if client already exists in session
 	if existingClient, ok := session.GetClient(clientName); ok && existingClient != nil && existingClient.Client != nil {
 		cm.logger.Debug(ctx, "Client already exists for session",

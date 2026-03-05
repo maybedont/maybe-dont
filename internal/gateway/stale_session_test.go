@@ -483,11 +483,12 @@ func TestCreateSingleSessionClient_SetsClientMetadata(t *testing.T) {
 			// session metadata should still be set.
 			_, _ = cm.CreateSingleSessionClient(reqCtx, sessionID, "test-client", cfg)
 
-			// Verify session metadata
+			// Verify session metadata and connected state
 			session, exists := cm.sessionManager.GetSession(sessionID)
 			require.True(t, exists, "Session should exist after CreateSingleSessionClient")
 			assert.Equal(t, tt.expectedIP, session.GetClientIP(), "Client IP mismatch")
 			assert.Equal(t, tt.expectedUA, session.GetUserAgent(), "User-Agent mismatch")
+			assert.True(t, session.IsConnected(), "Session should be connected — a client is actively sending requests")
 		})
 	}
 }
