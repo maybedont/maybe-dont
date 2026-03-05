@@ -260,6 +260,9 @@ func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionI
 		if err != nil {
 			// Race: another goroutine created it between our GetSession and CreateSession
 			session, _ = cm.sessionManager.GetSession(sessionID)
+			if session == nil {
+				return nil, fmt.Errorf("session %q disappeared during creation race", sessionID)
+			}
 		}
 	}
 

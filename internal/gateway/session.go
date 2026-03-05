@@ -37,9 +37,9 @@ type SessionClientInfo struct {
 // Session represents an upstream client session with its downstream clients
 type Session struct {
 	ID           string
-	ClientIP     string // IP address of the upstream client
-	UserAgent    string // User-Agent header from the upstream client
 	CreatedAt    time.Time
+	clientIP     string // IP address of the upstream client
+	userAgent    string // User-Agent header from the upstream client
 	lastActivity time.Time
 	mu           sync.RWMutex
 	clients      map[string]*SessionClientInfo // clientName -> downstream client for this session
@@ -83,28 +83,28 @@ func (s *Session) IsExpired(timeout time.Duration) bool {
 func (s *Session) SetClientIP(ip string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.ClientIP = ip
+	s.clientIP = ip
 }
 
 // GetClientIP returns the client IP address for this session
 func (s *Session) GetClientIP() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ClientIP
+	return s.clientIP
 }
 
 // SetUserAgent sets the User-Agent header for this session
 func (s *Session) SetUserAgent(userAgent string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.UserAgent = userAgent
+	s.userAgent = userAgent
 }
 
 // GetUserAgent returns the User-Agent header for this session
 func (s *Session) GetUserAgent() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.UserAgent
+	return s.userAgent
 }
 
 // SetConnected sets whether the MCP SDK has an active SSE connection for this session
