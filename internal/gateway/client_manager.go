@@ -266,6 +266,19 @@ func (cm *ClientManager) CreateSingleSessionClient(ctx context.Context, sessionI
 		}
 	}
 
+	// Set client metadata from the request context.
+	// This is essential when auto-creating sessions (above) since onSessionRegister
+	// never ran for them. For existing sessions, this refreshes metadata in case
+	// the current request has more current values (e.g., different proxy IP).
+	clientIP, hasClientIP := GetClientIP(ctx)
+	userAgent, hasUserAgent := GetUserAgent(ctx)
+	if hasClientIP && clientIP != "" {
+		session.SetClientIP(clientIP)
+	}
+	if hasUserAgent && userAgent != "" {
+		session.SetUserAgent(userAgent)
+	}
+
 	// Check if client already exists in session
 	if existingClient, ok := session.GetClient(clientName); ok && existingClient != nil && existingClient.Client != nil {
 		cm.logger.Debug(ctx, "Client already exists for session",
