@@ -44,6 +44,7 @@ type Session struct {
 	mu           sync.RWMutex
 	clients      map[string]*SessionClientInfo // clientName -> downstream client for this session
 	closing      bool                          // true if session is being closed, prevents new clients
+	connected    bool                          // true if the MCP SDK has an active SSE connection
 }
 
 // NewSession creates a new session
@@ -104,6 +105,20 @@ func (s *Session) GetUserAgent() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.UserAgent
+}
+
+// SetConnected sets whether the MCP SDK has an active SSE connection for this session
+func (s *Session) SetConnected(connected bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connected = connected
+}
+
+// IsConnected returns whether the MCP SDK has an active SSE connection for this session
+func (s *Session) IsConnected() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.connected
 }
 
 // GetClient returns a downstream client for this session

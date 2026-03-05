@@ -566,6 +566,7 @@ func (cm *ClientManager) GetActiveSessions() []SessionInfo {
 			SessionID:         sessionID,
 			ClientIP:          session.GetClientIP(),
 			UserAgent:         session.GetUserAgent(),
+			Connected:         session.IsConnected(),
 			DownstreamClients: downstreamClients,
 		})
 	}

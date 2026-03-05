@@ -11,17 +11,17 @@ import (
 
 // ListSessionsResponse is the response for the list_sessions tool
 type ListSessionsResponse struct {
-	Sessions             []SessionInfo `json:"sessions"`
-	ActiveSessionCount   int           `json:"active_session_count"`
-	InactiveSessionCount int           `json:"inactive_session_count"`
-	TotalSessions        int           `json:"total_sessions"`
+	Sessions          []SessionInfo `json:"sessions"`
+	ConnectedCount    int           `json:"connected_count"`
+	DisconnectedCount int           `json:"disconnected_count"`
+	TotalSessions     int           `json:"total_sessions"`
 }
 
 // getListSessionsToolDefinition returns the MCP tool definition for list_sessions
 func (h *NativeToolsHandler) getListSessionsToolDefinition() mcp.Tool {
 	return mcp.Tool{
 		Name:         ToolListSessions,
-		Description:  "[EXPERIMENTAL] List active upstream client sessions connected to this gateway. By default only sessions with downstream clients are shown; inactive sessions are reported as a count. Set include_inactive to true to include all sessions.",
+		Description:  "[EXPERIMENTAL] List upstream client sessions connected to this gateway. By default only sessions with an active SSE connection are shown; disconnected sessions are reported as a count. Set include_disconnected to true to include all sessions.",
 		DeferLoading: true,
 		Annotations: mcp.ToolAnnotation{
 			ReadOnlyHint: boolPtr(true),
@@ -29,9 +29,9 @@ func (h *NativeToolsHandler) getListSessionsToolDefinition() mcp.Tool {
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]any{
-				"include_inactive": map[string]any{
+				"include_disconnected": map[string]any{
 					"type":        "boolean",
-					"description": "When true, include sessions with no downstream clients connected. Defaults to false.",
+					"description": "When true, include sessions with no active SSE connection. Defaults to false.",
 				},
 			},
 		},
@@ -48,12 +48,12 @@ func (h *NativeToolsHandler) handleListSessions(ctx context.Context, req mcp.Cal
 		return mcp.NewToolResultError("Internal error: session provider not available"), nil
 	}
 
-	// Parse include_inactive parameter
-	includeInactive := false
+	// Parse include_disconnected parameter
+	includeDisconnected := false
 	if args, ok := req.Params.Arguments.(map[string]any); ok {
-		if val, exists := args["include_inactive"]; exists {
+		if val, exists := args["include_disconnected"]; exists {
 			if b, ok := val.(bool); ok {
-				includeInactive = b
+				includeDisconnected = b
 			}
 		}
 	}
@@ -61,19 +61,19 @@ func (h *NativeToolsHandler) handleListSessions(ctx context.Context, req mcp.Cal
 	// Get all sessions
 	allSessions := h.sessionProvider.GetActiveSessions()
 
-	// Separate active (has downstream clients) from inactive
-	var active, inactive []SessionInfo
+	// Separate connected from disconnected
+	var connected, disconnected []SessionInfo
 	for _, s := range allSessions {
-		if s.HasDownstreamClients() {
-			active = append(active, s)
+		if s.Connected {
+			connected = append(connected, s)
 		} else {
-			inactive = append(inactive, s)
+			disconnected = append(disconnected, s)
 		}
 	}
 
 	// Choose which sessions to include in the response
-	sessions := active
-	if includeInactive {
+	sessions := connected
+	if includeDisconnected {
 		sessions = allSessions
 	}
 
@@ -83,10 +83,10 @@ func (h *NativeToolsHandler) handleListSessions(ctx context.Context, req mcp.Cal
 	})
 
 	response := ListSessionsResponse{
-		Sessions:             sessions,
-		ActiveSessionCount:   len(active),
-		InactiveSessionCount: len(inactive),
-		TotalSessions:        len(allSessions),
+		Sessions:          sessions,
+		ConnectedCount:    len(connected),
+		DisconnectedCount: len(disconnected),
+		TotalSessions:     len(allSessions),
 	}
 
 	// Marshal response to JSON
@@ -97,9 +97,9 @@ func (h *NativeToolsHandler) handleListSessions(ctx context.Context, req mcp.Cal
 	}
 
 	h.logger.Info(ctx, "Listed sessions",
-		zap.Int("active", len(active)),
-		zap.Int("inactive", len(inactive)),
-		zap.Bool("include_inactive", includeInactive))
+		zap.Int("connected", len(connected)),
+		zap.Int("disconnected", len(disconnected)),
+		zap.Bool("include_disconnected", includeDisconnected))
 
 	return mcp.NewToolResultText(string(jsonBytes)), nil
 }

@@ -41,12 +41,8 @@ type SessionInfo struct {
 	SessionID         string                 `json:"session_id"`
 	ClientIP          string                 `json:"client_ip,omitempty"`
 	UserAgent         string                 `json:"user_agent,omitempty"`
+	Connected         bool                   `json:"connected"`
 	DownstreamClients []DownstreamClientInfo `json:"downstream_clients"`
-}
-
-// HasDownstreamClients returns true if this session has at least one downstream client connected
-func (s SessionInfo) HasDownstreamClients() bool {
-	return len(s.DownstreamClients) > 0
 }
 
 // DownstreamClientInfo contains information about a downstream MCP client

@@ -532,6 +532,23 @@ func TestSession_ClientIPAndUserAgent(t *testing.T) {
 	assert.Equal(t, "MCP-Client/2.0", session.GetUserAgent())
 }
 
+// TestSession_Connected verifies the connected state follows the SetConnected/IsConnected pattern:
+// default false, set true, verify, set false, verify.
+func TestSession_Connected(t *testing.T) {
+	session := NewSession("test-session")
+
+	// New session should default to disconnected
+	assert.False(t, session.IsConnected())
+
+	// Mark as connected
+	session.SetConnected(true)
+	assert.True(t, session.IsConnected())
+
+	// Mark as disconnected
+	session.SetConnected(false)
+	assert.False(t, session.IsConnected())
+}
+
 func TestSession_IsExpired(t *testing.T) {
 	session := NewSession("test-session")
 
@@ -1028,4 +1045,120 @@ func TestSessionLifecycle_PhantomSessionsFromGetCycling(t *testing.T) {
 	// Phantom sessions have no downstream clients
 	assert.Empty(t, phantom1.GetAllClients())
 	assert.Empty(t, phantom2.GetAllClients())
+}
+
+// TestClientManager_GetActiveSessions_ReturnsConnectedState verifies that GetActiveSessions
+// populates the Connected field from session.IsConnected(). This is the bridge between
+// the session-level connected state (set by onSessionRegister/onSessionUnregister) and
+// the SessionInfo returned to list_sessions.
+func TestClientManager_GetActiveSessions_ReturnsConnectedState(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// Create two sessions: one connected, one disconnected
+	connectedSession := mustCreateSession(t, cm.sessionManager, "connected-session")
+	connectedSession.SetConnected(true)
+	connectedSession.SetClientIP("10.0.0.1")
+
+	disconnectedSession := mustCreateSession(t, cm.sessionManager, "disconnected-session")
+	disconnectedSession.SetConnected(false)
+	disconnectedSession.SetClientIP("10.0.0.2")
+
+	sessions := cm.GetActiveSessions()
+	require.Len(t, sessions, 2)
+
+	// Find sessions by ID (order is not guaranteed)
+	sessionsByID := make(map[string]SessionInfo)
+	for _, s := range sessions {
+		sessionsByID[s.SessionID] = s
+	}
+
+	assert.True(t, sessionsByID["connected-session"].Connected,
+		"Connected session should have Connected=true in SessionInfo")
+	assert.False(t, sessionsByID["disconnected-session"].Connected,
+		"Disconnected session should have Connected=false in SessionInfo")
+}
+
+// TestSessionLifecycle_ConnectedState simulates the full session register/unregister
+// lifecycle and verifies the connected state transitions correctly:
+// 1. onSessionRegister creates session and sets Connected=true
+// 2. Session is visible as connected
+// 3. onSessionUnregister sets Connected=false
+// 4. Session is still present but marked as disconnected
+func TestSessionLifecycle_ConnectedState(t *testing.T) {
+	logger := newTestLogger(t)
+	sm := NewSessionManager(logger)
+
+	// Step 1: Simulate onSessionRegister — create session and mark connected
+	session := mustCreateSession(t, sm, "lifecycle-session")
+	session.SetClientIP("10.0.0.1")
+	session.SetUserAgent("Claude-Code/1.0.0")
+	session.SetConnected(true)
+
+	// Step 2: Verify session is connected
+	assert.True(t, session.IsConnected(), "Session should be connected after register")
+
+	// Step 3: Simulate onSessionUnregister — mark disconnected
+	retrieved, ok := sm.GetSession("lifecycle-session")
+	require.True(t, ok)
+	retrieved.SetConnected(false)
+
+	// Step 4: Session still exists but is disconnected
+	assert.True(t, sm.HasSession("lifecycle-session"),
+		"Session should still exist after unregister")
+	assert.False(t, session.IsConnected(),
+		"Session should be disconnected after unregister")
+
+	// Step 5: Simulate re-registration (new GET connection)
+	session.SetConnected(true)
+	assert.True(t, session.IsConnected(),
+		"Session should be reconnected after re-register")
+}
+
+// TestSessionLifecycle_ConnectedWithPhantomSessions verifies that connected state
+// correctly distinguishes real sessions from phantom sessions in the same setup
+// that list_sessions would see.
+func TestSessionLifecycle_ConnectedWithPhantomSessions(t *testing.T) {
+	ctx := context.Background()
+	logger := newTestLogger(t)
+	cm := NewClientManager(ctx, logger)
+	defer func() { _ = cm.Close(ctx) }()
+
+	// Real session: connected with downstream clients
+	realSession := mustCreateSession(t, cm.sessionManager, "real-session")
+	realSession.SetConnected(true)
+	realSession.SetClientIP("10.0.0.1")
+	realSession.SetClient("github", &SessionClientInfo{Name: "github"})
+
+	// Phantom session: was connected then disconnected (GET cycling), no downstream clients
+	phantomSession := mustCreateSession(t, cm.sessionManager, "phantom-session")
+	phantomSession.SetConnected(true)  // Initially connected
+	phantomSession.SetConnected(false) // Then disconnected by GET close
+
+	// Connected session without downstream clients (just registered, discovery pending)
+	pendingSession := mustCreateSession(t, cm.sessionManager, "pending-session")
+	pendingSession.SetConnected(true)
+	pendingSession.SetClientIP("10.0.0.2")
+
+	sessions := cm.GetActiveSessions()
+	require.Len(t, sessions, 3)
+
+	sessionsByID := make(map[string]SessionInfo)
+	for _, s := range sessions {
+		sessionsByID[s.SessionID] = s
+	}
+
+	// Real session: connected, has downstream clients
+	assert.True(t, sessionsByID["real-session"].Connected)
+	assert.Len(t, sessionsByID["real-session"].DownstreamClients, 1)
+
+	// Phantom session: disconnected, no downstream clients
+	assert.False(t, sessionsByID["phantom-session"].Connected)
+	assert.Empty(t, sessionsByID["phantom-session"].DownstreamClients)
+
+	// Pending session: connected, no downstream clients yet
+	assert.True(t, sessionsByID["pending-session"].Connected)
+	assert.Empty(t, sessionsByID["pending-session"].DownstreamClients)
 }

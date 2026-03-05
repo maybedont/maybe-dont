@@ -94,6 +94,9 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 	if hasUserAgent && userAgent != "" {
 		s.SetUserAgent(userAgent)
 	}
+
+	// Mark session as connected (has an active SSE connection)
+	s.SetConnected(true)
 }
 
 // onSessionUnregister handles upstream client session cleanup.
@@ -109,6 +112,12 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 // truly abandoned.
 func (g *Gateway) onSessionUnregister(ctx context.Context, session server.ClientSession) {
 	sessionID := session.SessionID()
+
+	// Mark session as disconnected (SSE connection closed)
+	s, ok := g.clientManager.sessionManager.GetSession(sessionID)
+	if ok {
+		s.SetConnected(false)
+	}
 
 	// Log session state for diagnostics
 	clientNames := g.clientManager.GetSessionClientNames(sessionID)
@@ -641,11 +650,10 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP server: %w", err)
 	}
 
-	// Create SSE server with auth extraction context function
+	// Create SSE server — context enrichment is handled by mcpContextMiddleware below
 	sseSrv := server.NewSSEServer(srv,
 		server.WithSSEEndpoint("/sse"),
 		server.WithMessageEndpoint("/message"),
-		server.WithSSEContextFunc(g.extractAuthFromRequest),
 	)
 
 	g.server = srv
@@ -657,10 +665,11 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 			zap.Strings("allowed_values", g.callerAuthConfig.OriginalValues()))
 	}
 
-	// Create mux and mount both SSE endpoints
+	// Create mux and mount both SSE endpoints, wrapped with context enrichment middleware.
+	// This ensures both SSE and message handlers get enriched context.
 	mux := http.NewServeMux()
-	mux.Handle("/sse", sseSrv.SSEHandler())
-	mux.Handle("/message", sseSrv.MessageHandler())
+	mux.Handle("/sse", g.mcpContextMiddleware(sseSrv.SSEHandler()))
+	mux.Handle("/message", g.mcpContextMiddleware(sseSrv.MessageHandler()))
 
 	// Add helpful 404 for HTTP endpoint when SSE transport is active
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
@@ -783,7 +792,6 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 	// Note: We set the endpoint path but will mount it ourselves on a mux
 	mcpHandler := server.NewStreamableHTTPServer(srv,
 		server.WithEndpointPath("/mcp"),
-		server.WithHTTPContextFunc(g.extractAuthFromRequest),
 	)
 
 	g.server = srv
@@ -795,9 +803,11 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 			zap.Strings("allowed_values", g.callerAuthConfig.OriginalValues()))
 	}
 
-	// Create mux and mount the MCP handler
+	// Create mux and mount the MCP handler, wrapped with context enrichment middleware.
+	// This ensures both GET (SSE listen) and POST (JSON-RPC) requests get enriched context,
+	// which is needed because the SDK's WithHTTPContextFunc only runs on POST, not GET.
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/mcp", g.mcpContextMiddleware(mcpHandler))
 
 	// Add helpful 404 for SSE endpoint when HTTP transport is active
 	mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
@@ -936,6 +946,18 @@ func (g *Gateway) handleToolCallWithErrorHandling(ctx context.Context, req mcp.C
 		return nil, err
 	}
 	return result, nil
+}
+
+// mcpContextMiddleware wraps an HTTP handler with context enrichment.
+// This replaces the SDK's WithHTTPContextFunc/WithSSEContextFunc callbacks, which
+// only run on POST requests. By using middleware, both GET (SSE listen) and POST
+// (JSON-RPC) requests get enriched context, ensuring onSessionRegister has access
+// to client IP, User-Agent, and other request metadata.
+func (g *Gateway) mcpContextMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := g.extractAuthFromRequest(r.Context(), r)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // extractAuthFromRequest prepares the context with request metadata needed for downstream calls.
