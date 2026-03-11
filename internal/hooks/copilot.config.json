@@ -1,0 +1,19 @@
+{
+  "_comment": "GitHub Copilot hooks configuration — save as .github/hooks/maybe-dont.json",
+  "_setup": "Export the hook script: maybe-dont hooks export --agent copilot > maybe-dont-hook.sh && chmod +x maybe-dont-hook.sh",
+  "_note": "This hook also works with VS Code Copilot and Cody, which share the same hook format.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "/path/to/maybe-dont-hook.sh"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "/path/to/maybe-dont-hook.sh"
+      }
+    ]
+  }
+}

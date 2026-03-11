@@ -1,7 +1,7 @@
 # Agent Hook and MCP Interceptor Integration
 
 ## Status
-**Implemented** (intercept endpoint shipped; hook scripts and MCP interceptor integration are future work)
+**Draft** — intercept endpoint shipped (#133); hook scripts shipped (#131, Phases 1–4.1); Cursor mutation path, shell tests, and documentation remain
 
 ## Overview
 
@@ -82,128 +82,19 @@ Agent decides to use a tool
 └─────────────────┘  exit code + JSON   └──────────────────────┘
 ```
 
-### Claude Code Hooks
+### Per-Agent Details
 
-**Events:** `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, plus lifecycle events (`SessionStart`, `Stop`, etc.)
+**Claude Code** — Events: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, plus lifecycle. Blocking: exit code 2 or JSON `permissionDecision: deny`. Config: `.claude/settings.json`. Ref: https://code.claude.com/docs/en/hooks-guide
 
-**Input (PreToolUse for Bash):**
-```json
-{
-  "session_id": "abc123",
-  "cwd": "/path/to/project",
-  "hook_event_name": "PreToolUse",
-  "tool_name": "Bash",
-  "tool_input": {
-    "command": "gh repo delete my-repo"
-  }
-}
-```
+**Cursor** — Events: `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `preToolUse`, `postToolUse`, plus lifecycle. Dedicated events for shell and MCP execution (most granular hook system). `beforeMCPExecution` and `beforeReadFile` are **fail-closed**. Blocking: exit code 2 or JSON `permission: deny`. Config: `.cursor/hooks/`. Ref: https://cursor.com/docs/agent/hooks
 
-**Blocking:** Exit code 2 blocks with stderr as feedback. Or JSON:
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "Destructive GitHub operation blocked by policy"
-  }
-}
-```
+**Gemini CLI** — Events: `BeforeTool`, `AfterTool`, plus model-layer hooks (`BeforeModel`, `AfterModel`, `BeforeToolSelection`) unique to Gemini. Blocking: exit code 2 or JSON `decision: deny`. Config: `settings.json`. Ref: https://geminicli.com/docs/hooks/reference/
 
-**Config:** `.claude/settings.json` (project) or `~/.claude/settings.json` (global)
+**Cline** — Events: `PreToolUse`, `PostToolUse`, plus lifecycle. Blocking: JSON `cancel: true`. Config: `.clinerules/hooks/` (project) or `~/Documents/Cline/Rules/Hooks/` (global). **macOS/Linux only.** Ref: https://docs.cline.bot/features/hooks/hook-reference
 
-**Reference:** https://code.claude.com/docs/en/hooks-guide
+**GitHub Copilot (CLI + VS Code)** — Events: `PreToolUse`, `PostToolUse`, `SessionStart`, `SessionEnd`, `UserPromptSubmit`. Blocking: JSON `permissionDecision: deny`. Config: `.github/hooks/*.json` (shared format). Ref: https://docs.github.com/en/copilot/how-tos/copilot-cli/use-hooks, https://code.visualstudio.com/docs/copilot/customization/hooks
 
-### Cursor Hooks
-
-**Events:** `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `preToolUse`, `postToolUse`, `beforeReadFile`, `afterFileEdit`, `beforeSubmitPrompt`, `stop`, plus lifecycle events
-
-Cursor has **dedicated events** for shell and MCP execution, separate from the generic `preToolUse`. This is the most granular hook system available.
-
-**Blocking:** Exit code 2 or JSON `"permission": "deny"`. `beforeMCPExecution` and `beforeReadFile` are **fail-closed** — script failures automatically block the operation.
-
-**Config:** `.cursor/hooks/` directory
-
-**Reference:** https://cursor.com/docs/agent/hooks
-
-### Gemini CLI Hooks
-
-**Events:** `BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeToolSelection`, `SessionStart`, `SessionEnd`, `Notification`, `PreCompress`
-
-Gemini CLI shipped hooks in v0.26.0 (January 2026). It has dedicated model-layer hooks (`BeforeModel`, `AfterModel`, `BeforeToolSelection`) that other agents don't expose.
-
-**Input (BeforeTool):**
-```json
-{
-  "session_id": "abc123",
-  "cwd": "/path/to/project",
-  "hook_event_name": "BeforeTool",
-  "timestamp": "2026-02-23T14:30:00Z",
-  "tool_name": "Bash",
-  "tool_input": {
-    "command": "gh repo delete my-repo"
-  },
-  "mcp_context": {}
-}
-```
-
-**Blocking:** Exit code 2 blocks with stderr as reason. Or JSON:
-```json
-{
-  "decision": "deny",
-  "reason": "Destructive GitHub operation blocked by policy"
-}
-```
-
-**Config:** `settings.json` with `hooks` object, same structure as Claude Code (matcher + hooks array)
-
-**Reference:** https://geminicli.com/docs/hooks/reference/
-
-### Cline Hooks
-
-**Events:** `PreToolUse`, `PostToolUse`, plus lifecycle events (`TaskStart`, `TaskComplete`, etc.)
-
-**Input (PreToolUse):**
-```json
-{
-  "taskId": "abc123",
-  "clineVersion": "3.17.0",
-  "timestamp": 1736654400000,
-  "workspacePath": "/path/to/project",
-  "preToolUse": {
-    "tool": "execute_command",
-    "parameters": { "command": "gh repo delete my-repo" }
-  }
-}
-```
-
-**Blocking:** Return JSON `{"cancel": true, "errorMessage": "Blocked by policy"}`
-
-**Config:** `.clinerules/hooks/` (project) or `~/Documents/Cline/Rules/Hooks/` (global)
-
-**Limitation:** macOS and Linux only. No Windows support.
-
-**Reference:** https://docs.cline.bot/features/hooks/hook-reference
-
-### GitHub Copilot CLI / VS Code
-
-**Events:** `PreToolUse`, `PostToolUse`, `SessionStart`, `SessionEnd`, `UserPromptSubmit`, plus `SubagentStart`/`SubagentStop` (VS Code), `errorOccurred` (CLI)
-
-**Blocking (VS Code):** JSON `permissionDecision: "deny"` with reason
-
-**Config:** `.github/hooks/*.json` (shared format for CLI and VS Code)
-
-**Reference:**
-- CLI: https://docs.github.com/en/copilot/how-tos/copilot-cli/use-hooks
-- VS Code: https://code.visualstudio.com/docs/copilot/customization/hooks
-
-### OpenAI Codex CLI
-
-Codex uses an approval-based system rather than user-defined hooks. It supports approval modes (`always`, `on-request`, `never`) and explicit approval prompts for MCP tool calls, but does not expose a pluggable pre-execution hook API for custom validation scripts.
-
-**Workaround:** Codex supports MCP servers. A Maybe Don't MCP gateway in front of downstream servers provides equivalent interception for MCP tool calls. For raw CLI commands, there is no hook mechanism — the `maybe-dont cli` skill approach remains the only option.
-
-**Reference:** https://developers.openai.com/codex/cli/
+**OpenAI Codex CLI** — No user-defined hooks. Approval-based system only. Use MCP gateway proxy for MCP tools; `maybe-dont cli` skill for CLI commands. Ref: https://developers.openai.com/codex/cli/
 
 ## MCP Interceptors (SEP-1763 — Draft)
 
@@ -561,76 +452,6 @@ The `shell_tool_names` list determines which tool names trigger CLI expression e
 
 ## Proposed Architecture
 
-### Hook Integration (Available Now)
-
-For each supported agent, provide a hook script that calls `POST /api/v1/intercept` for policy decisions. This provides **deterministic enforcement** — the hook fires automatically, unlike the skill-based approach that relies on LLM compliance.
-
-```
-┌─────────────────────────────────────────────────────┐
-│  AI Agent (Claude Code, Cursor, Cline, Copilot)     │
-│                                                     │
-│  Agent decides to run a tool or CLI command          │
-│         │                                           │
-│         ▼                                           │
-│  ┌───────────────────────────┐                      │
-│  │  PreToolUse hook          │                      │
-│  │  (maybe-dont-hook.sh)     │──── HTTP POST ────┐  │
-│  └───────────────────────────┘                   │  │
-│         │                                        │  │
-│    valid/invalid                                 │  │
-│         │                                        │  │
-│         ▼                                        │  │
-│  Tool executes (or blocked)                      │  │
-│         │                                        │  │
-│         ▼                                        │  │
-│  ┌───────────────────────────┐                   │  │
-│  │  PostToolUse hook         │──── HTTP POST ──┐ │  │
-│  │  (maybe-dont-hook.sh)     │                 │ │  │
-│  └───────────────────────────┘                 │ │  │
-│                                                │ │  │
-└────────────────────────────────────────────────┼─┼──┘
-                                                 │ │
-                              ┌───────────────────┘ │
-                              │  ┌──────────────────┘
-                              ▼  ▼
-                    ┌────────────────────┐
-                    │  Maybe Don't       │
-                    │  Gateway           │
-                    │                    │
-                    │  POST /api/v1/     │
-                    │    intercept       │
-                    │                    │
-                    │  phase: request    │
-                    │  (pre-tool)        │
-                    │                    │
-                    │  phase: response   │
-                    │  (post-tool)       │
-                    └────────────────────┘
-```
-
-### Hook Script Design
-
-A single hook script (`maybe-dont-hook.sh` or `maybe-dont-hook.py`) that:
-
-1. Reads JSON from stdin (agent-specific format)
-2. Extracts tool name and parameters
-3. Translates to the `/api/v1/intercept` request schema (event, phase, payload, context)
-4. Calls the gateway via HTTP
-5. Reads the response (`valid`, `severity`, `messages`)
-6. Returns allow/deny in the agent-specific output format
-
-Agent-specific wrappers handle format translation:
-
-```
-maybe-dont-hook.sh          ← core logic: build intercept request, call gateway, interpret response
-├── claude-pretooluse.sh    ← translates Claude Code stdin → intercept schema, response → Claude output
-├── cursor-beforeshell.sh   ← translates Cursor stdin → intercept schema, response → Cursor output
-├── cline-pretooluse.sh     ← translates Cline stdin → intercept schema, response → Cline output
-└── copilot-pretooluse.sh   ← translates Copilot stdin → intercept schema, response → Copilot output
-```
-
-Or a single polyglot script that detects the agent from input JSON structure.
-
 ### Interceptor Integration (Future — When SEP-1763 Ships)
 
 When MCP interceptors are adopted:
@@ -672,75 +493,333 @@ Phase 3 (Future):  MCP interceptors (native)   + Gateway as remote interceptor f
 
 Each phase is additive — earlier mechanisms continue to work alongside newer ones. The `/api/v1/intercept` endpoint serves as the bridge: hook scripts call it in Phase 2, and it becomes the remote interceptor endpoint in Phase 3.
 
-## Agent-Specific Implementation Notes
-
-### Claude Code
-
-- Use `PreToolUse` with `Bash` matcher for CLI commands
-- Use `PreToolUse` with `mcp__.*` matcher for MCP tool calls
-- Hook script can use `curl` to call gateway
-- Config in `.claude/settings.json` (project) or `~/.claude/settings.json` (user)
-- Also supports `type: "prompt"` and `type: "agent"` hooks for LLM-based decisions
-
-### Cursor
-
-- Use `beforeShellExecution` for CLI commands (dedicated event, more specific than generic `preToolUse`)
-- Use `beforeMCPExecution` for MCP tool calls (**fail-closed** — extra safety)
-- Use `afterMCPExecution` to scan MCP responses (can modify output via `updated_mcp_tool_output`)
-- Config in `.cursor/hooks/` directory
-
-### Gemini CLI
-
-- Use `BeforeTool` with matcher for CLI commands (tool name matching via regex)
-- Use `BeforeTool` for MCP tool calls (`mcp_context` included in input)
-- Use `AfterTool` to inspect tool responses
-- Block with exit code 2 or JSON `{"decision": "deny", "reason": "..."}`
-- Config in `settings.json` with `hooks` object
-- Also has model-layer hooks (`BeforeModel`, `BeforeToolSelection`) not available in other agents
-
-### Cline
-
-- Use `PreToolUse` matching `execute_command` for CLI commands
-- Use `PreToolUse` matching MCP tool names for MCP tool calls
-- Return `{"cancel": true, "errorMessage": "..."}` to block
-- Config in `.clinerules/hooks/` (project) or `~/Documents/Cline/Rules/Hooks/` (global)
-- **Limitation:** macOS/Linux only
-
-### GitHub Copilot (CLI and VS Code)
-
-- Use `PreToolUse` matching `bash` or `Bash` for CLI commands
-- Use `PreToolUse` matching tool names for MCP tool calls
-- Config in `.github/hooks/*.json`
-- Shared format across CLI and VS Code — single hook definition works for both
-
-### OpenAI Codex CLI
-
-- **No user-defined hooks available** — approval system is built-in and not extensible
-- For MCP tool calls: use Maybe Don't as an MCP gateway proxy in front of downstream servers
-- For CLI commands: the `maybe-dont cli` skill approach remains the only option
-- Monitor for future hook API — Codex is actively adding agent capabilities
-
 ## Relationship to Existing Specs and Endpoints
 
 - **[cli-proxy-for-ai-agents](cli-proxy-for-ai-agents.md)** — defines `/api/v1/cli/validate`. The new `/api/v1/intercept` endpoint supersedes this for hook-based integrations, but `/api/v1/cli/validate` remains for the `maybe-dont cli` binary which has its own request/response contract.
 - **[openhands-integration](openhands-integration.md)** — defines `/api/v1/action/validate`. Similarly, this endpoint remains for OpenHands' specific integration. The `/api/v1/intercept` endpoint is the forward-looking, SEP-1763-aligned API for new integrations.
 - **[runtime-action-interception-architecture](runtime-action-interception-architecture.md)** — defines the layered enforcement model. Hooks add a new enforcement point (Layer A, client-side) alongside the existing proxy enforcement points. The `/api/v1/intercept` endpoint becomes the unified API that all Layer A enforcement points call.
 
-## Open Questions
+## Resolved Design Decisions
 
-1. **Hook distribution:** How should hook scripts be distributed to users? Options: (a) ship in the `maybe-dont` binary as an export command (e.g., `maybe-dont hooks export --agent claude-code`), (b) publish to a hooks registry if one emerges, (c) document in the installation guide with copy-paste snippets.
+The following questions were resolved during implementation planning:
 
-2. **Policy caching:** Hook scripts add latency to every tool call. Should the hook script cache recent policy decisions locally with a TTL to reduce gateway round-trips?
+| # | Question | Decision | Rationale |
+|---|----------|----------|-----------|
+| 1 | **Hook distribution** | `maybe-dont hooks export --agent <name>` CLI command + docs copy-paste snippets | Mirrors existing `maybe-dont skill view` pattern. Binary embeds hook scripts. |
+| 2 | **Policy caching** | No caching in v1 | Gateway is typically local (sub-50ms). Adds complexity and stale cache risks. Revisit if latency becomes a real complaint. |
+| 3 | **Unified vs per-agent scripts** | Per-agent self-contained scripts with core logic inlined | Agent I/O formats are genuinely different (different JSON field names, different deny output formats). A polyglot detector is fragile. Each exported script is one file with no external dependencies beyond bash/curl/jq. |
+| 4 | **SEP-1763 prototype** | Wait for SDK adoption | The intercept endpoint already aligns with the SEP-1763 schema. Building a prototype interceptor now risks churn against a draft spec. Hooks are the pragmatic bridge. |
+| 5 | **Interceptor policy distribution** | N/A for v1 | Hooks call the gateway which already has policies loaded. Not relevant until interceptor adoption. |
+| 6 | **Shell tool name discovery** | Gateway-side default list (already implemented in `shell_tool_names` config) | Hook scripts don't hint tool type — the gateway detects shell tools from its configured list. Solved. |
+| 7 | **Observability responses** | No in v1 | SEP-1763 treats observability as fire-and-forget. The gateway audit log is the source of truth. |
+| 8 | **Hook script language** | Bash + curl + jq | Zero interpreter dependencies beyond standard tools. Fast startup (no runtime overhead). Hook scripts are reference implementations — users can rewrite in Python or any language. |
+| 9 | **Fail-open behavior** | Hooks fail open (allow + stderr warning) when gateway is unreachable | Matches CLI gateway behavior. Exception: Cursor `beforeMCPExecution` is inherently fail-closed by the agent runtime — hook script can't override that. |
+| 10 | **Gateway URL config** | `MAYBE_DONT_URL` environment variable, default `http://localhost:8080` | Simple, consistent. |
+| 11 | **PostToolUse hooks** | Include in v1 | The intercept endpoint already supports `phase: "response"`. Only Cursor `afterMCPExecution` can modify output (redaction); all other agents' post-tool hooks are observability-only. |
+| 12 | **Cody** | Exclude | Cody uses the same VS Code hook format as Copilot (`.github/hooks/`). The Copilot hook script works for Cody. Document as a note on the Copilot page. Consider removing the standalone Cody docs page. |
+| 13 | **Cline** | Include | 5M+ installs, 58K GitHub stars, top-3 VS Code-based coding agent. |
+| 14 | **Curl timeout** | 30 seconds default | Matches CLI gateway default. Fail open on timeout. |
+| 15 | **Double validation (hooks + MCP gateway)** | Solved at config level via hook matchers, not in script | See [Recommended Deployment Patterns](#recommended-deployment-patterns). |
 
-3. **Unified hook script vs. per-agent scripts:** A single script that auto-detects the agent format is simpler to maintain but harder to debug. Per-agent scripts are more explicit. Which approach?
+## Hook Script Implementation Plan
 
-4. **SEP-1763 timeline:** Should we build a prototype interceptor implementation now against the draft spec, or wait for SDK support? The risk of building early is spec changes; the risk of waiting is missing early adoption.
+### Scope: 5 Agents, Pre + Post Tool Hooks
 
-5. **Interceptor policy distribution:** MCP interceptors define execution but not policy management. How do interceptor instances receive policy updates? Options: embedded config, remote policy API, file watch.
+| Agent | Pre-tool event | Post-tool event | Config location |
+|-------|---------------|----------------|-----------------|
+| Claude Code | `PreToolUse` | `PostToolUse` | `.claude/settings.json` |
+| Cursor | `beforeShellExecution` + `beforeMCPExecution` | `afterShellExecution` + `afterMCPExecution` | `.cursor/hooks/` |
+| Gemini CLI | `BeforeTool` | `AfterTool` | `settings.json` |
+| Cline | `PreToolUse` | `PostToolUse` | `.clinerules/hooks/` |
+| GitHub Copilot | `PreToolUse` | `PostToolUse` | `.github/hooks/*.json` |
 
-6. **Shell tool name discovery:** The `shell_tool_names` config allows the gateway to detect CLI commands, but new agents may introduce new tool names. Should the hook script hint the tool type via `config`, or should the gateway maintain a comprehensive default list?
+### Script Architecture
 
-7. **Observability responses:** Should the `/api/v1/intercept` endpoint also return observability results (audit confirmation) alongside validation/mutation results? SEP-1763 treats observability as fire-and-forget, but hook callers may want confirmation that the event was logged.
+Each agent gets **one self-contained bash script** with core logic inlined. The script handles both pre-tool and post-tool events by detecting the phase from the input JSON. The same script file is referenced from multiple hook config entries.
+
+```
+maybe-dont-claude-code.sh       ← one file, handles PreToolUse + PostToolUse
+maybe-dont-cursor.sh            ← one file, handles all 4 Cursor events
+maybe-dont-gemini-cli.sh        ← one file, handles BeforeTool + AfterTool
+maybe-dont-cline.sh             ← one file, handles PreToolUse + PostToolUse
+maybe-dont-copilot.sh           ← one file, handles PreToolUse + PostToolUse
+```
+
+Internal structure of each script:
+
+```
+┌─────────────────────────────────────────────┐
+│  #!/usr/bin/env bash                        │
+│                                             │
+│  ┌─ Core functions (inlined) ─────────────┐ │
+│  │ md_call_gateway()   — POST + fail-open │ │
+│  │ md_is_denied()      — check valid field│ │
+│  │ md_get_reason()     — extract messages │ │
+│  │ md_check_deps()     — verify jq, curl  │ │
+│  └────────────────────────────────────────┘ │
+│                                             │
+│  ┌─ Agent-specific translation ───────────┐ │
+│  │ Read stdin JSON                        │ │
+│  │ Detect phase (pre vs post)             │ │
+│  │ Extract tool_name, arguments, result   │ │
+│  │ Extract context (session_id, cwd)      │ │
+│  │ Build /api/v1/intercept request        │ │
+│  │ Call md_call_gateway()                 │ │
+│  │ Translate response to agent format     │ │
+│  │ Exit with agent-specific code          │ │
+│  └────────────────────────────────────────┘ │
+└─────────────────────────────────────────────┘
+```
+
+### Phase Detection Per Agent
+
+Each agent signals the event type differently in its stdin JSON:
+
+| Agent | Phase detection method |
+|-------|----------------------|
+| Claude Code | `hook_event_name` field: `"PreToolUse"` or `"PostToolUse"` |
+| Cursor | Payload shape: pre events lack `output`/`result` fields; post events include them. Also inferable from the event-specific JSON structure. |
+| Gemini CLI | `hook_event_name` field: `"BeforeTool"` or `"AfterTool"` |
+| Cline | Top-level key: `preToolUse` vs `postToolUse` |
+| Copilot | `hook_event_name` field: `"PreToolUse"` or `"PostToolUse"` |
+
+### MCP vs CLI Detection
+
+**The hook script does not need to distinguish MCP from CLI tools.** The gateway's intercept endpoint handles routing internally by checking `payload.name` against its configured `shell_tool_names` list.
+
+The MCP-vs-CLI distinction matters only at the **hook configuration level** (matcher patterns), which controls when the hook fires:
+
+| Agent | CLI matcher | MCP matcher |
+|-------|-----------|------------|
+| Claude Code | `"Bash"` | `"mcp__.*"` (regex) |
+| Cursor | `beforeShellExecution` event | `beforeMCPExecution` event |
+| Gemini CLI | Tool name regex for shell tools | Tool name regex for MCP tools |
+| Cline | `"execute_command"` | MCP tool names |
+| Copilot | `"Bash"` or `"bash"` | MCP tool names |
+
+### Per-Agent I/O Translation
+
+#### Claude Code
+
+**Input (PreToolUse):**
+```json
+{
+  "session_id": "abc123",
+  "cwd": "/path/to/project",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {"command": "gh repo delete my-repo"}
+}
+```
+
+**Deny output:**
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Repository deletion blocked by policy"
+  }
+}
+```
+
+**Allow:** Exit 0, no output.
+
+**Post-tool:** Same script, detects `PostToolUse` from `hook_event_name`. Sends `phase: "response"` with tool result. Logs warnings to stderr (cannot modify output).
+
+#### Cursor
+
+**Input (beforeShellExecution):**
+```json
+{"command": "gh repo delete my-repo"}
+```
+
+**Input (beforeMCPExecution):**
+```json
+{"serverName": "github", "toolName": "create_issue", "arguments": {"title": "..."}}
+```
+
+**Deny output:**
+```json
+{"permission": "deny"}
+```
+
+**Post-tool (afterMCPExecution) — unique:** Can return `updated_mcp_tool_output` with redacted content from the gateway's mutation response. This is the only agent that supports output modification from hooks.
+
+#### Gemini CLI
+
+**Input (BeforeTool):**
+```json
+{
+  "session_id": "abc123",
+  "cwd": "/path/to/project",
+  "hook_event_name": "BeforeTool",
+  "tool_name": "Bash",
+  "tool_input": {"command": "gh repo delete my-repo"},
+  "mcp_context": {}
+}
+```
+
+**Deny output:**
+```json
+{"decision": "deny", "reason": "Repository deletion blocked by policy"}
+```
+
+**Allow:** Exit 0, no output.
+
+#### Cline
+
+**Input (PreToolUse):**
+```json
+{
+  "taskId": "abc123",
+  "clineVersion": "3.17.0",
+  "timestamp": 1736654400000,
+  "workspacePath": "/path/to/project",
+  "preToolUse": {
+    "tool": "execute_command",
+    "parameters": {"command": "gh repo delete my-repo"}
+  }
+}
+```
+
+**Deny output:**
+```json
+{"cancel": true, "errorMessage": "Repository deletion blocked by policy"}
+```
+
+**Allow:** Exit 0, empty JSON `{}` or no output.
+
+#### GitHub Copilot
+
+**Input (PreToolUse):**
+```json
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {"command": "gh repo delete my-repo"}
+}
+```
+
+**Deny output:**
+```json
+{
+  "hookSpecificOutput": {
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Repository deletion blocked by policy"
+  }
+}
+```
+
+**Allow:** Exit 0, no output.
+
+### Recommended Deployment Patterns
+
+When hooks and the MCP gateway are used together, hook matchers should be scoped to CLI/shell tools only to avoid double-validating MCP tool calls:
+
+| Setup | Hook matchers | MCP Gateway | Use case |
+|-------|--------------|-------------|----------|
+| **Both (recommended)** | CLI tools only (`Bash`, `execute_command`) | Yes | Deterministic CLI enforcement via hooks, full MCP interception via gateway. No double validation. |
+| **Hooks only** | All tools (CLI + MCP) | Not used | Lightweight, no proxy needed. Post-tool response scanning limited to agents that support it. |
+| **MCP gateway only** | Not used | Yes | Full MCP interception with response validation/redaction. No CLI enforcement unless using `maybe-dont cli` skill. |
+
+The exported config snippets default to the **"Both"** pattern with CLI-only matchers. A commented-out "hooks only" variant with broader matchers is included.
+
+### CLI Command: `maybe-dont hooks`
+
+New subcommand mirroring the existing `maybe-dont skill` pattern:
+
+```bash
+# List available hook agents
+maybe-dont hooks list
+
+# Export the hook script to stdout
+maybe-dont hooks export --agent claude-code > maybe-dont-hook.sh
+chmod +x maybe-dont-hook.sh
+
+# Export the agent config snippet to stdout
+maybe-dont hooks export --agent claude-code --config
+```
+
+**`hooks list`** output:
+```
+Available hook agents:
+  claude-code    Claude Code PreToolUse/PostToolUse hooks
+  cursor         Cursor shell and MCP execution hooks
+  gemini-cli     Gemini CLI BeforeTool/AfterTool hooks
+  cline          Cline PreToolUse/PostToolUse hooks
+  copilot        GitHub Copilot PreToolUse/PostToolUse hooks
+
+Use 'maybe-dont hooks export --agent <name>' to output a hook script.
+Use 'maybe-dont hooks export --agent <name> --config' to output a config snippet.
+```
+
+**`hooks export --agent <name>`** outputs a self-contained bash script to stdout.
+
+**`hooks export --agent <name> --config`** outputs the ready-to-paste config snippet for that agent, showing how to wire the hook script into the agent's configuration. Defaults to the "Both" deployment pattern (CLI-only matchers). Includes commented-out "hooks only" variant.
+
+### Hook Script Runtime Behavior
+
+- **Dependencies:** `bash`, `curl`, `jq`. Script checks for `jq` and `curl` at startup and exits with a clear error message if missing.
+- **Gateway URL:** `$MAYBE_DONT_URL` environment variable, defaults to `http://localhost:8080`.
+- **Timeout:** 30-second curl timeout. On timeout, fail open (allow) with stderr warning.
+- **Fail-open:** If the gateway is unreachable, the script allows the tool call and writes a warning to stderr. Exception: Cursor `beforeMCPExecution` is inherently fail-closed by the agent runtime — the script cannot override this.
+- **Context passthrough:** Scripts forward `cwd`/`workspacePath`, `session_id`/`taskId`, and any trace context from the agent input into the intercept request's `context` and `config` fields.
+- **Post-tool observability:** For agents other than Cursor, post-tool hooks are observability-only — they call the gateway with `phase: "response"` for audit logging and policy evaluation, but cannot modify output. Warnings/denials are logged to stderr.
+- **Post-tool mutation (Cursor only):** Cursor's `afterMCPExecution` hook can return `updated_mcp_tool_output`. When the gateway returns a mutation response (`type: "mutation"`, `modified: true`), the Cursor post-tool hook returns the redacted payload, applying the gateway's redaction to the actual tool output.
+
+### Embedding and Distribution
+
+Hook scripts are embedded in the binary using Go's `embed` package, following the same pattern as `internal/skills/`:
+
+```
+internal/hooks/
+├── hooks.go                      ← Go API: ListHooks(), GetHook(), embed directives
+├── hooks_test.go
+├── claude-code.sh
+├── cursor.sh
+├── gemini-cli.sh
+├── cline.sh
+├── copilot.sh
+├── claude-code.config.json       ← config snippet for Claude Code
+├── cursor.config.json            ← config snippet for Cursor
+├── gemini-cli.config.json        ← config snippet for Gemini CLI
+├── cline.config.json             ← config snippet for Cline
+└── copilot.config.json           ← config snippet for Copilot
+```
+
+CLI command in `cmd/hooks.go` mirrors `cmd/skill.go`.
+
+## Future Improvements
+
+Potential improvements identified during code review of the v1 hook scripts (PR #139):
+
+### 1. Cursor `beforeMCPExecution` fail-open hardening
+
+All scripts use `set -euo pipefail`, which means an unexpected error (e.g., jq failing on genuinely malformed input) causes a non-zero exit. For most agents this is harmless — non-zero exit = allow. But Cursor's `beforeMCPExecution` is **inherently fail-closed by the agent runtime**: a non-zero exit blocks the tool call regardless of the script's intent. The script documents this (cursor.sh:365-367) but doesn't mitigate it. A targeted `trap 'exit 0' ERR` within the `beforeMCPExecution` branch would ensure fail-open even on unexpected bash/jq errors, without weakening error handling in the rest of the script.
+
+### 2. Large request bodies via shell argument
+
+PostToolUse hooks serialize the entire tool result into the curl request body via `-d "$body"` as a shell argument. For very large tool outputs (e.g., reading a large file, verbose command output), this could hit OS argument length limits (~2MB on macOS/Linux). A more robust approach would write the request body to a temp file and use `--data-binary @"$tmpfile"` instead. Not a practical concern for most tool results, but worth hardening for edge cases.
+
+### 3. Configurable curl timeout
+
+The 30-second `--max-time 30` on curl is hardcoded. For interactive coding agents, 30 seconds of blocking can feel sluggish if the gateway is slow or under load. A `MAYBE_DONT_TIMEOUT` environment variable (defaulting to 30) would let users tune this without modifying the script. This is especially relevant for post-tool hooks where the timeout adds latency to the tool response pipeline without providing blocking value (post-tool is observability-only for most agents).
+
+### 4. Additional agent support
+
+The v1 set covers the 5 major agents with mature hook systems. Agents evaluated and excluded:
+
+| Agent | Status | Reason |
+|-------|--------|--------|
+| **Windsurf** | Monitor | Has Cascade Hooks but the format is automation-focused, not request/deny compatible |
+| **Kiro** | Monitor | Too new; JSON hook format not yet stable or publicly documented |
+| **Aider** | No hooks | No native hook system; use CLI proxy |
+| **Continue** | No hooks | No native hook API; use CLI proxy or MCP gateway |
+| **Replit Agent** | No hooks | Browser-only environment; no local hook support |
+| **Cody** | Covered | Uses Copilot hook format (`.github/hooks/`); documented as a note on copilot.config.json |
+
+Windsurf and Kiro are the most likely candidates for future additions as their hook formats mature.
 
 ## References
 
