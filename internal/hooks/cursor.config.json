@@ -1,0 +1,29 @@
+{
+  "_comment": "Cursor hooks configuration — add to .cursor/hooks/hooks.json in your project root",
+  "_setup": "Export the hook script: maybe-dont hooks export --agent cursor > maybe-dont-hook.sh && chmod +x maybe-dont-hook.sh",
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "/path/to/maybe-dont-hook.sh"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "/path/to/maybe-dont-hook.sh"
+      }
+    ]
+  },
+  "_hooks_only_pattern": "To also validate MCP tool calls via hooks (instead of the MCP gateway proxy), add beforeMCPExecution and afterMCPExecution entries with the same command. The afterMCPExecution hook uniquely supports output redaction via the gateway's mutation response.",
+  "_hooks_only_example": {
+    "beforeMCPExecution": [
+      {
+        "command": "/path/to/maybe-dont-hook.sh"
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "/path/to/maybe-dont-hook.sh"
+      }
+    ]
+  }
+}
