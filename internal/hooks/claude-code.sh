@@ -85,9 +85,16 @@ md_is_denied() {
 # Outputs:   Joined reason string on stdout
 md_get_reason() {
   local response="$1"
-  echo "$response" | jq -r '
-    [.messages[]? | .message // empty] | join("; ") // "Blocked by policy"
-  '
+  [[ -z "$response" ]] && { echo "Blocked by policy"; return 0; }
+  local reason
+  reason=$(echo "$response" | jq -r '
+    if .messages and (.messages | length) > 0 then
+      [.messages[].message] | join("; ")
+    else
+      "Blocked by policy"
+    end
+  ')
+  echo "$reason"
 }
 
 # --- Main ---

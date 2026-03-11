@@ -13,7 +13,7 @@
 set -euo pipefail
 
 if [[ -z "${MAYBE_DONT_URL:-}" ]]; then
-  echo >&2 "maybe-dont: MAYBE_DONT_URL environment variable is not set"
+  echo >&2 "[maybe-dont] ERROR: MAYBE_DONT_URL environment variable is not set"
   exit 0  # fail-open: don't block tool calls due to misconfiguration
 fi
 INTERCEPT_ENDPOINT="${MAYBE_DONT_URL}/api/v1/intercept"
@@ -27,7 +27,7 @@ MD_GATEWAY_UNREACHABLE=false
 md_check_deps() {
   for cmd in jq curl; do
     if ! command -v "$cmd" &>/dev/null; then
-      echo "maybe-dont: required dependency '$cmd' not found on PATH" >&2
+      echo >&2 "[maybe-dont] ERROR: Missing required dependency: $cmd"
       exit 1
     fi
   done
@@ -36,20 +36,37 @@ md_check_deps() {
 # POST JSON to the intercept endpoint.
 # Args: $1 — JSON request body
 # Stdout: response body (empty on failure)
-# Sets MD_GATEWAY_UNREACHABLE=true on curl failure.
+# Sets MD_GATEWAY_UNREACHABLE=true on curl failure or non-2xx HTTP response.
 md_call_gateway() {
   local body="$1"
   local response
+  local http_code
 
   MD_GATEWAY_UNREACHABLE=false
-  if ! response=$(curl -sS --max-time 30 \
+
+  # Use a temp file to capture the body while extracting the HTTP status code.
+  local tmpfile
+  tmpfile=$(mktemp)
+  trap 'rm -f "$tmpfile"' RETURN
+
+  http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
+    --max-time 30 \
+    -X POST \
     -H "Content-Type: application/json" \
     -d "$body" \
-    "$INTERCEPT_ENDPOINT" 2>/dev/null); then
+    "$INTERCEPT_ENDPOINT" 2>/dev/null) || {
     MD_GATEWAY_UNREACHABLE=true
-    echo >&2 "maybe-dont: gateway unreachable at ${INTERCEPT_ENDPOINT}, allowing request (fail-open)"
-    echo ""
-    return
+    echo >&2 "[maybe-dont] WARNING: Gateway unreachable at ${INTERCEPT_ENDPOINT} — failing open (allow)"
+    return 0
+  }
+
+  response=$(<"$tmpfile")
+
+  # Non-2xx responses are treated as gateway errors — fail open.
+  if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+    echo >&2 "[maybe-dont] WARNING: Gateway returned HTTP ${http_code} — failing open (allow)"
+    MD_GATEWAY_UNREACHABLE=true
+    return 0
   fi
 
   echo "$response"
@@ -71,7 +88,16 @@ md_is_denied() {
 # Stdout: semicolon-separated message strings
 md_get_reason() {
   local response="$1"
-  echo "$response" | jq -r '[.messages[]?.message // empty] | join("; ")'
+  [[ -z "$response" ]] && { echo "Blocked by policy"; return 0; }
+  local reason
+  reason=$(echo "$response" | jq -r '
+    if .messages and (.messages | length) > 0 then
+      [.messages[].message] | join("; ")
+    else
+      "Blocked by policy"
+    end
+  ')
+  echo "$reason"
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -88,7 +114,7 @@ cwd=$(echo "$input" | jq -r '.cwd // empty')
 timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 if [[ -z "$hook_event" ]]; then
-  echo "maybe-dont: missing hook_event_name in input" >&2
+  echo >&2 "[maybe-dont] ERROR: Missing hook_event_name in input"
   exit 0
 fi
 
@@ -178,12 +204,12 @@ if [[ "$hook_event" == "AfterTool" ]]; then
   # AfterTool is observability-only — log warnings but never block
   if md_is_denied "$response"; then
     reason=$(md_get_reason "$response")
-    echo "maybe-dont: AfterTool warning for '${tool_name}': ${reason}" >&2
+    echo >&2 "[maybe-dont] WARNING (AfterTool): Policy violation detected for '${tool_name}' — ${reason}"
   fi
 
   exit 0
 fi
 
 # Unknown hook event — warn but don't block
-echo "maybe-dont: unknown hook_event_name '${hook_event}', ignoring" >&2
+echo >&2 "[maybe-dont] WARNING: Unknown hook_event_name: ${hook_event}"
 exit 0

@@ -85,9 +85,16 @@ md_is_denied() {
 # Outputs:   Joined reason string on stdout
 md_get_reason() {
   local response="$1"
-  echo "$response" | jq -r '
-    [.messages[]? | .message // empty] | join("; ") // "Blocked by policy"
-  '
+  [[ -z "$response" ]] && { echo "Blocked by policy"; return 0; }
+  local reason
+  reason=$(echo "$response" | jq -r '
+    if .messages and (.messages | length) > 0 then
+      [.messages[].message] | join("; ")
+    else
+      "Blocked by policy"
+    end
+  ')
+  echo "$reason"
 }
 
 # --- Main ---
@@ -108,7 +115,7 @@ WORKSPACE_PATH=$(echo "$INPUT" | jq -r '.workspacePath // empty')
 
 # Convert the millisecond epoch timestamp to ISO 8601.
 RAW_TS=$(echo "$INPUT" | jq -r '.timestamp // empty')
-if [[ -n "$RAW_TS" ]]; then
+if [[ -n "$RAW_TS" ]] && [[ "$RAW_TS" =~ ^[0-9]+$ ]]; then
   # Cline provides millisecond epoch — convert to seconds for date(1).
   EPOCH_SECS=$(( RAW_TS / 1000 ))
   # macOS date and GNU date use different flags; try GNU first, fall back to macOS.

@@ -104,7 +104,7 @@ md_is_denied() {
 md_get_reason() {
   local response="$1"
   if [[ -z "$response" ]]; then
-    echo "Policy validation failed"
+    echo "Blocked by policy"
     return 0
   fi
   local reason
@@ -112,7 +112,7 @@ md_get_reason() {
     if .messages and (.messages | length) > 0 then
       [.messages[].message] | join("; ")
     else
-      "Policy validation failed"
+      "Blocked by policy"
     end
   ')
   echo "$reason"
