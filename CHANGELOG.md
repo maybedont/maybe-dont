@@ -1,3 +1,9 @@
+## v1.5.0 (2026-03-11)
+
+### Feat
+
+- agent hook scripts for 5 AI agents (#139)
+
 ## v1.4.0 (2026-03-05)
 
 ### Feat
