@@ -790,6 +790,37 @@ internal/hooks/
 
 CLI command in `cmd/hooks.go` mirrors `cmd/skill.go`.
 
+## Future Improvements
+
+Potential improvements identified during code review of the v1 hook scripts (PR #139):
+
+### 1. Cursor `beforeMCPExecution` fail-open hardening
+
+All scripts use `set -euo pipefail`, which means an unexpected error (e.g., jq failing on genuinely malformed input) causes a non-zero exit. For most agents this is harmless — non-zero exit = allow. But Cursor's `beforeMCPExecution` is **inherently fail-closed by the agent runtime**: a non-zero exit blocks the tool call regardless of the script's intent. The script documents this (cursor.sh:365-367) but doesn't mitigate it. A targeted `trap 'exit 0' ERR` within the `beforeMCPExecution` branch would ensure fail-open even on unexpected bash/jq errors, without weakening error handling in the rest of the script.
+
+### 2. Large request bodies via shell argument
+
+PostToolUse hooks serialize the entire tool result into the curl request body via `-d "$body"` as a shell argument. For very large tool outputs (e.g., reading a large file, verbose command output), this could hit OS argument length limits (~2MB on macOS/Linux). A more robust approach would write the request body to a temp file and use `--data-binary @"$tmpfile"` instead. Not a practical concern for most tool results, but worth hardening for edge cases.
+
+### 3. Configurable curl timeout
+
+The 30-second `--max-time 30` on curl is hardcoded. For interactive coding agents, 30 seconds of blocking can feel sluggish if the gateway is slow or under load. A `MAYBE_DONT_TIMEOUT` environment variable (defaulting to 30) would let users tune this without modifying the script. This is especially relevant for post-tool hooks where the timeout adds latency to the tool response pipeline without providing blocking value (post-tool is observability-only for most agents).
+
+### 4. Additional agent support
+
+The v1 set covers the 5 major agents with mature hook systems. Agents evaluated and excluded:
+
+| Agent | Status | Reason |
+|-------|--------|--------|
+| **Windsurf** | Monitor | Has Cascade Hooks but the format is automation-focused, not request/deny compatible |
+| **Kiro** | Monitor | Too new; JSON hook format not yet stable or publicly documented |
+| **Aider** | No hooks | No native hook system; use CLI proxy |
+| **Continue** | No hooks | No native hook API; use CLI proxy or MCP gateway |
+| **Replit Agent** | No hooks | Browser-only environment; no local hook support |
+| **Cody** | Covered | Uses Copilot hook format (`.github/hooks/`); documented as a note on copilot.config.json |
+
+Windsurf and Kiro are the most likely candidates for future additions as their hook formats mature.
+
 ## References
 
 - [SEP-1763: Interceptors for MCP](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1763) — Draft proposal
