@@ -14,11 +14,16 @@
 #   # Then add to .cursor/hooks/hooks.json (see cursor.config.json)
 #
 # Environment:
-#   MAYBE_DONT_URL — gateway base URL (default: http://localhost:8080)
+#   MAYBE_DONT_URL — gateway base URL (required)
 #
 # Dependencies: bash, curl, jq
 
 set -euo pipefail
+
+if [[ -z "${MAYBE_DONT_URL:-}" ]]; then
+  echo >&2 "[maybe-dont] ERROR: MAYBE_DONT_URL environment variable is not set"
+  exit 0  # fail-open: don't block tool calls due to misconfiguration
+fi
 
 # ---------------------------------------------------------------------------
 # Core shared functions
@@ -46,23 +51,33 @@ MD_GATEWAY_FAILED=0
 
 md_call_gateway() {
   local request_body="$1"
-  local gateway_url="${MAYBE_DONT_URL:-http://localhost:8080}"
-  local endpoint="${gateway_url}/api/v1/intercept"
+  local endpoint="${MAYBE_DONT_URL}/api/v1/intercept"
 
   MD_RESPONSE=""
   MD_GATEWAY_FAILED=0
 
-  local http_response
-  if ! http_response=$(curl -s --max-time 30 \
+  local tmpfile http_code
+  tmpfile=$(mktemp)
+  trap 'rm -f "$tmpfile"' RETURN
+
+  http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
+    --max-time 30 \
     -H "Content-Type: application/json" \
     -d "$request_body" \
-    "$endpoint" 2>/dev/null); then
+    "$endpoint" 2>/dev/null) || {
     MD_GATEWAY_FAILED=1
     echo >&2 "[maybe-dont] WARNING: gateway unreachable at ${endpoint} — failing open (allow)"
     return 0
+  }
+
+  # Non-2xx responses are treated as gateway errors — fail open.
+  if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+    MD_GATEWAY_FAILED=1
+    echo >&2 "[maybe-dont] WARNING: gateway returned HTTP ${http_code} — failing open (allow)"
+    return 0
   fi
 
-  MD_RESPONSE="$http_response"
+  MD_RESPONSE=$(<"$tmpfile")
 }
 
 # Check if the gateway response indicates a deny (valid == false).

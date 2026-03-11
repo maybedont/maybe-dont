@@ -8,11 +8,14 @@
 # PostToolUse: Observability only — sends result for audit logging.
 #
 # Dependencies: bash, curl, jq
-# Config:       MAYBE_DONT_URL (default: http://localhost:8080)
+# Config:       MAYBE_DONT_URL (required — gateway base URL)
 
 set -euo pipefail
 
-MAYBE_DONT_URL="${MAYBE_DONT_URL:-http://localhost:8080}"
+if [[ -z "${MAYBE_DONT_URL:-}" ]]; then
+  echo >&2 "[maybe-dont] ERROR: MAYBE_DONT_URL environment variable is not set"
+  exit 0  # fail-open: don't block tool calls due to misconfiguration
+fi
 GATEWAY_UNREACHABLE=false
 
 # --- Core functions ---

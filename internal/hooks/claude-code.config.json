@@ -9,7 +9,7 @@
     "  { \"matcher\": \"mcp__.*\", \"hooks\": [{ \"type\": \"command\", \"command\": \"/path/to/maybe-dont-hook.sh\" }] }",
     "",
     "Update /path/to/maybe-dont-hook.sh to the actual path of the exported hook script.",
-    "Set MAYBE_DONT_URL in your environment if the gateway is not at http://localhost:8080."
+    "Set MAYBE_DONT_URL in your environment (e.g., export MAYBE_DONT_URL=http://localhost:8080)."
   ],
   "hooks": {
     "PreToolUse": [

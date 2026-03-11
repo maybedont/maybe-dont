@@ -1,7 +1,7 @@
 # Agent Hook and MCP Interceptor Integration
 
 ## Status
-**Partially Implemented** — intercept endpoint shipped (#133); hook scripts implementation in progress (#131); MCP interceptor integration is future work
+**Draft** — intercept endpoint shipped (#133); hook scripts shipped (#131, Phases 1–4.1); Cursor mutation path, shell tests, and documentation remain
 
 ## Overview
 

@@ -24,7 +24,6 @@ Each spec should have a `## Status` section near the top with one of these value
 | [test-pass-rate-history](test-pass-rate-history.md) | Rolling pass rate tracking, policy change markers, and stability reporting for the policy test suite |
 | [release-notes-process](release-notes-process.md) | Versioned release notes (release-notes/v{version}.md) enforced by CI |
 | [openhands-integration](openhands-integration.md) | OpenHands security analyzer integration via `POST /api/v1/action/validate` endpoint |
-| [agent-hook-and-interceptor-integration](agent-hook-and-interceptor-integration.md) | Agent hooks and `POST /api/v1/intercept` endpoint — endpoint shipped, hook scripts in progress (#131) |
 
 ### Ready for Implementation
 
@@ -38,6 +37,7 @@ Each spec should have a `## Status` section near the top with one of these value
 
 | Spec | Description |
 |------|-------------|
+| [agent-hook-and-interceptor-integration](agent-hook-and-interceptor-integration.md) | Agent hooks and `POST /api/v1/intercept` endpoint — hook scripts shipped (#131), Cursor mutation path and docs remain |
 | [test-failure-categorization](test-failure-categorization.md) | Separate extra-policy-only failures from decision failures in model comparison table |
 | [prompt-injection-considerations](prompt-injection-considerations.md) | Prompt injection threat model, product positioning, and optimization strategies |
 | [api-token-obfuscation](api-token-obfuscation.md) | Obfuscate sensitive tokens in logs and audit entries |

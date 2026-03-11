@@ -8,11 +8,14 @@
 # Config:  Add to your Gemini CLI settings.json (see gemini-cli.config.json)
 #
 # Environment:
-#   MAYBE_DONT_URL  — Gateway base URL (default: http://localhost:8080)
+#   MAYBE_DONT_URL  — Gateway base URL (required)
 
 set -euo pipefail
 
-MAYBE_DONT_URL="${MAYBE_DONT_URL:-http://localhost:8080}"
+if [[ -z "${MAYBE_DONT_URL:-}" ]]; then
+  echo >&2 "maybe-dont: MAYBE_DONT_URL environment variable is not set"
+  exit 0  # fail-open: don't block tool calls due to misconfiguration
+fi
 INTERCEPT_ENDPOINT="${MAYBE_DONT_URL}/api/v1/intercept"
 
 # Flag set by md_call_gateway when curl fails (fail-open)
@@ -57,6 +60,7 @@ md_call_gateway() {
 # Returns: 0 if denied, 1 if allowed or invalid response
 md_is_denied() {
   local response="$1"
+  [[ -z "$response" ]] && return 1
   local valid
   valid=$(echo "$response" | jq -r '.valid // true')
   [[ "$valid" == "false" ]]

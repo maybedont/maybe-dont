@@ -8,11 +8,14 @@
 # PostToolUse: Observability only — sends result for audit logging.
 #
 # Dependencies: bash, curl, jq
-# Config:       MAYBE_DONT_URL (default: http://localhost:8080)
+# Config:       MAYBE_DONT_URL (required — gateway base URL)
 
 set -euo pipefail
 
-MAYBE_DONT_URL="${MAYBE_DONT_URL:-http://localhost:8080}"
+if [[ -z "${MAYBE_DONT_URL:-}" ]]; then
+  echo >&2 "[maybe-dont] ERROR: MAYBE_DONT_URL environment variable is not set"
+  exit 0  # fail-open: don't block tool calls due to misconfiguration
+fi
 GATEWAY_UNREACHABLE=false
 
 # --- Core functions ---
@@ -101,10 +104,6 @@ if [[ -z "$HOOK_EVENT" ]]; then
   exit 0
 fi
 
-# Extract common fields from Claude Code hook input.
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
-CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # --- PreToolUse ---
