@@ -32,18 +32,23 @@
 Post-tool logic is included in the same script files from Phase 2. This phase covers the response-specific behavior:
 
 - [x] **3.1 — Post-tool: observability path** — For Claude Code, Gemini CLI, Cline, Copilot: detect post-tool phase, send `phase: "response"` with tool result to gateway, log warnings to stderr. Cannot modify output.
-- [ ] **3.2 — Post-tool: Cursor mutation path** — For Cursor `afterMCPExecution` only: when gateway returns `type: "mutation"` with `modified: true`, return `updated_mcp_tool_output` with the redacted payload. This applies gateway redaction rules to actual tool output.
+- [x] **3.2 — Post-tool: Cursor mutation path** — For Cursor `afterMCPExecution` only: when gateway returns `type: "mutation"` with `modified: true`, return `updated_mcp_tool_output` with the redacted payload. This applies gateway redaction rules to actual tool output.
 
 ## Phase 4: Testing
 
 - [x] **4.1 — Go unit tests** — `internal/hooks/hooks_test.go`: verify all hooks are embedded, can be listed, retrieved by name, and config snippets parse as valid JSON.
-- [ ] **4.2 — Hook script tests** — Shell-based tests for each agent script. Mock the gateway with a simple HTTP server (or `nc`), feed agent-specific JSON to stdin, verify:
-  - Correct `/api/v1/intercept` request body sent
+- [x] **4.2 — Hook script behavioral tests** — `internal/hooks/hooks_script_test.go`: Go tests that run actual bash scripts against mock HTTP servers, covering:
+  - Correct `/api/v1/intercept` request body sent (pre-tool and post-tool)
   - Correct deny output format per agent
-  - Correct exit code per agent
-  - Fail-open behavior when gateway unreachable
+  - Correct exit code per agent (always 0)
+  - Fail-open behavior: gateway unreachable, HTTP 500, missing MAYBE_DONT_URL
   - Pre vs post phase detection
-  - Context passthrough (session_id, cwd)
+  - Context passthrough (sessionId, timestamp, working_directory, arguments)
+  - Deny fallback reason when gateway returns no messages
+  - Multiple deny messages joined with "; "
+  - Cursor-specific: afterMCPExecution mutation/redaction, afterMCPExecution deny-only observability, deny output format
+  - Cline-specific: timestamp validation and injection prevention
+  - Cross-hook equivalence: same input to different hooks produces structurally identical gateway requests
 - [ ] **4.3 — End-to-end test** — Start gateway with a test CEL deny rule, run a hook script with a known-deny tool call, verify the tool is blocked with the correct agent-specific output.
 
 ## Phase 5: Documentation (maybedont.ai/docs — separate repo)

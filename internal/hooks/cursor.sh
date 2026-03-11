@@ -180,16 +180,18 @@ detect_event() {
 # ---------------------------------------------------------------------------
 
 # Build an intercept request for a shell command (before/after).
-# Args: $1=command, $2=phase ("request"|"response"), $3=output (optional, for response phase)
+# Args: $1=command, $2=phase ("request"|"response"), $3=timestamp, $4=output (optional, for response phase)
 build_shell_request() {
   local command="$1"
   local phase="$2"
-  local output="${3:-}"
+  local ts="$3"
+  local output="${4:-}"
 
   if [[ "$phase" == "response" && -n "$output" ]]; then
     jq -n \
       --arg cmd "$command" \
       --arg phase "$phase" \
+      --arg ts "$ts" \
       --arg output "$output" \
       '{
         event: "tools/call",
@@ -204,13 +206,15 @@ build_shell_request() {
           }
         },
         context: {
-          principal: { type: "service", id: "cursor" }
+          principal: { type: "service", id: "cursor" },
+          timestamp: $ts
         }
       }'
   else
     jq -n \
       --arg cmd "$command" \
       --arg phase "$phase" \
+      --arg ts "$ts" \
       '{
         event: "tools/call",
         phase: $phase,
@@ -219,20 +223,22 @@ build_shell_request() {
           arguments: { command: $cmd }
         },
         context: {
-          principal: { type: "service", id: "cursor" }
+          principal: { type: "service", id: "cursor" },
+          timestamp: $ts
         }
       }'
   fi
 }
 
 # Build an intercept request for an MCP tool call (before/after).
-# Args: $1=serverName, $2=toolName, $3=arguments (JSON), $4=phase, $5=output (optional)
+# Args: $1=serverName, $2=toolName, $3=arguments (JSON), $4=phase, $5=timestamp, $6=output (optional)
 build_mcp_request() {
   local server_name="$1"
   local tool_name="$2"
   local arguments="$3"
   local phase="$4"
-  local output="${5:-}"
+  local ts="$5"
+  local output="${6:-}"
 
   # Combine serverName and toolName into prefixed name: serverName__toolName
   local prefixed_name="${server_name}__${tool_name}"
@@ -242,6 +248,7 @@ build_mcp_request() {
       --arg name "$prefixed_name" \
       --argjson args "$arguments" \
       --arg phase "$phase" \
+      --arg ts "$ts" \
       --arg output "$output" \
       '{
         event: "tools/call",
@@ -256,7 +263,8 @@ build_mcp_request() {
           }
         },
         context: {
-          principal: { type: "service", id: "cursor" }
+          principal: { type: "service", id: "cursor" },
+          timestamp: $ts
         }
       }'
   else
@@ -264,6 +272,7 @@ build_mcp_request() {
       --arg name "$prefixed_name" \
       --argjson args "$arguments" \
       --arg phase "$phase" \
+      --arg ts "$ts" \
       '{
         event: "tools/call",
         phase: $phase,
@@ -272,7 +281,8 @@ build_mcp_request() {
           arguments: $args
         },
         context: {
-          principal: { type: "service", id: "cursor" }
+          principal: { type: "service", id: "cursor" },
+          timestamp: $ts
         }
       }'
   fi
@@ -292,6 +302,7 @@ if [[ -z "$INPUT" ]]; then
   exit 0
 fi
 
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EVENT=$(detect_event "$INPUT")
 
 case "$EVENT" in
@@ -306,7 +317,7 @@ case "$EVENT" in
       exit 0
     fi
 
-    request=$(build_shell_request "$command_str" "request")
+    request=$(build_shell_request "$command_str" "request" "$TIMESTAMP")
     md_call_gateway "$request"
 
     if [[ "$MD_GATEWAY_FAILED" -eq 1 ]]; then
@@ -337,7 +348,7 @@ case "$EVENT" in
       exit 0
     fi
 
-    request=$(build_shell_request "$command_str" "response" "$output_str")
+    request=$(build_shell_request "$command_str" "response" "$TIMESTAMP" "$output_str")
     md_call_gateway "$request"
 
     # Observability only — log any warnings but always allow
@@ -365,7 +376,7 @@ case "$EVENT" in
       exit 0
     fi
 
-    request=$(build_mcp_request "$server_name" "$tool_name" "$arguments" "request")
+    request=$(build_mcp_request "$server_name" "$tool_name" "$arguments" "request" "$TIMESTAMP")
     md_call_gateway "$request"
 
     if [[ "$MD_GATEWAY_FAILED" -eq 1 ]]; then
@@ -398,7 +409,7 @@ case "$EVENT" in
       exit 0
     fi
 
-    request=$(build_mcp_request "$server_name" "$tool_name" "$arguments" "response" "$output_str")
+    request=$(build_mcp_request "$server_name" "$tool_name" "$arguments" "response" "$TIMESTAMP" "$output_str")
     md_call_gateway "$request"
 
     if [[ "$MD_GATEWAY_FAILED" -eq 1 ]]; then

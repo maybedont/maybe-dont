@@ -115,6 +115,9 @@ fi
 
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# VS Code Copilot provides sessionId (camelCase); Copilot CLI does not.
+SESSION_ID=$(echo "$INPUT" | jq -r '.sessionId // empty')
+
 # --- PreToolUse ---
 
 if [[ "$HOOK_EVENT" == "PreToolUse" ]]; then
@@ -122,6 +125,7 @@ if [[ "$HOOK_EVENT" == "PreToolUse" ]]; then
   # input fields, avoiding any manual string interpolation of user data.
   REQUEST=$(echo "$INPUT" | jq -c \
     --arg timestamp "$TIMESTAMP" \
+    --arg sessionId "$SESSION_ID" \
     '{
       event: "tools/call",
       phase: "request",
@@ -131,6 +135,7 @@ if [[ "$HOOK_EVENT" == "PreToolUse" ]]; then
       },
       context: {
         principal: { type: "service", id: "copilot" },
+        sessionId: (if $sessionId != "" then $sessionId else null end),
         timestamp: $timestamp
       }
     }')
@@ -165,6 +170,7 @@ if [[ "$HOOK_EVENT" == "PostToolUse" ]]; then
   # Build the intercept request with the tool result included.
   REQUEST=$(echo "$INPUT" | jq -c \
     --arg timestamp "$TIMESTAMP" \
+    --arg sessionId "$SESSION_ID" \
     '{
       event: "tools/call",
       phase: "response",
@@ -182,6 +188,7 @@ if [[ "$HOOK_EVENT" == "PostToolUse" ]]; then
       },
       context: {
         principal: { type: "service", id: "copilot" },
+        sessionId: (if $sessionId != "" then $sessionId else null end),
         timestamp: $timestamp
       }
     }')

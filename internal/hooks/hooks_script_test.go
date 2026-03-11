@@ -147,11 +147,12 @@ func claudeCodePostToolInput() string {
 }
 
 func copilotPreToolInput() string {
-	return `{"hook_event_name": "PreToolUse", "tool_name": "gh_create_issue", "tool_input": {"title": "test"}, "session_id": "sess-1"}`
+	// VS Code Copilot uses camelCase sessionId (Copilot CLI doesn't provide it at all).
+	return `{"hook_event_name": "PreToolUse", "tool_name": "gh_create_issue", "tool_input": {"title": "test"}, "sessionId": "sess-1"}`
 }
 
 func copilotPostToolInput() string {
-	return `{"hook_event_name": "PostToolUse", "tool_name": "gh_create_issue", "tool_input": {"title": "test"}, "tool_result": "created", "session_id": "sess-1"}`
+	return `{"hook_event_name": "PostToolUse", "tool_name": "gh_create_issue", "tool_input": {"title": "test"}, "tool_result": "created", "sessionId": "sess-1"}`
 }
 
 func clinePreToolInput() string {
@@ -643,6 +644,368 @@ func TestCursorAfterMCPMutation(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(stdout), &out))
 	assert.Equal(t, "[REDACTED]", out["updated_mcp_tool_output"],
 		"Should return redacted text")
+}
+
+// =============================================================================
+// Context passthrough — verify sessionId, timestamp, working_directory, arguments
+// =============================================================================
+
+// TestContextPassthrough verifies that each agent script correctly forwards
+// session ID, timestamp, working directory, and tool arguments into the
+// intercept request's context and config fields.
+func TestContextPassthrough(t *testing.T) {
+	tests := []struct {
+		name             string
+		hookName         string
+		stdin            string
+		wantSessionID    string
+		wantWorkDir      string
+		wantArgKey       string // one argument key to verify passthrough
+		wantArgValue     any    // expected value for that argument key
+		sessionIDPresent bool   // whether sessionId should be present (vs null)
+		hasTimestamp     bool   // whether the script generates a timestamp
+	}{
+		{
+			name:     "claude-code forwards session_id, cwd, arguments",
+			hookName: "claude-code", stdin: claudeCodePreToolInput(),
+			wantSessionID: "sess-1", wantWorkDir: "/workspace",
+			wantArgKey: "command", wantArgValue: "rm -rf /",
+			sessionIDPresent: true, hasTimestamp: true,
+		},
+		{
+			name:     "copilot forwards sessionId, arguments",
+			hookName: "copilot", stdin: copilotPreToolInput(),
+			wantSessionID: "sess-1", wantWorkDir: "",
+			wantArgKey: "title", wantArgValue: "test",
+			sessionIDPresent: true, hasTimestamp: true,
+		},
+		{
+			name:     "gemini-cli forwards session_id, cwd, arguments",
+			hookName: "gemini-cli", stdin: geminiPreToolInput(),
+			wantSessionID: "sess-1", wantWorkDir: "/workspace",
+			wantArgKey: "path", wantArgValue: "/etc/passwd",
+			sessionIDPresent: true, hasTimestamp: true,
+		},
+		{
+			name:     "cline forwards taskId as sessionId, workspacePath, arguments",
+			hookName: "cline", stdin: clinePreToolInput(),
+			wantSessionID: "task-1", wantWorkDir: "/workspace",
+			wantArgKey: "command", wantArgValue: "rm -rf /",
+			sessionIDPresent: true, hasTimestamp: true,
+		},
+		{
+			name:     "cursor shell forwards command as argument",
+			hookName: "cursor", stdin: cursorShellInput(),
+			wantSessionID: "", wantWorkDir: "",
+			wantArgKey: "command", wantArgValue: "rm -rf /",
+			sessionIDPresent: false, hasTimestamp: true,
+		},
+		{
+			name:     "cursor MCP forwards arguments",
+			hookName: "cursor", stdin: cursorMCPInput(),
+			wantSessionID: "", wantWorkDir: "",
+			wantArgKey: "repo", wantArgValue: "test",
+			sessionIDPresent: false, hasTimestamp: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, captured := mockGateway(t, http.StatusOK, allowResponse)
+			hook := GetHook(tc.hookName)
+			require.NotNil(t, hook)
+
+			result := runScript(t, hook.Script, tc.stdin, map[string]string{
+				"MAYBE_DONT_URL": server.URL,
+			})
+
+			assert.Equal(t, 0, result.ExitCode)
+			require.Len(t, *captured, 1)
+			req := (*captured)[0]
+
+			// Verify timestamp when the script generates one.
+			if tc.hasTimestamp {
+				assert.NotEmpty(t, req.Context.Timestamp, "Timestamp should be set")
+				assert.Regexp(t, `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`, req.Context.Timestamp,
+					"Timestamp should be ISO 8601 format")
+			}
+
+			// Verify session ID passthrough.
+			if tc.sessionIDPresent {
+				assert.Equal(t, tc.wantSessionID, req.Context.SessionID,
+					"SessionID should be forwarded from agent input")
+			}
+
+			// Verify working directory passthrough.
+			if tc.wantWorkDir != "" {
+				require.NotNil(t, req.Config, "Config should be present when working directory is set")
+				assert.Equal(t, tc.wantWorkDir, req.Config.WorkingDirectory,
+					"Working directory should be forwarded from agent input")
+			}
+
+			// Verify at least one argument is correctly passed through.
+			argVal, ok := req.Payload.Arguments[tc.wantArgKey]
+			require.True(t, ok, "Argument %q should be present in payload", tc.wantArgKey)
+			assert.Equal(t, tc.wantArgValue, argVal,
+				"Argument %q should have correct value", tc.wantArgKey)
+		})
+	}
+}
+
+// =============================================================================
+// Post-tool intercept request format — verify phase="response" + result payload
+// =============================================================================
+
+// TestPostToolInterceptRequestFormat verifies that post-tool hooks send
+// phase="response" and include a result payload to the gateway.
+func TestPostToolInterceptRequestFormat(t *testing.T) {
+	tests := []struct {
+		name        string
+		hookName    string
+		stdin       string
+		wantTool    string
+		wantAgentID string
+		wantResult  string // expected substring in result.content[0].text
+	}{
+		{
+			name: "claude-code PostToolUse request", hookName: "claude-code",
+			stdin:    claudeCodePostToolInput(),
+			wantTool: "Bash", wantAgentID: "claude-code",
+			wantResult: "file1.txt",
+		},
+		{
+			name: "copilot PostToolUse request", hookName: "copilot",
+			stdin:    copilotPostToolInput(),
+			wantTool: "gh_create_issue", wantAgentID: "copilot",
+			wantResult: "created",
+		},
+		{
+			name: "cline postToolUse request", hookName: "cline",
+			stdin:    clinePostToolInput(),
+			wantTool: "execute_command", wantAgentID: "cline",
+			wantResult: "file1.txt",
+		},
+		{
+			name: "gemini-cli AfterTool request", hookName: "gemini-cli",
+			stdin:    geminiPostToolInput(),
+			wantTool: "read_file", wantAgentID: "gemini-cli",
+			wantResult: "content", // JSON object serialized to string
+		},
+		{
+			name: "cursor afterShellExecution request", hookName: "cursor",
+			stdin:    `{"command": "ls", "output": "file1.txt"}`,
+			wantTool: "Bash", wantAgentID: "cursor",
+			wantResult: "file1.txt",
+		},
+		{
+			name: "cursor afterMCPExecution request", hookName: "cursor",
+			stdin:    cursorAfterMCPInput(),
+			wantTool: "github__list_repos", wantAgentID: "cursor",
+			wantResult: "repo1",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, captured := mockGateway(t, http.StatusOK, allowResponse)
+			hook := GetHook(tc.hookName)
+			require.NotNil(t, hook)
+
+			result := runScript(t, hook.Script, tc.stdin, map[string]string{
+				"MAYBE_DONT_URL": server.URL,
+			})
+
+			assert.Equal(t, 0, result.ExitCode)
+			require.Len(t, *captured, 1, "Should send exactly one request to gateway")
+
+			req := (*captured)[0]
+			assert.Equal(t, "tools/call", req.Event)
+			assert.Equal(t, "response", req.Phase, "Post-tool must send phase=response")
+			assert.Equal(t, tc.wantTool, req.Payload.Name)
+			assert.Equal(t, "service", req.Context.Principal.Type)
+			assert.Equal(t, tc.wantAgentID, req.Context.Principal.ID)
+
+			// Verify result payload is present with content.
+			require.NotNil(t, req.Payload.Result, "Post-tool request must include result")
+			require.NotEmpty(t, req.Payload.Result.Content, "Result must have content entries")
+			assert.Equal(t, "text", req.Payload.Result.Content[0].Type)
+			assert.Contains(t, req.Payload.Result.Content[0].Text, tc.wantResult,
+				"Result text should contain tool output")
+		})
+	}
+}
+
+// =============================================================================
+// Cursor afterMCPExecution deny (non-mutation) — observability only
+// =============================================================================
+
+// TestCursorAfterMCPDenyObservability verifies that cursor afterMCPExecution
+// logs a deny to stderr but produces no deny output to stdout when the gateway
+// returns a plain deny (not a mutation response).
+func TestCursorAfterMCPDenyObservability(t *testing.T) {
+	server, _ := mockGateway(t, http.StatusOK, denyResponse)
+	hook := GetHook("cursor")
+	require.NotNil(t, hook)
+
+	result := runScript(t, hook.Script, cursorAfterMCPInput(), map[string]string{
+		"MAYBE_DONT_URL": server.URL,
+	})
+
+	assert.Equal(t, 0, result.ExitCode, "afterMCPExecution must always exit 0")
+	stdout := strings.TrimSpace(result.Stdout)
+	assert.Empty(t, stdout, "Should not produce any stdout on deny (observability only)")
+	assert.Contains(t, result.Stderr, "maybe-dont",
+		"Should log policy violation warning to stderr")
+	assert.Contains(t, result.Stderr, "no-destructive-ops",
+		"Should include the deny reason in stderr warning")
+}
+
+// =============================================================================
+// Cursor deny with no messages — verify no extraneous reason field
+// =============================================================================
+
+// TestCursorDenyNoMessages verifies that cursor produces a clean deny output
+// with no reason field when the gateway returns a deny with no messages.
+// Cursor's deny format is just {"permission": "deny"} — no reason field.
+func TestCursorDenyNoMessages(t *testing.T) {
+	tests := []struct {
+		name  string
+		stdin string
+	}{
+		{"cursor shell deny no messages", cursorShellInput()},
+		{"cursor MCP deny no messages", cursorMCPInput()},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _ := mockGateway(t, http.StatusOK, denyNoMessagesReponse)
+			hook := GetHook("cursor")
+			require.NotNil(t, hook)
+
+			result := runScript(t, hook.Script, tc.stdin, map[string]string{
+				"MAYBE_DONT_URL": server.URL,
+			})
+
+			assert.Equal(t, 0, result.ExitCode)
+			stdout := strings.TrimSpace(result.Stdout)
+			require.NotEmpty(t, stdout, "Should produce deny output")
+
+			var parsed map[string]any
+			require.NoError(t, json.Unmarshal([]byte(stdout), &parsed))
+			assert.Equal(t, "deny", parsed["permission"],
+				"Should output permission deny")
+			// Cursor's deny format has no reason field — only permission.
+			assert.Len(t, parsed, 1,
+				"Cursor deny output should only contain 'permission' field")
+		})
+	}
+}
+
+// =============================================================================
+// Multiple deny messages — verify "; " joining
+// =============================================================================
+
+// TestMultipleMessagesJoined verifies that when the gateway returns multiple
+// deny messages, they are joined with "; " in the deny output.
+func TestMultipleMessagesJoined(t *testing.T) {
+	multiMessageDeny := `{"valid": false, "messages": [{"message": "Rule A violated"}, {"message": "Rule B violated"}]}`
+
+	tests := []struct {
+		name        string
+		hookName    string
+		stdin       string
+		reasonField string
+	}{
+		{"claude-code multi-message", "claude-code", claudeCodePreToolInput(), "hookSpecificOutput.permissionDecisionReason"},
+		{"copilot multi-message", "copilot", copilotPreToolInput(), "hookSpecificOutput.permissionDecisionReason"},
+		{"cline multi-message", "cline", clinePreToolInput(), "errorMessage"},
+		{"gemini-cli multi-message", "gemini-cli", geminiPreToolInput(), "reason"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _ := mockGateway(t, http.StatusOK, multiMessageDeny)
+			hook := GetHook(tc.hookName)
+			require.NotNil(t, hook)
+
+			result := runScript(t, hook.Script, tc.stdin, map[string]string{
+				"MAYBE_DONT_URL": server.URL,
+			})
+
+			assert.Equal(t, 0, result.ExitCode)
+			stdout := strings.TrimSpace(result.Stdout)
+			require.NotEmpty(t, stdout)
+
+			var parsed map[string]any
+			require.NoError(t, json.Unmarshal([]byte(stdout), &parsed))
+
+			reason := extractNestedField(parsed, tc.reasonField)
+			reasonStr, ok := reason.(string)
+			require.True(t, ok, "Reason field should be a string")
+			assert.Equal(t, "Rule A violated; Rule B violated", reasonStr,
+				"Multiple messages should be joined with '; '")
+		})
+	}
+}
+
+// =============================================================================
+// Cross-hook equivalence — same input produces same gateway request
+// =============================================================================
+
+// TestCrossHookRequestEquivalence verifies that agents receiving equivalent
+// tool call input produce structurally identical intercept request payloads
+// (differing only in principal.id and context fields the agent may/may not have).
+func TestCrossHookRequestEquivalence(t *testing.T) {
+	// Claude Code and Gemini CLI both receive tool_name + tool_input in the same
+	// format (with hook_event_name, session_id, cwd). Their gateway requests for
+	// the same tool call should have identical event, phase, payload.name, and
+	// payload.arguments — only principal.id differs.
+	claudeInput := `{"hook_event_name": "PreToolUse", "tool_name": "read_file", "tool_input": {"path": "/tmp/test"}, "session_id": "shared-sess", "cwd": "/project"}`
+	geminiInput := `{"hook_event_name": "BeforeTool", "tool_name": "read_file", "tool_input": {"path": "/tmp/test"}, "session_id": "shared-sess", "cwd": "/project"}`
+
+	// Run claude-code
+	ccServer, ccCaptured := mockGateway(t, http.StatusOK, allowResponse)
+	ccHook := GetHook("claude-code")
+	require.NotNil(t, ccHook)
+	ccResult := runScript(t, ccHook.Script, claudeInput, map[string]string{
+		"MAYBE_DONT_URL": ccServer.URL,
+	})
+	assert.Equal(t, 0, ccResult.ExitCode)
+	require.Len(t, *ccCaptured, 1)
+	ccReq := (*ccCaptured)[0]
+
+	// Run gemini-cli
+	gemServer, gemCaptured := mockGateway(t, http.StatusOK, allowResponse)
+	gemHook := GetHook("gemini-cli")
+	require.NotNil(t, gemHook)
+	gemResult := runScript(t, gemHook.Script, geminiInput, map[string]string{
+		"MAYBE_DONT_URL": gemServer.URL,
+	})
+	assert.Equal(t, 0, gemResult.ExitCode)
+	require.Len(t, *gemCaptured, 1)
+	gemReq := (*gemCaptured)[0]
+
+	// Verify structural equivalence (everything except principal.id).
+	assert.Equal(t, ccReq.Event, gemReq.Event, "Event should match across hooks")
+	assert.Equal(t, ccReq.Phase, gemReq.Phase, "Phase should match across hooks")
+	assert.Equal(t, ccReq.Payload.Name, gemReq.Payload.Name,
+		"Payload name should match across hooks")
+	assert.Equal(t, ccReq.Payload.Arguments, gemReq.Payload.Arguments,
+		"Payload arguments should match across hooks")
+	assert.Equal(t, ccReq.Context.SessionID, gemReq.Context.SessionID,
+		"SessionID should match across hooks given same input")
+	assert.Equal(t, ccReq.Context.Timestamp, gemReq.Context.Timestamp,
+		"Timestamp should both be ISO 8601 (may differ by seconds)")
+
+	// principal.id must differ
+	assert.Equal(t, "claude-code", ccReq.Context.Principal.ID)
+	assert.Equal(t, "gemini-cli", gemReq.Context.Principal.ID)
+
+	// Working directory should match
+	require.NotNil(t, ccReq.Config)
+	require.NotNil(t, gemReq.Config)
+	assert.Equal(t, ccReq.Config.WorkingDirectory, gemReq.Config.WorkingDirectory,
+		"Working directory should match across hooks given same input")
 }
 
 // =============================================================================
