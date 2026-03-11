@@ -90,7 +90,7 @@ md_is_denied() {
     return 1
   fi
   local valid
-  valid=$(echo "$response" | jq -r '.valid // true')
+  valid=$(echo "$response" | jq -r '.valid')
   if [[ "$valid" == "false" ]]; then
     return 0
   fi

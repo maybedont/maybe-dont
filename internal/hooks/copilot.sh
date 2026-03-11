@@ -77,7 +77,7 @@ md_is_denied() {
   local response="$1"
   [[ -z "$response" ]] && return 1
   local valid
-  valid=$(echo "$response" | jq -r '.valid // true')
+  valid=$(echo "$response" | jq -r '.valid')
   [[ "$valid" == "false" ]]
 }
 
