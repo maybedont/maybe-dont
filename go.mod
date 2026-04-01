@@ -1,8 +1,8 @@
 module github.com/maybedont/maybe-dont
 
-go 1.24.0
+go 1.25.0
 
-toolchain go1.24.3
+toolchain go1.25.8
 
 require (
 	github.com/google/cel-go v0.26.1
