@@ -3432,8 +3432,8 @@ func TestInterceptConfigEnvOverride(t *testing.T) {
 	require.False(t, cfg.Intercept.Enabled)
 }
 
-// TestPolicyMode_IsValid verifies that IsValid accepts audit_only, enforce,
-// and empty string, but rejects unknown values.
+// TestPolicyMode_IsValid verifies that IsValid accepts audit_only and enforce,
+// but rejects empty string and unknown values.
 func TestPolicyMode_IsValid(t *testing.T) {
 	tests := []struct {
 		mode PolicyMode
@@ -3441,19 +3441,46 @@ func TestPolicyMode_IsValid(t *testing.T) {
 	}{
 		{PolicyModeAuditOnly, true},
 		{PolicyModeEnforce, true},
-		{"", true},
+		{"", false},
 		{"block", false},
 		{"unknown", false},
 	}
 	for _, tt := range tests {
-		t.Run(string(tt.mode), func(t *testing.T) {
+		name := string(tt.mode)
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
 			require.Equal(t, tt.want, tt.mode.IsValid())
 		})
 	}
 }
 
+// TestPolicyMode_Normalize verifies that Normalize converts empty string
+// to enforce and leaves other values unchanged.
+func TestPolicyMode_Normalize(t *testing.T) {
+	tests := []struct {
+		mode PolicyMode
+		want PolicyMode
+	}{
+		{"", PolicyModeEnforce},
+		{PolicyModeAuditOnly, PolicyModeAuditOnly},
+		{PolicyModeEnforce, PolicyModeEnforce},
+		{"block", "block"}, // invalid values pass through (caught by IsValid)
+	}
+	for _, tt := range tests {
+		name := string(tt.mode)
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.mode.Normalize())
+		})
+	}
+}
+
 // TestPolicyMode_IsAuditOnly verifies that only audit_only returns true;
-// enforce and empty string both mean rules can block.
+// enforce means rules can block.
 func TestPolicyMode_IsAuditOnly(t *testing.T) {
 	tests := []struct {
 		mode PolicyMode
@@ -3461,7 +3488,6 @@ func TestPolicyMode_IsAuditOnly(t *testing.T) {
 	}{
 		{PolicyModeAuditOnly, true},
 		{PolicyModeEnforce, false},
-		{"", false},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.mode), func(t *testing.T) {
@@ -3471,7 +3497,8 @@ func TestPolicyMode_IsAuditOnly(t *testing.T) {
 }
 
 // TestResolvePolicyMode_Enforce verifies that the enforce mode resolves
-// correctly at both top-level and per-rule scope.
+// correctly at both top-level and per-rule scope. The function always returns
+// one of the two valid constants (audit_only or enforce), never empty string.
 func TestResolvePolicyMode_Enforce(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -3482,8 +3509,7 @@ func TestResolvePolicyMode_Enforce(t *testing.T) {
 		{"top-level audit_only overrides rule enforce", PolicyModeAuditOnly, PolicyModeEnforce, PolicyModeAuditOnly},
 		{"top-level enforce with rule audit_only", PolicyModeEnforce, PolicyModeAuditOnly, PolicyModeAuditOnly},
 		{"top-level enforce with rule enforce", PolicyModeEnforce, PolicyModeEnforce, PolicyModeEnforce},
-		{"top-level enforce with rule empty", PolicyModeEnforce, "", ""},
-		{"top-level empty with rule enforce", "", PolicyModeEnforce, PolicyModeEnforce},
+		{"both audit_only", PolicyModeAuditOnly, PolicyModeAuditOnly, PolicyModeAuditOnly},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3504,4 +3530,25 @@ func TestPolicyMode_EnforceViaEnvVar(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, PolicyModeEnforce, cfg.RequestValidation.CEL.Mode)
 	require.False(t, cfg.RequestValidation.CEL.Mode.IsAuditOnly())
+}
+
+// TestPolicyMode_InvalidModeRejected verifies that an invalid policy mode
+// causes LoadConfig to return an error.
+func TestPolicyMode_InvalidModeRejected(t *testing.T) {
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	t.Setenv("MAYBE_DONT_REQUEST_VALIDATION_CEL_MODE", "block")
+
+	_, err := LoadConfig(configDir, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid policy mode")
+}
+
+// TestPolicyMode_NormalizeMethod verifies the Normalize method converts
+// empty string to enforce while leaving valid values unchanged.
+func TestPolicyMode_NormalizeMethod(t *testing.T) {
+	require.Equal(t, PolicyModeEnforce, PolicyMode("").Normalize())
+	require.Equal(t, PolicyModeAuditOnly, PolicyModeAuditOnly.Normalize())
+	require.Equal(t, PolicyModeEnforce, PolicyModeEnforce.Normalize())
 }

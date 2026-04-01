@@ -35,9 +35,11 @@ jobs:
           # Save output for later steps
           echo "$OUTPUT" > vuln-report.json
 
-          # Count actual vulnerability findings from JSON lines output using jq.
-          # Each finding object has an "osv" field; deduplicate by OSV ID to get the real count.
-          VULN_COUNT=$(jq -s '[.[] | select(.finding) | .finding.osv] | unique | length' vuln-report.json 2>/dev/null) || VULN_COUNT=0
+          # Extract unique findings into a JSON array for consistent parsing across steps.
+          # govulncheck -json outputs pretty-printed multi-line JSON objects (not NDJSON),
+          # so jq's stream parser is needed — line-by-line parsing won't work.
+          jq -s '[.[] | select(.finding) | .finding] | unique_by(.osv)' vuln-report.json > vuln-findings.json 2>/dev/null || echo '[]' > vuln-findings.json
+          VULN_COUNT=$(jq 'length' vuln-findings.json)
           echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
 
           exit 0  # Don't fail yet, let justification check run
@@ -82,18 +84,8 @@ jobs:
           script: |
             const fs = require('fs');
 
-            // Parse findings from JSON lines output
-            const findings = [];
-            const lines = fs.readFileSync('vuln-report.json', 'utf8').split('\n');
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              try {
-                const obj = JSON.parse(line);
-                if (obj.finding) {
-                  findings.push(obj.finding);
-                }
-              } catch (e) {}
-            }
+            // Read pre-parsed findings (extracted by the govulncheck step using jq)
+            const findings = JSON.parse(fs.readFileSync('vuln-findings.json', 'utf8'));
 
             // Build report
             let report = '## Vulnerability Scan Results\n\n';

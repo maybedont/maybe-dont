@@ -36,7 +36,7 @@ const (
 )
 
 // PolicyMode represents the execution mode for a policy or policy group.
-// Valid values: "audit_only" (log but don't block), "enforce" (rules can block), or "" (same as enforce).
+// Valid values: "audit_only" (log but don't block) or "enforce" (rules can block).
 type PolicyMode string
 
 const (
@@ -44,9 +44,18 @@ const (
 	PolicyModeEnforce   PolicyMode = "enforce"    // Policy executes and can block requests
 )
 
-// IsValid returns true if the PolicyMode is a valid value
+// IsValid returns true if the PolicyMode is a recognized value.
 func (m PolicyMode) IsValid() bool {
-	return m == PolicyModeAuditOnly || m == PolicyModeEnforce || m == ""
+	return m == PolicyModeAuditOnly || m == PolicyModeEnforce
+}
+
+// Normalize returns the canonical form of the PolicyMode.
+// Empty string (Go zero value for unset fields) is normalized to enforce.
+func (m PolicyMode) Normalize() PolicyMode {
+	if m == "" {
+		return PolicyModeEnforce
+	}
+	return m
 }
 
 // IsAuditOnly returns true if the mode is audit_only
@@ -79,14 +88,15 @@ func newLumberjackLogger(path string, rotationCfg RotationConfig) io.WriteCloser
 // Resolution logic:
 //  1. If top-level mode is audit_only, rule is audit_only
 //  2. If rule mode is audit_only, rule is audit_only
-//  3. Otherwise, rule can block (mode is empty)
+//  3. Otherwise, rule can block (mode is enforce)
 func ResolvePolicyMode(topLevelMode PolicyMode, ruleMode PolicyMode) PolicyMode {
-	// If top-level is audit_only, all rules are audit_only
 	if topLevelMode == PolicyModeAuditOnly {
 		return PolicyModeAuditOnly
 	}
-	// Otherwise, per-rule mode applies (audit_only or empty)
-	return ruleMode
+	if ruleMode == PolicyModeAuditOnly {
+		return PolicyModeAuditOnly
+	}
+	return PolicyModeEnforce
 }
 
 // Config represents the application configuration
@@ -243,7 +253,7 @@ type Policy struct {
 	Action        PolicyAction `mapstructure:"action" yaml:"action"` // allow or deny
 	Message       string       `mapstructure:"message" yaml:"message"`
 	Enabled       *bool        `mapstructure:"enabled" yaml:"enabled"` // Whether this rule runs (default: true)
-	Mode          PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only", "enforce", or empty (default: follows top-level)
+	Mode          PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only" or "enforce" (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -262,7 +272,7 @@ type AIPolicy struct {
 	Action      PolicyAction `mapstructure:"action"` // allow or deny
 	Message     string       `mapstructure:"message"`
 	Enabled     *bool        `mapstructure:"enabled"` // Whether this rule runs (default: true)
-	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: follows top-level)
+	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or "enforce" (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -283,7 +293,7 @@ type ResponsePolicy struct {
 	RedactionPattern     string       `mapstructure:"redaction_pattern" yaml:"redaction_pattern"`
 	RedactionReplacement string       `mapstructure:"redaction_replacement" yaml:"redaction_replacement"`
 	Enabled              *bool        `mapstructure:"enabled" yaml:"enabled"` // Whether this rule runs (default: true)
-	Mode                 PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only", "enforce", or empty (default: follows top-level)
+	Mode                 PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only" or "enforce" (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -302,7 +312,7 @@ type AIResponsePolicy struct {
 	Action      PolicyAction `mapstructure:"action"` // allow, deny, or redact
 	Message     string       `mapstructure:"message"`
 	Enabled     *bool        `mapstructure:"enabled"` // Whether this rule runs (default: true)
-	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: follows top-level)
+	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or "enforce" (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -328,7 +338,7 @@ type ResponseValidationConfig struct {
 // CELRequestValidationConfig for deterministic CEL-based request validation
 type CELRequestValidationConfig struct {
 	Enabled   bool       `mapstructure:"enabled"` // Whether this validation phase runs (default: true)
-	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: audit_only)
+	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only" or "enforce" (default: audit_only)
 	RulesFile string     `mapstructure:"rules_file"`
 	Rules     []Policy   `mapstructure:"rules"`
 }
@@ -336,7 +346,7 @@ type CELRequestValidationConfig struct {
 // AIRequestValidationConfig for AI-powered request validation
 type AIRequestValidationConfig struct {
 	Enabled   bool       `mapstructure:"enabled"` // Whether this validation phase runs (default: true)
-	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: audit_only)
+	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only" or "enforce" (default: audit_only)
 	RulesFile string     `mapstructure:"rules_file"`
 	Rules     []AIPolicy `mapstructure:"rules"`
 }
@@ -344,7 +354,7 @@ type AIRequestValidationConfig struct {
 // CELResponseValidationConfig for deterministic CEL-based response validation
 type CELResponseValidationConfig struct {
 	Enabled   bool             `mapstructure:"enabled"` // Whether this validation phase runs (default: false)
-	Mode      PolicyMode       `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: audit_only)
+	Mode      PolicyMode       `mapstructure:"mode"`    // "audit_only" or "enforce" (default: audit_only)
 	RulesFile string           `mapstructure:"rules_file"`
 	Rules     []ResponsePolicy `mapstructure:"rules"`
 }
@@ -352,7 +362,7 @@ type CELResponseValidationConfig struct {
 // AIResponseValidationConfig for AI-powered response validation
 type AIResponseValidationConfig struct {
 	Enabled   bool               `mapstructure:"enabled"` // Whether this validation phase runs (default: false)
-	Mode      PolicyMode         `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: audit_only)
+	Mode      PolicyMode         `mapstructure:"mode"`    // "audit_only" or "enforce" (default: audit_only)
 	RulesFile string             `mapstructure:"rules_file"`
 	Rules     []AIResponsePolicy `mapstructure:"rules"`
 }
@@ -1426,9 +1436,44 @@ func configErrorSimple(message string) string {
 // validateConfigWithOptions is the internal implementation that validates the configuration,
 // collects all errors (including any pre-existing load errors), and provides contextual guidance.
 func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []string) error {
+	// Normalize policy modes: convert empty string (Go zero value for unset fields)
+	// to enforce for backwards compatibility. This must happen before validation.
+	cfg.RequestValidation.CEL.Mode = cfg.RequestValidation.CEL.Mode.Normalize()
+	cfg.RequestValidation.AI.Mode = cfg.RequestValidation.AI.Mode.Normalize()
+	cfg.ResponseValidation.CEL.Mode = cfg.ResponseValidation.CEL.Mode.Normalize()
+	cfg.ResponseValidation.AI.Mode = cfg.ResponseValidation.AI.Mode.Normalize()
+	for i := range cfg.RequestValidation.CEL.Rules {
+		cfg.RequestValidation.CEL.Rules[i].Mode = cfg.RequestValidation.CEL.Rules[i].Mode.Normalize()
+	}
+	for i := range cfg.RequestValidation.AI.Rules {
+		cfg.RequestValidation.AI.Rules[i].Mode = cfg.RequestValidation.AI.Rules[i].Mode.Normalize()
+	}
+	for i := range cfg.ResponseValidation.CEL.Rules {
+		cfg.ResponseValidation.CEL.Rules[i].Mode = cfg.ResponseValidation.CEL.Rules[i].Mode.Normalize()
+	}
+	for i := range cfg.ResponseValidation.AI.Rules {
+		cfg.ResponseValidation.AI.Rules[i].Mode = cfg.ResponseValidation.AI.Rules[i].Mode.Normalize()
+	}
+
 	// Start with any errors from loading policy files
 	var errors []string
 	errors = append(errors, loadErrors...)
+
+	// Validate policy modes (must be "audit_only" or "enforce" after normalization)
+	modeChecks := []struct {
+		path string
+		mode PolicyMode
+	}{
+		{"request_validation.cel.mode", cfg.RequestValidation.CEL.Mode},
+		{"request_validation.ai.mode", cfg.RequestValidation.AI.Mode},
+		{"response_validation.cel.mode", cfg.ResponseValidation.CEL.Mode},
+		{"response_validation.ai.mode", cfg.ResponseValidation.AI.Mode},
+	}
+	for _, mc := range modeChecks {
+		if !mc.mode.IsValid() {
+			errors = append(errors, configError(mc.path, fmt.Sprintf("invalid policy mode %q (must be \"audit_only\" or \"enforce\")", mc.mode)))
+		}
+	}
 
 	// Validate server type
 	switch cfg.Server.Type {

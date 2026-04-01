@@ -29,9 +29,9 @@ The current mode system has a usability issue:
 | Field | Values | Purpose |
 |-------|--------|---------|
 | `enabled` | `true` (default) / `false` | On/off switch - does this rule run? |
-| `mode` | `audit_only` (optional) | When running, never block (log only) |
+| `mode` | `audit_only` or `enforce` | When `audit_only`, never block (log only); when `enforce`, rules can block |
 
-**No `mode: enabled` or `mode: disabled`**. The `enabled` boolean handles on/off. The `mode` field only supports `audit_only` as a value (or omitted/empty).
+**No `mode: enabled` or `mode: disabled`**. The `enabled` boolean handles on/off. The `mode` field supports `audit_only` or `enforce`. If omitted, defaults to `enforce`.
 
 ### Top-Level Config
 
@@ -87,7 +87,7 @@ rules:
 2. Rule enabled == false?          → rule skipped
 3. Top-level mode == "audit_only"? → rule is audit_only
 4. Rule mode == "audit_only"?      → rule is audit_only
-5. Otherwise                       → rule is enabled (can block)
+5. Otherwise                       → rule is enforce (can block)
 ```
 
 The key insight: **Top-level `mode: audit_only` applies to ALL enabled rules**. Per-rule `mode: audit_only` is additive - it ensures that specific rule never blocks even when top-level allows blocking.
@@ -96,7 +96,7 @@ The key insight: **Top-level `mode: audit_only` applies to ALL enabled rules**. 
 
 | Validation Phase | `enabled` default | `mode` default | Effect |
 |------------------|-------------------|----------------|--------|
-| `request_validation.cel` | `true` | (unset) | Rules can block |
+| `request_validation.cel` | `true` | `audit_only` | Rules audit only (default) |
 | `request_validation.ai` | `true` | `audit_only` | Rules audit only |
 | `response_validation.cel` | `false` | - | Phase disabled |
 | `response_validation.ai` | `false` | - | Phase disabled |
@@ -110,17 +110,18 @@ These defaults match current behavior.
 #### Update PolicyMode type
 
 ```go
-// PolicyMode represents the execution mode for a policy
-// Only "audit_only" is a valid explicit value; empty string means "enabled" (follows top-level)
+// PolicyMode represents the execution mode for a policy.
+// Valid values: "audit_only" (log but don't block) or "enforce" (rules can block).
 type PolicyMode string
 
 const (
     PolicyModeAuditOnly PolicyMode = "audit_only"
+    PolicyModeEnforce   PolicyMode = "enforce"
 )
 
-// IsValid returns true if the PolicyMode is a valid value
+// IsValid returns true if the PolicyMode is a recognized value.
 func (m PolicyMode) IsValid() bool {
-    return m == PolicyModeAuditOnly || m == ""
+    return m == PolicyModeAuditOnly || m == PolicyModeEnforce
 }
 ```
 
@@ -130,7 +131,7 @@ func (m PolicyMode) IsValid() bool {
 // CELRequestValidationConfig for deterministic CEL-based request validation
 type CELRequestValidationConfig struct {
     Enabled   bool       `mapstructure:"enabled"`    // Whether this validation phase runs (default: true)
-    Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or empty (default: empty = can block)
+    Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or "enforce" (default: enforce)
     RulesFile string     `mapstructure:"rules_file"`
     Rules     []Policy   `mapstructure:"rules"`
 }
@@ -138,7 +139,7 @@ type CELRequestValidationConfig struct {
 // AIRequestValidationConfig for AI-powered request validation
 type AIRequestValidationConfig struct {
     Enabled   bool       `mapstructure:"enabled"`    // Whether this validation phase runs (default: true)
-    Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or empty (default: audit_only for AI)
+    Mode      PolicyMode `mapstructure:"mode"`       // "audit_only" or "enforce" (default: audit_only for AI)
     RulesFile string     `mapstructure:"rules_file"`
     Rules     []AIPolicy `mapstructure:"rules"`
 }
@@ -157,7 +158,7 @@ type Policy struct {
     Action      PolicyAction `mapstructure:"action"`
     Message     string       `mapstructure:"message"`
     Enabled     *bool        `mapstructure:"enabled"` // nil = true (default enabled)
-    Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or empty
+    Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or "enforce"
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -177,12 +178,13 @@ func (p *Policy) IsEnabled() bool {
 // ResolvePolicyMode determines the effective mode for a rule.
 // Top-level audit_only applies to all rules. Per-rule audit_only is additive.
 func ResolvePolicyMode(topLevelMode PolicyMode, ruleMode PolicyMode) PolicyMode {
-    // If top-level is audit_only, all rules are audit_only
     if topLevelMode == PolicyModeAuditOnly {
         return PolicyModeAuditOnly
     }
-    // Otherwise, per-rule mode applies (audit_only or empty)
-    return ruleMode
+    if ruleMode == PolicyModeAuditOnly {
+        return PolicyModeAuditOnly
+    }
+    return PolicyModeEnforce
 }
 ```
 
@@ -196,10 +198,10 @@ func ResolvePolicyMode(topLevelMode PolicyMode, ruleMode PolicyMode) PolicyMode 
 
 ```go
 // In LoadConfig(), set defaults for enabled field
-// CEL request: enabled=true, mode=""
+// CEL request: enabled=true, mode="audit_only"
 // AI request: enabled=true, mode="audit_only"
-// CEL response: enabled=false
-// AI response: enabled=false
+// CEL response: enabled=false, mode="audit_only"
+// AI response: enabled=false, mode="audit_only"
 ```
 
 ### 2. `internal/gateway/cel_engine.go`

@@ -459,7 +459,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 		results.RecommendedAction = config.PolicyActionAllow
 		// Find the first allow message
 		for _, r := range results.Results {
-			if r.Action == config.PolicyActionAllow && r.Mode == "" && r.Message != "" {
+			if r.Action == config.PolicyActionAllow && !r.Mode.IsAuditOnly() && r.Message != "" {
 				results.Message = r.Message
 				break
 			}
@@ -758,7 +758,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 		results.RecommendedAction = config.PolicyActionAllow
 		// Find the first allow message
 		for _, r := range results.Results {
-			if r.Action == config.PolicyActionAllow && r.Mode == "" && r.Message != "" {
+			if r.Action == config.PolicyActionAllow && !r.Mode.IsAuditOnly() && r.Message != "" {
 				results.Message = r.Message
 				break
 			}
