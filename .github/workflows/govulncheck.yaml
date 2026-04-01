@@ -35,9 +35,9 @@ jobs:
           # Save output for later steps
           echo "$OUTPUT" > vuln-report.json
 
-          # Parse vulnerability count from JSON lines output
-          # Note: grep -c returns exit code 1 when count is 0, so we handle it separately
-          VULN_COUNT=$(grep -c '"finding"' vuln-report.json 2>/dev/null) || VULN_COUNT=0
+          # Count actual vulnerability findings from JSON lines output using jq.
+          # Each finding object has an "osv" field; deduplicate by OSV ID to get the real count.
+          VULN_COUNT=$(jq -s '[.[] | select(.finding) | .finding.osv] | unique | length' vuln-report.json 2>/dev/null) || VULN_COUNT=0
           echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
 
           exit 0  # Don't fail yet, let justification check run
