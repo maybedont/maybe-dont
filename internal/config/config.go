@@ -1475,6 +1475,28 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		}
 	}
 
+	// Validate per-rule policy modes
+	for i, rule := range cfg.RequestValidation.CEL.Rules {
+		if !rule.Mode.IsValid() {
+			errors = append(errors, fmt.Sprintf("request_validation.cel.rules[%d] (%s): invalid policy mode %q (must be \"audit_only\" or \"enforce\")", i, rule.Name, rule.Mode))
+		}
+	}
+	for i, rule := range cfg.RequestValidation.AI.Rules {
+		if !rule.Mode.IsValid() {
+			errors = append(errors, fmt.Sprintf("request_validation.ai.rules[%d] (%s): invalid policy mode %q (must be \"audit_only\" or \"enforce\")", i, rule.Name, rule.Mode))
+		}
+	}
+	for i, rule := range cfg.ResponseValidation.CEL.Rules {
+		if !rule.Mode.IsValid() {
+			errors = append(errors, fmt.Sprintf("response_validation.cel.rules[%d] (%s): invalid policy mode %q (must be \"audit_only\" or \"enforce\")", i, rule.Name, rule.Mode))
+		}
+	}
+	for i, rule := range cfg.ResponseValidation.AI.Rules {
+		if !rule.Mode.IsValid() {
+			errors = append(errors, fmt.Sprintf("response_validation.ai.rules[%d] (%s): invalid policy mode %q (must be \"audit_only\" or \"enforce\")", i, rule.Name, rule.Mode))
+		}
+	}
+
 	// Validate server type
 	switch cfg.Server.Type {
 	case ServerTypeSTDIO, ServerTypeHTTP, ServerTypeSSE:

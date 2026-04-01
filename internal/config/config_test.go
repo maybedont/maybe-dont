@@ -3552,3 +3552,18 @@ func TestPolicyMode_NormalizeMethod(t *testing.T) {
 	require.Equal(t, PolicyModeAuditOnly, PolicyModeAuditOnly.Normalize())
 	require.Equal(t, PolicyModeEnforce, PolicyModeEnforce.Normalize())
 }
+
+// TestPolicyMode_InvalidPerRuleModeRejected verifies that an invalid mode
+// on a per-rule policy is rejected during validation.
+func TestPolicyMode_InvalidPerRuleModeRejected(t *testing.T) {
+	cfg := &Config{}
+	cfg.Server.Type = ServerTypeHTTP
+	cfg.Server.ListenAddr = "127.0.0.1:8080"
+	cfg.RequestValidation.CEL.Rules = []Policy{
+		{Name: "bad-rule", Mode: "block"},
+	}
+	err := ValidateConfig(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad-rule")
+	require.Contains(t, err.Error(), "invalid policy mode")
+}
