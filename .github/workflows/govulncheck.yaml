@@ -58,11 +58,12 @@ jobs:
             }
 
             // Check PR body for justification marker
+            const marker = '<!-- govulncheck:accepted -->';
             const prBody = context.payload.pull_request.body || '';
-            const hasJustificationInBody = prBody.includes('<!-- govulncheck-justification -->') ||
-                                           prBody.toLowerCase().includes('vulnerability justification:');
+            const hasJustificationInBody = prBody.includes(marker);
 
-            // Check comments for justification
+            // Check non-bot comments for justification (skip bot comments to avoid
+            // matching the template text in the vulnerability report comment itself)
             const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -70,8 +71,7 @@ jobs:
             });
 
             const hasJustificationInComments = comments.data.some(comment =>
-              comment.body.includes('<!-- govulncheck-justification -->') ||
-              comment.body.toLowerCase().includes('vulnerability justification:')
+              comment.user.type !== 'Bot' && comment.body.includes(marker)
             );
 
             const hasJustification = hasJustificationInBody || hasJustificationInComments;
@@ -108,7 +108,7 @@ jobs:
             report += 'If you have reviewed the vulnerabilities and determined they are acceptable for this PR, ';
             report += 'add a comment with the following format (copy and customize):\n\n';
             report += '```\n';
-            report += '<!-- govulncheck-justification -->\n';
+            report += '<!-- govulncheck:accepted -->\n';
             report += 'Vulnerability Justification:\n';
             // Generate pre-filled template with actual vulnerability IDs
             for (const finding of findings) {
