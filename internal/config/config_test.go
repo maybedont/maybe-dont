@@ -3431,3 +3431,77 @@ func TestInterceptConfigEnvOverride(t *testing.T) {
 
 	require.False(t, cfg.Intercept.Enabled)
 }
+
+// TestPolicyMode_IsValid verifies that IsValid accepts audit_only, enforce,
+// and empty string, but rejects unknown values.
+func TestPolicyMode_IsValid(t *testing.T) {
+	tests := []struct {
+		mode PolicyMode
+		want bool
+	}{
+		{PolicyModeAuditOnly, true},
+		{PolicyModeEnforce, true},
+		{"", true},
+		{"block", false},
+		{"unknown", false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			require.Equal(t, tt.want, tt.mode.IsValid())
+		})
+	}
+}
+
+// TestPolicyMode_IsAuditOnly verifies that only audit_only returns true;
+// enforce and empty string both mean rules can block.
+func TestPolicyMode_IsAuditOnly(t *testing.T) {
+	tests := []struct {
+		mode PolicyMode
+		want bool
+	}{
+		{PolicyModeAuditOnly, true},
+		{PolicyModeEnforce, false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			require.Equal(t, tt.want, tt.mode.IsAuditOnly())
+		})
+	}
+}
+
+// TestResolvePolicyMode_Enforce verifies that the enforce mode resolves
+// correctly at both top-level and per-rule scope.
+func TestResolvePolicyMode_Enforce(t *testing.T) {
+	tests := []struct {
+		name     string
+		topLevel PolicyMode
+		rule     PolicyMode
+		want     PolicyMode
+	}{
+		{"top-level audit_only overrides rule enforce", PolicyModeAuditOnly, PolicyModeEnforce, PolicyModeAuditOnly},
+		{"top-level enforce with rule audit_only", PolicyModeEnforce, PolicyModeAuditOnly, PolicyModeAuditOnly},
+		{"top-level enforce with rule enforce", PolicyModeEnforce, PolicyModeEnforce, PolicyModeEnforce},
+		{"top-level enforce with rule empty", PolicyModeEnforce, "", ""},
+		{"top-level empty with rule enforce", "", PolicyModeEnforce, PolicyModeEnforce},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, ResolvePolicyMode(tt.topLevel, tt.rule))
+		})
+	}
+}
+
+// TestPolicyMode_EnforceViaEnvVar verifies that setting mode to "enforce"
+// via environment variable correctly overrides the audit_only default.
+func TestPolicyMode_EnforceViaEnvVar(t *testing.T) {
+	configDir := t.TempDir()
+	writeMinimalConfig(t, configDir)
+
+	t.Setenv("MAYBE_DONT_REQUEST_VALIDATION_CEL_MODE", "enforce")
+
+	cfg, err := LoadConfig(configDir, "")
+	require.NoError(t, err)
+	require.Equal(t, PolicyModeEnforce, cfg.RequestValidation.CEL.Mode)
+	require.False(t, cfg.RequestValidation.CEL.Mode.IsAuditOnly())
+}

@@ -36,16 +36,17 @@ const (
 )
 
 // PolicyMode represents the execution mode for a policy or policy group.
-// Only "audit_only" is a valid explicit value; empty string means rules can block.
+// Valid values: "audit_only" (log but don't block), "enforce" (rules can block), or "" (same as enforce).
 type PolicyMode string
 
 const (
 	PolicyModeAuditOnly PolicyMode = "audit_only" // Policy executes and is recorded, but doesn't affect final result
+	PolicyModeEnforce   PolicyMode = "enforce"    // Policy executes and can block requests
 )
 
 // IsValid returns true if the PolicyMode is a valid value
 func (m PolicyMode) IsValid() bool {
-	return m == PolicyModeAuditOnly || m == ""
+	return m == PolicyModeAuditOnly || m == PolicyModeEnforce || m == ""
 }
 
 // IsAuditOnly returns true if the mode is audit_only
@@ -242,7 +243,7 @@ type Policy struct {
 	Action        PolicyAction `mapstructure:"action" yaml:"action"` // allow or deny
 	Message       string       `mapstructure:"message" yaml:"message"`
 	Enabled       *bool        `mapstructure:"enabled" yaml:"enabled"` // Whether this rule runs (default: true)
-	Mode          PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only" or empty (default: follows top-level)
+	Mode          PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only", "enforce", or empty (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -261,7 +262,7 @@ type AIPolicy struct {
 	Action      PolicyAction `mapstructure:"action"` // allow or deny
 	Message     string       `mapstructure:"message"`
 	Enabled     *bool        `mapstructure:"enabled"` // Whether this rule runs (default: true)
-	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or empty (default: follows top-level)
+	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -282,7 +283,7 @@ type ResponsePolicy struct {
 	RedactionPattern     string       `mapstructure:"redaction_pattern" yaml:"redaction_pattern"`
 	RedactionReplacement string       `mapstructure:"redaction_replacement" yaml:"redaction_replacement"`
 	Enabled              *bool        `mapstructure:"enabled" yaml:"enabled"` // Whether this rule runs (default: true)
-	Mode                 PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only" or empty (default: follows top-level)
+	Mode                 PolicyMode   `mapstructure:"mode" yaml:"mode"`       // "audit_only", "enforce", or empty (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -301,7 +302,7 @@ type AIResponsePolicy struct {
 	Action      PolicyAction `mapstructure:"action"` // allow, deny, or redact
 	Message     string       `mapstructure:"message"`
 	Enabled     *bool        `mapstructure:"enabled"` // Whether this rule runs (default: true)
-	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only" or empty (default: follows top-level)
+	Mode        PolicyMode   `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: follows top-level)
 }
 
 // IsEnabled returns whether this policy is enabled (defaults to true if not set)
@@ -327,7 +328,7 @@ type ResponseValidationConfig struct {
 // CELRequestValidationConfig for deterministic CEL-based request validation
 type CELRequestValidationConfig struct {
 	Enabled   bool       `mapstructure:"enabled"` // Whether this validation phase runs (default: true)
-	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only" or empty (default: audit_only)
+	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: audit_only)
 	RulesFile string     `mapstructure:"rules_file"`
 	Rules     []Policy   `mapstructure:"rules"`
 }
@@ -335,7 +336,7 @@ type CELRequestValidationConfig struct {
 // AIRequestValidationConfig for AI-powered request validation
 type AIRequestValidationConfig struct {
 	Enabled   bool       `mapstructure:"enabled"` // Whether this validation phase runs (default: true)
-	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only" or empty (default: audit_only)
+	Mode      PolicyMode `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: audit_only)
 	RulesFile string     `mapstructure:"rules_file"`
 	Rules     []AIPolicy `mapstructure:"rules"`
 }
@@ -343,7 +344,7 @@ type AIRequestValidationConfig struct {
 // CELResponseValidationConfig for deterministic CEL-based response validation
 type CELResponseValidationConfig struct {
 	Enabled   bool             `mapstructure:"enabled"` // Whether this validation phase runs (default: false)
-	Mode      PolicyMode       `mapstructure:"mode"`    // "audit_only" or empty (default: audit_only)
+	Mode      PolicyMode       `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: audit_only)
 	RulesFile string           `mapstructure:"rules_file"`
 	Rules     []ResponsePolicy `mapstructure:"rules"`
 }
@@ -351,7 +352,7 @@ type CELResponseValidationConfig struct {
 // AIResponseValidationConfig for AI-powered response validation
 type AIResponseValidationConfig struct {
 	Enabled   bool               `mapstructure:"enabled"` // Whether this validation phase runs (default: false)
-	Mode      PolicyMode         `mapstructure:"mode"`    // "audit_only" or empty (default: audit_only)
+	Mode      PolicyMode         `mapstructure:"mode"`    // "audit_only", "enforce", or empty (default: audit_only)
 	RulesFile string             `mapstructure:"rules_file"`
 	Rules     []AIResponsePolicy `mapstructure:"rules"`
 }
