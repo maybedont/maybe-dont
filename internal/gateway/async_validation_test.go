@@ -141,7 +141,7 @@ func TestAsyncValidation_EnabledPoliciesBlock(t *testing.T) {
 			// Mode not set - can block
 		},
 	}
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	// Create blocking budget (required for enabled policies)
@@ -196,7 +196,7 @@ func TestAsyncValidation_MixedModePolicies(t *testing.T) {
 			Mode:   config.PolicyModeAuditOnly,
 		},
 	}
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	// Create blocking budget (required for enabled policies)
@@ -425,7 +425,7 @@ func TestAsyncValidation_FullChainWithCELAndAI(t *testing.T) {
 			Expression: "true",
 			Action:     config.PolicyActionAllow,
 		},
-	}, "")
+	}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	// Create AI engine with audit_only policy

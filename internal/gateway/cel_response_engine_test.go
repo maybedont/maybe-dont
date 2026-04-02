@@ -125,7 +125,7 @@ func TestCELResponsePolicyEngine_EvaluateResponse(t *testing.T) {
 			engine, err := NewCELResponsePolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies, "")
+			err = engine.LoadPolicies(tt.policies, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateResponse(context.Background(), tt.request, tt.response, nil)
@@ -209,7 +209,7 @@ func TestCELResponsePolicyEngine_DuplicatePolicyNames(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate policy name 'duplicate-name'")
 }

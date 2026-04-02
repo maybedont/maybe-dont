@@ -50,10 +50,10 @@ func (m PolicyMode) IsValid() bool {
 }
 
 // Normalize returns the canonical form of the PolicyMode.
-// Empty string (Go zero value for unset fields) is normalized to enforce.
-func (m PolicyMode) Normalize() PolicyMode {
+// Empty string (Go zero value for unset fields) is normalized to the given default.
+func (m PolicyMode) Normalize(defaultMode PolicyMode) PolicyMode {
 	if m == "" {
-		return PolicyModeEnforce
+		return defaultMode
 	}
 	return m
 }
@@ -63,24 +63,30 @@ func (m PolicyMode) IsAuditOnly() bool {
 	return m == PolicyModeAuditOnly
 }
 
-// normalizePolicyModes converts empty policy modes (Go zero value for unset fields)
-// to enforce for backwards compatibility. Called during config loading before validation.
+// normalizePolicyModes resolves empty (unset) policy modes to their correct defaults.
+// Top-level phase modes default to audit_only so that omitting mode from a config file
+// matches the shipped defaults. Per-rule modes default to enforce so that individual
+// rules block by default when the top-level phase mode allows it.
+// Called during config loading before validation.
 func normalizePolicyModes(cfg *Config) {
-	cfg.RequestValidation.CEL.Mode = cfg.RequestValidation.CEL.Mode.Normalize()
-	cfg.RequestValidation.AI.Mode = cfg.RequestValidation.AI.Mode.Normalize()
-	cfg.ResponseValidation.CEL.Mode = cfg.ResponseValidation.CEL.Mode.Normalize()
-	cfg.ResponseValidation.AI.Mode = cfg.ResponseValidation.AI.Mode.Normalize()
+	// Top-level phase modes: default to audit_only (matches embedded defaults YAML)
+	cfg.RequestValidation.CEL.Mode = cfg.RequestValidation.CEL.Mode.Normalize(PolicyModeAuditOnly)
+	cfg.RequestValidation.AI.Mode = cfg.RequestValidation.AI.Mode.Normalize(PolicyModeAuditOnly)
+	cfg.ResponseValidation.CEL.Mode = cfg.ResponseValidation.CEL.Mode.Normalize(PolicyModeAuditOnly)
+	cfg.ResponseValidation.AI.Mode = cfg.ResponseValidation.AI.Mode.Normalize(PolicyModeAuditOnly)
+
+	// Per-rule modes: default to enforce (rules block when top-level allows it)
 	for i := range cfg.RequestValidation.CEL.Rules {
-		cfg.RequestValidation.CEL.Rules[i].Mode = cfg.RequestValidation.CEL.Rules[i].Mode.Normalize()
+		cfg.RequestValidation.CEL.Rules[i].Mode = cfg.RequestValidation.CEL.Rules[i].Mode.Normalize(PolicyModeEnforce)
 	}
 	for i := range cfg.RequestValidation.AI.Rules {
-		cfg.RequestValidation.AI.Rules[i].Mode = cfg.RequestValidation.AI.Rules[i].Mode.Normalize()
+		cfg.RequestValidation.AI.Rules[i].Mode = cfg.RequestValidation.AI.Rules[i].Mode.Normalize(PolicyModeEnforce)
 	}
 	for i := range cfg.ResponseValidation.CEL.Rules {
-		cfg.ResponseValidation.CEL.Rules[i].Mode = cfg.ResponseValidation.CEL.Rules[i].Mode.Normalize()
+		cfg.ResponseValidation.CEL.Rules[i].Mode = cfg.ResponseValidation.CEL.Rules[i].Mode.Normalize(PolicyModeEnforce)
 	}
 	for i := range cfg.ResponseValidation.AI.Rules {
-		cfg.ResponseValidation.AI.Rules[i].Mode = cfg.ResponseValidation.AI.Rules[i].Mode.Normalize()
+		cfg.ResponseValidation.AI.Rules[i].Mode = cfg.ResponseValidation.AI.Rules[i].Mode.Normalize(PolicyModeEnforce)
 	}
 }
 

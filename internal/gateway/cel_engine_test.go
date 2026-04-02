@@ -72,7 +72,7 @@ func TestCELPolicyEngine_FailOpenOnError(t *testing.T) {
 			require.NoError(t, err)
 
 			// LoadPolicies may fail for syntax errors, but runtime errors will pass loading
-			loadErr := engine.LoadPolicies(tt.policies, "")
+			loadErr := engine.LoadPolicies(tt.policies, config.PolicyModeEnforce)
 
 			var results ValidationResults
 			if loadErr != nil {
@@ -121,12 +121,12 @@ func TestCELPolicyEngine_AuditOnlyMode(t *testing.T) {
 					Mode:       config.PolicyModeAuditOnly,
 				},
 			},
-			defaultMode: "",
+			defaultMode: config.PolicyModeEnforce,
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{Method: "tools/call"},
 				Params:  mcp.CallToolParams{Name: "dangerous_tool"},
 			},
-			wantAllowed:       true, // Should allow because mode is audit_only
+			wantAllowed:       true, // Should allow because per-rule mode is audit_only
 			wantDenyCount:     0,    // No enabled deny
 			wantAuditModeDeny: true, // But audit_only rule did match
 		},
@@ -164,10 +164,10 @@ func TestCELPolicyEngine_AuditOnlyMode(t *testing.T) {
 					Expression: `true`,
 					Action:     config.PolicyActionDeny,
 					Message:    "Enabled deny blocks",
-					// Mode not set, defaults to "" (can block)
+					// Mode not set, defaults to enforce (can block)
 				},
 			},
-			defaultMode: "",
+			defaultMode: config.PolicyModeEnforce,
 			req: mcp.CallToolRequest{
 				Request: mcp.Request{Method: "tools/call"},
 				Params:  mcp.CallToolParams{Name: "any_tool"},
@@ -304,10 +304,14 @@ func TestCELPolicyEngine_AuditModeBypass(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			defaultMode := tt.defaultMode
+			if defaultMode == "" {
+				defaultMode = config.PolicyModeEnforce
+			}
 			engine, err := NewCELPolicyEngine(t.Context(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies, tt.defaultMode)
+			err = engine.LoadPolicies(tt.policies, defaultMode)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateToolCall(t.Context(), req, nil)
@@ -338,7 +342,7 @@ func TestCELEngine_EvaluateCLICommand_AuditModeBypass(t *testing.T) {
 			Mode:          config.PolicyModeAuditOnly,
 		},
 	}
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	results, err := engine.EvaluateCLICommand(t.Context(), &CLIValidationRequest{
@@ -374,7 +378,7 @@ func TestCELPolicyEngine_DuplicatePolicyNames(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate policy name 'duplicate-name'")
 }
@@ -429,7 +433,7 @@ func TestCELEngine_ExpressionFallback(t *testing.T) {
 			engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies([]config.Policy{tt.policy}, "")
+			err = engine.LoadPolicies([]config.Policy{tt.policy}, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateToolCall(context.Background(), tt.req, nil)
@@ -495,7 +499,7 @@ func TestCELEngine_MCPExpressionPrecedence(t *testing.T) {
 			engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies([]config.Policy{tt.policy}, "")
+			err = engine.LoadPolicies([]config.Policy{tt.policy}, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateToolCall(context.Background(), tt.req, nil)
@@ -529,7 +533,7 @@ func TestCELEngine_CLIExpressionStored(t *testing.T) {
 		Message:       "Dangerous operation",
 	}
 
-	err = engine.LoadPolicies([]config.Policy{policy}, "")
+	err = engine.LoadPolicies([]config.Policy{policy}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	// Verify CLI expression is stored by checking the loaded policies
@@ -1020,7 +1024,7 @@ func TestCELPolicyEngine_Evaluate(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -1182,7 +1186,7 @@ func TestCELEngine_EvaluateCLICommand_Match(t *testing.T) {
 			engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies, "")
+			err = engine.LoadPolicies(tt.policies, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateCLICommand(context.Background(), tt.req, nil)
@@ -1287,7 +1291,7 @@ func TestCELEngine_EvaluateCLICommand_Arguments(t *testing.T) {
 			engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies, "")
+			err = engine.LoadPolicies(tt.policies, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateCLICommand(context.Background(), tt.req, nil)
@@ -1382,7 +1386,7 @@ func TestCELEngine_EvaluateCLICommand_SkipsMCPOnlyPolicies(t *testing.T) {
 			engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies, "")
+			err = engine.LoadPolicies(tt.policies, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateCLICommand(context.Background(), tt.req, nil)
@@ -1487,7 +1491,7 @@ func TestCELEngine_EvaluateCLICommand_Actions(t *testing.T) {
 			engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies, "")
+			err = engine.LoadPolicies(tt.policies, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateCLICommand(context.Background(), tt.req, nil)
@@ -1561,10 +1565,14 @@ func TestCELEngine_EvaluateCLICommand_AuditOnly(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			defaultMode := tt.defaultMode
+			if defaultMode == "" {
+				defaultMode = config.PolicyModeEnforce
+			}
 			engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
 			require.NoError(t, err)
 
-			err = engine.LoadPolicies(tt.policies, tt.defaultMode)
+			err = engine.LoadPolicies(tt.policies, defaultMode)
 			require.NoError(t, err)
 
 			results, err := engine.EvaluateCLICommand(context.Background(), tt.req, nil)
@@ -1607,7 +1615,7 @@ func TestCELEngine_EvaluateCLICommand_FailOpen(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	results, err := engine.EvaluateCLICommand(context.Background(), &CLIValidationRequest{

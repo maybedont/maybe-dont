@@ -52,6 +52,10 @@ func InitAIResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 // LoadPolicies loads AI response policies from configuration
 // topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
 func (e *AIResponsePolicyEngine) LoadPolicies(policies []config.AIResponsePolicy, topLevelMode config.PolicyMode) error {
+	if !topLevelMode.IsValid() {
+		return fmt.Errorf("invalid topLevelMode %q: must be normalized before calling LoadPolicies", topLevelMode)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 

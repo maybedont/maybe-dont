@@ -105,6 +105,10 @@ func NewCELPolicyEngine(ctx context.Context, logger *config.SessionLogger) (*CEL
 // LoadPolicies loads policies from configuration
 // topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
 func (e *CELPolicyEngine) LoadPolicies(policies []config.Policy, topLevelMode config.PolicyMode, includeDisabled ...bool) error {
+	if !topLevelMode.IsValid() {
+		return fmt.Errorf("invalid topLevelMode %q: must be normalized before calling LoadPolicies", topLevelMode)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 

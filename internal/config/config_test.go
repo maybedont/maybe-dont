@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -3532,21 +3533,20 @@ func TestPolicyMode_IsValid(t *testing.T) {
 // to enforce and leaves other values unchanged.
 func TestPolicyMode_Normalize(t *testing.T) {
 	tests := []struct {
-		mode PolicyMode
-		want PolicyMode
+		name        string
+		mode        PolicyMode
+		defaultMode PolicyMode
+		want        PolicyMode
 	}{
-		{"", PolicyModeEnforce},
-		{PolicyModeAuditOnly, PolicyModeAuditOnly},
-		{PolicyModeEnforce, PolicyModeEnforce},
-		{"block", "block"}, // invalid values pass through (caught by IsValid)
+		{"empty with audit_only default", "", PolicyModeAuditOnly, PolicyModeAuditOnly},
+		{"empty with enforce default", "", PolicyModeEnforce, PolicyModeEnforce},
+		{"audit_only unchanged regardless of default", PolicyModeAuditOnly, PolicyModeEnforce, PolicyModeAuditOnly},
+		{"enforce unchanged regardless of default", PolicyModeEnforce, PolicyModeAuditOnly, PolicyModeEnforce},
+		{"invalid values pass through (caught by IsValid)", "block", PolicyModeEnforce, "block"},
 	}
 	for _, tt := range tests {
-		name := string(tt.mode)
-		if name == "" {
-			name = "empty"
-		}
-		t.Run(name, func(t *testing.T) {
-			require.Equal(t, tt.want, tt.mode.Normalize())
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.mode.Normalize(tt.defaultMode))
 		})
 	}
 }
@@ -3644,29 +3644,77 @@ func TestPolicyMode_InvalidModeRejected(t *testing.T) {
 }
 
 // TestPolicyMode_InvalidPerRuleModeRejected verifies that an invalid mode
-// on a per-rule policy is rejected during validation.
+// on a per-rule policy is rejected during validation across all four phases.
 func TestPolicyMode_InvalidPerRuleModeRejected(t *testing.T) {
-	cfg := &Config{}
-	cfg.Server.Type = ServerTypeHTTP
-	cfg.Server.ListenAddr = "127.0.0.1:8080"
-	cfg.RequestValidation.CEL.Mode = PolicyModeAuditOnly
-	cfg.RequestValidation.AI.Mode = PolicyModeAuditOnly
-	cfg.ResponseValidation.CEL.Mode = PolicyModeAuditOnly
-	cfg.ResponseValidation.AI.Mode = PolicyModeAuditOnly
-	cfg.RequestValidation.CEL.Rules = []Policy{
-		{Name: "bad-rule", Mode: "block"},
+	tests := []struct {
+		name  string
+		setup func(cfg *Config)
+	}{
+		{"CEL request rule", func(cfg *Config) {
+			cfg.RequestValidation.CEL.Rules = []Policy{{Name: "bad-rule", Mode: "block"}}
+		}},
+		{"AI request rule", func(cfg *Config) {
+			cfg.RequestValidation.AI.Rules = []AIPolicy{{Name: "bad-rule", Mode: "block"}}
+		}},
+		{"CEL response rule", func(cfg *Config) {
+			cfg.ResponseValidation.CEL.Rules = []ResponsePolicy{{Name: "bad-rule", Mode: "block"}}
+		}},
+		{"AI response rule", func(cfg *Config) {
+			cfg.ResponseValidation.AI.Rules = []AIResponsePolicy{{Name: "bad-rule", Mode: "block"}}
+		}},
 	}
-	err := ValidateConfig(cfg)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "bad-rule")
-	require.Contains(t, err.Error(), "invalid policy mode")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{}
+			cfg.Server.Type = ServerTypeHTTP
+			cfg.Server.ListenAddr = "127.0.0.1:8080"
+			cfg.RequestValidation.CEL.Mode = PolicyModeAuditOnly
+			cfg.RequestValidation.AI.Mode = PolicyModeAuditOnly
+			cfg.ResponseValidation.CEL.Mode = PolicyModeAuditOnly
+			cfg.ResponseValidation.AI.Mode = PolicyModeAuditOnly
+			tt.setup(cfg)
+			err := ValidateConfig(cfg)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "bad-rule")
+			require.Contains(t, err.Error(), "invalid policy mode")
+		})
+	}
 }
 
 // TestPolicyMode_InvalidModeInYAML verifies that an invalid mode value written
-// directly in the YAML config file is rejected by LoadConfig.
+// directly in the YAML config file is rejected by LoadConfig across all four phases.
 func TestPolicyMode_InvalidModeInYAML(t *testing.T) {
-	configDir := t.TempDir()
-	writeConfigFile(t, configDir, `
+	tests := []struct {
+		name     string
+		badField string // which mode field gets the invalid value
+		badValue string
+	}{
+		{"CEL request mode", "request_validation.cel", "block"},
+		{"AI request mode", "request_validation.ai", "enabled"},
+		{"CEL response mode", "response_validation.cel", "disabled"},
+		{"AI response mode", "response_validation.ai", "AUDIT_ONLY"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Build a config where only the targeted field has an invalid mode
+			celReqMode := "audit_only"
+			aiReqMode := "audit_only"
+			celRespMode := "audit_only"
+			aiRespMode := "audit_only"
+
+			switch tt.badField {
+			case "request_validation.cel":
+				celReqMode = tt.badValue
+			case "request_validation.ai":
+				aiReqMode = tt.badValue
+			case "response_validation.cel":
+				celRespMode = tt.badValue
+			case "response_validation.ai":
+				aiRespMode = tt.badValue
+			}
+
+			configDir := t.TempDir()
+			writeConfigFile(t, configDir, fmt.Sprintf(`
 downstream_mcp_servers:
   test:
     type: stdio
@@ -3675,23 +3723,28 @@ downstream_mcp_servers:
 request_validation:
   cel:
     enabled: false
-    mode: block
+    mode: %s
   ai:
     enabled: false
+    mode: %s
 
 response_validation:
   cel:
     enabled: false
+    mode: %s
   ai:
     enabled: false
+    mode: %s
 
 native_tools:
   audit_report:
     enabled: false
-`)
+`, celReqMode, aiReqMode, celRespMode, aiRespMode))
 
-	_, err := LoadConfig(configDir, "")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid policy mode")
-	require.Contains(t, err.Error(), "block")
+			_, err := LoadConfig(configDir, "")
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "invalid policy mode")
+			require.Contains(t, err.Error(), tt.badValue)
+		})
+	}
 }

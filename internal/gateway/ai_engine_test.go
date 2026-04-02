@@ -41,7 +41,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 2)
 	})
@@ -67,7 +67,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, "enabled_policy", engine.policies[0].Name)
@@ -109,7 +109,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 		}
 
 		// Load with "" (can block) as default, but policy explicitly sets audit_only
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, config.PolicyModeAuditOnly, engine.policies[0].Mode)
@@ -128,7 +128,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "must not contain %s placeholder")
 	})
@@ -147,7 +147,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid action")
 	})
@@ -166,7 +166,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, config.PolicyActionDeny, engine.policies[0].Action)
@@ -186,7 +186,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, config.PolicyActionAllow, engine.policies[0].Action)
@@ -206,7 +206,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 		assert.Len(t, engine.policies, 1)
 		assert.Equal(t, config.PolicyModeAuditOnly, engine.policies[0].Mode)
@@ -232,7 +232,7 @@ func TestAIPolicyEngine_LoadPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate policy name 'duplicate_name'")
 	})
@@ -308,7 +308,7 @@ func TestAIPolicyEngine_CountEnabledPolicies(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 
 		// Count non-audit_only (enabled) policies
@@ -605,7 +605,7 @@ func TestAIPolicyEngine_UsesSharedBlockingBudget(t *testing.T) {
 				// Mode not set - can block
 			},
 		}
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 
 		// Create a budget that is already exhausted
@@ -1077,7 +1077,7 @@ func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 
 		// The engine should return immediately with no async work for all audit_only policies
@@ -1107,7 +1107,7 @@ func TestAIPolicyEngine_AuditModeBypassFlag(t *testing.T) {
 			},
 		}
 
-		err = engine.LoadPolicies(policies, "")
+		err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 		require.NoError(t, err)
 
 		// Count non-audit_only (enabled) policies
@@ -1414,7 +1414,7 @@ func TestAIPolicyEngine_EvaluateCLICommand_RequiresBudget(t *testing.T) {
 			// Mode not set - can block
 		},
 	}
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	req := &CLIValidationRequest{
@@ -1493,7 +1493,7 @@ func TestAIPolicyEngine_EvaluateCLICommand_ExhaustedBudget(t *testing.T) {
 			// Mode not set - can block
 		},
 	}
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	// Create a budget that is already exhausted
