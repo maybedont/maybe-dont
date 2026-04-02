@@ -1,3 +1,13 @@
+## v1.6.0 (2026-04-02)
+
+### Feat
+
+- add explicit enforce policy mode (#142)
+
+### Fix
+
+- upgrade Go 1.24 → 1.25.8 to resolve 7 stdlib vulnerabilities (#141)
+
 ## v1.5.0 (2026-03-11)
 
 ### Feat
