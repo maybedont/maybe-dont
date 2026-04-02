@@ -266,7 +266,7 @@ Each validation type has two configuration options:
 - **mode**: `audit_only` (optional) - when set, all rules log but never block
 
 Default modes:
-- `request_validation.cel`: enabled=true, mode=(empty) - rules can block
+- `request_validation.cel`: enabled=true, mode=enforce - rules can block
 - `request_validation.ai`: enabled=true, mode=audit_only - rules audit only
 - `response_validation.cel`: enabled=false - phase disabled
 - `response_validation.ai`: enabled=false - phase disabled

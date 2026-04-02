@@ -20,7 +20,7 @@ type AIResponsePolicy struct {
 	Prompt      string              `yaml:"prompt"`
 	Action      config.PolicyAction `yaml:"action"` // allow, deny, or redact
 	Message     string              `yaml:"message"`
-	Mode        config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
+	Mode        config.PolicyMode   `yaml:"mode"` // "audit_only" or "enforce"
 }
 
 // AIResponsePolicyEngine handles AI policy evaluation for responses

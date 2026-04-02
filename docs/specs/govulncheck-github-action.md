@@ -104,7 +104,7 @@ jobs:
 
             // Check PR body for justification marker
             const prBody = context.payload.pull_request.body || '';
-            const hasJustificationInBody = prBody.includes('<!-- govulncheck-justification -->') ||
+            const hasJustificationInBody = prBody.includes('<!-- govulncheck:accepted -->') ||
                                            prBody.toLowerCase().includes('vulnerability justification:');
 
             // Check comments for justification
@@ -115,7 +115,7 @@ jobs:
             });
 
             const hasJustificationInComments = comments.data.some(comment =>
-              comment.body.includes('<!-- govulncheck-justification -->') ||
+              comment.body.includes('<!-- govulncheck:accepted -->') ||
               comment.body.toLowerCase().includes('vulnerability justification:')
             );
 
@@ -164,7 +164,7 @@ jobs:
             report += 'If you have reviewed the vulnerabilities and determined they are acceptable for this PR, ';
             report += 'add a comment with the following format (copy and customize):\n\n';
             report += '```\n';
-            report += '<!-- govulncheck-justification -->\n';
+            report += '<!-- govulncheck:accepted -->\n';
             report += 'Vulnerability Justification:\n';
             // Generate pre-filled template with actual vulnerability IDs
             for (const finding of findings) {
@@ -225,7 +225,7 @@ jobs:
 ...
 
 ## Vulnerability Justification
-<!-- govulncheck-justification -->
+<!-- govulncheck:accepted -->
 - GO-2024-XXXX: This vulnerability requires network access which our deployment doesn't expose
 - GO-2024-YYYY: Fixed in next release, tracked in issue #123
 ```
@@ -233,7 +233,7 @@ jobs:
 ### In PR Comment
 
 ```markdown
-<!-- govulncheck-justification -->
+<!-- govulncheck:accepted -->
 Vulnerability Justification:
 - GO-2024-XXXX: The vulnerable code path is not reachable in our usage. The affected function `foo.Bar()` is only called with trusted input from our internal services.
 - GO-2024-YYYY: Accepting risk for 2 weeks while upstream fix is released. Mitigation: rate limiting is in place.
@@ -348,7 +348,7 @@ Found **2** vulnerabilities:
 
 If you have reviewed the vulnerabilities and determined they are acceptable for this PR, add a comment with the following format (copy and customize):
 
-<!-- govulncheck-justification -->
+<!-- govulncheck:accepted -->
 Vulnerability Justification:
 - GO-2024-2687: [Explain why this is acceptable, e.g., "The vulnerable code path in http2 is not reachable - we only use http1.1"]
 - GO-2024-2611: [Explain why this is acceptable, e.g., "Fixed in next sprint, tracked in issue #456"]

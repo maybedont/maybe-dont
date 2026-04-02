@@ -63,6 +63,27 @@ func (m PolicyMode) IsAuditOnly() bool {
 	return m == PolicyModeAuditOnly
 }
 
+// normalizePolicyModes converts empty policy modes (Go zero value for unset fields)
+// to enforce for backwards compatibility. Called during config loading before validation.
+func normalizePolicyModes(cfg *Config) {
+	cfg.RequestValidation.CEL.Mode = cfg.RequestValidation.CEL.Mode.Normalize()
+	cfg.RequestValidation.AI.Mode = cfg.RequestValidation.AI.Mode.Normalize()
+	cfg.ResponseValidation.CEL.Mode = cfg.ResponseValidation.CEL.Mode.Normalize()
+	cfg.ResponseValidation.AI.Mode = cfg.ResponseValidation.AI.Mode.Normalize()
+	for i := range cfg.RequestValidation.CEL.Rules {
+		cfg.RequestValidation.CEL.Rules[i].Mode = cfg.RequestValidation.CEL.Rules[i].Mode.Normalize()
+	}
+	for i := range cfg.RequestValidation.AI.Rules {
+		cfg.RequestValidation.AI.Rules[i].Mode = cfg.RequestValidation.AI.Rules[i].Mode.Normalize()
+	}
+	for i := range cfg.ResponseValidation.CEL.Rules {
+		cfg.ResponseValidation.CEL.Rules[i].Mode = cfg.ResponseValidation.CEL.Rules[i].Mode.Normalize()
+	}
+	for i := range cfg.ResponseValidation.AI.Rules {
+		cfg.ResponseValidation.AI.Rules[i].Mode = cfg.ResponseValidation.AI.Rules[i].Mode.Normalize()
+	}
+}
+
 // RotationConfig contains log rotation settings for both logger and audit
 type RotationConfig struct {
 	MaxSizeMB  int  `mapstructure:"max_size_mb"`  // Max size in MB before rotation (default: 100)
@@ -1393,6 +1414,9 @@ For each concern, estimate the potential impact category and explain the reasoni
 		config.DownstreamMCPServers[name] = client
 	}
 
+	// Normalize policy modes before validation (converts empty string → enforce)
+	normalizePolicyModes(&config)
+
 	// Validate config with context about whether a config file was found
 	if err := validateConfigWithOptions(&config, configFileFound, loadErrors); err != nil {
 		return nil, err
@@ -1436,25 +1460,6 @@ func configErrorSimple(message string) string {
 // validateConfigWithOptions is the internal implementation that validates the configuration,
 // collects all errors (including any pre-existing load errors), and provides contextual guidance.
 func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []string) error {
-	// Normalize policy modes: convert empty string (Go zero value for unset fields)
-	// to enforce for backwards compatibility. This must happen before validation.
-	cfg.RequestValidation.CEL.Mode = cfg.RequestValidation.CEL.Mode.Normalize()
-	cfg.RequestValidation.AI.Mode = cfg.RequestValidation.AI.Mode.Normalize()
-	cfg.ResponseValidation.CEL.Mode = cfg.ResponseValidation.CEL.Mode.Normalize()
-	cfg.ResponseValidation.AI.Mode = cfg.ResponseValidation.AI.Mode.Normalize()
-	for i := range cfg.RequestValidation.CEL.Rules {
-		cfg.RequestValidation.CEL.Rules[i].Mode = cfg.RequestValidation.CEL.Rules[i].Mode.Normalize()
-	}
-	for i := range cfg.RequestValidation.AI.Rules {
-		cfg.RequestValidation.AI.Rules[i].Mode = cfg.RequestValidation.AI.Rules[i].Mode.Normalize()
-	}
-	for i := range cfg.ResponseValidation.CEL.Rules {
-		cfg.ResponseValidation.CEL.Rules[i].Mode = cfg.ResponseValidation.CEL.Rules[i].Mode.Normalize()
-	}
-	for i := range cfg.ResponseValidation.AI.Rules {
-		cfg.ResponseValidation.AI.Rules[i].Mode = cfg.ResponseValidation.AI.Rules[i].Mode.Normalize()
-	}
-
 	// Start with any errors from loading policy files
 	var errors []string
 	errors = append(errors, loadErrors...)

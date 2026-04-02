@@ -86,6 +86,14 @@ func TestServerTypeValidation(t *testing.T) {
 				Audit: AuditConfig{
 					Path: "audit.log",
 				},
+				RequestValidation: RequestValidationConfig{
+					CEL: CELRequestValidationConfig{Mode: PolicyModeAuditOnly},
+					AI:  AIRequestValidationConfig{Mode: PolicyModeAuditOnly},
+				},
+				ResponseValidation: ResponseValidationConfig{
+					CEL: CELResponseValidationConfig{Mode: PolicyModeAuditOnly},
+					AI:  AIResponseValidationConfig{Mode: PolicyModeAuditOnly},
+				},
 			}
 
 			err := ValidateConfig(config)
@@ -141,6 +149,14 @@ func TestListenAddrValidation(t *testing.T) {
 				},
 				Audit: AuditConfig{
 					Path: "audit.log",
+				},
+				RequestValidation: RequestValidationConfig{
+					CEL: CELRequestValidationConfig{Mode: PolicyModeAuditOnly},
+					AI:  AIRequestValidationConfig{Mode: PolicyModeAuditOnly},
+				},
+				ResponseValidation: ResponseValidationConfig{
+					CEL: CELResponseValidationConfig{Mode: PolicyModeAuditOnly},
+					AI:  AIResponseValidationConfig{Mode: PolicyModeAuditOnly},
 				},
 			}
 
@@ -288,10 +304,16 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 			// No required fields in Audit anymore
 		},
 		RequestValidation: RequestValidationConfig{
+			CEL: CELRequestValidationConfig{Mode: PolicyModeAuditOnly},
 			AI: AIRequestValidationConfig{
 				Enabled: true, // AI enabled without credentials - Error 11 (api_key), 12 (model)
+				Mode:    PolicyModeAuditOnly,
 				// Note: endpoint is not required for default provider (openai)
 			},
+		},
+		ResponseValidation: ResponseValidationConfig{
+			CEL: CELResponseValidationConfig{Mode: PolicyModeAuditOnly},
+			AI:  AIResponseValidationConfig{Mode: PolicyModeAuditOnly},
 		},
 	}
 
@@ -350,6 +372,14 @@ func TestValidateConfigSuccess(t *testing.T) {
 		Audit: AuditConfig{
 			Path: "audit.log",
 		},
+		RequestValidation: RequestValidationConfig{
+			CEL: CELRequestValidationConfig{Mode: PolicyModeAuditOnly},
+			AI:  AIRequestValidationConfig{Mode: PolicyModeAuditOnly},
+		},
+		ResponseValidation: ResponseValidationConfig{
+			CEL: CELResponseValidationConfig{Mode: PolicyModeAuditOnly},
+			AI:  AIResponseValidationConfig{Mode: PolicyModeAuditOnly},
+		},
 	}
 
 	err := ValidateConfig(config)
@@ -405,7 +435,12 @@ func TestAIProviderValidation(t *testing.T) {
 				},
 			},
 			RequestValidation: RequestValidationConfig{
-				AI: AIRequestValidationConfig{Enabled: true},
+				CEL: CELRequestValidationConfig{Mode: PolicyModeAuditOnly},
+				AI:  AIRequestValidationConfig{Enabled: true, Mode: PolicyModeAuditOnly},
+			},
+			ResponseValidation: ResponseValidationConfig{
+				CEL: CELResponseValidationConfig{Mode: PolicyModeAuditOnly},
+				AI:  AIResponseValidationConfig{Mode: PolicyModeAuditOnly},
 			},
 		}
 	}
@@ -767,11 +802,16 @@ func collectConfigFields(t reflect.Type, pathPrefix string) []configFieldInfo {
 
 		switch kind {
 		case reflect.String:
+			testValue := "test-value-" + tag
+			// Use a valid policy mode for PolicyMode fields to avoid validation errors
+			if fieldType.Name() == "PolicyMode" {
+				testValue = string(PolicyModeEnforce)
+			}
 			fields = append(fields, configFieldInfo{
 				path:      fullPath,
 				envVar:    envVar,
 				kind:      kind,
-				testValue: "test-value-" + tag,
+				testValue: testValue,
 			})
 
 		case reflect.Bool:
@@ -1764,6 +1804,14 @@ func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
 		Audit: AuditConfig{
 			Path: "audit.log",
 		},
+		RequestValidation: RequestValidationConfig{
+			CEL: CELRequestValidationConfig{Mode: PolicyModeAuditOnly},
+			AI:  AIRequestValidationConfig{Mode: PolicyModeAuditOnly},
+		},
+		ResponseValidation: ResponseValidationConfig{
+			CEL: CELResponseValidationConfig{Mode: PolicyModeAuditOnly},
+			AI:  AIResponseValidationConfig{Mode: PolicyModeAuditOnly},
+		},
 	}
 
 	// Call with configFileFound=false
@@ -1798,6 +1846,14 @@ func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
 		},
 		Audit: AuditConfig{
 			Path: "audit.log",
+		},
+		RequestValidation: RequestValidationConfig{
+			CEL: CELRequestValidationConfig{Mode: PolicyModeAuditOnly},
+			AI:  AIRequestValidationConfig{Mode: PolicyModeAuditOnly},
+		},
+		ResponseValidation: ResponseValidationConfig{
+			CEL: CELResponseValidationConfig{Mode: PolicyModeAuditOnly},
+			AI:  AIResponseValidationConfig{Mode: PolicyModeAuditOnly},
 		},
 	}
 
@@ -1846,6 +1902,14 @@ func TestValidateConfig_DownstreamServersOptional(t *testing.T) {
 				DownstreamMCPServers: tt.servers,
 				Audit: AuditConfig{
 					Path: "audit.log",
+				},
+				RequestValidation: RequestValidationConfig{
+					CEL: CELRequestValidationConfig{Mode: PolicyModeAuditOnly},
+					AI:  AIRequestValidationConfig{Mode: PolicyModeAuditOnly},
+				},
+				ResponseValidation: ResponseValidationConfig{
+					CEL: CELResponseValidationConfig{Mode: PolicyModeAuditOnly},
+					AI:  AIResponseValidationConfig{Mode: PolicyModeAuditOnly},
 				},
 			}
 
@@ -1930,6 +1994,14 @@ func createValidBaseConfig() *Config {
 		},
 		Audit: AuditConfig{
 			Path: "audit.log",
+		},
+		RequestValidation: RequestValidationConfig{
+			CEL: CELRequestValidationConfig{Mode: PolicyModeAuditOnly},
+			AI:  AIRequestValidationConfig{Mode: PolicyModeAuditOnly},
+		},
+		ResponseValidation: ResponseValidationConfig{
+			CEL: CELResponseValidationConfig{Mode: PolicyModeAuditOnly},
+			AI:  AIResponseValidationConfig{Mode: PolicyModeAuditOnly},
 		},
 		NativeTools: struct {
 			AuditLog struct {
@@ -3518,39 +3590,57 @@ func TestResolvePolicyMode_Enforce(t *testing.T) {
 	}
 }
 
-// TestPolicyMode_EnforceViaEnvVar verifies that setting mode to "enforce"
-// via environment variable correctly overrides the audit_only default.
-func TestPolicyMode_EnforceViaEnvVar(t *testing.T) {
-	configDir := t.TempDir()
-	writeMinimalConfig(t, configDir)
+// TestPolicyMode_ViaEnvVar verifies that setting mode via environment variable
+// correctly overrides the default audit_only mode for valid values.
+func TestPolicyMode_ViaEnvVar(t *testing.T) {
+	tests := []struct {
+		name      string
+		envValue  string
+		wantMode  PolicyMode
+		wantAudit bool
+	}{
+		{"enforce via env var", "enforce", PolicyModeEnforce, false},
+		{"audit_only via env var", "audit_only", PolicyModeAuditOnly, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			writeMinimalConfig(t, configDir)
 
-	t.Setenv("MAYBE_DONT_REQUEST_VALIDATION_CEL_MODE", "enforce")
+			t.Setenv("MAYBE_DONT_REQUEST_VALIDATION_CEL_MODE", tt.envValue)
 
-	cfg, err := LoadConfig(configDir, "")
-	require.NoError(t, err)
-	require.Equal(t, PolicyModeEnforce, cfg.RequestValidation.CEL.Mode)
-	require.False(t, cfg.RequestValidation.CEL.Mode.IsAuditOnly())
+			cfg, err := LoadConfig(configDir, "")
+			require.NoError(t, err)
+			require.Equal(t, tt.wantMode, cfg.RequestValidation.CEL.Mode)
+			require.Equal(t, tt.wantAudit, cfg.RequestValidation.CEL.Mode.IsAuditOnly())
+		})
+	}
 }
 
-// TestPolicyMode_InvalidModeRejected verifies that an invalid policy mode
-// causes LoadConfig to return an error.
+// TestPolicyMode_InvalidModeRejected verifies that invalid policy mode values
+// are rejected by LoadConfig regardless of how they're set.
 func TestPolicyMode_InvalidModeRejected(t *testing.T) {
-	configDir := t.TempDir()
-	writeMinimalConfig(t, configDir)
+	tests := []struct {
+		name     string
+		envValue string
+	}{
+		{"block", "block"},
+		{"enabled", "enabled"},
+		{"disabled", "disabled"},
+		{"wrong case AUDIT_ONLY", "AUDIT_ONLY"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			writeMinimalConfig(t, configDir)
 
-	t.Setenv("MAYBE_DONT_REQUEST_VALIDATION_CEL_MODE", "block")
+			t.Setenv("MAYBE_DONT_REQUEST_VALIDATION_CEL_MODE", tt.envValue)
 
-	_, err := LoadConfig(configDir, "")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid policy mode")
-}
-
-// TestPolicyMode_NormalizeMethod verifies the Normalize method converts
-// empty string to enforce while leaving valid values unchanged.
-func TestPolicyMode_NormalizeMethod(t *testing.T) {
-	require.Equal(t, PolicyModeEnforce, PolicyMode("").Normalize())
-	require.Equal(t, PolicyModeAuditOnly, PolicyModeAuditOnly.Normalize())
-	require.Equal(t, PolicyModeEnforce, PolicyModeEnforce.Normalize())
+			_, err := LoadConfig(configDir, "")
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "invalid policy mode")
+		})
+	}
 }
 
 // TestPolicyMode_InvalidPerRuleModeRejected verifies that an invalid mode
@@ -3559,6 +3649,10 @@ func TestPolicyMode_InvalidPerRuleModeRejected(t *testing.T) {
 	cfg := &Config{}
 	cfg.Server.Type = ServerTypeHTTP
 	cfg.Server.ListenAddr = "127.0.0.1:8080"
+	cfg.RequestValidation.CEL.Mode = PolicyModeAuditOnly
+	cfg.RequestValidation.AI.Mode = PolicyModeAuditOnly
+	cfg.ResponseValidation.CEL.Mode = PolicyModeAuditOnly
+	cfg.ResponseValidation.AI.Mode = PolicyModeAuditOnly
 	cfg.RequestValidation.CEL.Rules = []Policy{
 		{Name: "bad-rule", Mode: "block"},
 	}
@@ -3566,4 +3660,38 @@ func TestPolicyMode_InvalidPerRuleModeRejected(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad-rule")
 	require.Contains(t, err.Error(), "invalid policy mode")
+}
+
+// TestPolicyMode_InvalidModeInYAML verifies that an invalid mode value written
+// directly in the YAML config file is rejected by LoadConfig.
+func TestPolicyMode_InvalidModeInYAML(t *testing.T) {
+	configDir := t.TempDir()
+	writeConfigFile(t, configDir, `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+    mode: block
+  ai:
+    enabled: false
+
+response_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+`)
+
+	_, err := LoadConfig(configDir, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid policy mode")
+	require.Contains(t, err.Error(), "block")
 }
