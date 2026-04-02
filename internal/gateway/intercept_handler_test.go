@@ -884,7 +884,7 @@ func TestInterceptHandler_ShellTool_DualEvaluation(t *testing.T) {
 			Action:     config.PolicyActionDeny,
 			Message:    "Bash denied by MCP rule",
 		},
-	}, "")
+	}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	evaluator := &PolicyEvaluator{
@@ -938,7 +938,7 @@ func TestInterceptHandler_ShellTool_CLIAllowMCPDeny(t *testing.T) {
 			Action:     config.PolicyActionDeny,
 			Message:    "Denied by MCP rule",
 		},
-	}, "")
+	}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	evaluator := &PolicyEvaluator{
@@ -1170,7 +1170,7 @@ func TestInterceptHandler_ShellTool_AuditMergesRulesDetails(t *testing.T) {
 			Action:     config.PolicyActionDeny,
 			Message:    "Bash denied",
 		},
-	}, "")
+	}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	evaluator := &PolicyEvaluator{
@@ -1228,7 +1228,7 @@ func TestInterceptHandler_FailedOpen_ActionReason(t *testing.T) {
 			Action:     config.PolicyActionDeny,
 			Message:    "should not reach here",
 		},
-	}, "")
+	}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	evaluator := &PolicyEvaluator{

@@ -35,9 +35,11 @@ jobs:
           # Save output for later steps
           echo "$OUTPUT" > vuln-report.json
 
-          # Count actual vulnerability findings from JSON lines output using jq.
-          # Each finding object has an "osv" field; deduplicate by OSV ID to get the real count.
-          VULN_COUNT=$(jq -s '[.[] | select(.finding) | .finding.osv] | unique | length' vuln-report.json 2>/dev/null) || VULN_COUNT=0
+          # Extract unique findings into a JSON array for consistent parsing across steps.
+          # govulncheck -json outputs pretty-printed multi-line JSON objects (not NDJSON),
+          # so jq's stream parser is needed — line-by-line parsing won't work.
+          jq -s '[.[] | select(.finding) | .finding] | unique_by(.osv)' vuln-report.json > vuln-findings.json 2>/dev/null || echo '[]' > vuln-findings.json
+          VULN_COUNT=$(jq 'length' vuln-findings.json)
           echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
 
           exit 0  # Don't fail yet, let justification check run
@@ -56,11 +58,12 @@ jobs:
             }
 
             // Check PR body for justification marker
+            const marker = '<!-- govulncheck:accepted -->';
             const prBody = context.payload.pull_request.body || '';
-            const hasJustificationInBody = prBody.includes('<!-- govulncheck-justification -->') ||
-                                           prBody.toLowerCase().includes('vulnerability justification:');
+            const hasJustificationInBody = prBody.includes(marker);
 
-            // Check comments for justification
+            // Check non-bot comments for justification (skip bot comments to avoid
+            // matching the template text in the vulnerability report comment itself)
             const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -68,8 +71,7 @@ jobs:
             });
 
             const hasJustificationInComments = comments.data.some(comment =>
-              comment.body.includes('<!-- govulncheck-justification -->') ||
-              comment.body.toLowerCase().includes('vulnerability justification:')
+              comment.user.type !== 'Bot' && comment.body.includes(marker)
             );
 
             const hasJustification = hasJustificationInBody || hasJustificationInComments;
@@ -82,18 +84,8 @@ jobs:
           script: |
             const fs = require('fs');
 
-            // Parse findings from JSON lines output
-            const findings = [];
-            const lines = fs.readFileSync('vuln-report.json', 'utf8').split('\n');
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              try {
-                const obj = JSON.parse(line);
-                if (obj.finding) {
-                  findings.push(obj.finding);
-                }
-              } catch (e) {}
-            }
+            // Read pre-parsed findings (extracted by the govulncheck step using jq)
+            const findings = JSON.parse(fs.readFileSync('vuln-findings.json', 'utf8'));
 
             // Build report
             let report = '## Vulnerability Scan Results\n\n';
@@ -116,7 +108,7 @@ jobs:
             report += 'If you have reviewed the vulnerabilities and determined they are acceptable for this PR, ';
             report += 'add a comment with the following format (copy and customize):\n\n';
             report += '```\n';
-            report += '<!-- govulncheck-justification -->\n';
+            report += '<!-- govulncheck:accepted -->\n';
             report += 'Vulnerability Justification:\n';
             // Generate pre-filled template with actual vulnerability IDs
             for (const finding of findings) {

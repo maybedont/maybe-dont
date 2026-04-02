@@ -20,7 +20,7 @@ type CELResponsePolicy struct {
 	Expression           string              `yaml:"expression"`
 	Action               config.PolicyAction `yaml:"action"` // allow, deny, or redact
 	Message              string              `yaml:"message"`
-	Mode                 config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
+	Mode                 config.PolicyMode   `yaml:"mode"` // "audit_only" or "enforce"
 	RedactionPattern     string              `yaml:"redaction_pattern"`
 	RedactionReplacement string              `yaml:"redaction_replacement"`
 }
@@ -54,6 +54,10 @@ func NewCELResponsePolicyEngine(ctx context.Context, logger *config.SessionLogge
 // LoadPolicies loads response policies from configuration
 // topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
 func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy, topLevelMode config.PolicyMode, includeDisabled ...bool) error {
+	if !topLevelMode.IsValid() {
+		return fmt.Errorf("invalid topLevelMode %q: must be normalized before calling LoadPolicies", topLevelMode)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -190,7 +194,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("compile_error", issues.Err()),
 			})
-			// Fail-open on compilation error for enabled rules
+			// Fail-open on compilation error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -219,7 +223,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("program_error", err),
 			})
-			// Fail-open on program creation error for enabled rules
+			// Fail-open on program creation error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -249,7 +253,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("eval_error", err),
 			})
-			// Fail-open on evaluation error for enabled rules
+			// Fail-open on evaluation error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -272,7 +276,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				EvaluationMs: ruleDurationMs,
 				Error:        "policy did not return a boolean",
 			})
-			// Fail-open on type error for enabled rules
+			// Fail-open on type error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -326,7 +330,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 
 			switch policy.Action {
 			case config.PolicyActionDeny:
-				// Only affect final decision if mode is enabled (not audit_only)
+				// Only affect final decision if mode is enforce (not audit_only)
 				if !policy.Mode.IsAuditOnly() {
 					if phaseTracker != nil {
 						phaseTracker.MarkDecided()
@@ -350,7 +354,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 					// Update the result entry with redacted content
 					results.Results[len(results.Results)-1].RedactedContent = redacted
 
-					// Only actually apply redaction if mode is enabled (not audit_only)
+					// Only actually apply redaction if mode is enforce (not audit_only)
 					if !policy.Mode.IsAuditOnly() {
 						if finalAction == "allow" {
 							finalAction = "redact"

@@ -316,7 +316,7 @@ func newTestCELEngineWithCLIDenyRule(t *testing.T) *CELPolicyEngine {
 			Message:       "Denied by CLI test rule",
 		},
 	}
-	err = engine.LoadPolicies(rules, "")
+	err = engine.LoadPolicies(rules, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	return engine

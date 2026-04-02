@@ -72,7 +72,7 @@ request_validation:
   # CEL-based deterministic request validation
   cel:
     enabled: true
-    mode: audit_only  # audit_only = log but don't block; empty = enforce
+    mode: audit_only  # "audit_only" = log but don't block; "enforce" = rules can block
     rules_file: "cel_request_rules.yaml"
   # AI-powered request validation
   ai:

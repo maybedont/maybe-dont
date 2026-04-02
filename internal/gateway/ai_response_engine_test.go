@@ -49,7 +49,7 @@ func TestAIResponsePolicyEngine_DuplicatePolicyNames(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate policy name 'duplicate-name'")
 }
@@ -76,7 +76,7 @@ func TestAIResponsePolicyEngine_RejectsPercentSPlaceholder(t *testing.T) {
 		},
 	}
 
-	err = engine.LoadPolicies(policies, "")
+	err = engine.LoadPolicies(policies, config.PolicyModeEnforce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must not contain %s placeholder")
 }
@@ -186,7 +186,7 @@ func TestAIResponsePolicyEngine_RedactDecisionLogic(t *testing.T) {
 					Prompt: "Check this response for security risks",
 					Action: tt.ruleAction,
 				},
-			}, "")
+			}, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			req := createTestToolRequest("test_tool")
@@ -298,7 +298,7 @@ func TestAIResponsePolicyEngine_MixedActionAggregation(t *testing.T) {
 					Prompt: "Deny check for dangerous content",
 					Action: config.PolicyActionDeny,
 				},
-			}, "")
+			}, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			req := createTestToolRequest("test_tool")
@@ -385,7 +385,7 @@ func TestAIResponsePolicyEngine_DenyTrumpsRedact_DeterministicOrdering(t *testin
 			Prompt: "Deny check for dangerous content",
 			Action: config.PolicyActionDeny,
 		},
-	}, "")
+	}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	req := createTestToolRequest("test_tool")
@@ -498,7 +498,7 @@ func TestAIResponsePolicyEngine_DetectAgentRestrictedContent(t *testing.T) {
 					Prompt: "Check if this response contains explicit signals that AI agents should not access this content",
 					Action: config.PolicyActionDeny,
 				},
-			}, "")
+			}, config.PolicyModeEnforce)
 			require.NoError(t, err)
 
 			req := createTestToolRequest("github__get_file_contents")

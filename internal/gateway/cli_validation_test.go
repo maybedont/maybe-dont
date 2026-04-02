@@ -880,7 +880,7 @@ func TestHandleCLIValidation_AuditEntry_FailedOpen(t *testing.T) {
 			Action:        config.PolicyActionDeny,
 			Message:       "should not reach here",
 		},
-	}, "")
+	}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	auditWriter := &mockAuditWriter{}

@@ -318,7 +318,11 @@ func TestCLIValidation_Integration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stack := setupCLIIntegrationTest(t, tt.policies, tt.topLevelMode, tt.validateCommands)
+			topLevelMode := tt.topLevelMode
+			if topLevelMode == "" {
+				topLevelMode = config.PolicyModeEnforce
+			}
+			stack := setupCLIIntegrationTest(t, tt.policies, topLevelMode, tt.validateCommands)
 
 			resp, err := stack.client.Validate(context.Background(), tt.request)
 			require.NoError(t, err)
@@ -355,7 +359,7 @@ func TestCLIValidation_Integration(t *testing.T) {
 // serialization of client_info.cli_version from cliproxy types through gateway types
 // and back.
 func TestCLIValidation_Integration_ClientVersionEchoed(t *testing.T) {
-	stack := setupCLIIntegrationTest(t, nil, "", []string{"*"})
+	stack := setupCLIIntegrationTest(t, nil, config.PolicyModeEnforce, []string{"*"})
 
 	resp, err := stack.client.Validate(context.Background(), cliproxy.ValidationRequest{
 		Command:   "echo",
@@ -382,7 +386,7 @@ func TestCLIValidation_Integration_AuditEntry(t *testing.T) {
 		},
 	}
 
-	stack := setupCLIIntegrationTest(t, policies, "", []string{"*"})
+	stack := setupCLIIntegrationTest(t, policies, config.PolicyModeEnforce, []string{"*"})
 
 	resp, err := stack.client.Validate(context.Background(), cliproxy.ValidationRequest{
 		Command:          "sudo",
@@ -459,7 +463,7 @@ func TestCLIValidation_Integration_RequestIDInLogs(t *testing.T) {
 			Action:        config.PolicyActionDeny,
 			Message:       "rm is blocked",
 		},
-	}, "")
+	}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	evaluator := &PolicyEvaluator{

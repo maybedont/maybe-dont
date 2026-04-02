@@ -745,7 +745,7 @@ func TestHandleActionValidation_AuditEntry_FailedOpen(t *testing.T) {
 			Action:     config.PolicyActionDeny,
 			Message:    "should not reach here",
 		},
-	}, "")
+	}, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	auditWriter := &mockAuditWriter{}
@@ -1040,7 +1040,7 @@ func newTestCELEngineWithAllowRule(t *testing.T) *CELPolicyEngine {
 			Message:    "Allowed by test rule",
 		},
 	}
-	err = engine.LoadPolicies(rules, "")
+	err = engine.LoadPolicies(rules, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	return engine
@@ -1065,7 +1065,7 @@ func newTestCELEngineWithDenyRule(t *testing.T) *CELPolicyEngine {
 			Message:    "Denied by test rule",
 		},
 	}
-	err = engine.LoadPolicies(rules, "")
+	err = engine.LoadPolicies(rules, config.PolicyModeEnforce)
 	require.NoError(t, err)
 
 	return engine
@@ -1281,13 +1281,13 @@ func TestActionValidation_CrossEngineTruthTable(t *testing.T) {
 // newTestAIEngineWithAllowRule creates an AI engine with a mock that returns allow.
 func newTestAIEngineWithAllowRule(t *testing.T) *AIPolicyEngine {
 	t.Helper()
-	return newTestAIEngineWithMockResponse(t, true, "Allowed by AI", "")
+	return newTestAIEngineWithMockResponse(t, true, "Allowed by AI", config.PolicyModeEnforce)
 }
 
 // newTestAIEngineWithDenyRule creates an AI engine with a mock that returns deny (enforced).
 func newTestAIEngineWithDenyRule(t *testing.T) *AIPolicyEngine {
 	t.Helper()
-	return newTestAIEngineWithMockResponse(t, false, "Denied by AI", "")
+	return newTestAIEngineWithMockResponse(t, false, "Denied by AI", config.PolicyModeEnforce)
 }
 
 // newTestAIEngineWithAuditOnlyDenyRule creates an AI engine with a mock that returns deny

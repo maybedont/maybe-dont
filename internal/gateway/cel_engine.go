@@ -24,7 +24,7 @@ type CELPolicy struct {
 	CLIExpression string              `yaml:"cli_expression"` // CEL expression for CLI commands
 	Action        config.PolicyAction `yaml:"action"`         // allow or deny
 	Message       string              `yaml:"message"`
-	Mode          config.PolicyMode   `yaml:"mode"` // enabled, audit_only, or disabled
+	Mode          config.PolicyMode   `yaml:"mode"` // "audit_only" or "enforce"
 }
 
 // CELPolicyEngine handles CEL policy evaluation.
@@ -105,6 +105,10 @@ func NewCELPolicyEngine(ctx context.Context, logger *config.SessionLogger) (*CEL
 // LoadPolicies loads policies from configuration
 // topLevelMode is the top-level mode that applies to all policies (audit_only makes all rules audit_only)
 func (e *CELPolicyEngine) LoadPolicies(policies []config.Policy, topLevelMode config.PolicyMode, includeDisabled ...bool) error {
+	if !topLevelMode.IsValid() {
+		return fmt.Errorf("invalid topLevelMode %q: must be normalized before calling LoadPolicies", topLevelMode)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -275,7 +279,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("compile_error", issues.Err()),
 			})
-			// Fail-open on compilation error for enabled rules
+			// Fail-open on compilation error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -304,7 +308,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("program_error", err),
 			})
-			// Fail-open on program creation error for enabled rules
+			// Fail-open on program creation error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -334,7 +338,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("eval_error", err),
 			})
-			// Fail-open on evaluation error for enabled rules
+			// Fail-open on evaluation error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -357,7 +361,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        "policy did not return a boolean",
 			})
-			// Fail-open on type error for enabled rules
+			// Fail-open on type error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -410,7 +414,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 			})
 
 			if policy.Action == config.PolicyActionDeny {
-				// Only count toward final decision if mode is enabled (not audit_only)
+				// Only count toward final decision if mode is enforce (not audit_only)
 				if !policy.Mode.IsAuditOnly() {
 					if phaseTracker != nil {
 						phaseTracker.MarkDecided()
@@ -425,7 +429,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 					auditOnlyDeny = true
 				}
 			} else if policy.Action == config.PolicyActionAllow {
-				// Only count toward final decision if mode is enabled (not audit_only)
+				// Only count toward final decision if mode is enforce (not audit_only)
 				if !policy.Mode.IsAuditOnly() {
 					results.AllowCount++
 				}
@@ -459,7 +463,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 		results.RecommendedAction = config.PolicyActionAllow
 		// Find the first allow message
 		for _, r := range results.Results {
-			if r.Action == config.PolicyActionAllow && r.Mode == "" && r.Message != "" {
+			if r.Action == config.PolicyActionAllow && !r.Mode.IsAuditOnly() && r.Message != "" {
 				results.Message = r.Message
 				break
 			}
@@ -496,12 +500,12 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 }
 
 // modeToAuditString converts PolicyMode to audit string representation.
-// Returns empty string for enabled mode (omit in JSON), "audit_only" otherwise.
+// Returns empty string for enforce mode (omit in JSON), "audit_only" otherwise.
 func modeToAuditString(mode config.PolicyMode) string {
 	if mode == config.PolicyModeAuditOnly {
 		return "audit_only"
 	}
-	return "" // Omit "enabled" mode in audit output
+	return "" // Omit "enforce" mode in audit output
 }
 
 // EvaluateCLICommand evaluates a CLI command against all policies.
@@ -574,7 +578,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("compile_error", issues.Err()),
 			})
-			// Fail-open on compilation error for enabled rules
+			// Fail-open on compilation error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -603,7 +607,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("program_error", err),
 			})
-			// Fail-open on program creation error for enabled rules
+			// Fail-open on program creation error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -633,7 +637,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("eval_error", err),
 			})
-			// Fail-open on evaluation error for enabled rules
+			// Fail-open on evaluation error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -656,7 +660,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				EvaluationMs: ruleDurationMs,
 				Error:        "policy did not return a boolean",
 			})
-			// Fail-open on type error for enabled rules
+			// Fail-open on type error for enforced rules
 			if !policy.Mode.IsAuditOnly() {
 				if phaseTracker != nil {
 					phaseTracker.MarkDecided()
@@ -709,7 +713,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 			})
 
 			if policy.Action == config.PolicyActionDeny {
-				// Only count toward final decision if mode is enabled (not audit_only)
+				// Only count toward final decision if mode is enforce (not audit_only)
 				if !policy.Mode.IsAuditOnly() {
 					if phaseTracker != nil {
 						phaseTracker.MarkDecided()
@@ -724,7 +728,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 					auditOnlyDeny = true
 				}
 			} else if policy.Action == config.PolicyActionAllow {
-				// Only count toward final decision if mode is enabled (not audit_only)
+				// Only count toward final decision if mode is enforce (not audit_only)
 				if !policy.Mode.IsAuditOnly() {
 					results.AllowCount++
 				}
@@ -758,7 +762,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 		results.RecommendedAction = config.PolicyActionAllow
 		// Find the first allow message
 		for _, r := range results.Results {
-			if r.Action == config.PolicyActionAllow && r.Mode == "" && r.Message != "" {
+			if r.Action == config.PolicyActionAllow && !r.Mode.IsAuditOnly() && r.Message != "" {
 				results.Message = r.Message
 				break
 			}

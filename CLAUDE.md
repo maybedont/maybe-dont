@@ -111,13 +111,13 @@ Environment variables:
 ### Validation Policy Configuration
 Each validation phase (CEL request, AI request, CEL response, AI response) has two settings:
 - **enabled** (bool) - Whether the validation phase runs at all
-- **mode** (default: `audit_only`) - When set to `audit_only`, rules log but don't block. Set to empty string to enable blocking.
+- **mode** (`audit_only` or `enforce`, default: `audit_only`) - When `audit_only`, rules log but don't block. Set to `enforce` to enable blocking.
 
 Per-rule settings allow fine-grained control:
 - **enabled** (bool) - Whether this specific rule runs (default: true)
-- **mode** (optional, only `audit_only` supported) - When set, overrides top-level for this rule
+- **mode** (`audit_only` or `enforce`) - Per-rule override. If omitted, defaults to `enforce`.
 
-**Mode Resolution**: Top-level `mode: audit_only` applies to ALL rules in that phase. Per-rule `mode: audit_only` only affects that rule.
+**Mode Resolution**: Top-level `mode: audit_only` applies to ALL rules in that phase. Per-rule `mode: audit_only` only affects that rule. Invalid mode values are rejected at startup.
 
 Defaults:
 - `request_validation.cel.enabled`: true, `mode`: audit_only

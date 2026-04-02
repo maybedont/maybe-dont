@@ -24,6 +24,7 @@ Each spec should have a `## Status` section near the top with one of these value
 | [test-pass-rate-history](test-pass-rate-history.md) | Rolling pass rate tracking, policy change markers, and stability reporting for the policy test suite |
 | [release-notes-process](release-notes-process.md) | Versioned release notes (release-notes/v{version}.md) enforced by CI |
 | [openhands-integration](openhands-integration.md) | OpenHands security analyzer integration via `POST /api/v1/action/validate` endpoint |
+| [rule-mode-simplification](rule-mode-simplification.md) | Simplify rule mode configuration |
 
 ### Ready for Implementation
 
@@ -60,7 +61,6 @@ These specs predate the status convention and need review:
 | [gateway-auth-header-design](gateway-auth-header-design.md) | Gateway authentication header design |
 | [govulncheck-github-action](govulncheck-github-action.md) | GitHub Action for vulnerability scanning |
 | [lazy-discovery-synchronization](lazy-discovery-synchronization.md) | Lazy tool discovery synchronization |
-| [rule-mode-simplification](rule-mode-simplification.md) | Simplify rule mode configuration |
 | [validation-chain-audit-schema](validation-chain-audit-schema.md) | Audit entry schema for validation chain |
 | [validation-config-restructure](validation-config-restructure.md) | Restructure validation configuration |
 
