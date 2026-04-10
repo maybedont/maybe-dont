@@ -1,3 +1,9 @@
+## v1.6.1 (2026-04-09)
+
+### Fix
+
+- send tools/list_changed notification after discover_tools (#143)
+
 ## v1.6.0 (2026-04-02)
 
 ### Feat
