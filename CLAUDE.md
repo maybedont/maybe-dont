@@ -183,7 +183,7 @@ Each tool can be enabled/disabled in config under `native_tools`.
 ### Session Management
 - Sessions have configurable idle timeout (`server.session_timeout_minutes`, default: 30)
 - Sessions inactive longer than the timeout are cleaned up
-- When a session expires, clients need to call `maybedont__discover_tools` to reconnect
+
 
 ## Important Development Notes
 

@@ -1047,7 +1047,17 @@ func (g *Gateway) doDiscoverPassThroughTools(ctx context.Context, sessionID stri
 	for _, name := range passThroughClients {
 		existingClient, err := g.clientManager.GetSessionClient(sessionID, name)
 		if err == nil && existingClient != nil && existingClient.Client != nil {
-			// Client already connected
+			// Client already connected — ensure tools are registered globally.
+			// After a gateway restart, the session may have reconnected clients
+			// but the MCP server's tool handlers may not be registered yet.
+			for _, tool := range existingClient.Tools {
+				prefixedTool := tool
+				prefixedTool.Name = PrefixName(name, tool.Name)
+				prefixedTool.DeferLoading = true
+				if g.server.GetTool(prefixedTool.Name) == nil {
+					g.server.AddTool(prefixedTool, g.handleToolCallWithErrorHandling)
+				}
+			}
 			result.AlreadyConnected = append(result.AlreadyConnected, name)
 			g.logger.Debug(ctx, "Client already connected for session",
 				zap.String("session_id", sessionID),
@@ -1109,6 +1119,21 @@ func (g *Gateway) doDiscoverPassThroughTools(ctx context.Context, sessionID stri
 				zap.String("session_id", sessionID),
 				zap.String("client", name),
 				zap.Int("tools_count", len(toolNames)))
+		}
+	}
+
+	// Notify the requesting session that the tool list may have changed.
+	// This is necessary because the MCP client may have lost its tool registrations
+	// (e.g., after a transport reconnect) even though the gateway still has the tools.
+	// By sending tools/list_changed, the client will call tools/list to refresh its registry.
+	if len(result.AlreadyConnected) > 0 || len(result.DiscoveredClients) > 0 {
+		if err := g.server.SendNotificationToClient(ctx, mcp.MethodNotificationToolsListChanged, nil); err != nil {
+			g.logger.Debug(ctx, "Failed to send tools/list_changed notification to requesting session",
+				zap.String("session_id", sessionID),
+				zap.Error(err))
+		} else {
+			g.logger.Debug(ctx, "Sent tools/list_changed notification to requesting session",
+				zap.String("session_id", sessionID))
 		}
 	}
 
