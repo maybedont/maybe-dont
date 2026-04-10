@@ -1,0 +1,142 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: maybe-dont-dev
+  namespace: 580294893150
+  selfLink: /apis/serving.knative.dev/v1/namespaces/580294893150/services/maybe-dont-dev
+  uid: 029e72fb-5282-433a-9540-d54854eeb10c
+  resourceVersion: AAZMxDTN54w
+  generation: 77
+  creationTimestamp: '2025-12-18T00:57:33.709918Z'
+  labels:
+    cloud.googleapis.com/location: us-central1
+  annotations:
+    serving.knative.dev/creator: robotdan@maybedont.ai
+    serving.knative.dev/lastModifier: robotdan@maybedont.ai
+    run.googleapis.com/client-name: cloud-console
+    run.googleapis.com/operation-id: 8519b8ce-07a9-4773-87c8-c26396ae289a
+    run.googleapis.com/ingress: all
+    run.googleapis.com/ingress-status: all
+    run.googleapis.com/invoker-iam-disabled: 'true'
+    run.googleapis.com/minScale: 1
+    run.googleapis.com/maxScale: 1
+    run.googleapis.com/urls: >-
+      ["https://maybe-dont-dev-580294893150.us-central1.run.app","https://maybe-dont-dev-vjjgkc7mfq-uc.a.run.app"]
+spec:
+  template:
+    metadata:
+      labels:
+        client.knative.dev/nonce: 46ae4a2c-ff8e-4de0-b6f3-49b8bf8f2c03
+        run.googleapis.com/startupProbeType: Custom
+      annotations:
+        autoscaling.knative.dev/maxScale: 1
+        autoscaling.knative.dev/minScale: 1
+        run.googleapis.com/client-name: cloud-console
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 30
+      serviceAccountName: 580294893150-compute@developer.gserviceaccount.com
+      containers:
+      - name: maybe-dont-1
+        image: >-
+          us-central1-docker.pkg.dev/utility-dynamo-481523-i9/ghcr/maybedont/maybe-dont:v1.5.0
+        ports:
+        - name: http1
+          containerPort: 8080
+        env:
+        - name: MAYBE_DONT_CONFIG_DIR
+          value: /config
+        - name: MAYBE_DONT_LOG_DIR
+          value: /logs
+        - name: MAYBE_DONT_LOGGER_LEVEL
+          value: debug
+        - name: MAYBE_DONT_AUDIT_PATH
+          value: maybedont-audit.log
+        - name: MAYBE_DONT_VALIDATION_AI_MODEL
+          value: gpt-5.2
+        - name: MAYBE_DONT_REQUEST_VALIDATION_AI_ENABLED
+          value: 'true'
+        - name: MAYBE_DONT_REQUEST_VALIDATION_CEL_ENABLED
+          value: 'true'
+        - name: MAYBE_DONT_RESPONSE_VALIDATION_AI_ENABLED
+          value: 'true'
+        - name: MAYBE_DONT_RESPONSE_VALIDATION_CEL_ENABLED
+          value: 'true'
+        - name: MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_TYPE
+          value: http
+        - name: MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL
+          value: https://api.githubcopilot.com/mcp/
+        - name: MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_ENABLED
+          value: 'true'
+        - name: MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_HEADERS
+          value: X-GitHub-Token:Authorization:Bearer {value}
+        - name: MAYBE_DONT_REQUEST_VALIDATION_CEL_RULES_FILE
+          value: cel_request_rules.yaml
+        - name: MAYBE_DONT_REQUEST_VALIDATION_AI_RULES_FILE
+          value: ai_request_rules.yaml
+        - name: MAYBE_DONT_VALIDATION_AI_ENDPOINT
+          value: https://api.openai.com/v1/chat/completions
+        - name: MAYBE_DONT_SERVER_TYPE
+          value: http
+        - name: MAYBE_DONT_SERVER_LISTEN_ADDR
+          value: 0.0.0.0:8080
+        - name: MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_AWS_DOCS_TYPE
+          value: http
+        - name: MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_AWS_DOCS_URL
+          value: https://knowledge-mcp.global.api.aws
+        - name: MAYBE_DONT_RESPONSE_VALIDATION_CEL_RULES_FILE
+          value: cel_response_rules.yaml
+        - name: MAYBE_DONT_RESPONSE_VALIDATION_AI_RULES_FILE
+          value: ai_response_rules.yaml
+        - name: MAYBE_DONT_RESPONSE_VALIDATION_CEL_MODE
+          value: enabled
+        - name: MAYBE_DONT_RESPONSE_VALIDATION_AI_MODE
+          value: audit_only
+        - name: MAYBE_DONT_REQUEST_VALIDATION_AI_MODE
+          value: enabled
+        - name: MAYBE_DONT_REQUEST_VALIDATION_CEL_MODE
+          value: enabled
+        - name: MAYBE_DONT_REQUIRED_HEADER_NAME
+          value: X-MaybeDont-Caller
+        - name: MAYBE_DONT_REQUIRED_HEADER_VALUE
+          value: '*@maybedont.ai'
+        - name: MAYBE_DONT_VALIDATION_AI_PROVIDER
+          value: openai
+        - name: MAYBE_DONT_VALIDATION_AI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: latest
+              name: OPENAI_API_KEY
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+        volumeMounts:
+        - name: gcs-1
+          mountPath: /config
+        - name: gcs-2
+          mountPath: /logs
+        startupProbe:
+          initialDelaySeconds: 7
+          timeoutSeconds: 240
+          periodSeconds: 240
+          failureThreshold: 2
+          tcpSocket:
+            port: 8080
+      volumes:
+      - name: gcs-1
+        csi:
+          driver: gcsfuse.run.googleapis.com
+          readOnly: true
+          volumeAttributes:
+            bucketName: dev-1.config.fs.maybedont.ai
+            mountOptions: only-dir=dev
+      - name: gcs-2
+        csi:
+          driver: gcsfuse.run.googleapis.com
+          volumeAttributes:
+            bucketName: dev-1.logs.fs.maybedont.ai
+            mountOptions: only-dir=dev
+  traffic:
+  - percent: 100
+    latestRevision: true
