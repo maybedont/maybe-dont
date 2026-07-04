@@ -39,6 +39,7 @@ Each spec should have a `## Status` section near the top with one of these value
 | Spec | Description |
 |------|-------------|
 | [agent-hook-and-interceptor-integration](agent-hook-and-interceptor-integration.md) | Agent hooks and `POST /api/v1/intercept` endpoint — hook scripts shipped (#131), Cursor mutation path and docs remain |
+| [enterprise-managed-authorization](enterprise-managed-authorization.md) | MCP Enterprise-Managed Authorization (SEP-990): ID-JAG-based Bearer auth, identity-aware policy, downstream token exchange; absorbs the OBO token exchange draft |
 | [test-failure-categorization](test-failure-categorization.md) | Separate extra-policy-only failures from decision failures in model comparison table |
 | [prompt-injection-considerations](prompt-injection-considerations.md) | Prompt injection threat model, product positioning, and optimization strategies |
 | [api-token-obfuscation](api-token-obfuscation.md) | Obfuscate sensitive tokens in logs and audit entries |
