@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/auth"
 	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 	"golang.org/x/text/cases"
@@ -23,8 +24,18 @@ type ClientManager struct {
 	clientConfigs map[string]config.ClientConfig
 	// sessionManager manages per-session downstream client instances
 	sessionManager *SessionManager
-	mu             sync.RWMutex
-	logger         *config.SessionLogger
+	// tokenBroker performs downstream on-behalf-of token exchange (nil when unused)
+	tokenBroker *auth.TokenBroker
+	mu          sync.RWMutex
+	logger      *config.SessionLogger
+}
+
+// SetTokenBroker wires the downstream token broker used for token_exchange and
+// enterprise_managed auth types. Called once at startup.
+func (cm *ClientManager) SetTokenBroker(broker *auth.TokenBroker) {
+	cm.tokenBroker = broker
+	// Evict a session's cached downstream tokens when the session is torn down.
+	cm.sessionManager.SetOnSessionDeleted(broker.EvictSession)
 }
 
 // NewClientManager creates a new client manager with the default session timeout
@@ -88,11 +99,13 @@ func (cm *ClientManager) DiscoverAllCapabilities(ctx context.Context) (*Discover
 	var errs []string
 	var skippedPassThrough []string
 	for name, cfg := range configs {
-		// Skip probing for clients with pass-through auth enabled
-		// These clients require upstream credentials which aren't available at startup
-		if cfg.Auth.PassThrough.Enabled {
-			cm.logger.Info(ctx, "Skipping probe for pass-through auth client (requires upstream credentials)",
-				zap.String("client", name))
+		// Skip probing for clients whose credentials are only available per-session
+		// (pass-through, token_exchange, enterprise_managed). These are discovered lazily
+		// once an authenticated request arrives.
+		if cfg.Auth.RequiresPerSessionCredentials() {
+			cm.logger.Info(ctx, "Skipping probe for per-session auth client (requires upstream credentials)",
+				zap.String("client", name),
+				zap.String("auth_type", cfg.Auth.EffectiveType()))
 			skippedPassThrough = append(skippedPassThrough, name)
 			continue
 		}
@@ -355,13 +368,19 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		}
 
 		// Add dynamic auth headers if pass-through is enabled
-		if cfg.Auth.PassThrough.Enabled {
+		if cfg.Auth.IsPassThrough() {
 			headerFunc := cm.createAuthHeaderFunc(name, cfg)
 			sseOpts = append(sseOpts, client.WithHeaderFunc(headerFunc))
 			cm.logger.Debug(ctx, "Enabled pass-through auth for SSE client",
 				zap.String("session_id", sessionID),
 				zap.String("client", name),
 				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
+		} else if cfg.Auth.IsTokenExchange() {
+			sseOpts = append(sseOpts, client.WithHeaderFunc(cm.createExchangeHeaderFunc(name, cfg)))
+			cm.logger.Debug(ctx, "Enabled token-exchange auth for SSE client",
+				zap.String("session_id", sessionID),
+				zap.String("client", name),
+				zap.String("auth_type", cfg.Auth.EffectiveType()))
 		}
 
 		cl, err = client.NewSSEMCPClient(cfg.DownstreamURL, sseOpts...)
@@ -379,13 +398,19 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		}
 
 		// Add dynamic auth headers if pass-through is enabled
-		if cfg.Auth.PassThrough.Enabled {
+		if cfg.Auth.IsPassThrough() {
 			headerFunc := cm.createAuthHeaderFunc(name, cfg)
 			httpOpts = append(httpOpts, transport.WithHTTPHeaderFunc(headerFunc))
 			cm.logger.Debug(ctx, "Enabled pass-through auth for HTTP client",
 				zap.String("session_id", sessionID),
 				zap.String("client", name),
 				zap.Int("header_mappings", len(cfg.Auth.PassThrough.Headers)))
+		} else if cfg.Auth.IsTokenExchange() {
+			httpOpts = append(httpOpts, transport.WithHTTPHeaderFunc(cm.createExchangeHeaderFunc(name, cfg)))
+			cm.logger.Debug(ctx, "Enabled token-exchange auth for HTTP client",
+				zap.String("session_id", sessionID),
+				zap.String("client", name),
+				zap.String("auth_type", cfg.Auth.EffectiveType()))
 		}
 
 		cl, err = client.NewStreamableHttpClient(cfg.DownstreamURL, httpOpts...)
@@ -989,6 +1014,39 @@ func (cm *ClientManager) createAuthHeaderFunc(clientName string, cfg config.Clie
 				zap.String("target_header", mapping.TargetHeader))
 		}
 
+		return headers
+	}
+}
+
+// createExchangeHeaderFunc creates a header function for token-exchange auth types
+// (token_exchange, enterprise_managed). It reads the validated caller identity from
+// context and attaches the exchanged downstream token as an Authorization header.
+//
+// The token is normally already cached by the pre-flight in HandleToolCall, so this is a
+// cache read on the hot path. On error we log at debug and send no Authorization header;
+// the downstream will reject the call, which surfaces as a tool error (the pre-flight
+// provides the clean, specific error message in the common case).
+func (cm *ClientManager) createExchangeHeaderFunc(clientName string, cfg config.ClientConfig) transport.HTTPHeaderFunc {
+	return func(ctx context.Context) map[string]string {
+		headers := make(map[string]string)
+		if cm.tokenBroker == nil {
+			return headers
+		}
+
+		sessionID, _ := GetSessionIDFromContext(ctx)
+		subjectToken := ""
+		if identity, ok := IdentityFromContext(ctx); ok {
+			subjectToken = identity.RawToken
+		}
+
+		result, err := cm.tokenBroker.TokenFor(ctx, sessionID, clientName, cfg.DownstreamURL, subjectToken, cfg.Auth)
+		if err != nil {
+			cm.logger.Debug(ctx, "Token exchange unavailable for downstream request",
+				zap.String("client", clientName),
+				zap.Error(err))
+			return headers
+		}
+		headers["Authorization"] = "Bearer " + result.AccessToken
 		return headers
 	}
 }

@@ -90,6 +90,53 @@ func normalizePolicyModes(cfg *Config) {
 	}
 }
 
+// OriginOf returns the scheme://host origin of a URL, or the input unchanged if it
+// cannot be parsed as an absolute URL.
+func OriginOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return raw
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// normalizeAuthConfig fills in derived defaults for the server auth and IdP config so
+// that validation and runtime code can rely on populated values. Called during loading
+// before validation.
+func normalizeAuthConfig(cfg *Config) {
+	if cfg.Server.Auth.Mode == "" {
+		cfg.Server.Auth.Mode = AuthModeDisabled
+	}
+	if !cfg.AuthEnabled() {
+		return
+	}
+
+	// Default expected audience to the resource identifier.
+	if cfg.Server.Auth.Audience == "" {
+		cfg.Server.Auth.Audience = cfg.Server.Auth.Resource
+	}
+
+	// Default the OIDC discovery URL from the issuer when neither explicit endpoint is set.
+	if cfg.IdP.OpenIDConnectDiscoveryURL == "" && cfg.IdP.JWKSURL == "" && cfg.IdP.Issuer != "" {
+		cfg.IdP.OpenIDConnectDiscoveryURL = strings.TrimRight(cfg.IdP.Issuer, "/") + "/.well-known/openid-configuration"
+	}
+
+	switch cfg.Server.Auth.Mode {
+	case AuthModeJWTValidation:
+		// Advertise the IdP as the authorization server if none configured.
+		if len(cfg.Server.Auth.AuthorizationServers) == 0 && cfg.IdP.Issuer != "" {
+			cfg.Server.Auth.AuthorizationServers = []string{cfg.IdP.Issuer}
+		}
+	case AuthModeEmbeddedAS:
+		if cfg.Server.Auth.EmbeddedAS.Issuer == "" {
+			cfg.Server.Auth.EmbeddedAS.Issuer = OriginOf(cfg.Server.Auth.Resource)
+		}
+		if cfg.Server.Auth.EmbeddedAS.AccessTokenTTLSeconds == 0 {
+			cfg.Server.Auth.EmbeddedAS.AccessTokenTTLSeconds = 3600
+		}
+	}
+}
+
 // RotationConfig contains log rotation settings for both logger and audit
 type RotationConfig struct {
 	MaxSizeMB  int  `mapstructure:"max_size_mb"`  // Max size in MB before rotation (default: 100)
@@ -126,31 +173,42 @@ func ResolvePolicyMode(topLevelMode PolicyMode, ruleMode PolicyMode) PolicyMode 
 	return PolicyModeEnforce
 }
 
+// ServerConfig holds server transport and authentication configuration.
+type ServerConfig struct {
+	Type       ServerType `mapstructure:"type"` // stdio, http, sse
+	ListenAddr string     `mapstructure:"listen_addr"`
+	SSE        struct {
+		TLS struct {
+			Enabled  bool   `mapstructure:"enabled"`
+			CertFile string `mapstructure:"cert_file"`
+			KeyFile  string `mapstructure:"key_file"`
+		} `mapstructure:"tls"`
+	} `mapstructure:"sse"`
+	// TrustedProxies is a list of IP addresses, IPv6 addresses, or CIDR blocks
+	// that are trusted to provide accurate X-Forwarded-For headers.
+	// When configured, only the rightmost IP in X-Forwarded-For that is NOT a trusted proxy
+	// will be used as the client IP (this is the most secure approach).
+	// If empty or not set, all proxies are trusted and the leftmost (first) IP is used.
+	// Examples: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1", "fc00::/7"]
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
+	// SessionTimeoutMinutes is the idle timeout for sessions in minutes.
+	// Sessions inactive for longer than this will be cleaned up.
+	// Default: 30 minutes. Set to 0 to disable session timeout (not recommended).
+	SessionTimeoutMinutes int `mapstructure:"session_timeout_minutes"`
+
+	// Auth configures OAuth Bearer authentication for incoming MCP requests
+	// (Enterprise-Managed Authorization). Disabled by default.
+	Auth ServerAuthConfig `mapstructure:"auth"`
+}
+
 // Config represents the application configuration
 type Config struct {
 	// Server configuration
-	Server struct {
-		Type       ServerType `mapstructure:"type"` // stdio, http, sse
-		ListenAddr string     `mapstructure:"listen_addr"`
-		SSE        struct {
-			TLS struct {
-				Enabled  bool   `mapstructure:"enabled"`
-				CertFile string `mapstructure:"cert_file"`
-				KeyFile  string `mapstructure:"key_file"`
-			} `mapstructure:"tls"`
-		} `mapstructure:"sse"`
-		// TrustedProxies is a list of IP addresses, IPv6 addresses, or CIDR blocks
-		// that are trusted to provide accurate X-Forwarded-For headers.
-		// When configured, only the rightmost IP in X-Forwarded-For that is NOT a trusted proxy
-		// will be used as the client IP (this is the most secure approach).
-		// If empty or not set, all proxies are trusted and the leftmost (first) IP is used.
-		// Examples: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1", "fc00::/7"]
-		TrustedProxies []string `mapstructure:"trusted_proxies"`
-		// SessionTimeoutMinutes is the idle timeout for sessions in minutes.
-		// Sessions inactive for longer than this will be cleaned up.
-		// Default: 30 minutes. Set to 0 to disable session timeout (not recommended).
-		SessionTimeoutMinutes int `mapstructure:"session_timeout_minutes"`
-	} `mapstructure:"server"`
+	Server ServerConfig `mapstructure:"server"`
+
+	// IdP configures the enterprise Identity Provider used for validating incoming
+	// tokens (server.auth) and for downstream on-behalf-of token exchange.
+	IdP IdPConfig `mapstructure:"idp"`
 
 	// Global validation settings that apply to all validation phases
 	Validation struct {
@@ -219,6 +277,65 @@ type Config struct {
 	} `mapstructure:"native_tools"`
 }
 
+// Server auth mode values for ServerAuthConfig.Mode.
+const (
+	AuthModeDisabled      = "disabled"       // No Bearer authentication on incoming requests
+	AuthModeJWTValidation = "jwt_validation" // Validate tokens issued by an external authorization server
+	AuthModeEmbeddedAS    = "embedded_as"    // Gateway hosts its own resource authorization server
+)
+
+// IdPConfig configures the enterprise Identity Provider.
+type IdPConfig struct {
+	// Issuer is the expected `iss` claim in incoming tokens and ID-JAGs.
+	Issuer string `mapstructure:"issuer"`
+	// OpenIDConnectDiscoveryURL is the OIDC discovery endpoint. If empty, it defaults to
+	// {issuer}/.well-known/openid-configuration when a discovery-derived endpoint is needed.
+	OpenIDConnectDiscoveryURL string `mapstructure:"openid_connect_discovery_url"`
+	// JWKSURL overrides the JWKS endpoint used to validate token signatures.
+	JWKSURL string `mapstructure:"jwks_url"`
+	// TokenEndpoint overrides the IdP token endpoint used for token exchange.
+	TokenEndpoint string `mapstructure:"token_endpoint"`
+	// ClientID is the gateway's confidential-client ID at the IdP (required for exchange).
+	ClientID string `mapstructure:"client_id"`
+	// ClientSecret is the gateway's confidential-client secret at the IdP.
+	ClientSecret string `mapstructure:"client_secret"`
+}
+
+// ServerAuthConfig configures Bearer authentication for incoming MCP requests.
+type ServerAuthConfig struct {
+	// Mode selects the auth behavior: disabled, jwt_validation, or embedded_as.
+	Mode string `mapstructure:"mode"`
+	// Resource is this gateway's RFC 9728 protected-resource identifier and the default
+	// expected `aud` for incoming tokens. Required when Mode != disabled.
+	Resource string `mapstructure:"resource"`
+	// Audience overrides the expected `aud` claim. Default: Resource.
+	Audience string `mapstructure:"audience"`
+	// ScopesSupported is advertised in protected resource metadata.
+	ScopesSupported []string `mapstructure:"scopes_supported"`
+	// AuthorizationServers is advertised in protected resource metadata (jwt_validation mode).
+	AuthorizationServers []string `mapstructure:"authorization_servers"`
+	// EmbeddedAS configures the embedded resource authorization server (embedded_as mode).
+	EmbeddedAS EmbeddedASConfig `mapstructure:"embedded_as"`
+}
+
+// EmbeddedASConfig configures the gateway's embedded resource authorization server.
+type EmbeddedASConfig struct {
+	// Issuer is the AS issuer identifier. Default: origin of ServerAuthConfig.Resource.
+	Issuer string `mapstructure:"issuer"`
+	// AccessTokenTTLSeconds is the lifetime of issued access tokens (default: 3600).
+	AccessTokenTTLSeconds int `mapstructure:"access_token_ttl_seconds"`
+	// SigningKeyFile is the path to the Ed25519 signing key. Default: {state_dir}/as-signing-key.pem.
+	SigningKeyFile string `mapstructure:"signing_key_file"`
+	// AllowedClientIDs optionally restricts which ID-JAG client_id values are accepted.
+	AllowedClientIDs []string `mapstructure:"allowed_client_ids"`
+}
+
+// AuthEnabled reports whether Bearer authentication is active for incoming requests.
+func (c *Config) AuthEnabled() bool {
+	m := c.Server.Auth.Mode
+	return m != "" && m != AuthModeDisabled
+}
+
 // ClientConfig represents configuration for a single MCP client
 type ClientConfig struct {
 	Type          string   `mapstructure:"type"` // stdio, sse, http
@@ -245,15 +362,75 @@ type ClientConfig struct {
 		Headers map[string]string `mapstructure:"headers"`
 	} `mapstructure:"http"`
 
-	// Pass-through authentication configuration
-	Auth struct {
-		PassThrough struct {
-			Enabled bool `mapstructure:"enabled"`
+	// Downstream authentication configuration
+	Auth ClientAuthConfig `mapstructure:"auth"`
+}
 
-			// HTTP/SSE: List of header mappings
-			Headers []CredentialMapping `mapstructure:"headers"`
-		} `mapstructure:"pass_through"`
-	} `mapstructure:"auth"`
+// Downstream auth type values for ClientAuthConfig.Type.
+const (
+	AuthTypePassThrough       = "pass_through"       // Forward credentials from incoming headers
+	AuthTypeTokenExchange     = "token_exchange"     // Plain RFC 8693 on-behalf-of exchange at the IdP
+	AuthTypeEnterpriseManaged = "enterprise_managed" // Full ID-JAG -> JWT-bearer chain (EMA)
+)
+
+// ClientAuthConfig configures how the gateway authenticates to a downstream MCP server.
+type ClientAuthConfig struct {
+	// Type selects the auth strategy: pass_through, token_exchange, or enterprise_managed.
+	// If empty, pass_through is inferred when pass_through.enabled is true (backward compat).
+	Type string `mapstructure:"type"`
+
+	// Resource is the RFC 9728 resource identifier of the downstream MCP server
+	// (used by enterprise_managed). Default: derived from the downstream url origin.
+	Resource string `mapstructure:"resource"`
+
+	// Audience overrides the token-exchange audience (used by token_exchange).
+	// Default: derived from the downstream url origin.
+	Audience string `mapstructure:"audience"`
+
+	// Scope is the space-separated scopes to request during token exchange (optional).
+	Scope string `mapstructure:"scope"`
+
+	// PassThrough configures header-based credential forwarding.
+	PassThrough PassThroughConfig `mapstructure:"pass_through"`
+}
+
+// PassThroughConfig configures forwarding of credentials from incoming request headers.
+type PassThroughConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+
+	// HTTP/SSE: List of header mappings
+	Headers []CredentialMapping `mapstructure:"headers"`
+}
+
+// EffectiveType resolves the auth strategy, honoring the legacy pass_through.enabled flag
+// when Type is not explicitly set.
+func (a ClientAuthConfig) EffectiveType() string {
+	if a.Type != "" {
+		return a.Type
+	}
+	if a.PassThrough.Enabled {
+		return AuthTypePassThrough
+	}
+	return ""
+}
+
+// IsPassThrough reports whether the downstream uses pass-through credential forwarding.
+func (a ClientAuthConfig) IsPassThrough() bool {
+	return a.EffectiveType() == AuthTypePassThrough
+}
+
+// IsTokenExchange reports whether the downstream uses an OAuth token-exchange strategy
+// (plain RFC 8693 or full enterprise-managed ID-JAG).
+func (a ClientAuthConfig) IsTokenExchange() bool {
+	t := a.EffectiveType()
+	return t == AuthTypeTokenExchange || t == AuthTypeEnterpriseManaged
+}
+
+// RequiresPerSessionCredentials reports whether the downstream needs per-session
+// credentials that are only available once an authenticated request arrives. Such
+// clients are skipped during startup capability probing and discovered lazily.
+func (a ClientAuthConfig) RequiresPerSessionCredentials() bool {
+	return a.EffectiveType() != ""
 }
 
 // CredentialMapping defines how to map a credential from incoming headers to downstream
@@ -732,6 +909,10 @@ var knownClientConfigFields = map[string]bool{
 	"CAPABILITY_DISCOVERY_DELAY_MS": true,
 	"CAPABILITY_DISCOVERY_RETRIES":  true,
 	"CAPABILITY_RETRY_DELAY_MS":     true,
+	"AUTH_TYPE":                     true,
+	"AUTH_RESOURCE":                 true,
+	"AUTH_AUDIENCE":                 true,
+	"AUTH_SCOPE":                    true,
 	"AUTH_PASS_THROUGH_ENABLED":     true,
 	"AUTH_PASS_THROUGH_HEADERS":     true, // compact format
 	"SSE_HEADERS":                   true, // prefix for SSE headers
@@ -917,6 +1098,14 @@ func applyClientConfigField(client *ClientConfig, fieldPath, value string) {
 		if v, err := strconv.Atoi(value); err == nil {
 			client.CapabilityRetryDelayMs = v
 		}
+	case fieldPath == "AUTH_TYPE":
+		client.Auth.Type = value
+	case fieldPath == "AUTH_RESOURCE":
+		client.Auth.Resource = value
+	case fieldPath == "AUTH_AUDIENCE":
+		client.Auth.Audience = value
+	case fieldPath == "AUTH_SCOPE":
+		client.Auth.Scope = value
 	case fieldPath == "AUTH_PASS_THROUGH_ENABLED":
 		if v, err := strconv.ParseBool(value); err == nil {
 			client.Auth.PassThrough.Enabled = v
@@ -1216,6 +1405,9 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 	v.SetDefault("validation.max_blocking_ms", 90_000)
 	v.SetDefault("validation.max_rule_evaluation_ms", 45_000)
 	v.SetDefault("server.session_timeout_minutes", 30)
+	// Server auth (Enterprise-Managed Authorization) defaults
+	v.SetDefault("server.auth.mode", AuthModeDisabled)
+	v.SetDefault("server.auth.embedded_as.access_token_ttl_seconds", 3600)
 	// Validation phase defaults
 	v.SetDefault("request_validation.cel.enabled", true)
 	v.SetDefault("request_validation.cel.mode", "audit_only")
@@ -1423,6 +1615,9 @@ For each concern, estimate the potential impact category and explain the reasoni
 	// Normalize policy modes before validation (converts empty string → enforce)
 	normalizePolicyModes(&config)
 
+	// Normalize auth config (fills derived defaults for server.auth and idp)
+	normalizeAuthConfig(&config)
+
 	// Validate config with context about whether a config file was found
 	if err := validateConfigWithOptions(&config, configFileFound, loadErrors); err != nil {
 		return nil, err
@@ -1533,6 +1728,58 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		}
 	}
 
+	// Validate server auth (Enterprise-Managed Authorization) configuration.
+	switch cfg.Server.Auth.Mode {
+	case "", AuthModeDisabled, AuthModeJWTValidation, AuthModeEmbeddedAS:
+		// Valid mode
+	default:
+		errors = append(errors, configError("server.auth.mode",
+			fmt.Sprintf("invalid value %q (must be one of: disabled, jwt_validation, embedded_as)", cfg.Server.Auth.Mode)))
+	}
+
+	// Determine whether any downstream requires token exchange (needs the IdP configured).
+	downstreamNeedsExchange := false
+	for _, client := range cfg.DownstreamMCPServers {
+		if client.Auth.IsTokenExchange() {
+			downstreamNeedsExchange = true
+			break
+		}
+	}
+
+	if cfg.AuthEnabled() {
+		if cfg.Server.Auth.Resource == "" {
+			errors = append(errors, configError("server.auth.resource", "required when server.auth.mode is not disabled"))
+		}
+		if cfg.IdP.Issuer == "" {
+			errors = append(errors, configError("idp.issuer", "required when server.auth.mode is not disabled"))
+		}
+		if cfg.IdP.OpenIDConnectDiscoveryURL == "" && cfg.IdP.JWKSURL == "" {
+			errors = append(errors, configError("idp.jwks_url",
+				"either idp.openid_connect_discovery_url or idp.jwks_url is required when auth is enabled"))
+		}
+		if cfg.Server.Auth.Mode == AuthModeJWTValidation && len(cfg.Server.Auth.AuthorizationServers) == 0 {
+			errors = append(errors, configError("server.auth.authorization_servers",
+				"required (or set idp.issuer) when server.auth.mode is jwt_validation"))
+		}
+	} else if downstreamNeedsExchange {
+		errors = append(errors, configErrorSimple(
+			"a downstream server uses auth.type token_exchange or enterprise_managed, which requires server.auth.mode to be enabled (jwt_validation or embedded_as) so an incoming user identity is available to exchange"))
+	}
+
+	// Token exchange requires IdP client credentials and a token endpoint source.
+	if downstreamNeedsExchange {
+		if cfg.IdP.ClientID == "" {
+			errors = append(errors, configError("idp.client_id", "required when a downstream uses token_exchange or enterprise_managed"))
+		}
+		if cfg.IdP.ClientSecret == "" {
+			errors = append(errors, configError("idp.client_secret", "required when a downstream uses token_exchange or enterprise_managed"))
+		}
+		if cfg.IdP.OpenIDConnectDiscoveryURL == "" && cfg.IdP.TokenEndpoint == "" {
+			errors = append(errors, configError("idp.token_endpoint",
+				"either idp.openid_connect_discovery_url or idp.token_endpoint is required for token exchange"))
+		}
+	}
+
 	// Validate each client in the map
 	for name, client := range cfg.DownstreamMCPServers {
 		// Validate client type and required fields
@@ -1616,6 +1863,22 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 					configErrorSimple(fmt.Sprintf("downstream_mcp_servers[%s]: pass_through auth is only supported for http and sse transports, not %s",
 						name, client.Type)))
 			}
+		}
+
+		// Validate auth.type value and transport compatibility.
+		switch client.Auth.Type {
+		case "", AuthTypePassThrough, AuthTypeTokenExchange, AuthTypeEnterpriseManaged:
+			// Valid
+		default:
+			errors = append(errors, configError(fmt.Sprintf("downstream_mcp_servers[%s].auth.type", name),
+				fmt.Sprintf("invalid value %q (must be one of: pass_through, token_exchange, enterprise_managed)", client.Auth.Type)))
+		}
+
+		// Token exchange (RFC 8693 / ID-JAG) requires a Bearer-capable transport.
+		if client.Auth.IsTokenExchange() && client.Type != "http" && client.Type != "sse" {
+			errors = append(errors,
+				configErrorSimple(fmt.Sprintf("downstream_mcp_servers[%s]: auth.type %s is only supported for http and sse transports, not %s",
+					name, client.Auth.EffectiveType(), client.Type)))
 		}
 	}
 

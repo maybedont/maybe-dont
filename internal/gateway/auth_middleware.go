@@ -67,6 +67,13 @@ func AuthMiddleware(config *CallerAuthConfig, next http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// OAuth discovery and token endpoints must be reachable without the caller header
+		// so clients can bootstrap authentication.
+		if isWellKnownOrTokenPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Header lookup is case-insensitive in Go's http.Header
 		headerValue := r.Header.Get(config.HeaderName)
 

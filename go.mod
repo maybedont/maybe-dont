@@ -5,6 +5,8 @@ go 1.25.0
 toolchain go1.25.8
 
 require (
+	github.com/MicahParks/keyfunc/v3 v3.8.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/cel-go v0.26.1
 	github.com/invopop/jsonschema v0.13.0
 	github.com/mark3labs/mcp-go v0.44.0-beta.2
@@ -18,6 +20,7 @@ require (
 )
 
 require (
+	github.com/MicahParks/jwkset v0.11.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
@@ -25,6 +28,7 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/time v0.9.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
 
@@ -33,7 +37,7 @@ require (
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/openai/openai-go v1.12.0
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect

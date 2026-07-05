@@ -231,6 +231,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				"meta":      meta,
 			},
 		},
+		"auth": buildAuthVar(ctx),
 	}
 
 	results := ValidationResults{
@@ -796,6 +797,38 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 	)
 
 	return results, nil
+}
+
+// buildAuthVar builds the CEL "auth" variable from the validated identity in context.
+// When no identity is present (unauthenticated request), it returns zero values so that
+// policies referencing auth.* evaluate deterministically rather than erroring.
+func buildAuthVar(ctx context.Context) map[string]interface{} {
+	user := map[string]interface{}{
+		"sub":    "",
+		"email":  "",
+		"scopes": []string{},
+		"claims": map[string]interface{}{},
+	}
+	authenticated := false
+
+	if identity, ok := IdentityFromContext(ctx); ok {
+		authenticated = true
+		user["sub"] = identity.Subject
+		user["email"] = identity.Email
+		scopes := identity.Scopes
+		if scopes == nil {
+			scopes = []string{}
+		}
+		user["scopes"] = scopes
+		if identity.Claims != nil {
+			user["claims"] = identity.Claims
+		}
+	}
+
+	return map[string]interface{}{
+		"authenticated": authenticated,
+		"user":          user,
+	}
 }
 
 // BuildCLIContext creates the CEL evaluation context for a CLI command.

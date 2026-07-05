@@ -95,6 +95,12 @@ func (g *Gateway) onSessionRegister(ctx context.Context, session server.ClientSe
 		s.SetUserAgent(userAgent)
 	}
 
+	// Bind the authenticated identity (if any) to the session so subsequent requests
+	// can be checked for consistency (prevents cross-user session reuse).
+	if identity, ok := IdentityFromContext(ctx); ok {
+		s.SetIdentitySubject(identity.Subject)
+	}
+
 	// Mark session as connected (has an active SSE connection)
 	s.SetConnected(true)
 }
@@ -289,8 +295,8 @@ func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionI
 		// Collect all discovered tools and register them as session tools
 		var allTools []mcp.Tool
 		for clientName, clientInfo := range discoveryResult.DownstreamClients {
-			// Only process pass-through clients
-			if !clientInfo.Config.Auth.PassThrough.Enabled {
+			// Only process clients whose credentials arrive per-session
+			if !clientInfo.Config.Auth.RequiresPerSessionCredentials() {
 				continue
 			}
 
@@ -668,8 +674,11 @@ func (g *Gateway) initSSEServer(ctx context.Context) error {
 	// Create mux and mount both SSE endpoints, wrapped with context enrichment middleware.
 	// This ensures both SSE and message handlers get enriched context.
 	mux := http.NewServeMux()
-	mux.Handle("/sse", g.mcpContextMiddleware(sseSrv.SSEHandler()))
-	mux.Handle("/message", g.mcpContextMiddleware(sseSrv.MessageHandler()))
+	mux.Handle("/sse", g.wrapWithBearer(g.mcpContextMiddleware(sseSrv.SSEHandler())))
+	mux.Handle("/message", g.wrapWithBearer(g.mcpContextMiddleware(sseSrv.MessageHandler())))
+
+	// Register OAuth discovery / token endpoints (Enterprise-Managed Authorization)
+	g.registerAuthRoutes(ctx, mux)
 
 	// Add helpful 404 for HTTP endpoint when SSE transport is active
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
@@ -807,7 +816,10 @@ func (g *Gateway) initHTTPServer(ctx context.Context) error {
 	// This ensures both GET (SSE listen) and POST (JSON-RPC) requests get enriched context,
 	// which is needed because the SDK's WithHTTPContextFunc only runs on POST, not GET.
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", g.mcpContextMiddleware(mcpHandler))
+	mux.Handle("/mcp", g.wrapWithBearer(g.mcpContextMiddleware(mcpHandler)))
+
+	// Register OAuth discovery / token endpoints (Enterprise-Managed Authorization)
+	g.registerAuthRoutes(ctx, mux)
 
 	// Add helpful 404 for SSE endpoint when HTTP transport is active
 	mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
@@ -1025,11 +1037,20 @@ func (g *Gateway) hasPassThroughCredentials(ctx context.Context) bool {
 
 	// Check if any configured pass-through client has source headers in the request
 	for _, clientConfig := range g.config.DownstreamMCPServers {
-		if !clientConfig.Auth.PassThrough.Enabled {
+		if !clientConfig.Auth.IsPassThrough() {
 			continue
 		}
 		for _, mapping := range clientConfig.Auth.PassThrough.Headers {
 			if rawHeaders.Get(mapping.SourceHeader) != "" {
+				return true
+			}
+		}
+	}
+
+	// For token-exchange clients, the "credential" is a validated identity on the request.
+	if _, ok := IdentityFromContext(ctx); ok {
+		for _, clientConfig := range g.config.DownstreamMCPServers {
+			if clientConfig.Auth.IsTokenExchange() {
 				return true
 			}
 		}

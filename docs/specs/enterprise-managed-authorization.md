@@ -2,7 +2,13 @@
 
 ## Status
 
-Draft — see [README.md](README.md)
+Implemented — see [README.md](README.md)
+
+> **Implementation note**: Shipped in `internal/auth/` (discovery, JWT validation, RFC 8693/7523
+> exchange, embedded AS issuer + ID-JAG validation, downstream token broker) with gateway wiring
+> in `internal/gateway/` (`bearer_middleware.go`, `wellknown.go`, and identity/audit/CEL hooks).
+> The JWT/JWKS stack uses `github.com/golang-jwt/jwt/v5` + `github.com/MicahParks/keyfunc/v3`
+> rather than the `jwx` library named in the original design; everything else follows this spec.
 
 > **Relationship to existing work**: This spec absorbs and extends
 > `docs/plans/2026-02-20-obo-token-exchange-spec.md` (Draft). That document describes plain

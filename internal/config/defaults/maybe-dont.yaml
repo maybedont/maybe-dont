@@ -42,6 +42,22 @@ audit:
 #     args:
 #       - --verbose
 #
+#   # Enterprise-Managed Authorization: exchange the caller's token for a downstream one
+#   asana:
+#     type: http
+#     url: "https://mcp.asana.example/"
+#     auth:
+#       type: enterprise_managed   # full ID-JAG -> JWT-bearer chain (RFC 9728/8414 discovery)
+#       scope: "tasks.read tasks.write"
+#
+#   # Plain RFC 8693 on-behalf-of token exchange at the IdP
+#   internal-api:
+#     type: http
+#     url: "https://api.internal.example/mcp/"
+#     auth:
+#       type: token_exchange
+#       # audience: "https://api.internal.example"  # default: derived from url origin
+#
 downstream_mcp_servers:
   # Add your downstream MCP servers here
   # example:
@@ -52,6 +68,29 @@ downstream_mcp_servers:
 server:
   type: http  # stdio, http, sse
   listen_addr: "127.0.0.1:8080"  # Required for http/sse
+  # Enterprise-Managed Authorization: authenticate incoming MCP requests with OAuth Bearer
+  # tokens. Disabled by default. See https://maybedont.ai/docs for the full guide.
+  # auth:
+  #   mode: disabled              # disabled | jwt_validation | embedded_as
+  #   resource: "https://maybedont.example/mcp"   # this gateway's RFC 9728 resource id
+  #   scopes_supported: []
+  #   # jwt_validation: an external authorization server issues the tokens; the gateway validates them
+  #   authorization_servers:
+  #     - "https://acme.okta.example/oauth2/default"
+  #   # embedded_as: the gateway hosts its own resource authorization server (/oauth2/token)
+  #   embedded_as:
+  #     issuer: "https://maybedont.example"
+  #     access_token_ttl_seconds: 3600
+
+# Enterprise Identity Provider (required when server.auth is enabled or a downstream uses
+# token_exchange / enterprise_managed). Shared by incoming validation and downstream exchange.
+# idp:
+#   issuer: "https://acme.okta.example"
+#   openid_connect_discovery_url: "https://acme.okta.example/.well-known/openid-configuration"
+#   # jwks_url: ""            # override; otherwise derived from discovery
+#   # token_endpoint: ""      # override; otherwise derived from discovery
+#   client_id: "maybedont-gateway"
+#   client_secret: "${MAYBEDONT_IDP_CLIENT_SECRET}"
 
 # Global validation settings
 validation:

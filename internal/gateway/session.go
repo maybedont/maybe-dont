@@ -45,6 +45,24 @@ type Session struct {
 	clients      map[string]*SessionClientInfo // clientName -> downstream client for this session
 	closing      bool                          // true if session is being closed, prevents new clients
 	connected    bool                          // true if the MCP SDK has an active SSE connection
+	identitySub  string                        // `sub` of the identity bound to this session (empty if unauthenticated)
+}
+
+// SetIdentitySubject binds an authenticated user subject to this session. The first
+// authenticated request wins; later requests are checked against it.
+func (s *Session) SetIdentitySubject(sub string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.identitySub == "" {
+		s.identitySub = sub
+	}
+}
+
+// IdentitySubject returns the `sub` bound to this session (empty if none).
+func (s *Session) IdentitySubject() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.identitySub
 }
 
 // NewSession creates a new session
@@ -187,6 +205,26 @@ type SessionManager struct {
 	sessionTimeout time.Duration
 	stopCleanup    chan struct{}
 	cleanupDone    chan struct{}
+	// onSessionDeleted, if set, is invoked with the session ID after a session is removed
+	// (used to evict cached downstream tokens for that session).
+	onSessionDeleted func(sessionID string)
+}
+
+// SetOnSessionDeleted registers a callback invoked when a session is deleted or expires.
+func (sm *SessionManager) SetOnSessionDeleted(fn func(sessionID string)) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.onSessionDeleted = fn
+}
+
+// notifySessionDeleted invokes the delete callback if one is registered.
+func (sm *SessionManager) notifySessionDeleted(sessionID string) {
+	sm.mu.RLock()
+	fn := sm.onSessionDeleted
+	sm.mu.RUnlock()
+	if fn != nil {
+		fn(sessionID)
+	}
 }
 
 // NewSessionManager creates a new session manager with the default timeout
@@ -243,6 +281,7 @@ func (sm *SessionManager) cleanupExpiredSessions() {
 		idleTime := time.Since(session.LastActivity())
 		clientCount := len(session.GetAllClients())
 
+		sm.notifySessionDeleted(expiredIDs[i])
 		if err := session.Close(); err != nil {
 			sm.logger.Error(context.Background(), "Error closing expired session",
 				zap.String("session_id", expiredIDs[i]),
@@ -305,6 +344,8 @@ func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) e
 	}
 	delete(sm.sessions, sessionID)
 	sm.mu.Unlock()
+
+	sm.notifySessionDeleted(sessionID)
 
 	// Close all downstream clients for this session
 	if err := session.Close(); err != nil {

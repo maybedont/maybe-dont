@@ -75,6 +75,9 @@ type Gateway struct {
 	trustedProxyChecker *TrustedProxyChecker
 	// Caller authentication config (loaded once at startup)
 	callerAuthConfig *CallerAuthConfig
+	// Enterprise-Managed Authorization components (nil when auth is disabled and no
+	// downstream requires token exchange)
+	authComponents *authComponents
 	// WaitGroup for tracking pending async audit writes
 	pendingAuditWrites sync.WaitGroup
 	// Singleflight group for deduplicating concurrent lazy discovery requests per session
@@ -224,7 +227,7 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		return nil, fmt.Errorf("invalid caller auth configuration: %w", err)
 	}
 
-	return &Gateway{
+	g := &Gateway{
 		logger:                 logger,
 		auditWriter:            auditWriter,
 		config:                 cfg,
@@ -239,7 +242,21 @@ func New(ctx context.Context, cfg *config.Config, logger *config.SessionLogger, 
 		nativeToolsHandler:     nativeToolsHandler,
 		trustedProxyChecker:    trustedProxyChecker,
 		callerAuthConfig:       callerAuthConfig,
-	}, nil
+	}
+
+	// Initialize Enterprise-Managed Authorization (Bearer validation, discovery, token
+	// exchange). No-op when auth is disabled and no downstream requires token exchange.
+	if err := g.initAuth(ctx, logDir); err != nil {
+		return nil, fmt.Errorf("failed to initialize authorization: %w", err)
+	}
+
+	// Wire the token broker into the client manager so downstream clients can attach
+	// exchanged tokens on outbound calls.
+	if g.authComponents != nil && g.authComponents.broker != nil {
+		clientManager.SetTokenBroker(g.authComponents.broker)
+	}
+
+	return g, nil
 }
 
 // Start initializes and starts the gateway
@@ -410,6 +427,12 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	// Set User-Agent header
 	audit.SetUserAgent(userAgent)
 
+	// Record the authenticated sponsor (human identity) for the delegation-chain audit.
+	identity, hasIdentity := IdentityFromContext(ctx)
+	if hasIdentity {
+		audit.SetSponsor(identity.Subject, identity.Email)
+	}
+
 	// Set AI provider info if AI validation is enabled
 	if g.aiProviderInfo != nil {
 		audit.SetAIProvider(g.aiProviderInfo)
@@ -541,6 +564,18 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		}
 	}
 
+	// Enforce session-identity binding: a session established by one authenticated user
+	// must not be driven by a token belonging to a different user.
+	if hasIdentity {
+		if sess, found := g.clientManager.sessionManager.GetSession(sessionID); found {
+			if boundSub := sess.IdentitySubject(); boundSub != "" && boundSub != identity.Subject {
+				g.logger.Error(ctx, "Session identity mismatch, rejecting request",
+					zap.String("session_id", sessionID))
+				return nil, fmt.Errorf("session identity mismatch: token subject does not match the session owner")
+			}
+		}
+	}
+
 	// Get the appropriate client for this session
 	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
 	if err != nil {
@@ -550,6 +585,32 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 		}
 		// Other client errors - wrap with context
 		return nil, fmt.Errorf("client not found for session: %w", err)
+	}
+
+	// Token-exchange pre-flight: for downstreams using token_exchange/enterprise_managed,
+	// acquire (and cache) the on-behalf-of token now so failures surface as a clean error
+	// before the downstream call, and so the outbound header func is a cache read.
+	if g.authComponents != nil && g.authComponents.broker != nil && clientInfo.Config.Auth.IsTokenExchange() {
+		subjectToken := ""
+		if hasIdentity {
+			subjectToken = identity.RawToken
+		}
+		tokenResult, exErr := g.authComponents.broker.TokenFor(ctx, sessionID, clientName,
+			clientInfo.Config.DownstreamURL, subjectToken, clientInfo.Config.Auth)
+		if exErr != nil {
+			g.logger.Warn(ctx, "Downstream token exchange failed",
+				zap.String("session_id", sessionID),
+				zap.String("client", clientName),
+				zap.Error(exErr))
+			audit.SetActions(string(config.PolicyActionDeny), string(config.PolicyActionDeny), "token_exchange_failed")
+			writeAuditLog()
+			return nil, &PolicyDeniedError{
+				Message: fmt.Sprintf("Maybe Don't: token exchange failed for downstream '%s': %v", clientName, exErr),
+				Data:    map[string]interface{}{"client": clientName, "reason": "token_exchange_failed"},
+			}
+		}
+		audit.SetTokenExchange(g.authComponents.idpClientID, clientName, tokenResult.Flow,
+			tokenResult.Audience, tokenResult.ScopesRequested, tokenResult.ScopesGranted)
 	}
 
 	// Create a new request with the original tool name

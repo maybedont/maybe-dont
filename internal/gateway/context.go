@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/maybedont/maybe-dont/internal/auth"
 	"github.com/maybedont/maybe-dont/internal/config"
 	"go.uber.org/zap"
 )
@@ -33,7 +34,22 @@ const (
 	// CallerKey stores the caller identifier from the gateway auth header.
 	// Value type: string
 	CallerKey contextKey = "caller"
+
+	// IdentityKey stores the validated OAuth identity from the incoming Bearer token.
+	// Value type: *auth.Identity
+	IdentityKey contextKey = "identity"
 )
+
+// WithIdentity adds the validated OAuth identity to the context.
+func WithIdentity(ctx context.Context, identity *auth.Identity) context.Context {
+	return context.WithValue(ctx, IdentityKey, identity)
+}
+
+// IdentityFromContext retrieves the validated OAuth identity from the context.
+func IdentityFromContext(ctx context.Context) (*auth.Identity, bool) {
+	identity, ok := ctx.Value(IdentityKey).(*auth.Identity)
+	return identity, ok && identity != nil
+}
 
 // RequestIDKey stores the request ID for tracking capabilities per session
 // Value type: string

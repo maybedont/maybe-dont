@@ -92,6 +92,26 @@ type UpstreamRequestInfo struct {
 	SessionID  string `json:"session_id,omitempty"`
 	ClientIP   string `json:"client_ip,omitempty"`
 	UserAgent  string `json:"user_agent,omitempty"` // User-Agent header from incoming request
+
+	// Delegation chain (populated when the request is authenticated / uses token exchange).
+	Sponsor       *AuditSponsor       `json:"sponsor,omitempty"`        // Human who authorized this agent session
+	ActingParty   string              `json:"acting_party,omitempty"`   // Party acting on the user's behalf (gateway client_id)
+	TokenExchange *AuditTokenExchange `json:"token_exchange,omitempty"` // Downstream token exchange details
+}
+
+// AuditSponsor identifies the human on whose behalf an action was taken.
+type AuditSponsor struct {
+	Subject string `json:"sub,omitempty"`
+	Email   string `json:"email,omitempty"`
+}
+
+// AuditTokenExchange records details of a downstream on-behalf-of token exchange.
+type AuditTokenExchange struct {
+	Client          string `json:"client,omitempty"`           // Downstream client name
+	Flow            string `json:"flow,omitempty"`             // "rfc8693" or "id-jag"
+	Audience        string `json:"audience,omitempty"`         // Audience the token was exchanged for
+	ScopesRequested string `json:"scopes_requested,omitempty"` // Scopes requested in the exchange
+	ScopesGranted   string `json:"scopes_granted,omitempty"`   // Scopes granted by the issuer
 }
 
 // AuditValidationInfo contains validation results for CEL and AI policies
@@ -181,6 +201,28 @@ func (ac *AuditContext) SetToolParams(params map[string]interface{}) {
 // SetUserAgent sets the User-Agent header from the incoming request
 func (ac *AuditContext) SetUserAgent(userAgent string) {
 	ac.entry.UpstreamRequest.UserAgent = userAgent
+}
+
+// SetSponsor records the human identity that authorized this request (from the validated
+// incoming token). No-op if both fields are empty.
+func (ac *AuditContext) SetSponsor(sub, email string) {
+	if sub == "" && email == "" {
+		return
+	}
+	ac.entry.UpstreamRequest.Sponsor = &AuditSponsor{Subject: sub, Email: email}
+}
+
+// SetTokenExchange records details of a downstream on-behalf-of token exchange, including
+// the acting party (the gateway's client identifier at the IdP).
+func (ac *AuditContext) SetTokenExchange(actingParty, client, flow, audience, scopesRequested, scopesGranted string) {
+	ac.entry.UpstreamRequest.ActingParty = actingParty
+	ac.entry.UpstreamRequest.TokenExchange = &AuditTokenExchange{
+		Client:          client,
+		Flow:            flow,
+		Audience:        audience,
+		ScopesRequested: scopesRequested,
+		ScopesGranted:   scopesGranted,
+	}
 }
 
 // SetAIProvider sets the AI provider metadata for the audit entry.
