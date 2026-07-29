@@ -1,0 +1,12 @@
+{
+  "_comment": "Cline hooks configuration — place in .clinerules/hooks/ directory",
+  "_setup": "Export the hook script: maybe-dont hooks export --agent cline > maybe-dont-hook.sh && chmod +x maybe-dont-hook.sh",
+  "hooks": {
+    "preToolUse": {
+      "command": "/path/to/maybe-dont-hook.sh"
+    },
+    "postToolUse": {
+      "command": "/path/to/maybe-dont-hook.sh"
+    }
+  }
+}

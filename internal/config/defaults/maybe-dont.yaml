@@ -1,0 +1,139 @@
+# Maybe Don't AI Configuration
+#
+# This is the default configuration generated on first run.
+# Edit this file to configure your downstream MCP servers and validation rules.
+#
+# Documentation: https://maybedont.ai/docs
+
+# Application logging configuration
+logger:
+  level: info  # debug, info, warn, error
+  path: stderr # filename, stderr, stdout
+
+# Audit log configuration
+audit:
+  path: maybedont-audit.log # filename, stderr, stdout
+  filter: all # all or deny_only
+  # Include full argument values in audit log entries (applies to both CLI and MCP tool calls).
+  # When true (default), full argument values are logged for forensic analysis.
+  # When false, only argument flags/names (CLI) or param keys (MCP) are logged to protect sensitive data.
+  include_argument_values: true
+
+# Downstream MCP servers configuration
+# Configure at least one downstream server to proxy requests to.
+# Example configurations:
+#
+#   # HTTP/SSE server with pass-through authentication
+#   github:
+#     type: http
+#     url: "https://api.githubcopilot.com/mcp/"
+#     auth:
+#       pass_through:
+#         enabled: true
+#         headers:
+#           - source_header: "X-GitHub-Token"
+#             target_header: "Authorization"
+#             format: "Bearer {value}"
+#
+#   # STDIO server (local process)
+#   local-mcp:
+#     type: stdio
+#     command: /path/to/mcp-server
+#     args:
+#       - --verbose
+#
+downstream_mcp_servers:
+  # Add your downstream MCP servers here
+  # example:
+  #   type: stdio
+  #   command: echo
+
+# Server configuration
+server:
+  type: http  # stdio, http, sse
+  listen_addr: "127.0.0.1:8080"  # Required for http/sse
+
+# Global validation settings
+validation:
+  # Maximum cumulative time (ms) to block a request waiting for validation decisions
+  max_blocking_ms: 90000
+  # Maximum time (ms) for any single rule evaluation to complete
+  max_rule_evaluation_ms: 45000
+  # AI configuration (required when AI validation or audit report is enabled)
+  ai:
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    model: "gpt-5"
+    api_key: "${OPENAI_API_KEY}"  # Set via environment variable
+    # parameters:
+    #   temperature: 0.0  # Enable for deterministic output (not supported by all models, e.g. gpt-5)
+
+# Request validation configuration
+request_validation:
+  # CEL-based deterministic request validation
+  cel:
+    enabled: true
+    mode: audit_only  # "audit_only" = log but don't block; "enforce" = rules can block
+    rules_file: "cel_request_rules.yaml"
+  # AI-powered request validation
+  ai:
+    enabled: true
+    mode: audit_only
+    rules_file: "ai_request_rules.yaml"
+
+# Response validation configuration
+response_validation:
+  # CEL-based deterministic response validation
+  cel:
+    enabled: false
+    mode: audit_only
+    rules_file: "cel_response_rules.yaml"
+  # AI-powered response validation
+  ai:
+    enabled: false
+    mode: audit_only
+    rules_file: "ai_response_rules.yaml"
+
+# Native gateway tools configuration
+native_tools:
+  audit_log:
+    enabled: true
+    max_entries: 100
+  audit_report:
+    enabled: true
+    max_entries: 1000
+  list_servers:
+    enabled: true
+  list_sessions:
+    enabled: true
+
+# Intercept Endpoint
+# Validates tool calls and CLI commands from agent hook scripts via REST API.
+# Agents send tool call details before/after execution for policy evaluation.
+intercept:
+  # Enable the /api/v1/intercept REST endpoint
+  enabled: true
+
+  # Tool names that represent shell/CLI execution.
+  # When a tool with one of these names is intercepted, the gateway parses
+  # the command string and evaluates both cli_expression and mcp_expression.
+  shell_tool_names:
+    - "Bash"
+    - "execute_command"
+    - "shell"
+    - "run_terminal_command"
+    - "run_command"
+
+# CLI Request Validation
+# Validates CLI commands from AI agents via REST API endpoint.
+# See docs/specs/cli-proxy-for-ai-agents.md for details.
+cli_request_validation:
+  # Enable the /api/v1/cli/validate REST endpoint
+  enabled: false
+
+  # Commands that require validation when enabled.
+  # Use "*" to validate ALL commands (has performance implications).
+  # Example commands (uncomment to enable):
+  #   - gh
+  #   - aws
+  #   - kubectl
+  validate_commands: []

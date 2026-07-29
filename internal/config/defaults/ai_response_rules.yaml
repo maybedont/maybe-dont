@@ -1,0 +1,148 @@
+# Example AI response rules
+
+rules:
+  # Example: Detect and redact PII in responses
+  - name: detect-pii-in-response
+    description: Detect and redact personally identifiable information in responses
+    enabled: false
+    action: redact
+    prompt: |-
+      ANALYZE: Does this response contain PII (personally identifiable information)?
+
+      Look for: email addresses, phone numbers, social security numbers, physical addresses,
+      credit card numbers, passport numbers, driver's license numbers, or other identifying information.
+
+      If PII is found, provide a redacted version with sensitive data replaced by [PII_REDACTED].
+
+      EXAMPLES:
+      - "Contact John at john@example.com" -> PII DETECTED: Email address found, redact to "[PII_REDACTED]"
+      - "The server returned 200 OK" -> SAFE: No PII detected
+      - "User SSN: 123-45-6789" -> PII DETECTED: Social security number found
+
+    message: PII detected and redacted from response
+
+  # Example: Detect credential leakage in responses
+  - name: detect-credential-leakage
+    description: Detect if response contains credentials or secrets
+    enabled: true
+    action: deny
+    prompt: |-
+      ANALYZE: Does this response contain credentials, API keys, passwords, or secrets?
+
+      Look for patterns like:
+      - API keys (alphanumeric strings that look like tokens)
+      - Passwords in configuration files or environment dumps
+      - Private keys or certificates
+      - OAuth tokens
+      - Database connection strings with credentials
+      - AWS/GCP/Azure access keys
+
+      IMPORTANT: Environment variable REFERENCES (like $HOME, ${API_KEY}, $(VAR))
+      are NOT secrets - they are just variable names. Only flag environment
+      variables when actual VALUES are exposed, such as:
+        - KEY=sk-abc123... (variable assignment with real value)
+        - export SECRET="actual-password-here"
+        - Environment dumps showing resolved values
+
+      EXAMPLES:
+      - "Connected to database on port 5432" -> SAFE: No credentials exposed
+      - "API_KEY=sk-proj-abc123def456" -> DANGEROUS: API key with actual value exposed
+      - "Using endpoint ${API_URL}" -> SAFE: Environment variable reference, not a value
+      - "-----BEGIN RSA PRIVATE KEY-----" -> DANGEROUS: Private key material
+
+    message: Credential leakage detected in response
+
+  # Example: Detect and redact internal system paths
+  - name: redact-internal-paths
+    description: Redact internal file system paths from responses
+    enabled: true
+    action: redact
+    prompt: |-
+      ANALYZE: Does this response contain internal file system paths or infrastructure details that should be redacted?
+
+      Look for:
+      - Unix absolute paths: /home/*, /Users/*, /opt/*, /srv/*, /var/*, /etc/*
+      - Windows absolute paths: C:\Users\*, C:\Program Files\*, C:\Windows\*, D:\*
+      - Deployment paths: paths containing "deployments", "releases", version numbers (v1.2.3)
+      - Internal hostnames: *.local, *.internal, *.corp.*, *-prod-*, *-staging-*
+      - Application paths in stack traces or error messages
+      - Paths revealing infrastructure: /app/, /services/, specific usernames
+
+      If internal paths or infrastructure details are found, provide redacted content with sensitive parts replaced by [PATH_REDACTED] or [HOST_REDACTED].
+
+      NOT internal paths (do not flag):
+      - Bare filenames without directory separators (e.g., "main.go", "config.yaml")
+
+      EXAMPLES:
+      - "File not found: /home/deploy/app/v2.3.1/config.yaml" -> PATHS DETECTED: Deployment path with version info
+      - "Query returned 42 results" -> SAFE: No sensitive paths detected
+      - "Error at staging-db-01.corp.internal:5432" -> PATHS DETECTED: Internal hostname exposed
+      - "syntax error in main.go line 42" -> SAFE: Bare filename without directory path
+
+    message: Internal paths redacted from response
+
+  # Example: Detect sensitive business data
+  - name: detect-sensitive-business-data
+    description: Detect and block responses containing sensitive business information
+    enabled: true
+    mode: audit_only
+    action: deny
+    prompt: |-
+      ANALYZE: Does this response contain sensitive business information that should not be shared?
+
+      Look for:
+      - Internal financial data (revenue reports, cost breakdowns, profit margins, pricing strategy)
+      - Strategic plans or roadmaps
+      - Customer lists with names, emails, or contact information
+      - Individual customer records or PII
+      - Proprietary algorithms or trade secrets
+      - Confidential meeting notes
+      - Internal employee information (names, salaries, reviews)
+
+      NOT sensitive (allow these):
+      - Aggregated counts or statistics (e.g., "total_users: 15234")
+      - Public metrics without individual identifiers
+      - General system status or health information
+      - Product catalogs with retail prices (e.g., {"name": "Widget", "price": 9.99})
+
+      EXAMPLES:
+      - "Total active users: 15,234" -> SAFE: Aggregated statistic
+      - "Customer: Jane Doe, email: jane@company.com, revenue: $45,000" -> DANGEROUS: Individual customer record with PII
+      - "System health: all services operational" -> SAFE: General status information
+      - {"name": "Widget", "price": 9.99} -> SAFE: Product catalog with retail prices
+
+    message: Sensitive business data detected in response
+
+  # Detect content that explicitly restricts AI agent access.
+  # Enable this rule to block responses from repos or resources that signal
+  # they should not be accessed by automated agents.
+  - name: detect-agent-restricted-content
+    description: Detect content with explicit restrictions on AI agent access
+    enabled: false
+    action: deny
+    prompt: |-
+      ANALYZE: Does this response contain explicit signals that AI agents
+      should not access or use this content?
+
+      Look for:
+      - Explicit agent restrictions: "AI agents should not access",
+        "not intended for automated access", "no bot access",
+        "restricted from AI/LLM", "do not scrape"
+      - Machine-readable markers: "X-AI-Access: deny",
+        "ai-access: restricted", similar to robots.txt directives
+      - Repository or content metadata indicating agent-restricted status
+
+      Do NOT flag:
+      - Generic copyright or license text
+      - Terms of service (unless specifically restricting AI agents)
+      - Content that is simply marked "confidential" without
+        specific AI/agent restrictions
+
+      EXAMPLES:
+      - "This repo is for internal use. AI agents should not access." -> DANGEROUS: Explicit agent restriction
+      - "MIT License - free to use" -> SAFE: Standard license text
+      - "WARNING: No automated or AI-based access permitted" -> DANGEROUS: Explicit automated access restriction
+      - "Copyright 2024 Acme Corp" -> SAFE: Generic copyright
+      - "ai-access: restricted" -> DANGEROUS: Machine-readable agent restriction marker
+
+    message: Content contains explicit AI agent access restrictions

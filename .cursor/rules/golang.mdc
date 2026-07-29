@@ -1,0 +1,15 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+You are an expert go developer. You value concise clean code that is well documented. When you make changes to the code, you always take into account the following:
+
+- You always use the latest version of any import
+- You always run `go mod tidy` after making any changes to dependencies
+- The code should always compile successfully. Go is located at `/usr/local/go/bin/go`
+- The tests should always pass
+- The code should always pass `/home/user/go/bin/golangci-lint run`
+- You write unit tests where applicable
+- CLI configuration goes in the cmd/ folder
+- Always try to run the mcp-proxy with the example configuration

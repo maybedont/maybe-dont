@@ -1,0 +1,25 @@
+case_id: "resp-detect-sensitive-business-data"
+title: "Detect sensitive business data in response"
+tags: ["business-sensitive", "ai"]
+notes:
+  - "This rule is audit_only by default; enforcement should not block in runtime"
+
+phase: "response"
+engine: "ai"
+
+request:
+  tool_name: "analytics__get_report"
+  arguments:
+    report: "q4_financials"
+
+response:
+  content:
+    - type: "text"
+      text: "Q4 revenue was $12M with 38% margin."
+  is_error: false
+
+expectations:
+  decision: "deny"
+  policies:
+    - policy_name: "detect-sensitive-business-data"
+      decision: "deny"

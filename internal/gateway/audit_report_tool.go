@@ -1,0 +1,800 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/maybedont/maybe-dont/internal/config"
+	"go.uber.org/zap"
+)
+
+// AuditReportRequest represents the parameters for generating an audit report
+type AuditReportRequest struct {
+	TimeRange              string `json:"time_range"`
+	Focus                  string `json:"focus"`
+	IncludeRecommendations bool   `json:"include_recommendations"`
+	IncludeImpactAnalysis  bool   `json:"include_impact_analysis"`
+	Format                 string `json:"format"`
+}
+
+// AuditReportConcern represents a single security concern in the report
+type AuditReportConcern struct {
+	Severity       string            `json:"severity" jsonschema:"required"`
+	Category       string            `json:"category" jsonschema:"required"`
+	Description    string            `json:"description" jsonschema:"required"`
+	Impact         AuditReportImpact `json:"impact" jsonschema:"required"`
+	Occurrences    int               `json:"occurrences" jsonschema:"required"`
+	AffectedTools  []string          `json:"affected_tools" jsonschema:"required"`
+	Recommendation string            `json:"recommendation" jsonschema:"required"`
+}
+
+// AuditReportImpact represents the business impact assessment
+type AuditReportImpact struct {
+	Type      string `json:"type" jsonschema:"required"`
+	Reasoning string `json:"reasoning" jsonschema:"required"`
+}
+
+// AuditReportStatistics represents aggregate statistics
+type AuditReportStatistics struct {
+	TotalRequests    int            `json:"total_requests"`
+	SuccessCount     int            `json:"success_count"`
+	DeniedCount      int            `json:"denied_count"`
+	ErrorCount       int            `json:"error_count"`
+	UniqueTools      int            `json:"unique_tools"`
+	UniqueClients    int            `json:"unique_clients"`
+	TopTools         map[string]int `json:"top_tools"`
+	TopClients       map[string]int `json:"top_clients"`
+	DeniedByPolicy   map[string]int `json:"denied_by_policy"`
+	AuditOnlyDenials int            `json:"audit_only_denials"` // Requests that would have been denied if not in audit_only mode
+	TimeoutFailures  int            `json:"timeout_failures"`   // Requests that failed open due to policy evaluation timeouts
+	SuccessfulDenies int            `json:"successful_denies"`  // Requests that were correctly denied by enabled policies
+}
+
+// AuditReportResponse represents the full AI-generated report
+type AuditReportResponse struct {
+	Summary         string                `json:"summary"`
+	Concerns        []AuditReportConcern  `json:"concerns"`
+	Statistics      AuditReportStatistics `json:"statistics"`
+	Recommendations []string              `json:"recommendations,omitempty"`
+	Metadata        AuditReportMetadata   `json:"metadata"`
+}
+
+// AuditReportMetadata represents metadata about the report generation
+type AuditReportMetadata struct {
+	GeneratedAt     string `json:"generated_at"`
+	TimeRange       string `json:"time_range"`
+	EntriesAnalyzed int    `json:"entries_analyzed"`
+	Focus           string `json:"focus"`
+}
+
+// AIReportResponse is the expected response structure from the AI
+type AIReportResponse struct {
+	Summary         string               `json:"summary" jsonschema:"required"`
+	Concerns        []AuditReportConcern `json:"concerns" jsonschema:"required"`
+	Recommendations []string             `json:"recommendations" jsonschema:"required"`
+}
+
+// handleGenerateAuditReport handles the maybedont__generate_audit_report tool call
+func (h *NativeToolsHandler) handleGenerateAuditReport(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	h.logger.Info(ctx, "Processing generate_audit_report request")
+
+	// Check if AI is configured
+	if h.config.Validation.AI.APIKey == "" {
+		return mcp.NewToolResultError("Audit report generation requires an API key. Configure validation.ai.api_key in your config file."), nil
+	}
+
+	// Parse parameters
+	params := AuditReportRequest{
+		TimeRange:              "24h",
+		Focus:                  "comprehensive",
+		IncludeRecommendations: true,
+		IncludeImpactAnalysis:  true,
+		Format:                 "markdown",
+	}
+
+	if args, ok := req.Params.Arguments.(map[string]interface{}); ok && args != nil {
+		if tr, ok := args["time_range"].(string); ok {
+			params.TimeRange = tr
+		}
+		if f, ok := args["focus"].(string); ok {
+			params.Focus = f
+		}
+		if ir, ok := args["include_recommendations"].(bool); ok {
+			params.IncludeRecommendations = ir
+		}
+		if ia, ok := args["include_impact_analysis"].(bool); ok {
+			params.IncludeImpactAnalysis = ia
+		}
+		if format, ok := args["format"].(string); ok {
+			params.Format = format
+		}
+	}
+
+	// Log request parameters for debugging
+	h.logger.Debug(ctx, "Audit report request parameters",
+		zap.String("time_range", params.TimeRange),
+		zap.String("focus", params.Focus),
+		zap.String("format", params.Format),
+		zap.Bool("include_recommendations", params.IncludeRecommendations),
+		zap.Bool("include_impact_analysis", params.IncludeImpactAnalysis),
+	)
+
+	// Get audit log entries for analysis
+	entries, stats, err := h.getEntriesForReport(ctx, params.TimeRange)
+	if err != nil {
+		h.logger.Error(ctx, "Failed to get audit entries for report", zap.Error(err))
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to read audit log: %v", err)), nil
+	}
+
+	if len(entries) == 0 {
+		return mcp.NewToolResultText("No audit log entries found for the specified time range."), nil
+	}
+
+	// Generate the AI report
+	report, err := h.generateAIReport(ctx, entries, stats, params)
+	if err != nil {
+		h.logger.Error(ctx, "Failed to generate AI report", zap.Error(err))
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to generate report: %v", err)), nil
+	}
+
+	// Format output based on requested format
+	var output string
+	switch params.Format {
+	case "json":
+		outputBytes, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to serialize report: %v", err)), nil
+		}
+		output = string(outputBytes)
+	case "summary":
+		output = report.Summary
+	case "markdown":
+		fallthrough
+	default:
+		output = h.formatReportAsMarkdown(report, params)
+	}
+
+	return mcp.NewToolResultText(output), nil
+}
+
+// ParseTimeRange parses a time range string into a time.Duration.
+// Supports:
+//   - Go's standard duration format: "1h30m", "45m", "2h", etc.
+//   - Extended formats: "7d" (days), "2w" (weeks)
+//   - Legacy enum values: "1h", "6h", "24h", "7d", "30d"
+//   - Special value "all" returns 0 (no time filter)
+//
+// Returns 0 duration for "all" or empty string (meaning no time filter).
+// Returns error for unparseable formats.
+func ParseTimeRange(s string) (time.Duration, error) {
+	if s == "" || s == "all" {
+		return 0, nil
+	}
+
+	// Try Go's standard duration parser first (handles "1h30m", "45m", "2h", etc.)
+	if d, err := time.ParseDuration(s); err == nil {
+		return d, nil
+	}
+
+	// Handle extended formats with days and weeks
+	if len(s) >= 2 {
+		unit := s[len(s)-1]
+		valueStr := s[:len(s)-1]
+
+		var value int
+		if _, err := fmt.Sscanf(valueStr, "%d", &value); err == nil {
+			switch unit {
+			case 'd': // days
+				return time.Duration(value) * 24 * time.Hour, nil
+			case 'w': // weeks
+				return time.Duration(value) * 7 * 24 * time.Hour, nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("invalid time range format: %q (supported: Go duration like '1h30m', days like '7d', weeks like '2w', or 'all')", s)
+}
+
+// getEntriesForReport retrieves audit log entries filtered by time range
+func (h *NativeToolsHandler) getEntriesForReport(ctx context.Context, timeRangeStr string) ([]AuditLogEntry, AuditReportStatistics, error) {
+	// Parse time range string to duration
+	timeRange, err := ParseTimeRange(timeRangeStr)
+	if err != nil {
+		return nil, AuditReportStatistics{}, fmt.Errorf("invalid time range: %w", err)
+	}
+
+	// Read entries with time-based filtering (handled by readAuditLogEntries)
+	entries, _, err := h.readAuditLogEntries(ctx, h.config.NativeTools.AuditReport.MaxEntries, timeRange, AuditLogFilter{})
+	if err != nil {
+		return nil, AuditReportStatistics{}, err
+	}
+
+	// Collect statistics from the filtered entries
+	stats := AuditReportStatistics{
+		TopTools:       make(map[string]int),
+		TopClients:     make(map[string]int),
+		DeniedByPolicy: make(map[string]int),
+	}
+	uniqueTools := make(map[string]bool)
+	uniqueClients := make(map[string]bool)
+
+	for _, entry := range entries {
+		if entry.Audit == nil {
+			continue
+		}
+		stats.TotalRequests++
+
+		// Count by action (allow/deny)
+		switch entry.Audit.Action {
+		case string(config.PolicyActionAllow):
+			stats.SuccessCount++
+		case string(config.PolicyActionDeny):
+			stats.DeniedCount++
+			stats.SuccessfulDenies++ // Track successful denials
+		default:
+			stats.ErrorCount++
+		}
+
+		// Extract tool name and client from the new structure (nil-safe for CLI audit entries)
+		if entry.Audit.Tool != nil {
+			toolName := entry.Audit.Tool.PrefixedName
+			if toolName != "" {
+				stats.TopTools[toolName]++
+				uniqueTools[toolName] = true
+
+				// Use the client field directly
+				if entry.Audit.Tool.Client != "" {
+					stats.TopClients[entry.Audit.Tool.Client]++
+					uniqueClients[entry.Audit.Tool.Client] = true
+				}
+			}
+		}
+
+		// Track audit_mode and fail_open using the top-level action_reason field
+		// This counts requests (not individual rules) that were affected
+		switch ActionReason(entry.Audit.ActionReason) {
+		case ActionReasonAuditMode:
+			stats.AuditOnlyDenials++
+		case ActionReasonFailOpen:
+			stats.TimeoutFailures++
+		}
+
+		// Track denied policies from request validation
+		if entry.Audit.RequestValidation != nil {
+			if entry.Audit.RequestValidation.CEL != nil && entry.Audit.RequestValidation.CEL.Action == "deny" {
+				ruleName := entry.Audit.RequestValidation.CEL.DecidingRule
+				if ruleName == "" {
+					ruleName = "CEL Policy"
+				}
+				stats.DeniedByPolicy[ruleName]++
+			}
+			if entry.Audit.RequestValidation.AI != nil && entry.Audit.RequestValidation.AI.Action == "deny" {
+				ruleName := entry.Audit.RequestValidation.AI.DecidingRule
+				if ruleName == "" {
+					ruleName = "AI Policy"
+				}
+				stats.DeniedByPolicy[ruleName]++
+			}
+		}
+		// Track denied policies from response validation
+		if entry.Audit.ResponseValidation != nil {
+			if entry.Audit.ResponseValidation.CEL != nil && entry.Audit.ResponseValidation.CEL.Action == "deny" {
+				ruleName := entry.Audit.ResponseValidation.CEL.DecidingRule
+				if ruleName == "" {
+					ruleName = "CEL Response Policy"
+				}
+				stats.DeniedByPolicy[ruleName]++
+			}
+			if entry.Audit.ResponseValidation.AI != nil && entry.Audit.ResponseValidation.AI.Action == "deny" {
+				ruleName := entry.Audit.ResponseValidation.AI.DecidingRule
+				if ruleName == "" {
+					ruleName = "AI Response Policy"
+				}
+				stats.DeniedByPolicy[ruleName]++
+			}
+		}
+	}
+
+	stats.UniqueTools = len(uniqueTools)
+	stats.UniqueClients = len(uniqueClients)
+
+	return entries, stats, nil
+}
+
+// generateAIReport calls the AI to analyze the audit entries
+func (h *NativeToolsHandler) generateAIReport(ctx context.Context, entries []AuditLogEntry, stats AuditReportStatistics, params AuditReportRequest) (*AuditReportResponse, error) {
+	// Prepare a summary of entries for the AI (we don't send raw entries to avoid token limits)
+	entrySummary := h.prepareEntrySummary(entries, stats)
+
+	// Build the user prompt
+	userPrompt := h.buildReportPrompt(entrySummary, params)
+
+	// Log request details for debugging
+	h.logger.Debug(ctx, "Preparing audit report AI request",
+		zap.String("time_range", params.TimeRange),
+		zap.Int("entry_count", len(entries)),
+		zap.Int("system_prompt_size", len(h.config.NativeTools.AuditReport.SystemPrompt)),
+		zap.Int("user_prompt_size", len(userPrompt)),
+	)
+
+	// Create provider-agnostic AI client (uses configured endpoint, fixing the bug where
+	// endpoint was ignored and always defaulted to OpenAI)
+	client := NewAIProviderClient(h.config)
+
+	// Build the AI request with structured output schema
+	aiRequest := AIRequest{
+		Model:          h.config.Validation.AI.Model,
+		SystemPrompt:   h.config.NativeTools.AuditReport.SystemPrompt,
+		UserPrompt:     userPrompt,
+		ResponseSchema: GenerateSchema[AIReportResponse](),
+	}
+
+	// Call the AI with configurable timeout
+	timeout := time.Duration(h.config.NativeTools.AuditReport.TimeoutSeconds) * time.Second
+	aiCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	apiStart := time.Now()
+	result, err := client.Generate(aiCtx, aiRequest)
+	apiDuration := time.Since(apiStart)
+
+	if err != nil {
+		// Distinguish between timeout and other errors for better debugging
+		if errors.Is(err, context.DeadlineExceeded) {
+			h.logger.Debug(ctx, "Audit report AI API call timed out",
+				zap.Duration("duration", apiDuration),
+				zap.Duration("timeout", timeout),
+				zap.Error(err),
+			)
+			return nil, fmt.Errorf("AI API call timed out after %v (consider increasing native_tools.audit_report.timeout_seconds or reducing time_range): %w", timeout, err)
+		}
+
+		// Check for specific error types
+		var aiErr *AIProviderError
+		if errors.As(err, &aiErr) {
+			h.logger.Debug(ctx, "Audit report AI API call failed",
+				zap.Duration("duration", apiDuration),
+				zap.String("category", aiErr.Category),
+				zap.Bool("retryable", aiErr.Retryable),
+				zap.Error(err),
+			)
+		} else {
+			h.logger.Debug(ctx, "Audit report AI API call failed",
+				zap.Duration("duration", apiDuration),
+				zap.Error(err),
+			)
+		}
+		return nil, fmt.Errorf("AI API call failed: %w", err)
+	}
+
+	h.logger.Debug(ctx, "Audit report AI API call completed",
+		zap.Duration("duration", apiDuration),
+		zap.String("provider_request_id", result.ProviderRequestID),
+	)
+
+	// Parse the AI response from the provider-agnostic result
+	// Sanitize invalid escape sequences that AI models may produce
+	// (e.g., C:\Windows → \W) when echoing text from prompts.
+	var aiResponse AIReportResponse
+	if result.ParsedJSON != nil {
+		if err := json.Unmarshal(SanitizeJSONEscapes(result.ParsedJSON), &aiResponse); err != nil {
+			return nil, fmt.Errorf("failed to parse AI response: %w", err)
+		}
+	} else {
+		// Fallback to raw text if no parsed JSON
+		if err := json.Unmarshal(SanitizeJSONEscapes([]byte(result.RawText)), &aiResponse); err != nil {
+			return nil, fmt.Errorf("failed to parse AI response: %w", err)
+		}
+	}
+
+	// Build the full report
+	report := &AuditReportResponse{
+		Summary:    aiResponse.Summary,
+		Concerns:   aiResponse.Concerns,
+		Statistics: stats,
+		Metadata: AuditReportMetadata{
+			GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
+			TimeRange:       params.TimeRange,
+			EntriesAnalyzed: len(entries),
+			Focus:           params.Focus,
+		},
+	}
+
+	if params.IncludeRecommendations {
+		report.Recommendations = aiResponse.Recommendations
+	}
+
+	return report, nil
+}
+
+// prepareEntrySummary creates a summary of entries suitable for AI analysis
+func (h *NativeToolsHandler) prepareEntrySummary(entries []AuditLogEntry, stats AuditReportStatistics) string {
+	// Create a condensed summary to avoid token limits
+	var summary string
+
+	summary += fmt.Sprintf("Total Requests: %d\n", stats.TotalRequests)
+	summary += fmt.Sprintf("Success: %d, Denied: %d, Errors: %d\n", stats.SuccessCount, stats.DeniedCount, stats.ErrorCount)
+	summary += fmt.Sprintf("Unique Tools: %d, Unique Clients: %d\n\n", stats.UniqueTools, stats.UniqueClients)
+
+	// Policy effectiveness metrics (important for highlighting)
+	summary += "Policy Effectiveness Metrics:\n"
+	summary += fmt.Sprintf("  - Successful Denials (blocked harmful requests): %d\n", stats.SuccessfulDenies)
+	summary += fmt.Sprintf("  - Audit-Only Denials (would be denied if enabled): %d\n", stats.AuditOnlyDenials)
+	summary += fmt.Sprintf("  - Timeout Failures (failed open due to timeouts): %d\n\n", stats.TimeoutFailures)
+
+	// Top tools
+	summary += "Top Tools by Usage:\n"
+	for tool, count := range stats.TopTools {
+		summary += fmt.Sprintf("  - %s: %d calls\n", tool, count)
+	}
+
+	// Denied policies
+	if len(stats.DeniedByPolicy) > 0 {
+		summary += "\nDenials by Policy:\n"
+		for policy, count := range stats.DeniedByPolicy {
+			summary += fmt.Sprintf("  - %s: %d denials\n", policy, count)
+		}
+	}
+
+	// Sample of audit-only denials (HIGH PRIORITY - these would have been blocked)
+	summary += h.collectAuditOnlySamples(entries)
+
+	// Sample of timeout failures (HIGH PRIORITY - potential security gaps)
+	summary += h.collectTimeoutSamples(entries)
+
+	// Sample of denied entries (for context on what we successfully blocked)
+	summary += "\nSample Denied Requests (successfully blocked):\n"
+	deniedCount := 0
+	for _, entry := range entries {
+		if deniedCount >= 5 {
+			break
+		}
+		if entry.Audit == nil || entry.Audit.Tool == nil {
+			continue
+		}
+		if entry.Audit.Action == string(config.PolicyActionDeny) {
+			toolName := entry.Audit.Tool.PrefixedName
+			args, _ := json.Marshal(entry.Audit.Tool.Params)
+			summary += fmt.Sprintf("  - Tool: %s, Args: %s\n", toolName, string(args))
+			deniedCount++
+		}
+	}
+
+	return summary
+}
+
+// collectAuditOnlySamples gathers sample entries where audit-only policies would have denied the request
+func (h *NativeToolsHandler) collectAuditOnlySamples(entries []AuditLogEntry) string {
+	var summary string
+	summary += "\nSample Audit-Only Denials (would be blocked if policies enabled):\n"
+	count := 0
+
+	for _, entry := range entries {
+		if count >= 5 {
+			break
+		}
+		if entry.Audit == nil || entry.Audit.Tool == nil {
+			continue
+		}
+
+		// Use top-level action_reason to identify audit_mode entries
+		if ActionReason(entry.Audit.ActionReason) != ActionReasonAuditMode {
+			continue
+		}
+
+		toolName := entry.Audit.Tool.PrefixedName
+		args, _ := json.Marshal(entry.Audit.Tool.Params)
+
+		// Find the deciding rule from validation results for context
+		rule := ""
+		if entry.Audit.RequestValidation != nil {
+			if entry.Audit.RequestValidation.CEL != nil && entry.Audit.RequestValidation.CEL.DecidingRule != "" {
+				rule = entry.Audit.RequestValidation.CEL.DecidingRule
+			} else if entry.Audit.RequestValidation.AI != nil && entry.Audit.RequestValidation.AI.DecidingRule != "" {
+				rule = entry.Audit.RequestValidation.AI.DecidingRule
+			}
+		}
+		if rule == "" && entry.Audit.ResponseValidation != nil {
+			if entry.Audit.ResponseValidation.CEL != nil && entry.Audit.ResponseValidation.CEL.DecidingRule != "" {
+				rule = entry.Audit.ResponseValidation.CEL.DecidingRule + " (response)"
+			} else if entry.Audit.ResponseValidation.AI != nil && entry.Audit.ResponseValidation.AI.DecidingRule != "" {
+				rule = entry.Audit.ResponseValidation.AI.DecidingRule + " (response)"
+			}
+		}
+
+		if rule != "" {
+			summary += fmt.Sprintf("  - Tool: %s, Rule: %s, Args: %s\n", toolName, rule, string(args))
+		} else {
+			summary += fmt.Sprintf("  - Tool: %s, Args: %s\n", toolName, string(args))
+		}
+		count++
+	}
+
+	if count == 0 {
+		summary += "  (none found)\n"
+	}
+	return summary
+}
+
+// collectTimeoutSamples gathers sample entries where policies failed due to timeouts
+func (h *NativeToolsHandler) collectTimeoutSamples(entries []AuditLogEntry) string {
+	var summary string
+	summary += "\nSample Timeout Failures (policies failed open due to timeouts):\n"
+	count := 0
+
+	for _, entry := range entries {
+		if count >= 5 {
+			break
+		}
+		if entry.Audit == nil || entry.Audit.Tool == nil {
+			continue
+		}
+
+		// Use top-level action_reason to identify fail_open entries
+		if ActionReason(entry.Audit.ActionReason) != ActionReasonFailOpen {
+			continue
+		}
+
+		toolName := entry.Audit.Tool.PrefixedName
+
+		// Find error details from validation results for context
+		rule, errMsg := "", ""
+		if entry.Audit.RequestValidation != nil {
+			rule, errMsg = findErrorInResults(entry.Audit.RequestValidation)
+		}
+		if rule == "" && entry.Audit.ResponseValidation != nil {
+			r, e := findErrorInResults(entry.Audit.ResponseValidation)
+			if r != "" {
+				rule = r + " (response)"
+				errMsg = e
+			}
+		}
+
+		if rule != "" {
+			summary += fmt.Sprintf("  - Tool: %s, Rule: %s, Error: %s\n", toolName, rule, errMsg)
+		} else {
+			summary += fmt.Sprintf("  - Tool: %s\n", toolName)
+		}
+		count++
+	}
+
+	if count == 0 {
+		summary += "  (none found)\n"
+	}
+	return summary
+}
+
+// findErrorInResults finds the first rule that failed with an error (typically timeout)
+func findErrorInResults(validation *AuditValidationInfo) (rule, errMsg string) {
+	if validation == nil {
+		return "", ""
+	}
+
+	if validation.CEL != nil {
+		for _, result := range validation.CEL.Results {
+			if result.Result == "error" && result.Error != "" {
+				return result.Rule, result.Error
+			}
+		}
+	}
+
+	if validation.AI != nil {
+		for _, result := range validation.AI.Results {
+			if result.Result == "error" && result.Error != "" {
+				return result.Rule, result.Error
+			}
+		}
+	}
+
+	return "", ""
+}
+
+// buildReportPrompt builds the prompt for the AI
+func (h *NativeToolsHandler) buildReportPrompt(entrySummary string, params AuditReportRequest) string {
+	prompt := fmt.Sprintf(`Analyze the following MCP gateway audit log data and generate a security analysis report.
+
+Focus Area: %s
+Time Range: %s
+Include Impact Analysis: %v
+
+Audit Log Summary:
+%s
+
+Please provide:
+1. A concise summary of the findings
+
+2. A list of concerns, prioritized by business impact (HIGH, MEDIUM, LOW)
+
+   **IMPORTANT - Pay special attention to these categories:**
+
+   a) **AUDIT-ONLY DENIALS (HIGH PRIORITY)**: Requests that were ALLOWED but would have been DENIED
+      if the policies were not in "audit_only" mode. These represent potential security gaps where
+      harmful requests are getting through because policies haven't been fully enabled yet.
+      Category: "audit_only_gap"
+
+   b) **TIMEOUT FAILURES (HIGH PRIORITY)**: Requests where policy evaluation failed due to timeouts
+      (context deadline exceeded) and the system "failed open" (allowed the request). These indicate
+      that either the AI validation service is too slow, or the timeout configuration needs to be
+      increased. These are security gaps because we don't know if the request would have been denied.
+      Category: "timeout_security_gap"
+
+   c) **SUCCESSFUL DENIALS (SECONDARY)**: Requests that were correctly denied by enabled policies.
+      Highlight these to show the value the gateway is providing - these are harmful requests that
+      were successfully blocked.
+      Category: "successful_protection"
+
+   For each concern, include:
+     - severity (HIGH, MEDIUM, or LOW)
+     - category (use the categories above, or others like "data_breach_risk", "policy_bypass_attempt", "excessive_permissions")
+     - description of the concern
+     - impact assessment with type (monetary, reputational, or monetary_and_reputational) and reasoning
+     - number of occurrences
+     - affected tools
+     - recommendation for remediation
+
+3. Recommendations
+
+   CRITICAL: All recommendations must be:
+   - Grounded in patterns observed in this audit log data (reference specific tools, patterns, or statistics)
+   - Achievable with the current MCP gateway capabilities or organizational actions
+   - Specific and actionable, not generic security advice
+
+   Recommendations must fall into one of these categories:
+
+   a) **CEL Policy Changes** - Deterministic rules using Common Expression Language:
+      - Add rules to match specific tool/argument patterns observed in the data
+      - Remove or disable rules causing excessive false positives
+      - Refine existing rules to be more precise (reduce scope or add conditions)
+      - Enable rules currently in audit_only mode that are catching real issues
+      Example: "Add a CEL rule to deny [tool_name] when the [argument] matches pattern [X] - this would have caught [N] of the audit-only denials"
+
+   b) **AI Policy Changes** - Context-aware validation rules:
+      - Add AI rules for nuanced scenarios CEL cannot express
+      - Adjust AI rule instructions to reduce false positives/negatives
+      - Enable AI rules in audit_only mode that show good signal
+
+   c) **Gateway Configuration Tuning**:
+      - Adjust max_blocking_ms or max_rule_evaluation_ms if timeout failures are occurring
+      - Enable/disable validation phases (request CEL, request AI, response CEL, response AI)
+      - Switch specific rules or phases from audit_only to blocking mode
+
+   d) **Organizational Actions** (external to the gateway):
+      - User training on specific tool usage patterns observed
+      - Process changes for sensitive operations
+      - Review which downstream MCP servers should remain enabled
+      - Access control modifications
+      - Incident response procedures for specific threat patterns
+
+   DO NOT recommend features that don't exist:
+   - Rate limiting, quotas, or throttling
+   - ML-based anomaly detection
+   - Integration with SIEM or external systems
+   - User authentication or identity management
+   - New validation engines or rule types
+
+   Distinguish between:
+   - Per-concern recommendations: Tactical fixes for that specific issue
+   - Overall recommendations: Strategic themes across multiple concerns
+
+Sort concerns by severity (HIGH first, then MEDIUM, then LOW).
+For each severity level, sort by number of occurrences (highest first).
+`, params.Focus, params.TimeRange, params.IncludeImpactAnalysis, entrySummary)
+
+	return prompt
+}
+
+// formatReportAsMarkdown formats the report as markdown
+func (h *NativeToolsHandler) formatReportAsMarkdown(report *AuditReportResponse, params AuditReportRequest) string {
+	var md string
+
+	md += "# Audit Log Analysis Report\n\n"
+	md += fmt.Sprintf("**Generated:** %s\n", report.Metadata.GeneratedAt)
+	md += fmt.Sprintf("**Time Range:** %s\n", report.Metadata.TimeRange)
+	md += fmt.Sprintf("**Entries Analyzed:** %d\n", report.Metadata.EntriesAnalyzed)
+	md += fmt.Sprintf("**Focus:** %s\n\n", report.Metadata.Focus)
+
+	md += "## Summary\n\n"
+	md += report.Summary + "\n\n"
+
+	md += "## Statistics\n\n"
+	md += "| Metric | Value |\n"
+	md += "|--------|-------|\n"
+	md += fmt.Sprintf("| Total Requests | %d |\n", report.Statistics.TotalRequests)
+	md += fmt.Sprintf("| Successful | %d |\n", report.Statistics.SuccessCount)
+	md += fmt.Sprintf("| Denied | %d |\n", report.Statistics.DeniedCount)
+	md += fmt.Sprintf("| Errors | %d |\n", report.Statistics.ErrorCount)
+	md += fmt.Sprintf("| Unique Tools | %d |\n", report.Statistics.UniqueTools)
+	md += fmt.Sprintf("| Unique Clients | %d |\n\n", report.Statistics.UniqueClients)
+
+	// Policy effectiveness metrics
+	md += "### Policy Effectiveness\n\n"
+	md += "| Metric | Value | Description |\n"
+	md += "|--------|-------|-------------|\n"
+	md += fmt.Sprintf("| Successful Denials | %d | Harmful requests blocked by enabled policies |\n", report.Statistics.SuccessfulDenies)
+	md += fmt.Sprintf("| Audit-Only Denials | %d | Would be blocked if policies were enabled |\n", report.Statistics.AuditOnlyDenials)
+	md += fmt.Sprintf("| Timeout Failures | %d | Failed open due to policy evaluation timeouts |\n\n", report.Statistics.TimeoutFailures)
+
+	if len(report.Concerns) > 0 {
+		md += "## Concerns (Prioritized by Business Impact)\n\n"
+
+		// Group by severity
+		highConcerns := []AuditReportConcern{}
+		mediumConcerns := []AuditReportConcern{}
+		lowConcerns := []AuditReportConcern{}
+
+		for _, c := range report.Concerns {
+			switch c.Severity {
+			case "HIGH":
+				highConcerns = append(highConcerns, c)
+			case "MEDIUM":
+				mediumConcerns = append(mediumConcerns, c)
+			default:
+				lowConcerns = append(lowConcerns, c)
+			}
+		}
+
+		if len(highConcerns) > 0 {
+			md += "### HIGH Impact\n\n"
+			for i, c := range highConcerns {
+				md += h.formatConcern(i+1, c, params.IncludeImpactAnalysis)
+			}
+		}
+
+		if len(mediumConcerns) > 0 {
+			md += "### MEDIUM Impact\n\n"
+			for i, c := range mediumConcerns {
+				md += h.formatConcern(i+1, c, params.IncludeImpactAnalysis)
+			}
+		}
+
+		if len(lowConcerns) > 0 {
+			md += "### LOW Impact\n\n"
+			for i, c := range lowConcerns {
+				md += h.formatConcern(i+1, c, params.IncludeImpactAnalysis)
+			}
+		}
+	}
+
+	if params.IncludeRecommendations && len(report.Recommendations) > 0 {
+		md += "## Recommendations\n\n"
+		for i, rec := range report.Recommendations {
+			md += fmt.Sprintf("%d. %s\n", i+1, rec)
+		}
+		md += "\n"
+	}
+
+	return md
+}
+
+// formatConcern formats a single concern as markdown
+func (h *NativeToolsHandler) formatConcern(num int, c AuditReportConcern, includeImpact bool) string {
+	var md string
+
+	md += fmt.Sprintf("#### %d. %s\n\n", num, c.Category)
+	md += fmt.Sprintf("**Description:** %s\n\n", c.Description)
+	md += fmt.Sprintf("**Occurrences:** %d\n\n", c.Occurrences)
+
+	if len(c.AffectedTools) > 0 {
+		md += "**Affected Tools:**\n"
+		for _, tool := range c.AffectedTools {
+			md += fmt.Sprintf("- `%s`\n", tool)
+		}
+		md += "\n"
+	}
+
+	if includeImpact {
+		md += fmt.Sprintf("**Impact Type:** %s\n\n", c.Impact.Type)
+		md += fmt.Sprintf("**Impact Reasoning:** %s\n\n", c.Impact.Reasoning)
+	}
+
+	if c.Recommendation != "" {
+		md += fmt.Sprintf("**Recommendation:** %s\n\n", c.Recommendation)
+	}
+
+	md += "---\n\n"
+	return md
+}

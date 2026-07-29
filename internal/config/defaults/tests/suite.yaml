@@ -1,0 +1,109 @@
+# Test suite for the default shipped policies
+# This validates that the default CEL and AI policies work as expected
+version: "v1"
+bundle_id: default-policies
+description: "Test suite for shipped default policies"
+
+# Provider-level API keys - shared across all models for each provider
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+
+policies:
+  cel_request_rules: "../cel_request_rules.yaml"
+  ai_request_rules: "../ai_request_rules.yaml"
+  cel_response_rules: "../cel_response_rules.yaml"
+  ai_response_rules: "../ai_response_rules.yaml"
+
+acceptance:
+  min_match_rate: 1.0 # All tests must pass for default policies
+
+execution:
+  timeout_ms: 60000
+  retries: 2
+  retry_delay_ms: 1000
+
+engines:
+  cel:
+    enabled: true
+  ai:
+    enabled: true
+    model_matrix:
+      # OpenAI models - fast to slow, cheap to expensive
+      - provider: openai
+        model: gpt-5-mini # Fast and cost-effective
+        enabled: true
+      - provider: openai
+        model: gpt-5 # Balanced performance and quality
+        enabled: true
+      - provider: openai
+        model: gpt-5.1 # Enhanced reasoning, between gpt-5 and gpt-5.2
+        enabled: true
+      - provider: openai
+        model: gpt-5.2 # Flagship reasoning model, highest quality
+        enabled: true
+
+      # Anthropic models - fast to slow, cheap to expensive
+      # Using dated versions for reproducible test results
+      # temperature: 0.0 for deterministic output (supported by Anthropic models)
+      - provider: anthropic
+        model: claude-haiku-4-5-20251001 # Fast and cost-effective
+        enabled: true
+        parameters:
+          temperature: 0.0
+      - provider: anthropic
+        model: claude-sonnet-4-5-20250929 # Balanced performance and quality
+        enabled: true
+        parameters:
+          temperature: 0.0
+      - provider: anthropic
+        model: claude-sonnet-4-6 # Improved reasoning, 1M context
+        enabled: true
+        parameters:
+          temperature: 0.0
+      - provider: anthropic
+        model: claude-opus-4-5-20251101 # High quality
+        enabled: true
+        parameters:
+          temperature: 0.0
+      - provider: anthropic
+        model: claude-opus-4-6 # Latest flagship, highest quality
+        enabled: true
+        parameters:
+          temperature: 0.0
+
+      # Google Gemini (via OpenAI-compatible endpoint)
+      # export GEMINI_API_KEY=<your key> then set enabled: true
+      - provider: openai_compatible
+        model: gemini-2.5-flash
+        endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        api_key: "${GEMINI_API_KEY}"
+        enabled: false
+      - provider: openai_compatible
+        model: gemini-2.5-pro
+        endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        api_key: "${GEMINI_API_KEY}"
+        enabled: false
+
+      # Groq (via OpenAI-compatible endpoint)
+      # export GROQ_API_KEY=<your key> then set enabled: true
+      - provider: openai_compatible
+        model: llama-3.3-70b-versatile
+        endpoint: "https://api.groq.com/openai/v1/chat/completions"
+        api_key: "${GROQ_API_KEY}"
+        enabled: false
+
+      # Perplexity (via OpenAI-compatible endpoint)
+      # export PERPLEXITY_API_KEY=<your key> then set enabled: true
+      - provider: openai_compatible
+        model: sonar-pro
+        endpoint: "https://api.perplexity.ai/chat/completions"
+        api_key: "${PERPLEXITY_API_KEY}"
+        enabled: false
+
+filters:
+  tags: []
+  exclude_tags: []
+  case_pattern: ""

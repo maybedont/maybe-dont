@@ -1,0 +1,21 @@
+case_id: "req-mcp-github-delete-file-deny"
+title: "Deny github delete file tool"
+tags: ["security", "github", "cel"]
+notes:
+  - "CEL rule blocks github__delete_file by name"
+
+phase: "request"
+engine: "cel"
+
+request:
+  tool_name: "github__delete_file"
+  arguments:
+    owner: "example"
+    repo: "demo"
+    path: "secrets.env"
+
+expectations:
+  decision: "deny"
+  policies:
+    - policy_name: "deny-github-delete-file"
+      decision: "deny"

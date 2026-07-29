@@ -1,0 +1,28 @@
+case_id: "resp-redact-passwd"
+title: "Redact /etc/passwd content in response"
+tags: ["security", "system-file", "cel"]
+notes:
+  - "CEL response rule should redact passwd content"
+
+phase: "response"
+engine: "cel"
+
+request:
+  tool_name: "read_file"
+  arguments:
+    path: "/etc/passwd"
+
+response:
+  content:
+    - type: "text"
+      text: "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin"
+  is_error: false
+
+expectations:
+  decision: "redact"
+  redacted_content:
+    - type: "text"
+      text: "[SYSTEM_FILE_REDACTED]"
+  policies:
+    - policy_name: "redact-passwd-content"
+      decision: "redact"

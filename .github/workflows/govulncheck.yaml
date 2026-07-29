@@ -1,0 +1,160 @@
+name: vulnerability scan
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  govulncheck:
+    name: vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        id: vulncheck
+        run: |
+          set +e
+          OUTPUT=$(govulncheck -json ./... 2>&1)
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+          # Save output for later steps
+          echo "$OUTPUT" > vuln-report.json
+
+          # Extract unique findings into a JSON array for consistent parsing across steps.
+          # govulncheck -json outputs pretty-printed multi-line JSON objects (not NDJSON),
+          # so jq's stream parser is needed — line-by-line parsing won't work.
+          jq -s '[.[] | select(.finding) | .finding] | unique_by(.osv)' vuln-report.json > vuln-findings.json 2>/dev/null || echo '[]' > vuln-findings.json
+          VULN_COUNT=$(jq 'length' vuln-findings.json)
+          echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+
+          exit 0  # Don't fail yet, let justification check run
+
+      - name: Check for justification
+        id: justification
+        if: steps.vulncheck.outputs.vuln_count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Check PR description and comments for justification
+            const prNumber = context.payload.pull_request?.number;
+            if (!prNumber) {
+              core.setOutput('has_justification', 'false');
+              return;
+            }
+
+            // Check PR body for justification marker
+            const marker = '<!-- govulncheck:accepted -->';
+            const prBody = context.payload.pull_request.body || '';
+            const hasJustificationInBody = prBody.includes(marker);
+
+            // Check non-bot comments for justification (skip bot comments to avoid
+            // matching the template text in the vulnerability report comment itself)
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+
+            const hasJustificationInComments = comments.data.some(comment =>
+              comment.user.type !== 'Bot' && comment.body.includes(marker)
+            );
+
+            const hasJustification = hasJustificationInBody || hasJustificationInComments;
+            core.setOutput('has_justification', hasJustification.toString());
+
+      - name: Post vulnerability report
+        if: steps.vulncheck.outputs.vuln_count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read pre-parsed findings (extracted by the govulncheck step using jq)
+            const findings = JSON.parse(fs.readFileSync('vuln-findings.json', 'utf8'));
+
+            // Build report
+            let report = '## Vulnerability Scan Results\n\n';
+            report += `Found **${findings.length}** vulnerabilities:\n\n`;
+
+            for (const finding of findings) {
+              const osv = finding.osv;
+              report += `### ${osv}\n`;
+              report += `- **Module**: ${finding.trace?.[0]?.module || 'unknown'}\n`;
+              report += `- **Package**: ${finding.trace?.[0]?.package || 'unknown'}\n`;
+              report += `- **Details**: https://pkg.go.dev/vuln/${osv}\n\n`;
+            }
+
+            report += '---\n\n';
+            report += '### How to resolve\n\n';
+            report += '**Option 1**: Fix the vulnerabilities\n';
+            report += '- Update affected dependencies to patched versions\n';
+            report += '- Run `go get -u <module>@<version>` and `go mod tidy`\n\n';
+            report += '**Option 2**: Provide justification to merge with known vulnerabilities\n\n';
+            report += 'If you have reviewed the vulnerabilities and determined they are acceptable for this PR, ';
+            report += 'add a comment with the following format (copy and customize):\n\n';
+            report += '```\n';
+            report += '<!-- govulncheck:accepted -->\n';
+            report += 'Vulnerability Justification:\n';
+            // Generate pre-filled template with actual vulnerability IDs
+            for (const finding of findings) {
+              const osv = finding.osv;
+              report += `- ${osv}: [Explain why this is acceptable]\n`;
+            }
+            report += '```\n\n';
+            report += 'After adding the justification comment, re-run this check.\n';
+
+            // Post or update comment
+            const prNumber = context.payload.pull_request?.number;
+            if (prNumber) {
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber
+              });
+
+              const botComment = comments.data.find(c =>
+                c.user.type === 'Bot' && c.body.includes('## Vulnerability Scan Results')
+              );
+
+              if (botComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: botComment.id,
+                  body: report
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: report
+                });
+              }
+            }
+
+      - name: Fail if vulnerabilities without justification
+        if: steps.vulncheck.outputs.vuln_count != '0' && steps.justification.outputs.has_justification != 'true'
+        run: |
+          echo "::error::Vulnerabilities detected without justification. See PR comment for details."
+          exit 1
+
+      - name: Pass with justification warning
+        if: steps.vulncheck.outputs.vuln_count != '0' && steps.justification.outputs.has_justification == 'true'
+        run: |
+          echo "::warning::Vulnerabilities detected but justification provided. Proceeding with merge."

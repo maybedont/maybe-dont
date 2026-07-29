@@ -1,0 +1,20 @@
+case_id: "req-mcp-write-executable-allow"
+title: "Allow script creation in approved directory"
+tags: ["allow", "filesystem", "ai"]
+notes:
+  - "Executable scripts are allowed in ./scripts/ per default AI rule"
+
+phase: "request"
+engine: "ai"
+
+request:
+  tool_name: "write_file"
+  arguments:
+    path: "./scripts/build.py"
+    content: "print('ok')"
+
+expectations:
+  decision: "allow"
+  policies:
+    - policy_name: "Check executable file creation"
+      decision: "allow"

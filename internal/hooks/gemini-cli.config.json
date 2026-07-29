@@ -1,0 +1,18 @@
+{
+  "_comment": "Gemini CLI hooks configuration — add to your settings.json",
+  "_setup": "Export the hook script: maybe-dont hooks export --agent gemini-cli > maybe-dont-hook.sh && chmod +x maybe-dont-hook.sh",
+  "hooks": {
+    "BeforeTool": [
+      {
+        "type": "command",
+        "command": "/path/to/maybe-dont-hook.sh"
+      }
+    ],
+    "AfterTool": [
+      {
+        "type": "command",
+        "command": "/path/to/maybe-dont-hook.sh"
+      }
+    ]
+  }
+}
