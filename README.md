@@ -70,12 +70,11 @@ platform.
 
 ## Quickstart
 
-Start the gateway once to generate default config files, then edit them:
+Run the gateway once to generate default config files, then edit them. AI validation is on by default and needs an API key you haven't set yet, so this first run bootstraps the config and exits rather than staying up — that's expected:
 
 ```bash
 maybe-dont gateway start
 # Configuration initialized at ~/.config/maybe-dont
-# ^C to stop
 ```
 
 This writes `maybe-dont.yaml` plus the four rules files
