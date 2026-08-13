@@ -125,7 +125,6 @@ intercept:
 
 # CLI Request Validation
 # Validates CLI commands from AI agents via REST API endpoint.
-# See docs/specs/cli-proxy-for-ai-agents.md for details.
 cli_request_validation:
   # Enable the /api/v1/cli/validate REST endpoint
   enabled: false

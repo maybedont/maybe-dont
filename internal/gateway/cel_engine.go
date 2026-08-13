@@ -36,7 +36,7 @@ type CELPolicy struct {
 //
 // If CEL execution time increases significantly in the future (e.g., complex expressions,
 // large datasets, or external data lookups), consider implementing async behavior similar
-// to AI engines. See docs/specs/validation-chain-audit-schema.md "Async Behavior Scope".
+// to AI engines.
 type CELPolicyEngine struct {
 	logger   *config.SessionLogger
 	env      *cel.Env
