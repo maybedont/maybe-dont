@@ -1,19 +1,8 @@
 ## v1.7.0 (2026-08-13)
 
-### BREAKING CHANGE
-
-- anonymous usage telemetry removed entirely (`MAYBEDONT_METRICS_OPTOUT` is now a no-op)
-- relicensed from proprietary to Apache License 2.0
-- Cloud Run deployment example and workflow removed from the repository
-
 ### Fix
 
 - resolve govulncheck findings on buger/jsonparser, x/sys, x/text (#146)
-
-### Docs
-
-- drop dead specs, fold valuable rationale into ARCHITECTURE.md (#146)
-- fix quickstart wording and broken defaults-export reference (#147)
 
 ## v1.6.1 (2026-04-09)
 
