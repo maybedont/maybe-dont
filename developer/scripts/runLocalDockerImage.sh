@@ -5,7 +5,7 @@
 #
 # Host paths (XDG defaults):
 #   - Config: ~/.config/maybe-dont
-#   - State:  ~/.local/state/maybe-dont (logs, installation ID, metrics state)
+#   - State:  ~/.local/state/maybe-dont (logs)
 #
 # Container paths:
 #   - Config: /app/config/maybe-dont/

@@ -94,7 +94,8 @@ against a request/response object. Rules support a plain `expression` (or
 the more specific `mcp_expression`) for MCP tool calls and a separate
 `cli_expression` for CLI commands, so one rule can cover both surfaces. See
 `internal/config/defaults/cel_request_rules.yaml` for shipped examples and
-`docs/specs/` for design rationale on individual features.
+[Design notes](#design-notes) below for rationale behind individual
+features.
 
 ## Testing
 
@@ -103,3 +104,72 @@ the more specific `mcp_expression`) for MCP tool calls and a separate
   behavior tests against a YAML-defined suite of request/response cases,
   independent of `go test`. See
   [docs/specs/policy-test-suite.md](docs/specs/policy-test-suite.md).
+
+## Design notes
+
+Rationale behind decisions that aren't obvious from reading the code alone.
+Consolidated from what used to be a larger set of individual `docs/specs/`
+files, most of which described features that are now fully implemented and
+self-evident from the code — this section keeps only the "why," not the
+original design-process narrative.
+
+### Validation & policy
+
+- Rule config is `enabled: true/false` + `mode: audit_only` (only) — a
+  deliberate simplification from an earlier 3-state
+  `enabled`/`audit_only`/`disabled` enum. Don't reintroduce the 3-state
+  form.
+- Deterministic CEL rules are preferred over AI-evaluated rules where
+  possible. AI model match rates on the policy test suite range roughly
+  52-68% across models tested, versus 100% for CEL. Use AI evaluation only
+  where CEL can't express the check.
+- Audit entries distinguish `recommended_action` (what validation decided)
+  from `action` (what actually happened) via an `action_reason` field
+  (`request_policy`, `response_policy`, `audit_mode`, `fail_open`) — needed
+  because audit-only mode and fail-open behavior mean the two can
+  legitimately diverge.
+- Test suite results distinguish real decision failures from cases where
+  only *extra* policies fired unexpectedly (`ExtraPolicyOnly` in
+  `internal/testsuite`) — the latter isn't a regression, the decision was
+  still correct.
+
+### Integration surfaces
+
+- Three ways to integrate: the MCP gateway proxy (intercepts all tool
+  calls), the CLI proxy (`maybe-dont cli -- <command>`, validates via REST
+  before exec), and agent-native hooks (deterministic, fire regardless of
+  LLM compliance — unlike relying on a skill/prompt alone).
+- The CLI proxy has no response validation: commands run via `syscall.Exec`,
+  so output can't be inspected after the fact. Known limitation, not an
+  oversight.
+- Agent hook integration (Claude Code, Cursor, etc.) is **partially
+  shipped**: the intercept endpoint and hook scripts for most agents are
+  done; Cursor's response-mutation path and shell-level tests are still
+  open (tracked upstream as issue #131).
+- `/api/v1/action/validate` exists specifically for OpenHands'
+  security-analyzer integration and maps directly to OpenHands' `SecurityRisk`
+  enum values — it's not a general-purpose endpoint.
+- The AI provider abstraction supports `openai`, `anthropic`, and
+  `openai_compatible` — the compatible mode exists so self-hosted/local
+  models work without a first-class integration.
+
+### Config & state
+
+- Config/log directories follow XDG Base Directory conventions
+  (`~/.config/maybe-dont`, `~/.local/state/maybe-dont`) instead of
+  `~/.maybe-dont`, for consistency with dotfile-management tools and
+  container environments. Resolution still falls back through:
+  `--config-dir`/env var → `./config` → legacy `$HOME/.maybe-dont/config`
+  (back-compat for existing installs) → cwd.
+- `downstream_mcp_servers` (normally YAML, map-keyed) can be fully
+  configured via `MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_<NAME>_<FIELD>` env
+  vars instead — needed because Claude Desktop doesn't support mounting a
+  YAML config file.
+- The optional required-header check
+  (`MAYBE_DONT_REQUIRED_HEADER_NAME`/`_VALUE`) is a caller identifier for
+  audit logging, not an auth secret.
+- Audit logging uses a dedicated `JSONLAuditWriter` (rotation-aware) rather
+  than inline logging, to keep audit I/O off the hot request path.
+- Discovery requests are deduplicated per session/client via a
+  `singleflight.Group` (key: `sessionID/clientName`) to avoid redundant
+  concurrent tool-discovery calls.

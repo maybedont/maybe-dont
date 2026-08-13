@@ -57,7 +57,8 @@ maybe-dont test policies --suite-dir ./suite --matrix   # full model matrix
 ```
 
 See [docs/specs/policy-test-suite.md](docs/specs/policy-test-suite.md) for
-the suite format and `docs/specs/policy-test-suite/` for the example suite.
+the suite format and `internal/config/defaults/tests/` for the example
+suite CI runs.
 
 ## Docker
 
