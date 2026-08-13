@@ -1,3 +1,9 @@
+## v1.7.0 (2026-08-13)
+
+### Fix
+
+- resolve govulncheck findings on buger/jsonparser, x/sys, x/text (#146)
+
 ## v1.6.1 (2026-04-09)
 
 ### Fix
