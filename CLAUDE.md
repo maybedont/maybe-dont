@@ -389,7 +389,7 @@ services:
 
 **First-Run Workflow:**
 1. Start container without config volume to generate defaults
-2. Copy defaults from container or use `defaults export` command
+2. Copy defaults from container or use `gateway defaults export` command
 3. Customize configuration files
 4. Restart with config volume mounted read-only
 

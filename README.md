@@ -75,7 +75,6 @@ Start the gateway once to generate default config files, then edit them:
 ```bash
 maybe-dont gateway start
 # Configuration initialized at ~/.config/maybe-dont
-# ^C to stop
 ```
 
 This writes `maybe-dont.yaml` plus the four rules files
