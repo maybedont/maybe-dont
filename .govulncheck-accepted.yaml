@@ -1,0 +1,21 @@
+# Vulnerabilities accepted by code review. govulncheck findings whose ID is
+# listed here don't fail the vulnerability scan until review_by passes.
+#
+# Add an entry only when there is no fixed version to upgrade to, or the fix
+# can't be taken yet. Every entry needs:
+#   id:        the Go vulnerability ID (GO-YYYY-NNNN)
+#   reason:    why it's acceptable, including any mitigation in our code
+#   review_by: YYYY-MM-DD. After this date the entry stops counting and the
+#              scan fails again, so it gets revisited.
+#
+# Remove an entry once govulncheck no longer reports it.
+
+- id: GO-2026-6911
+  reason: >-
+    mcp-go follows cross-origin redirects and re-sends configured headers.
+    Mitigated since v1.8.0 by our own http.Client for SSE and streamable HTTP
+    downstream servers, which refuses cross-origin redirects unless a server
+    sets allow_cross_origin_redirects (internal/gateway/downstream_http_client.go, #151).
+    Fixed upstream in mcp-go v1.6.0, but the vuln DB still lists no fixed
+    version (golang/vulndb#6926), and moving off v0.44.0-beta.2 is a separate upgrade.
+  review_by: 2026-12-20
