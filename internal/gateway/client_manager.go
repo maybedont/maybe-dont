@@ -346,7 +346,8 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 			zap.String("name", name),
 			zap.String("command", cfg.Command),
 			zap.Any("command_args", cfg.CommandArgs))
-		cl, err = client.NewStdioMCPClient(cfg.Command, nil, cfg.CommandArgs...)
+		cl, err = client.NewStdioMCPClientWithOptions(cfg.Command, nil, cfg.CommandArgs,
+			transport.WithCommandFunc(stdioCommandFunc(cfg.Env)))
 	case "sse":
 		cm.logger.Debug(ctx, "Initializing SSE MCP client",
 			zap.String("name", name),

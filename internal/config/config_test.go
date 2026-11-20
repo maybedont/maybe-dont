@@ -3884,3 +3884,107 @@ func TestAIKeyRequiredMessage(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadConfig_StdioEnv verifies that a stdio server's env loads from YAML
+// with variable names in their original case (viper lowercases map keys),
+// supports ${VAR} substitution, can be set via
+// MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_<NAME>_ENV_<VAR>, and is rejected on
+// non-stdio servers.
+func TestLoadConfig_StdioEnv(t *testing.T) {
+	tests := []struct {
+		name    string
+		servers string
+		envVars map[string]string
+		wantEnv map[string]string
+		wantErr string
+	}{
+		{
+			name: "names keep their case",
+			servers: `  local:
+    type: stdio
+    command: echo
+    env:
+      GITHUB_TOKEN: "abc"
+      http_proxy: "http://proxy:3128"
+      PORT: 8080
+`,
+			wantEnv: map[string]string{"GITHUB_TOKEN": "abc", "http_proxy": "http://proxy:3128", "PORT": "8080"},
+		},
+		{
+			name: "values support substitution",
+			servers: `  local:
+    type: stdio
+    command: echo
+    env:
+      GITHUB_TOKEN: "${TEST_STDIO_ENV_TOKEN}"
+`,
+			envVars: map[string]string{"TEST_STDIO_ENV_TOKEN": "from-gateway-env"},
+			wantEnv: map[string]string{"GITHUB_TOKEN": "from-gateway-env"},
+		},
+		{
+			name: "server name with uppercase letters",
+			servers: `  LocalServer:
+    type: stdio
+    command: echo
+    env:
+      API_TOKEN: "x"
+`,
+			wantEnv: map[string]string{"API_TOKEN": "x"},
+		},
+		{
+			name: "environment variable override",
+			servers: `  local:
+    type: stdio
+    command: echo
+`,
+			envVars: map[string]string{"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_ENV_GITHUB_TOKEN": "from-override"},
+			wantEnv: map[string]string{"GITHUB_TOKEN": "from-override"},
+		},
+		{
+			name: "rejected on http servers",
+			servers: `  local:
+    type: http
+    url: "https://example.com/mcp"
+    env:
+      GITHUB_TOKEN: "abc"
+`,
+			wantErr: "downstream_mcp_servers[local].env",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			for k, v := range tt.envVars {
+				t.Setenv(k, v)
+			}
+			dir := t.TempDir()
+			yamlContent := `server:
+  type: http
+  listen_addr: "127.0.0.1:8080"
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+native_tools:
+  audit_report:
+    enabled: false
+downstream_mcp_servers:
+` + tt.servers
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "maybe-dont.yaml"), []byte(yamlContent), 0o600))
+
+			cfg, err := LoadConfig(dir, "maybe-dont.yaml")
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, cfg.DownstreamMCPServers, 1)
+			for _, server := range cfg.DownstreamMCPServers {
+				require.Equal(t, tt.wantEnv, server.Env)
+			}
+		})
+	}
+}

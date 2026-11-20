@@ -406,6 +406,7 @@ export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_URL=https://api.githubcopilot.co
 export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_TYPE=stdio
 export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_COMMAND=/usr/local/bin/mcp-server
 export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_ARGS=--verbose,--port=8080
+export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_LOCAL_ENV_GITHUB_TOKEN=ghp_xxx  # sets GITHUB_TOKEN for the process
 
 # Pass-through auth (compact format - single header)
 export MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_GITHUB_AUTH_PASS_THROUGH_ENABLED=true
@@ -491,6 +492,9 @@ For HTTP/SSE clients, pass-through authentication allows extracting credentials 
 - Config tests require at least one client in the `DownstreamMCPServers` map
 - Test fixtures use minimal client config: `{"test": {Type: "stdio", Command: "echo"}}`
 - Integration tests should verify name prefixing and routing behavior
+
+### STDIO Server Environment
+A stdio server's process gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL` and `TERM` from the gateway's environment (the Windows equivalents on Windows), plus its configured `env`. It never inherits the whole gateway environment, which can hold API keys. Viper lowercases map keys, so `env` names are restored to their original case from the YAML file (`restoreDownstreamEnvKeyCase`).
 
 ### Client Lifecycle Management
 - All clients are initialized during gateway startup

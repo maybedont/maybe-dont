@@ -228,6 +228,12 @@ type ClientConfig struct {
 	CommandArgs   []string `mapstructure:"command_args"`
 	Args          []string `mapstructure:"args"` // Alias for command_args
 
+	// Env sets environment variables for a stdio server's process. The process
+	// gets only these plus a small set of basics (PATH, HOME, ...), never the
+	// gateway's whole environment, which can hold API keys. Values support
+	// ${VAR} substitution to pass a gateway variable through.
+	Env map[string]string `mapstructure:"env"`
+
 	// AllowCrossOriginRedirects lets HTTP/SSE clients follow redirects to a
 	// different scheme, host or port. Off by default because a redirect would
 	// carry configured headers to the new host and can point the gateway at
@@ -723,6 +729,39 @@ func applyMapFromEnv(field reflect.Value, envKeyPrefix string) {
 	}
 }
 
+// restoreDownstreamEnvKeyCase replaces each downstream server's Env map with
+// the one in the config file, keeping variable names as written. Viper
+// lowercases every map key it loads, and environment variable names are case
+// sensitive (GITHUB_TOKEN, http_proxy). Server names are matched lowercased,
+// the same way viper stores them.
+func restoreDownstreamEnvKeyCase(cfg *Config, configFile string) error {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", configFile, err)
+	}
+	var raw struct {
+		DownstreamMCPServers map[string]struct {
+			Env map[string]string `yaml:"env"`
+		} `yaml:"downstream_mcp_servers"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("failed to parse %s: %w", configFile, err)
+	}
+	for name, server := range raw.DownstreamMCPServers {
+		if server.Env == nil {
+			continue
+		}
+		key := strings.ToLower(name)
+		client, ok := cfg.DownstreamMCPServers[key]
+		if !ok {
+			continue
+		}
+		client.Env = server.Env
+		cfg.DownstreamMCPServers[key] = client
+	}
+	return nil
+}
+
 // knownClientConfigFields contains the valid field path suffixes for ClientConfig.
 // These are derived from the mapstructure tags and used to identify where the client name
 // ends and the field path begins when parsing environment variables.
@@ -744,6 +783,7 @@ var knownClientConfigFields = map[string]bool{
 	"AUTH_PASS_THROUGH_HEADERS":     true, // compact format
 	"SSE_HEADERS":                   true, // prefix for SSE headers
 	"HTTP_HEADERS":                  true, // prefix for HTTP headers
+	"ENV":                           true, // prefix for stdio environment variables
 }
 
 // parseCompactHeaders parses the compact header format: "source:target[:format][;...]"
@@ -947,6 +987,13 @@ func applyClientConfigField(client *ClientConfig, fieldPath, value string) {
 			client.HTTPConfig.Headers = make(map[string]string)
 		}
 		client.HTTPConfig.Headers[headerName] = value
+	case strings.HasPrefix(fieldPath, "ENV_"):
+		// The variable name keeps its case: ..._ENV_GITHUB_TOKEN sets GITHUB_TOKEN
+		envName := strings.TrimPrefix(fieldPath, "ENV_")
+		if client.Env == nil {
+			client.Env = make(map[string]string)
+		}
+		client.Env[envName] = value
 	case strings.HasPrefix(fieldPath, "SSE_HEADERS_"):
 		headerName := strings.TrimPrefix(fieldPath, "SSE_HEADERS_")
 		if client.SSEConfig.Headers == nil {
@@ -1280,6 +1327,14 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
+	// Viper lowercases map keys, which is harmless for header names but would
+	// rename environment variables, so restore their case from the file.
+	if configFileFound {
+		if err := restoreDownstreamEnvKeyCase(&config, v.ConfigFileUsed()); err != nil {
+			return nil, err
+		}
+	}
+
 	// Expand environment variables in all string fields (handles ${VAR} syntax in config values)
 	expandEnvironmentVariables(reflect.ValueOf(&config).Elem())
 
@@ -1572,6 +1627,13 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 
 	// Validate each client in the map
 	for name, client := range cfg.DownstreamMCPServers {
+		// env only reaches a process the gateway spawns; on an http or sse
+		// server it would be silently ignored
+		if len(client.Env) > 0 && client.Type != "stdio" {
+			errors = append(errors, configError(fmt.Sprintf("downstream_mcp_servers[%s].env", name),
+				fmt.Sprintf("only supported for stdio servers, not %s", client.Type)))
+		}
+
 		// Validate client type and required fields
 		switch client.Type {
 		case "stdio":
