@@ -547,7 +547,7 @@ func resolveRulesFilePath(rulesFile, configDir string) string {
 
 // applyEnvironmentOverrides walks through the config struct and overrides fields
 // with values from environment variables using the specified prefix.
-// For example, with envPrefix="MAYBE_DONT", ai_validation.api_key can be set via MAYBE_DONT_AI_VALIDATION_API_KEY.
+// For example, with envPrefix="MAYBE_DONT", validation.ai.api_key can be set via MAYBE_DONT_VALIDATION_AI_API_KEY.
 // This provides a general mechanism for Docker/container deployments without hardcoding bindings.
 //
 // Supported types:
@@ -1285,7 +1285,7 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 
 	// Apply environment variable overrides using viper's configured prefix
 	// This allows any config field to be set via environment variable, e.g.:
-	// MAYBE_DONT_AI_VALIDATION_API_KEY, MAYBE_DONT_SERVER_LISTEN_ADDR, etc.
+	// MAYBE_DONT_VALIDATION_AI_API_KEY, MAYBE_DONT_SERVER_LISTEN_ADDR, etc.
 	applyEnvironmentOverrides(reflect.ValueOf(&config).Elem(), reflect.TypeOf(config), "", v.GetEnvPrefix())
 
 	// Parse downstream MCP servers from environment variables
@@ -1446,6 +1446,31 @@ For each concern, estimate the potential impact category and explain the reasoni
 // ValidationContext provides additional context for configuration validation
 type ValidationContext struct {
 	ConfigFileFound bool
+}
+
+// aiKeyRequiredMessage explains a missing AI API key: which enabled settings
+// need it, and that turning them off is the alternative. The default config
+// enables AI request validation and the audit report tool, so this is the
+// first error a new user without an API key sees.
+func aiKeyRequiredMessage(provider string, aiRequestEnabled, aiResponseEnabled, auditReportEnabled bool) string {
+	var needKey []string
+	if aiRequestEnabled {
+		needKey = append(needKey, "request_validation.ai.enabled")
+	}
+	if aiResponseEnabled {
+		needKey = append(needKey, "response_validation.ai.enabled")
+	}
+	if auditReportEnabled {
+		needKey = append(needKey, "native_tools.audit_report.enabled")
+	}
+	// Only the default OpenAI setup reads OPENAI_API_KEY; pointing an
+	// Anthropic or OpenAI-compatible user at it would send them the wrong way.
+	setKey := "Set it"
+	if provider == "" || provider == "openai" {
+		setKey = "Set it (the default config reads ${OPENAI_API_KEY})"
+	}
+	return fmt.Sprintf("required when AI validation or audit report is enabled. %s, or to run without AI set %s to false",
+		setKey, strings.Join(needKey, ", "))
 }
 
 // ValidateConfig validates the configuration and collects all errors.
@@ -1652,7 +1677,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		}
 
 		if cfg.Validation.AI.APIKey == "" {
-			errors = append(errors, configError("validation.ai.api_key", "required when AI validation or audit report is enabled"))
+			errors = append(errors, configError("validation.ai.api_key", aiKeyRequiredMessage(cfg.Validation.AI.Provider, aiRequestEnabled, aiResponseEnabled, auditReportEnabled)))
 		}
 
 		// Endpoint is required only for openai_compatible; openai and anthropic have sensible defaults
@@ -1730,7 +1755,7 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 			errMsg += "the gateway entirely via environment variables (MAYBE_DONT_* prefix).\n"
 			errMsg += "For example:\n"
 			errMsg += "  - MAYBE_DONT_SERVER_TYPE=stdio\n"
-			errMsg += "  - MAYBE_DONT_AI_VALIDATION_API_KEY=your-api-key\n"
+			errMsg += "  - MAYBE_DONT_VALIDATION_AI_API_KEY=your-api-key\n"
 			errMsg += "\nAlternatively, create a config file (maybe-dont.yaml) in one of these locations:\n"
 			errMsg += "  - $XDG_CONFIG_HOME/maybe-dont/ (or ~/.config/maybe-dont/)\n"
 			errMsg += "  - Current directory\n"
