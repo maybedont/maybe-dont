@@ -25,136 +25,111 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
-        id: vulncheck
         run: |
-          set +e
-          OUTPUT=$(govulncheck -json ./... 2>&1)
-          EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          # govulncheck exits non-zero when it finds anything; the filter step
+          # below decides whether that fails the build.
+          govulncheck -json ./... > vuln-report.json || true
 
-          # Save output for later steps
-          echo "$OUTPUT" > vuln-report.json
+      # Accepted vulnerabilities live in .govulncheck-accepted.yaml so they go
+      # through code review and apply the same way to PRs and pushes to main.
+      # Entries past review_by stop counting, so stale acceptances get revisited.
+      - name: Filter accepted vulnerabilities
+        id: filter
+        run: |
+          set -euo pipefail
 
-          # Extract unique findings into a JSON array for consistent parsing across steps.
-          # govulncheck -json outputs pretty-printed multi-line JSON objects (not NDJSON),
-          # so jq's stream parser is needed — line-by-line parsing won't work.
-          jq -s '[.[] | select(.finding) | .finding] | unique_by(.osv)' vuln-report.json > vuln-findings.json 2>/dev/null || echo '[]' > vuln-findings.json
-          VULN_COUNT=$(jq 'length' vuln-findings.json)
-          echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+          # govulncheck -json outputs pretty-printed multi-line JSON objects
+          # (not NDJSON), so slurp them with jq -s.
+          jq -s '[.[] | select(.finding) | .finding] | unique_by(.osv)' vuln-report.json > vuln-findings.json
 
-          exit 0  # Don't fail yet, let justification check run
+          if [ -f .govulncheck-accepted.yaml ]; then
+            yq -o=json '. // []' .govulncheck-accepted.yaml > accepted.json
+          else
+            echo '[]' > accepted.json
+          fi
 
-      - name: Check for justification
-        id: justification
-        if: steps.vulncheck.outputs.vuln_count != '0'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            // Check PR description and comments for justification
-            const prNumber = context.payload.pull_request?.number;
-            if (!prNumber) {
-              core.setOutput('has_justification', 'false');
-              return;
-            }
+          # Fail fast on malformed entries rather than silently ignoring them.
+          INVALID=$(jq -r '.[] | select((.id // "") == "" or (.reason // "") == "" or ((.review_by // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") | not)) | (.id // "<missing id>")' accepted.json)
+          if [ -n "$INVALID" ]; then
+            echo "::error file=.govulncheck-accepted.yaml::Entries need id, reason, and review_by (YYYY-MM-DD): $INVALID"
+            exit 1
+          fi
 
-            // Check PR body for justification marker
-            const marker = '<!-- govulncheck:accepted -->';
-            const prBody = context.payload.pull_request.body || '';
-            const hasJustificationInBody = prBody.includes(marker);
+          TODAY=$(date -u +%F)
+          jq --arg today "$TODAY" '[.[] | select(.review_by >= $today) | .id]' accepted.json > active-ids.json
+          jq --arg today "$TODAY" '[.[] | select(.review_by < $today) | .id]' accepted.json > expired-ids.json
 
-            // Check non-bot comments for justification (skip bot comments to avoid
-            // matching the template text in the vulnerability report comment itself)
-            const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber
-            });
+          jq --slurpfile active active-ids.json '[.[] | select(.osv as $id | $active[0] | index($id) | not)]' vuln-findings.json > unaccepted.json
+          jq --slurpfile active active-ids.json '[.[] | select(.osv as $id | $active[0] | index($id))]' vuln-findings.json > accepted-found.json
 
-            const hasJustificationInComments = comments.data.some(comment =>
-              comment.user.type !== 'Bot' && comment.body.includes(marker)
-            );
+          for id in $(jq -r '.[].osv' accepted-found.json); do
+            echo "::warning::$id is accepted in .govulncheck-accepted.yaml"
+          done
+          for id in $(jq -r --slurpfile found vuln-findings.json '.[] | select(. as $id | $found[0] | map(.osv) | index($id) | not)' active-ids.json); do
+            echo "::warning file=.govulncheck-accepted.yaml::$id is no longer reported by govulncheck; remove it"
+          done
 
-            const hasJustification = hasJustificationInBody || hasJustificationInComments;
-            core.setOutput('has_justification', hasJustification.toString());
+          echo "unaccepted_count=$(jq 'length' unaccepted.json)" >> "$GITHUB_OUTPUT"
 
       - name: Post vulnerability report
-        if: steps.vulncheck.outputs.vuln_count != '0'
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
+            const unaccepted = JSON.parse(fs.readFileSync('unaccepted.json', 'utf8'));
+            const acceptedFound = JSON.parse(fs.readFileSync('accepted-found.json', 'utf8'));
+            const expired = JSON.parse(fs.readFileSync('expired-ids.json', 'utf8'));
+            const header = '## Vulnerability Scan Results';
 
-            // Read pre-parsed findings (extracted by the govulncheck step using jq)
-            const findings = JSON.parse(fs.readFileSync('vuln-findings.json', 'utf8'));
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes(header)
+            );
 
-            // Build report
-            let report = '## Vulnerability Scan Results\n\n';
-            report += `Found **${findings.length}** vulnerabilities:\n\n`;
-
-            for (const finding of findings) {
-              const osv = finding.osv;
-              report += `### ${osv}\n`;
-              report += `- **Module**: ${finding.trace?.[0]?.module || 'unknown'}\n`;
-              report += `- **Package**: ${finding.trace?.[0]?.package || 'unknown'}\n`;
-              report += `- **Details**: https://pkg.go.dev/vuln/${osv}\n\n`;
+            // Only comment when there's something to fix, but update an earlier
+            // report so it doesn't keep showing findings that are resolved.
+            if (unaccepted.length === 0 && !botComment) {
+              return;
             }
 
-            report += '---\n\n';
-            report += '### How to resolve\n\n';
-            report += '**Option 1**: Fix the vulnerabilities\n';
-            report += '- Update affected dependencies to patched versions\n';
-            report += '- Run `go get -u <module>@<version>` and `go mod tidy`\n\n';
-            report += '**Option 2**: Provide justification to merge with known vulnerabilities\n\n';
-            report += 'If you have reviewed the vulnerabilities and determined they are acceptable for this PR, ';
-            report += 'add a comment with the following format (copy and customize):\n\n';
-            report += '```\n';
-            report += '<!-- govulncheck:accepted -->\n';
-            report += 'Vulnerability Justification:\n';
-            // Generate pre-filled template with actual vulnerability IDs
-            for (const finding of findings) {
-              const osv = finding.osv;
-              report += `- ${osv}: [Explain why this is acceptable]\n`;
-            }
-            report += '```\n\n';
-            report += 'After adding the justification comment, re-run this check.\n';
-
-            // Post or update comment
-            const prNumber = context.payload.pull_request?.number;
-            if (prNumber) {
-              const comments = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber
-              });
-
-              const botComment = comments.data.find(c =>
-                c.user.type === 'Bot' && c.body.includes('## Vulnerability Scan Results')
-              );
-
-              if (botComment) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: botComment.id,
-                  body: report
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: prNumber,
-                  body: report
-                });
+            let report = `${header}\n\n`;
+            if (unaccepted.length === 0) {
+              report += 'No unaccepted vulnerabilities.\n';
+            } else {
+              report += `Found **${unaccepted.length}** unaccepted vulnerabilities:\n\n`;
+              for (const finding of unaccepted) {
+                const osv = finding.osv;
+                const note = expired.includes(osv) ? ' (acceptance expired)' : '';
+                report += `### ${osv}${note}\n`;
+                report += `- **Module**: ${finding.trace?.[0]?.module || 'unknown'}\n`;
+                report += `- **Details**: https://pkg.go.dev/vuln/${osv}\n\n`;
               }
+              report += '---\n\n';
+              report += '### How to resolve\n\n';
+              report += '1. Upgrade the affected dependency to a fixed version and run `go mod tidy`.\n';
+              report += '2. If there is no fix you can take, add an entry to `.govulncheck-accepted.yaml` ';
+              report += 'with the reason and a `review_by` date. It goes through review with the rest of the PR.\n';
+            }
+            if (acceptedFound.length > 0) {
+              report += `\nAccepted in \`.govulncheck-accepted.yaml\`: ${acceptedFound.map(f => f.osv).join(', ')}\n`;
             }
 
-      - name: Fail if vulnerabilities without justification
-        if: steps.vulncheck.outputs.vuln_count != '0' && steps.justification.outputs.has_justification != 'true'
-        run: |
-          echo "::error::Vulnerabilities detected without justification. See PR comment for details."
-          exit 1
+            const params = { owner: context.repo.owner, repo: context.repo.repo };
+            if (botComment) {
+              await github.rest.issues.updateComment({ ...params, comment_id: botComment.id, body: report });
+            } else {
+              await github.rest.issues.createComment({ ...params, issue_number: context.issue.number, body: report });
+            }
 
-      - name: Pass with justification warning
-        if: steps.vulncheck.outputs.vuln_count != '0' && steps.justification.outputs.has_justification == 'true'
+      - name: Fail on unaccepted vulnerabilities
+        if: steps.filter.outputs.unaccepted_count != '0'
         run: |
-          echo "::warning::Vulnerabilities detected but justification provided. Proceeding with merge."
+          jq -r '.[].osv' unaccepted.json | while read -r id; do
+            echo "::error::$id: upgrade to a fixed version or add it to .govulncheck-accepted.yaml (https://pkg.go.dev/vuln/$id)"
+          done
+          exit 1
