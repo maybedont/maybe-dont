@@ -60,7 +60,7 @@ jobs:
           echo "release_notes_flag=--release-notes=${NOTES_FILE}" >> $GITHUB_ENV
       - uses: goreleaser/goreleaser-action@v6
         with:
-          distribution: goreleaser-pro
+          distribution: goreleaser
           version: latest
           args: release --clean ${{ env.flags }} ${{ env.release_notes_flag }}
         env:
@@ -68,7 +68,20 @@ jobs:
           # the Homebrew formula to maybedont/homebrew-tap. Docker push
           # uses docker login credentials (set above), not this token.
           GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
-          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+      # The get-started docs link to <artifact>.sha256 for each archive.
+      # OSS GoReleaser can only split checksums as bare hashes, so build
+      # sha256sum-compatible files from checksums.txt and attach them here.
+      # Runs before the site trigger so the links exist when the site updates.
+      - name: Publish per-artifact sha256 files
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd dist
+          while read -r hash name; do
+            echo "$hash  $name" > "$name.sha256"
+          done < checksums.txt
+          gh release upload "$GITHUB_REF_NAME" ./*.sha256 --repo maybedont/releases --clobber
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
       - name: Trigger site release
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
