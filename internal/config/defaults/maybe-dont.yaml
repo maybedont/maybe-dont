@@ -47,6 +47,13 @@ downstream_mcp_servers:
   # example:
   #   type: stdio
   #   command: echo
+  #
+  # HTTP/SSE servers only follow redirects to the same host and port (http to
+  # https upgrades are allowed). To let a trusted server redirect elsewhere:
+  # example-http:
+  #   type: http
+  #   url: "https://mcp.example.com/mcp"
+  #   allow_cross_origin_redirects: true
 
 # Server configuration
 server:

@@ -228,6 +228,12 @@ type ClientConfig struct {
 	CommandArgs   []string `mapstructure:"command_args"`
 	Args          []string `mapstructure:"args"` // Alias for command_args
 
+	// AllowCrossOriginRedirects lets HTTP/SSE clients follow redirects to a
+	// different scheme, host or port. Off by default because a redirect would
+	// carry configured headers to the new host and can point the gateway at
+	// internal addresses. Enable only for downstream servers you trust.
+	AllowCrossOriginRedirects bool `mapstructure:"allow_cross_origin_redirects"`
+
 	// Initialization configuration for stdio clients
 	StartupTimeoutMs      int `mapstructure:"startup_timeout_ms"`     // Timeout for process startup (default: 30000ms)
 	InitializationRetries int `mapstructure:"initialization_retries"` // Number of retry attempts (default: 5)
@@ -727,6 +733,7 @@ var knownClientConfigFields = map[string]bool{
 	"COMMAND":                       true,
 	"ARGS":                          true,
 	"COMMAND_ARGS":                  true,
+	"ALLOW_CROSS_ORIGIN_REDIRECTS":  true,
 	"STARTUP_TIMEOUT_MS":            true,
 	"INITIALIZATION_RETRIES":        true,
 	"RETRY_DELAY_MS":                true,
@@ -894,6 +901,10 @@ func applyClientConfigField(client *ClientConfig, fieldPath, value string) {
 		client.Args = splitCommaSeparated(value)
 	case fieldPath == "COMMAND_ARGS":
 		client.CommandArgs = splitCommaSeparated(value)
+	case fieldPath == "ALLOW_CROSS_ORIGIN_REDIRECTS":
+		if v, err := strconv.ParseBool(value); err == nil {
+			client.AllowCrossOriginRedirects = v
+		}
 	case fieldPath == "STARTUP_TIMEOUT_MS":
 		if v, err := strconv.Atoi(value); err == nil {
 			client.StartupTimeoutMs = v
