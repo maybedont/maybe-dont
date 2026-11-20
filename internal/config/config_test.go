@@ -1968,6 +1968,52 @@ native_tools:
 	require.Equal(t, ServerTypeSTDIO, config.Server.Type)
 }
 
+// TestLoadConfig_AllowCrossOriginRedirects verifies the per-server
+// allow_cross_origin_redirects YAML field is loaded and defaults to false.
+func TestLoadConfig_AllowCrossOriginRedirects(t *testing.T) {
+	viper.Reset()
+	tmpDir := t.TempDir()
+
+	configContent := `
+downstream_mcp_servers:
+  vendor:
+    type: http
+    url: "https://old.vendor.example/mcp"
+    allow_cross_origin_redirects: true
+  default:
+    type: http
+    url: "https://mcp.example.com/mcp"
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+`
+	require.NoError(t, os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644))
+
+	config, err := LoadConfig(tmpDir, "")
+	require.NoError(t, err)
+
+	tests := []struct {
+		server string
+		want   bool
+	}{
+		{server: "vendor", want: true},
+		{server: "default", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.server, func(t *testing.T) {
+			require.Contains(t, config.DownstreamMCPServers, tt.server)
+			require.Equal(t, tt.want, config.DownstreamMCPServers[tt.server].AllowCrossOriginRedirects)
+		})
+	}
+}
+
 // createValidBaseConfig creates a Config with all required fields set to valid values.
 // Use this as a starting point when testing specific validation rules.
 func createValidBaseConfig() *Config {
@@ -2353,6 +2399,22 @@ func TestParseDownstreamServersFromEnv(t *testing.T) {
 		require.Len(t, servers, 1)
 		require.Equal(t, "secret123", servers["api"].HTTPConfig.Headers["X_API_KEY"])
 		require.Equal(t, "my-client", servers["api"].HTTPConfig.Headers["X_CLIENT_ID"])
+	})
+
+	t.Run("allow cross-origin redirects", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_VENDOR_TYPE":                         "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_VENDOR_URL":                          "https://old.vendor.example/mcp",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_VENDOR_ALLOW_CROSS_ORIGIN_REDIRECTS": "true",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_OTHER_TYPE":                          "http",
+			"MAYBE_DONT_DOWNSTREAM_MCP_SERVERS_OTHER_URL":                           "https://other.example/mcp",
+		})
+		defer cleanup()
+
+		servers := parseDownstreamServersFromEnv(nil, "MAYBE_DONT")
+		require.Len(t, servers, 2)
+		require.True(t, servers["vendor"].AllowCrossOriginRedirects)
+		require.False(t, servers["other"].AllowCrossOriginRedirects, "must default to false")
 	})
 
 	t.Run("integer fields", func(t *testing.T) {

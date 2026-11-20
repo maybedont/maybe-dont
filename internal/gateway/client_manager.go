@@ -347,7 +347,7 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 			zap.String("downstream_url", cfg.DownstreamURL))
 
 		// Build SSE client options
-		sseOpts := []transport.ClientOption{}
+		sseOpts := []transport.ClientOption{transport.WithHTTPClient(newDownstreamHTTPClient(cfg.AllowCrossOriginRedirects))}
 
 		// Add static headers if configured
 		if len(cfg.SSEConfig.Headers) > 0 {
@@ -371,7 +371,7 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 			zap.String("downstream_url", cfg.DownstreamURL))
 
 		// Build HTTP client options
-		httpOpts := []transport.StreamableHTTPCOption{}
+		httpOpts := []transport.StreamableHTTPCOption{transport.WithHTTPBasicClient(newDownstreamHTTPClient(cfg.AllowCrossOriginRedirects))}
 
 		// Add static headers if configured
 		if len(cfg.HTTPConfig.Headers) > 0 {
