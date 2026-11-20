@@ -833,21 +833,33 @@ func parseCompactHeaders(value string) ([]CredentialMapping, error) {
 }
 
 // extractClientNameAndPath extracts the client name and remaining field path from an env var suffix.
+// A server name followed by a map field stays ambiguous when the map key is
+// itself a field name: LOCAL_ENV_TYPE is server "local-env" with field TYPE,
+// not server "local" with env var TYPE. Use YAML for such keys.
 // For example: "GITHUB_AUTH_PASS_THROUGH_ENABLED" -> ("github", "AUTH_PASS_THROUGH_ENABLED")
 // Client names use underscores in env vars, converted to hyphens: "AWS_DOCS" -> "aws-docs"
 func extractClientNameAndPath(suffix string) (clientName string, fieldPath string, ok bool) {
-	// Try progressively longer prefixes until we find a valid field path
 	parts := strings.Split(suffix, "_")
+	split := func(i int) (string, string) {
+		// Convert underscores to hyphens for client name, lowercase
+		name := strings.ToLower(strings.ReplaceAll(strings.Join(parts[:i], "_"), "_", "-"))
+		return name, strings.Join(parts[i:], "_")
+	}
 
+	// Prefer a split whose remainder is exactly a field, so DEV_ENV_COMMAND is
+	// server "dev-env" with field COMMAND rather than server "dev" with a stdio
+	// env var named COMMAND.
+	for i := 1; i < len(parts); i++ {
+		if name, path := split(i); knownClientConfigFields[path] {
+			return name, path, true
+		}
+	}
+
+	// Otherwise take the shortest server name whose remainder starts with a
+	// map or indexed field (ENV_*, HTTP_HEADERS_*, AUTH_PASS_THROUGH_HEADERS_0_*).
 	for i := 1; i <= len(parts); i++ {
-		candidateClient := strings.Join(parts[:i], "_")
-		candidatePath := strings.Join(parts[i:], "_")
-
-		// Check if the remaining path starts with a known field
-		if isValidFieldPath(candidatePath) {
-			// Convert underscores to hyphens for client name, lowercase
-			clientName = strings.ToLower(strings.ReplaceAll(candidateClient, "_", "-"))
-			return clientName, candidatePath, true
+		if name, path := split(i); isValidFieldPath(path) {
+			return name, path, true
 		}
 	}
 
@@ -1632,6 +1644,13 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 		if len(client.Env) > 0 && client.Type != "stdio" {
 			errors = append(errors, configError(fmt.Sprintf("downstream_mcp_servers[%s].env", name),
 				fmt.Sprintf("only supported for stdio servers, not %s", client.Type)))
+		}
+		// ${VAR} on an unset variable expands to "", which would start the
+		// server with, say, an empty token and no hint why it fails
+		for envName, value := range client.Env {
+			if value == "" {
+				fmt.Fprintf(os.Stderr, "WARNING: downstream_mcp_servers[%s].env.%s is empty; if it uses ${VAR}, that variable is not set\n", name, envName)
+			}
 		}
 
 		// Validate client type and required fields

@@ -3988,3 +3988,29 @@ downstream_mcp_servers:
 		})
 	}
 }
+
+// TestExtractClientNameAndPath_EnvField verifies that the ENV map field
+// doesn't capture overrides for servers whose names contain an "env" segment:
+// an exact field match wins over a map-field prefix match.
+func TestExtractClientNameAndPath_EnvField(t *testing.T) {
+	tests := []struct {
+		suffix     string
+		wantClient string
+		wantPath   string
+	}{
+		{"LOCAL_ENV_GITHUB_TOKEN", "local", "ENV_GITHUB_TOKEN"},
+		{"DEV_ENV_COMMAND", "dev-env", "COMMAND"},
+		{"PROD_ENV_TYPE", "prod-env", "TYPE"},
+		{"GITHUB_HTTP_HEADERS_AUTHORIZATION", "github", "HTTP_HEADERS_AUTHORIZATION"},
+		{"AWS_DOCS_URL", "aws-docs", "URL"},
+		{"GITHUB_AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER", "github", "AUTH_PASS_THROUGH_HEADERS_0_SOURCE_HEADER"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.suffix, func(t *testing.T) {
+			client, path, ok := extractClientNameAndPath(tt.suffix)
+			require.True(t, ok)
+			require.Equal(t, tt.wantClient, client)
+			require.Equal(t, tt.wantPath, path)
+		})
+	}
+}

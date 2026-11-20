@@ -41,8 +41,8 @@ audit:
 #     command: /path/to/mcp-server
 #     args:
 #       - --verbose
-#     # The process gets only PATH, HOME, USER, LOGNAME, SHELL and TERM from
-#     # the gateway's environment, plus what you list here. ${VAR} passes a
+#     # The process gets only PATH, HOME, USER, LOGNAME, SHELL, TERM, TMPDIR,
+#     # LANG and LC_ALL from the gateway, plus what you list here. ${VAR} passes a
 #     # gateway variable through.
 #     env:
 #       GITHUB_TOKEN: "${GITHUB_TOKEN}"

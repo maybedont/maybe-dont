@@ -494,7 +494,7 @@ For HTTP/SSE clients, pass-through authentication allows extracting credentials 
 - Integration tests should verify name prefixing and routing behavior
 
 ### STDIO Server Environment
-A stdio server's process gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL` and `TERM` from the gateway's environment (the Windows equivalents on Windows), plus its configured `env`. It never inherits the whole gateway environment, which can hold API keys. Viper lowercases map keys, so `env` names are restored to their original case from the YAML file (`restoreDownstreamEnvKeyCase`).
+A stdio server's process gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `TMPDIR`, `LANG` and `LC_ALL` from the gateway's environment (the Windows equivalents on Windows; see `inheritedStdioEnv`), plus its configured `env`. It never inherits the whole gateway environment, which can hold API keys. Viper lowercases map keys, so `env` names are restored to their original case from the YAML file (`restoreDownstreamEnvKeyCase`).
 
 ### Client Lifecycle Management
 - All clients are initialized during gateway startup
