@@ -189,6 +189,12 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 
 	var errs []string
 	for name, cfg := range configs {
+		// A tool call may already have connected this client on demand.
+		// Creating it again would overwrite and leak that connection.
+		if existing, ok := session.GetClient(name); ok && existing != nil && existing.Client != nil {
+			result.DownstreamClients[name] = existing
+			continue
+		}
 		clientInfo, err := cm.createClient(ctx, name, cfg)
 		if err != nil {
 			errMsg := fmt.Sprintf("failed to create client %s: %v", name, err)
@@ -633,27 +639,33 @@ func (cm *ClientManager) discoverSessionClientCapabilities(ctx context.Context, 
 		)
 	}
 
-	// Get prompts if available
-	if clientInfo.Capabilities.Prompts != nil && clientInfo.Capabilities.Prompts.ListChanged {
+	// Get prompts if available. ListChanged only says whether the server
+	// sends change notifications, so it must not gate discovery.
+	if clientInfo.Capabilities.Prompts != nil {
+		// Prompts and resources are optional extras: a server whose list
+		// call fails must still serve its tools.
 		prompts, err := cm.discoverSessionPromptsWithRetry(ctx, clientInfo)
 		if err != nil {
-			return fmt.Errorf("failed to discover prompts: %w", err)
+			cm.logger.Warn(ctx, "Prompt discovery failed, continuing without prompts",
+				zap.String("client", clientInfo.Name), zap.Error(err))
 		}
 		clientInfo.Prompts = prompts
 	}
 
 	// Get resources if available
-	if clientInfo.Capabilities.Resources != nil && clientInfo.Capabilities.Resources.ListChanged {
+	if clientInfo.Capabilities.Resources != nil {
 		resources, err := cm.discoverSessionResourcesWithRetry(ctx, clientInfo)
 		if err != nil {
-			return fmt.Errorf("failed to discover resources: %w", err)
+			cm.logger.Warn(ctx, "Resource discovery failed, continuing without resources",
+				zap.String("client", clientInfo.Name), zap.Error(err))
 		}
 		clientInfo.Resources = resources
 
 		// Also list resource templates if available
 		templates, err := cm.discoverSessionResourceTemplatesWithRetry(ctx, clientInfo)
 		if err != nil {
-			return fmt.Errorf("failed to discover resource templates: %w", err)
+			cm.logger.Warn(ctx, "Resource template discovery failed, continuing without templates",
+				zap.String("client", clientInfo.Name), zap.Error(err))
 		}
 		clientInfo.Templates = templates
 	}

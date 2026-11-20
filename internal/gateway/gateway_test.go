@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -253,25 +255,32 @@ func TestJsonRPCRequest_Parsing(t *testing.T) {
 	assert.Equal(t, "initialize", req.Method)
 }
 
-func TestCallToolParams_Parsing(t *testing.T) {
-	// Test parsing tool name from a tools/call request
-	toolCallJSON := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github__list_issues","arguments":{"owner":"test"}}}`
-	var toolReq callToolParams
-	err := json.Unmarshal([]byte(toolCallJSON), &toolReq)
-	require.NoError(t, err)
-	assert.Equal(t, "github__list_issues", toolReq.Params.Name)
-
-	// Test with different tool name
-	toolCallJSON2 := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"aws__describe_instance"}}`
-	err = json.Unmarshal([]byte(toolCallJSON2), &toolReq)
-	require.NoError(t, err)
-	assert.Equal(t, "aws__describe_instance", toolReq.Params.Name)
-
-	// Test with native tool (no prefix)
-	nativeToolJSON := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"maybedont__discover_tools"}}`
-	err = json.Unmarshal([]byte(nativeToolJSON), &toolReq)
-	require.NoError(t, err)
-	assert.Equal(t, "maybedont__discover_tools", toolReq.Params.Name)
+// TestDownstreamTarget verifies that the prefixed name a downstream-bound
+// request is addressed to is extracted for tools/call, prompts/get and
+// resources/read, and that other methods are ignored.
+func TestDownstreamTarget(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		msg        string
+		wantTarget string
+		wantOK     bool
+	}{
+		{"tool call", "tools/call", `{"params":{"name":"github__list_issues","arguments":{"owner":"test"}}}`, "github__list_issues", true},
+		{"native tool call", "tools/call", `{"params":{"name":"maybedont__discover_tools"}}`, "maybedont__discover_tools", true},
+		{"prompt get", "prompts/get", `{"params":{"name":"local__greet"}}`, "local__greet", true},
+		{"resource read", "resources/read", `{"params":{"uri":"local__test://hello"}}`, "local__test://hello", true},
+		{"tool call without name", "tools/call", `{"params":{}}`, "", false},
+		{"unparseable", "tools/call", `{`, "", false},
+		{"tools list", "tools/list", `{"params":{"name":"ignored"}}`, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, ok := downstreamTarget(tt.method, []byte(tt.msg))
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantTarget, target)
+		})
+	}
 }
 
 func TestStaleSessionDetection_PrefixParsing(t *testing.T) {
@@ -420,4 +429,36 @@ func TestGatewayNew_NoDownstreamServers(t *testing.T) {
 	assert.NotNil(t, gw.nativeToolsHandler)
 	nativeTools := gw.nativeToolsHandler.GetTools()
 	assert.NotEmpty(t, nativeTools, "native tools should be registered even without downstream servers")
+}
+
+// TestIsStatelessProtocolRequest verifies that requests on the stateless
+// 2026-07-28 protocol are recognized from the method, the _meta version or the
+// Mcp-Protocol-Version header, and that legacy requests and unknown header
+// values are not.
+func TestIsStatelessProtocolRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		msg    string
+		header string
+		want   bool
+	}{
+		{"server/discover", `{"method":"server/discover"}`, "", true},
+		{"modern version in _meta", `{"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`, "", true},
+		{"modern version in header", `{"method":"tools/list"}`, "2026-07-28", true},
+		{"legacy header", `{"method":"tools/call","params":{"name":"x"}}`, "2025-11-25", false},
+		{"no version", `{"method":"initialize"}`, "", false},
+		{"unknown header value", `{"method":"tools/list"}`, "latest", false},
+		{"legacy _meta without version", `{"method":"tools/call","params":{"_meta":{"progressToken":1}}}`, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req jsonRPCRequest
+			require.NoError(t, json.Unmarshal([]byte(tt.msg), &req))
+			ctx := context.Background()
+			if tt.header != "" {
+				ctx = WithRawRequestHeaders(ctx, http.Header{"Mcp-Protocol-Version": []string{tt.header}})
+			}
+			assert.Equal(t, tt.want, isStatelessProtocolRequest(ctx, req))
+		})
+	}
 }

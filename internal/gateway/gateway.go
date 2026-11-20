@@ -78,6 +78,9 @@ type Gateway struct {
 	lazyDiscoveryGroup singleflight.Group
 	// Singleflight group for deduplicating concurrent maybedont__discover_tools calls
 	discoverToolsGroup singleflight.Group
+	// Singleflight group for deduplicating concurrent on-demand connects of one
+	// downstream client in one session (see getOrConnectSessionClient)
+	sessionConnectGroup singleflight.Group
 }
 
 // New creates a new gateway instance.
@@ -520,7 +523,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 	}
 
 	// Get the appropriate client for this session
-	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
+	clientInfo, err := g.getOrConnectSessionClient(ctx, sessionID, clientName)
 	if err != nil {
 		// Check if this is a session expired error - pass it through directly
 		if IsSessionExpiredError(err) {
@@ -891,7 +894,7 @@ func (g *Gateway) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest
 	}
 
 	// Get the appropriate client for this session
-	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
+	clientInfo, err := g.getOrConnectSessionClient(ctx, sessionID, clientName)
 	if err != nil {
 		// Check if this is a session expired error - pass it through directly
 		if IsSessionExpiredError(err) {
@@ -925,7 +928,7 @@ func (g *Gateway) handleResourceRequest(ctx context.Context, req mcp.ReadResourc
 	}
 
 	// Get the appropriate client for this session
-	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
+	clientInfo, err := g.getOrConnectSessionClient(ctx, sessionID, clientName)
 	if err != nil {
 		// Check if this is a session expired error - pass it through directly
 		if IsSessionExpiredError(err) {

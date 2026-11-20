@@ -14,6 +14,8 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/yosida95/uritemplate/v3"
 	"go.uber.org/zap"
+
+	"github.com/maybedont/maybe-dont/internal/config"
 )
 
 // zapLogWriter is a writer that adapts log output to zap logger
@@ -129,16 +131,73 @@ func (g *Gateway) onSessionUnregister(ctx context.Context, session server.Client
 		zap.Strings("downstream_clients", clientNames))
 }
 
-// jsonRPCRequest is used to parse just the method from a JSON-RPC request
+// jsonRPCRequest is used to parse just the method and declared protocol
+// version from a JSON-RPC request
 type jsonRPCRequest struct {
 	Method string `json:"method"`
+	Params struct {
+		Meta map[string]any `json:"_meta"`
+	} `json:"params"`
 }
 
-// callToolParams is used to parse just the tool name from a tools/call request
-type callToolParams struct {
+// declaredProtocolVersion returns the protocol version a request declares in
+// its _meta, which only stateless (2026-07-28 and later) requests carry.
+func (r jsonRPCRequest) declaredProtocolVersion() string {
+	version, _ := r.Params.Meta[mcp.MetaKeyProtocolVersion].(string)
+	return version
+}
+
+// errStatelessProtocolUnsupported rejects requests on the stateless MCP
+// protocol (2026-07-28 and later). The gateway keeps per-session downstream
+// connections and pass-through credentials, which that protocol has no
+// session to hang them on. Rejecting server/discover makes clients fall back
+// to the initialize handshake, the same as with a server that predates it.
+var errStatelessProtocolUnsupported = fmt.Errorf(
+	"MCP protocol %s and later is not supported by this gateway; connect with initialize using protocol version %s or earlier",
+	mcp.ProtocolVersion20260728, mcp.LATEST_LEGACY_PROTOCOL_VERSION)
+
+// isStatelessProtocolRequest reports whether a request uses the stateless
+// protocol, from either its _meta or its Mcp-Protocol-Version header.
+func isStatelessProtocolRequest(ctx context.Context, req jsonRPCRequest) bool {
+	if req.Method == string(mcp.MethodServerDiscover) || mcp.IsModernProtocol(req.declaredProtocolVersion()) {
+		return true
+	}
+	if headers, ok := GetRawRequestHeaders(ctx); ok {
+		// Only a known version counts: IsModernProtocol compares strings, so
+		// an unrecognized value like "latest" would sort as modern.
+		version := headers.Get(server.HeaderKeyProtocolVersion)
+		return mcp.IsValidProtocolVersion(version) && mcp.IsModernProtocol(version)
+	}
+	return false
+}
+
+// downstreamRequestParams is used to parse just the prefixed tool or prompt
+// name, or resource URI, from a request addressed to a downstream server
+type downstreamRequestParams struct {
 	Params struct {
 		Name string `json:"name"`
+		URI  string `json:"uri"`
 	} `json:"params"`
+}
+
+// downstreamTarget returns the prefixed name a downstream-bound request is
+// addressed to: the tool name for tools/call, the prompt name for
+// prompts/get and the resource URI for resources/read. ok is false for every
+// other method.
+func downstreamTarget(method string, msg []byte) (target string, ok bool) {
+	switch mcp.MCPMethod(method) {
+	case mcp.MethodToolsCall, mcp.MethodPromptsGet, mcp.MethodResourcesRead:
+	default:
+		return "", false
+	}
+	var params downstreamRequestParams
+	if err := json.Unmarshal(msg, &params); err != nil {
+		return "", false
+	}
+	if mcp.MCPMethod(method) == mcp.MethodResourcesRead {
+		return params.Params.URI, params.Params.URI != ""
+	}
+	return params.Params.Name, params.Params.Name != ""
 }
 
 // onRequestInitialization is called before each request is processed.
@@ -173,25 +232,22 @@ func (g *Gateway) onRequestInitialization(ctx context.Context, id any, message a
 	g.logger.Debug(ctx, "Processing JSON-RPC request",
 		zap.String("method", req.Method))
 
-	// Only check for tools/call requests
-	if req.Method != string(mcp.MethodToolsCall) {
+	if isStatelessProtocolRequest(ctx, req) {
+		g.logger.Debug(ctx, "Rejecting stateless MCP protocol request",
+			zap.String("method", req.Method),
+			zap.String("protocol_version", req.declaredProtocolVersion()))
+		return errStatelessProtocolUnsupported
+	}
+
+	// Only requests addressed to a downstream tool, prompt or resource need a
+	// session and a downstream connection
+	toolName, ok := downstreamTarget(req.Method, msgBytes)
+	if !ok {
+		// Unparseable or not downstream-bound, let the normal handler deal with it
 		return nil
 	}
 
-	// Parse the tool name from the request
-	var toolReq callToolParams
-	if err := json.Unmarshal(msgBytes, &toolReq); err != nil {
-		// Can't parse tool name, let the normal handler deal with it
-		return nil
-	}
-
-	toolName := toolReq.Params.Name
-	if toolName == "" {
-		// No tool name, let the normal handler deal with it
-		return nil
-	}
-
-	// Check if the tool name has a prefix that matches a configured downstream client
+	// Check if the name has a prefix that matches a configured downstream client
 	clientName, _, err := ParsePrefixedName(toolName)
 	if err != nil {
 		// Not a prefixed name (e.g., native tool like "maybedont__discover_tools")
@@ -218,8 +274,11 @@ func (g *Gateway) onRequestInitialization(ctx context.Context, id any, message a
 
 	// Check if we have this session in our SessionManager
 	if g.clientManager.HasSession(sessionID) {
-		// Session exists, all good - let the request proceed
-		return nil
+		// Session exists. A pass-through client has to be connected here,
+		// before the SDK looks the tool up, because its tools are only
+		// registered once some session has discovered them. Other clients
+		// are connected by the handlers, after policy validation.
+		return g.ensurePassThroughClient(ctx, sessionID, clientName)
 	}
 
 	// Session doesn't exist in our SessionManager, but the tool belongs to a
@@ -242,8 +301,10 @@ func (g *Gateway) onRequestInitialization(ctx context.Context, id any, message a
 // Uses singleflight to deduplicate concurrent discovery requests for the same session.
 // Returns the list of tools (which may be empty if no pass-through clients).
 func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionID string) []mcp.Tool {
-	// Fast path: check if clients already exist
-	existingClients := g.clientManager.GetSessionClientNames(sessionID)
+	// Fast path: the session's pass-through clients are already connected.
+	// Only pass-through clients count; a client connected on demand by a
+	// tool call must not stop pass-through discovery.
+	existingClients := g.connectedPassThroughClients(sessionID)
 	if len(existingClients) > 0 {
 		// Downstream clients exist - return their tools directly.
 		// The tools may not be registered as session tools (due to race conditions),
@@ -265,7 +326,7 @@ func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionI
 	// This prevents multiple concurrent tools/list requests from all triggering discovery.
 	result, err, shared := g.lazyDiscoveryGroup.Do(sessionID, func() (interface{}, error) {
 		// Double-check: another request might have completed discovery while we waited
-		existingClients := g.clientManager.GetSessionClientNames(sessionID)
+		existingClients := g.connectedPassThroughClients(sessionID)
 		if len(existingClients) > 0 {
 			g.logger.Debug(ctx, "Discovery already completed by another request",
 				zap.String("session_id", sessionID),
@@ -336,6 +397,19 @@ func (g *Gateway) ensurePassThroughToolsDiscovered(ctx context.Context, sessionI
 		return nil
 	}
 	return result.([]mcp.Tool)
+}
+
+// connectedPassThroughClients returns the names of the session's connected
+// downstream clients that use pass-through auth.
+func (g *Gateway) connectedPassThroughClients(sessionID string) []string {
+	configs := g.clientManager.GetClientConfigs()
+	var names []string
+	for _, name := range g.clientManager.GetSessionClientNames(sessionID) {
+		if configs[name].Auth.PassThrough.Enabled {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // getToolsFromExistingClients retrieves tools from downstream clients that are already
@@ -1015,21 +1089,94 @@ func (g *Gateway) extractAuthFromRequest(ctx context.Context, r *http.Request) c
 // in the raw request headers. This is used to determine if lazy discovery should
 // be attempted without eagerly extracting all credentials.
 func (g *Gateway) hasPassThroughCredentials(ctx context.Context) bool {
+	for _, clientConfig := range g.config.DownstreamMCPServers {
+		if hasPassThroughCredentialsFor(ctx, clientConfig) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasPassThroughCredentialsFor reports whether the request carries at least
+// one of the source headers of a pass-through client.
+func hasPassThroughCredentialsFor(ctx context.Context, cfg config.ClientConfig) bool {
+	if !cfg.Auth.PassThrough.Enabled {
+		return false
+	}
 	rawHeaders, ok := GetRawRequestHeaders(ctx)
 	if !ok {
 		return false
 	}
-
-	// Check if any configured pass-through client has source headers in the request
-	for _, clientConfig := range g.config.DownstreamMCPServers {
-		if !clientConfig.Auth.PassThrough.Enabled {
-			continue
-		}
-		for _, mapping := range clientConfig.Auth.PassThrough.Headers {
-			if rawHeaders.Get(mapping.SourceHeader) != "" {
-				return true
-			}
+	for _, mapping := range cfg.Auth.PassThrough.Headers {
+		if rawHeaders.Get(mapping.SourceHeader) != "" {
+			return true
 		}
 	}
 	return false
+}
+
+// errDownstreamConnectFailed is what a caller sees when a downstream server
+// can't be connected. The underlying error can carry URLs with credentials or
+// local command paths, so it is only logged.
+func errDownstreamConnectFailed(clientName string) error {
+	return fmt.Errorf("failed to connect to downstream server '%s'; see the gateway log for details", clientName)
+}
+
+// ensurePassThroughClient connects a pass-through client for the session when
+// the request carries its credentials and it isn't connected yet. Without
+// credentials the request proceeds and the handler returns the error telling
+// the caller to send them and call maybedont__discover_tools.
+func (g *Gateway) ensurePassThroughClient(ctx context.Context, sessionID, clientName string) error {
+	cfg, ok := g.clientManager.GetClientConfigs()[clientName]
+	if !ok || !cfg.Auth.PassThrough.Enabled || !hasPassThroughCredentialsFor(ctx, cfg) {
+		return nil
+	}
+	if _, err := g.clientManager.GetSessionClient(sessionID, clientName); err == nil {
+		return nil
+	}
+
+	// Also registers the client's tools, which the SDK needs to route the
+	// call when no session has discovered them yet.
+	result, err := g.DiscoverPassThroughTools(ctx, sessionID, clientName)
+	if err == nil && len(result.Errors) > 0 {
+		err = errors.New(result.Errors[0].Error)
+	}
+	if err != nil {
+		g.logger.Warn(ctx, "Failed to connect pass-through client for session",
+			zap.String("session_id", sessionID),
+			zap.String("client", clientName),
+			zap.Error(err))
+		return errDownstreamConnectFailed(clientName)
+	}
+	return nil
+}
+
+// getOrConnectSessionClient returns the session's client for a downstream
+// server, connecting it on first use. Handlers call it after policy
+// validation, so a denied or invalid request never spawns a process or opens
+// a connection. Pass-through clients are connected earlier, by
+// ensurePassThroughClient, when credentials are present; one that still
+// isn't connected returns the guidance error from GetSessionClient.
+func (g *Gateway) getOrConnectSessionClient(ctx context.Context, sessionID, clientName string) (*SessionClientInfo, error) {
+	clientInfo, err := g.clientManager.GetSessionClient(sessionID, clientName)
+	if err == nil || IsSessionExpiredError(err) {
+		return clientInfo, err
+	}
+
+	cfg, ok := g.clientManager.GetClientConfigs()[clientName]
+	if !ok || cfg.Auth.PassThrough.Enabled {
+		return nil, err
+	}
+
+	connected, connectErr, _ := g.sessionConnectGroup.Do(sessionID+"/"+clientName, func() (interface{}, error) {
+		return g.clientManager.CreateSingleSessionClient(ctx, sessionID, clientName, cfg)
+	})
+	if connectErr != nil {
+		g.logger.Warn(ctx, "Failed to connect downstream client for session",
+			zap.String("session_id", sessionID),
+			zap.String("client", clientName),
+			zap.Error(connectErr))
+		return nil, errDownstreamConnectFailed(clientName)
+	}
+	return connected.(*SessionClientInfo), nil
 }
