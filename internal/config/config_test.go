@@ -3810,3 +3810,49 @@ native_tools:
 		})
 	}
 }
+
+// TestAIKeyRequiredMessage verifies that the missing-API-key error names
+// exactly the enabled settings that need the key, so a user without a key
+// knows what to turn off.
+func TestAIKeyRequiredMessage(t *testing.T) {
+	tests := []struct {
+		name                               string
+		aiRequest, aiResponse, auditReport bool
+		wantSettings                       []string
+		wantNotSettings                    []string
+	}{
+		{
+			name:            "default config: AI request validation and audit report",
+			aiRequest:       true,
+			auditReport:     true,
+			wantSettings:    []string{"request_validation.ai.enabled", "native_tools.audit_report.enabled"},
+			wantNotSettings: []string{"response_validation.ai.enabled"},
+		},
+		{
+			name:            "only audit report",
+			auditReport:     true,
+			wantSettings:    []string{"native_tools.audit_report.enabled"},
+			wantNotSettings: []string{"request_validation.ai.enabled", "response_validation.ai.enabled"},
+		},
+		{
+			name:         "all three",
+			aiRequest:    true,
+			aiResponse:   true,
+			auditReport:  true,
+			wantSettings: []string{"request_validation.ai.enabled", "response_validation.ai.enabled", "native_tools.audit_report.enabled"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := aiKeyRequiredMessage(tt.aiRequest, tt.aiResponse, tt.auditReport)
+			require.Contains(t, msg, "required when AI validation or audit report is enabled")
+			require.Contains(t, msg, "OPENAI_API_KEY")
+			for _, setting := range tt.wantSettings {
+				require.Contains(t, msg, setting)
+			}
+			for _, setting := range tt.wantNotSettings {
+				require.NotContains(t, msg, setting)
+			}
+		})
+	}
+}

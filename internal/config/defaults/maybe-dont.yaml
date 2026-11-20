@@ -68,6 +68,7 @@ validation:
   max_rule_evaluation_ms: 45000
   # AI configuration (required when AI validation or audit report is enabled)
   ai:
+    provider: openai  # openai, openai_compatible, anthropic
     endpoint: "https://api.openai.com/v1/chat/completions"
     model: "gpt-5"
     api_key: "${OPENAI_API_KEY}"  # Set via environment variable
