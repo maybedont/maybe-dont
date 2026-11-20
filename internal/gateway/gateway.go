@@ -78,6 +78,9 @@ type Gateway struct {
 	lazyDiscoveryGroup singleflight.Group
 	// Singleflight group for deduplicating concurrent maybedont__discover_tools calls
 	discoverToolsGroup singleflight.Group
+	// Singleflight group for deduplicating concurrent on-demand connects of one
+	// downstream client in one session (see ensureSessionClient)
+	sessionConnectGroup singleflight.Group
 }
 
 // New creates a new gateway instance.

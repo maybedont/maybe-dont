@@ -122,6 +122,9 @@ func TestOnRequestInitialization_ValidSession(t *testing.T) {
 	// Create the session in our SessionManager BEFORE the request
 	validSessionID := "valid-session-12345"
 	mustCreateSession(t, cm.sessionManager, validSessionID)
+	// The downstream client is already connected for this session, so the
+	// hook has nothing to connect on demand.
+	require.True(t, cm.sessionManager.SetSessionClient(validSessionID, "github", &SessionClientInfo{Name: "github"}))
 
 	// Create a minimal Gateway
 	g := &Gateway{

@@ -633,8 +633,9 @@ func (cm *ClientManager) discoverSessionClientCapabilities(ctx context.Context, 
 		)
 	}
 
-	// Get prompts if available
-	if clientInfo.Capabilities.Prompts != nil && clientInfo.Capabilities.Prompts.ListChanged {
+	// Get prompts if available. ListChanged only says whether the server
+	// sends change notifications, so it must not gate discovery.
+	if clientInfo.Capabilities.Prompts != nil {
 		prompts, err := cm.discoverSessionPromptsWithRetry(ctx, clientInfo)
 		if err != nil {
 			return fmt.Errorf("failed to discover prompts: %w", err)
@@ -643,7 +644,7 @@ func (cm *ClientManager) discoverSessionClientCapabilities(ctx context.Context, 
 	}
 
 	// Get resources if available
-	if clientInfo.Capabilities.Resources != nil && clientInfo.Capabilities.Resources.ListChanged {
+	if clientInfo.Capabilities.Resources != nil {
 		resources, err := cm.discoverSessionResourcesWithRetry(ctx, clientInfo)
 		if err != nil {
 			return fmt.Errorf("failed to discover resources: %w", err)

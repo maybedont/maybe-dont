@@ -253,25 +253,32 @@ func TestJsonRPCRequest_Parsing(t *testing.T) {
 	assert.Equal(t, "initialize", req.Method)
 }
 
-func TestCallToolParams_Parsing(t *testing.T) {
-	// Test parsing tool name from a tools/call request
-	toolCallJSON := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github__list_issues","arguments":{"owner":"test"}}}`
-	var toolReq callToolParams
-	err := json.Unmarshal([]byte(toolCallJSON), &toolReq)
-	require.NoError(t, err)
-	assert.Equal(t, "github__list_issues", toolReq.Params.Name)
-
-	// Test with different tool name
-	toolCallJSON2 := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"aws__describe_instance"}}`
-	err = json.Unmarshal([]byte(toolCallJSON2), &toolReq)
-	require.NoError(t, err)
-	assert.Equal(t, "aws__describe_instance", toolReq.Params.Name)
-
-	// Test with native tool (no prefix)
-	nativeToolJSON := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"maybedont__discover_tools"}}`
-	err = json.Unmarshal([]byte(nativeToolJSON), &toolReq)
-	require.NoError(t, err)
-	assert.Equal(t, "maybedont__discover_tools", toolReq.Params.Name)
+// TestDownstreamTarget verifies that the prefixed name a downstream-bound
+// request is addressed to is extracted for tools/call, prompts/get and
+// resources/read, and that other methods are ignored.
+func TestDownstreamTarget(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		msg        string
+		wantTarget string
+		wantOK     bool
+	}{
+		{"tool call", "tools/call", `{"params":{"name":"github__list_issues","arguments":{"owner":"test"}}}`, "github__list_issues", true},
+		{"native tool call", "tools/call", `{"params":{"name":"maybedont__discover_tools"}}`, "maybedont__discover_tools", true},
+		{"prompt get", "prompts/get", `{"params":{"name":"local__greet"}}`, "local__greet", true},
+		{"resource read", "resources/read", `{"params":{"uri":"local__test://hello"}}`, "local__test://hello", true},
+		{"tool call without name", "tools/call", `{"params":{}}`, "", false},
+		{"unparseable", "tools/call", `{`, "", false},
+		{"tools list", "tools/list", `{"params":{"name":"ignored"}}`, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, ok := downstreamTarget(tt.method, []byte(tt.msg))
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantTarget, target)
+		})
+	}
 }
 
 func TestStaleSessionDetection_PrefixParsing(t *testing.T) {
