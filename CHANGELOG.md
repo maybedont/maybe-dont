@@ -1,3 +1,9 @@
+## v1.8.0 (2026-11-20)
+
+### Fix
+
+- refuse cross-origin redirects from downstream MCP servers (#151)
+
 ## v1.7.0 (2026-08-13)
 
 ### Fix
