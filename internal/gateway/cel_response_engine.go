@@ -35,11 +35,14 @@ type CELResponsePolicyEngine struct {
 
 // NewCELResponsePolicyEngine creates a new CEL response policy engine
 func NewCELResponsePolicyEngine(ctx context.Context, logger *config.SessionLogger) (*CELResponsePolicyEngine, error) {
-	// Create CEL environment with custom functions
-	env, err := cel.NewEnv(
+	// Declare the same "tool" variable and has()/get() helpers as the request engine
+	// so a rule written against the documented tool.* shape works in both phases.
+	envOptions := append([]cel.EnvOption{
 		cel.Variable("request", cel.DynType),
+		cel.Variable(celToolVariable, cel.DynType),
 		cel.Variable("response", cel.DynType),
-	)
+	}, celMapHelperFunctions()...)
+	env, err := cel.NewEnv(envOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
 	}
@@ -151,7 +154,8 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				"arguments": req.Params.Arguments,
 			},
 		},
-		"response": responseData,
+		celToolVariable: buildToolVariable(req),
+		"response":      responseData,
 	}
 
 	results := ResponseValidationResults{
