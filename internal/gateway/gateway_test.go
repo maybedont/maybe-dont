@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -427,4 +429,36 @@ func TestGatewayNew_NoDownstreamServers(t *testing.T) {
 	assert.NotNil(t, gw.nativeToolsHandler)
 	nativeTools := gw.nativeToolsHandler.GetTools()
 	assert.NotEmpty(t, nativeTools, "native tools should be registered even without downstream servers")
+}
+
+// TestIsStatelessProtocolRequest verifies that requests on the stateless
+// 2026-07-28 protocol are recognized from the method, the _meta version or the
+// Mcp-Protocol-Version header, and that legacy requests and unknown header
+// values are not.
+func TestIsStatelessProtocolRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		msg    string
+		header string
+		want   bool
+	}{
+		{"server/discover", `{"method":"server/discover"}`, "", true},
+		{"modern version in _meta", `{"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`, "", true},
+		{"modern version in header", `{"method":"tools/list"}`, "2026-07-28", true},
+		{"legacy header", `{"method":"tools/call","params":{"name":"x"}}`, "2025-11-25", false},
+		{"no version", `{"method":"initialize"}`, "", false},
+		{"unknown header value", `{"method":"tools/list"}`, "latest", false},
+		{"legacy _meta without version", `{"method":"tools/call","params":{"_meta":{"progressToken":1}}}`, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req jsonRPCRequest
+			require.NoError(t, json.Unmarshal([]byte(tt.msg), &req))
+			ctx := context.Background()
+			if tt.header != "" {
+				ctx = WithRawRequestHeaders(ctx, http.Header{"Mcp-Protocol-Version": []string{tt.header}})
+			}
+			assert.Equal(t, tt.want, isStatelessProtocolRequest(ctx, req))
+		})
+	}
 }

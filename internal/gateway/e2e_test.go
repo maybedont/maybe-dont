@@ -93,6 +93,7 @@ func newE2EDownstream(name string) *server.MCPServer {
 
 // e2eGateway is a running gateway plus where to reach it and its audit log.
 type e2eGateway struct {
+	gw        *Gateway
 	url       string
 	auditPath string
 }
@@ -153,7 +154,7 @@ downstream_mcp_servers:
 
 	url := "http://" + addr + "/mcp"
 	waitForListener(t, addr)
-	return &e2eGateway{url: url, auditPath: filepath.Join(logDir, "maybedont-audit.log")}
+	return &e2eGateway{gw: gw, url: url, auditPath: filepath.Join(logDir, "maybedont-audit.log")}
 }
 
 // connect opens an MCP session to the gateway the way an agent would,
@@ -441,6 +442,62 @@ func TestE2E_PassThroughClientWithoutCredentials(t *testing.T) {
 	// A session without credentials gets the guidance error, not the
 	// other session's connection.
 	requireRefused(t, gw.connect(t, nil), "not connected for this session")
+}
+
+// connectedClients returns the downstream clients connected for each session.
+func (g *e2eGateway) connectedClients() map[string][]string {
+	out := map[string][]string{}
+	for _, session := range g.gw.clientManager.GetActiveSessions() {
+		for _, c := range session.DownstreamClients {
+			out[session.SessionID] = append(out[session.SessionID], c.Name)
+		}
+	}
+	return out
+}
+
+// TestE2E_DeniedCallDoesNotConnect verifies that a call the policy denies,
+// or one to a tool the downstream doesn't have, never connects (spawns) the
+// downstream server, while an allowed call does.
+func TestE2E_DeniedCallDoesNotConnect(t *testing.T) {
+	gw := startE2EGateway(t, stdioDownstreamYAML(t, "local"))
+	c := gw.connect(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, _ = callTool(ctx, c, "local__blocked", nil)
+	_, _ = callTool(ctx, c, "local__no_such_tool", nil)
+	require.Empty(t, gw.connectedClients(), "denied or unknown calls connected a downstream")
+
+	res, err := callTool(ctx, c, "local__echo", map[string]any{"message": "hi"})
+	require.NoError(t, err)
+	require.False(t, res.IsError, toolText(t, res))
+	connected := gw.connectedClients()
+	require.Len(t, connected, 1)
+	for _, names := range connected {
+		require.Equal(t, []string{"local"}, names)
+	}
+}
+
+// TestE2E_CallThenListDiscoversPassThrough verifies that connecting a
+// non-pass-through client on demand doesn't stop a later tools/list with
+// credentials from discovering the pass-through client's tools.
+func TestE2E_CallThenListDiscoversPassThrough(t *testing.T) {
+	gw := startE2EGateway(t, stdioDownstreamYAML(t, "local")+httpDownstreamYAML(t, "secure", true))
+	c := gw.connect(t, map[string]string{e2ePassThroughHeader: "s3cret"})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	res, err := callTool(ctx, c, "local__echo", map[string]any{"message": "hi"})
+	require.NoError(t, err)
+	require.False(t, res.IsError, toolText(t, res))
+
+	tools, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	require.NoError(t, err)
+	names := make([]string, 0, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		names = append(names, tool.Name)
+	}
+	require.Contains(t, names, "secure__echo")
 }
 
 // TestE2E_ProtocolNegotiation verifies that clients end up on the newest
