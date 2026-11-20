@@ -12,22 +12,22 @@ decision is written to an audit log.
 ## How it works
 
 ```
-                       ┌─────────────────────────────────────────┐
+                       ┌───────────────────────────────────────────┐
                        │              Maybe Don't Gateway          │
   Agent / IDE  ──────► │                                           │
-                       │  ┌───────────────┐   ┌─────────────────┐ │
-  MCP proxy,           │  │ CEL request   │   │  AI request     │ │
-  /api/v1/intercept,   │  │ rules         │──►│  rules          │ │
-  or /api/v1/cli/      │  └───────────────┘   └────────┬────────┘ │
-  validate             │                                │          │
-                       │                                ▼          │      Downstream
+                       │  ┌───────────────┐   ┌─────────────────┐  │
+  MCP proxy,           │  │ CEL request   │   │  AI request     │  │
+  /api/v1/intercept,   │  │ rules         │──►│  rules          │  │
+  or /api/v1/cli/      │  └───────────────┘   └────────┬────────┘  │
+  validate             │                               │           │
+                       │                               ▼           │      Downstream
                        │                    (deny / allow / audit) │ ───► MCP server(s)
-                       │                                │          │      or shell
-                       │                                ▼          │
-                       │  ┌───────────────┐   ┌─────────────────┐ │
-                       │  │ CEL response  │◄──│  AI response    │ │
-                       │  │ rules         │   │  rules          │ │◄─── response
-                       │  └───────┬───────┘   └─────────────────┘ │
+                       │                               │           │      or shell
+                       │                               ▼           │
+                       │  ┌───────────────┐   ┌─────────────────┐  │
+                       │  │ CEL response  │◄──│  AI response    │  │
+                       │  │ rules         │   │  rules          │  │◄─── response
+                       │  └───────┬───────┘   └─────────────────┘  │
                        │          ▼                                │
                        │      Audit log                            │
                        └───────────────────────────────────────────┘
