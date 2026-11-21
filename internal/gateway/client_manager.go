@@ -419,9 +419,7 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		// token with 400. Point the user at credentials and URL first.
 		if cfg.Type == "http" && errors.Is(err, transport.ErrLegacySSEServer) {
 			// Callers add the client name, so it is left out here.
-			return nil, fmt.Errorf("rejected the MCP initialize request with a 4xx status; "+
-				"check its credentials (headers or pass-through auth) and URL; "+
-				"only servers that use the old SSE transport need `type: sse`: %w", err)
+			return nil, fmt.Errorf("%w: %w", errInitializeRejected4xx, err)
 		}
 		return nil, fmt.Errorf("failed to check capabilities: %w", err)
 	}

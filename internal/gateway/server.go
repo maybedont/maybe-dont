@@ -1115,13 +1115,6 @@ func hasPassThroughCredentialsFor(ctx context.Context, cfg config.ClientConfig) 
 	return false
 }
 
-// errDownstreamConnectFailed is what a caller sees when a downstream server
-// can't be connected. The underlying error can carry URLs with credentials or
-// local command paths, so it is only logged.
-func errDownstreamConnectFailed(clientName string) error {
-	return fmt.Errorf("failed to connect to downstream server '%s'; see the gateway log for details", clientName)
-}
-
 // ensurePassThroughClient connects a pass-through client for the session when
 // the request carries its credentials and it isn't connected yet. Without
 // credentials the request proceeds and the handler returns the error telling
@@ -1138,15 +1131,21 @@ func (g *Gateway) ensurePassThroughClient(ctx context.Context, sessionID, client
 	// Also registers the client's tools, which the SDK needs to route the
 	// call when no session has discovered them yet.
 	result, err := g.DiscoverPassThroughTools(ctx, sessionID, clientName)
-	if err == nil && len(result.Errors) > 0 {
-		err = errors.New(result.Errors[0].Error)
-	}
 	if err != nil {
 		g.logger.Warn(ctx, "Failed to connect pass-through client for session",
 			zap.String("session_id", sessionID),
 			zap.String("client", clientName),
 			zap.Error(err))
 		return errDownstreamConnectFailed(clientName)
+	}
+	if len(result.Errors) > 0 {
+		// Discovery already logged the raw error and made this message safe
+		// for the caller with safeDownstreamConnectError.
+		g.logger.Warn(ctx, "Failed to connect pass-through client for session",
+			zap.String("session_id", sessionID),
+			zap.String("client", clientName),
+			zap.String("error", result.Errors[0].Error))
+		return errors.New(result.Errors[0].Error)
 	}
 	return nil
 }
@@ -1176,7 +1175,7 @@ func (g *Gateway) getOrConnectSessionClient(ctx context.Context, sessionID, clie
 			zap.String("session_id", sessionID),
 			zap.String("client", clientName),
 			zap.Error(connectErr))
-		return nil, errDownstreamConnectFailed(clientName)
+		return nil, safeDownstreamConnectError(clientName, cfg, connectErr)
 	}
 	return connected.(*SessionClientInfo), nil
 }

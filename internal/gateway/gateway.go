@@ -1050,9 +1050,11 @@ func (g *Gateway) doDiscoverPassThroughTools(ctx context.Context, sessionID stri
 		cfg := configs[name]
 		clientInfo, err := g.clientManager.CreateSingleSessionClient(ctx, sessionID, name, cfg)
 		if err != nil {
+			// The raw error can carry the downstream URL and any credential in
+			// it, so the agent gets a fixed message and the log gets the detail.
 			result.Errors = append(result.Errors, DiscoveryError{
 				ClientName: name,
-				Error:      err.Error(),
+				Error:      safeDownstreamConnectError(name, cfg, err).Error(),
 			})
 			g.logger.Warn(ctx, "Failed to connect to pass-through client",
 				zap.String("session_id", sessionID),
