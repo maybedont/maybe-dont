@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/maybedont/maybe-dont/internal/config"
@@ -97,7 +96,7 @@ func (g *Gateway) downstreamCallError(ctx context.Context, sessionID, clientName
 		zap.String("session_id", sessionID),
 		zap.String("client", clientName),
 		zap.String("method", method),
-		downstreamErrorField(cfg, err))
+		downstreamErrorField(err))
 
 	if errors.Is(err, transport.ErrAuthorizationRequired) {
 		return fmt.Errorf("call to downstream server '%s' failed: %s", clientName, authorizationRequiredHint(cfg))
@@ -106,7 +105,7 @@ func (g *Gateway) downstreamCallError(ctx context.Context, sessionID, clientName
 }
 
 // configuredDownstreamURL returns the URL cfg connects to; url is an alias
-// for downstream_url.
+// for downstream_url, which config loading normally fills from it.
 func configuredDownstreamURL(cfg config.ClientConfig) string {
 	if cfg.DownstreamURL != "" {
 		return cfg.DownstreamURL
@@ -131,43 +130,4 @@ func redactedDownstreamURL(rawURL string) string {
 	u.Fragment = ""
 	u.RawFragment = ""
 	return u.String()
-}
-
-// redactedURLMarker stands in for a configured URL that redactedDownstreamURL
-// can't make safe.
-const redactedURLMarker = "<redacted-url>"
-
-// downstreamErrorField returns err as the "error" log field with the client's
-// configured URL replaced by its redacted form. Errors from net/http quote the
-// request URL, with a password masked as *** but the query string intact, so
-// the raw text would log a token kept in the query. Every log of a downstream
-// connect or call error goes through here.
-func downstreamErrorField(cfg config.ClientConfig, err error) zap.Field {
-	return zap.String("error", redactConfiguredURL(cfg, err.Error()))
-}
-
-// redactConfiguredURL replaces each form of cfg's configured URL that can
-// appear in error text (as configured, as re-serialized by net/url, and with
-// the password masked as net/http prints it) with its redacted form.
-func redactConfiguredURL(cfg config.ClientConfig, text string) string {
-	rawURL := configuredDownstreamURL(cfg)
-	if rawURL == "" {
-		return text
-	}
-	replacement := redactedDownstreamURL(rawURL)
-	if replacement == "" {
-		replacement = redactedURLMarker
-	}
-	forms := []string{rawURL}
-	if u, err := url.Parse(rawURL); err == nil {
-		forms = append(forms, u.String())
-		// The same replacement net/http's stripPassword makes for its errors.
-		if _, hasPassword := u.User.Password(); hasPassword {
-			forms = append(forms, strings.Replace(u.String(), u.User.String()+"@", u.User.Username()+":***@", 1))
-		}
-	}
-	for _, form := range forms {
-		text = strings.ReplaceAll(text, form, replacement)
-	}
-	return text
 }

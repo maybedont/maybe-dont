@@ -1174,7 +1174,7 @@ func (g *Gateway) getOrConnectSessionClient(ctx context.Context, sessionID, clie
 		g.logger.Warn(ctx, "Failed to connect downstream client for session",
 			zap.String("session_id", sessionID),
 			zap.String("client", clientName),
-			downstreamErrorField(cfg, connectErr))
+			downstreamErrorField(connectErr))
 		return nil, safeDownstreamConnectError(clientName, cfg, connectErr)
 	}
 	return connected.(*SessionClientInfo), nil

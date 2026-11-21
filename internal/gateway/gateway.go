@@ -1063,7 +1063,7 @@ func (g *Gateway) doDiscoverPassThroughTools(ctx context.Context, sessionID stri
 			g.logger.Warn(ctx, "Failed to connect to pass-through client",
 				zap.String("session_id", sessionID),
 				zap.String("client", name),
-				downstreamErrorField(cfg, err))
+				downstreamErrorField(err))
 			continue
 		}
 
