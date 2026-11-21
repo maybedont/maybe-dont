@@ -1988,6 +1988,24 @@ func TestCELPolicyEngine_ContinuesAfterRuleError(t *testing.T) {
 			wantActionReason: string(ActionReasonRequestPolicy),
 		},
 		{
+			// The broken rule no longer stops the loop, so the audit_only deny after it
+			// runs and sets AuditModeBypass. The call was still allowed because a rule
+			// errored, so it must be reported as fail_open, matching the MCP proxy path.
+			name: "eval error then audit_only deny reports fail_open",
+			policies: []config.Policy{broken(evalErrorExpr, ""), {
+				Name:       "audit-deny",
+				Expression: `true`,
+				Action:     config.PolicyActionDeny,
+				Mode:       config.PolicyModeAuditOnly,
+			}},
+			tool:             "github__get_file",
+			wantAllowed:      true,
+			wantFailedOpen:   true,
+			wantRecommended:  config.PolicyActionDeny,
+			wantRuleResults:  []string{"broken=error", "audit-deny=deny"},
+			wantActionReason: string(ActionReasonFailOpen),
+		},
+		{
 			name:            "audit_only eval error alone does not fail open",
 			policies:        []config.Policy{broken(evalErrorExpr, config.PolicyModeAuditOnly), denyDeleteRepo},
 			tool:            "github__get_file",

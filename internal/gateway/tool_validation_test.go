@@ -481,12 +481,14 @@ func TestDeriveAuditActionReason(t *testing.T) {
 			want:       "",
 		},
 		{
-			name:            "audit_mode bypass takes precedence over fail_open",
+			// fail_open wins: a rule could not be evaluated, so the allow is not
+			// explained by audit_only alone. Matches the MCP proxy path in gateway.go.
+			name:            "fail_open takes precedence over audit_mode bypass",
 			allowed:         true,
 			auditModeBypass: true,
 			failedOpen:      true,
 			denyReason:      ActionReasonRequestPolicy,
-			want:            "audit_mode",
+			want:            "fail_open",
 		},
 		{
 			name:       "fail_open when allowed and no audit bypass",

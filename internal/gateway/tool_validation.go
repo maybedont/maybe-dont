@@ -28,16 +28,19 @@ const (
 // if no specific deny reason should be recorded (e.g., CLI/Action handlers where
 // the deny action itself is self-explanatory).
 //
-// Priority: denied → denyReason, audit_mode bypass → "audit_mode", fail_open → "fail_open".
+// Priority: denied → denyReason, fail_open → "fail_open", audit_mode bypass → "audit_mode".
+// fail_open outranks audit_mode because a rule that could not be evaluated means the
+// allow is not explained by audit_only rules alone. This matches the MCP proxy path
+// in Gateway, which checks FailedOpen before AuditModeBypass.
 func DeriveAuditActionReason(allowed, auditModeBypass, failedOpen bool, denyReason ActionReason) string {
 	if !allowed {
 		return string(denyReason)
 	}
-	if auditModeBypass {
-		return string(ActionReasonAuditMode)
-	}
 	if failedOpen {
 		return string(ActionReasonFailOpen)
+	}
+	if auditModeBypass {
+		return string(ActionReasonAuditMode)
 	}
 	return ""
 }
