@@ -445,8 +445,9 @@ func withMockSession(ctx context.Context, sessionID string) context.Context {
 
 // TestListDownstreamServers_URLCredentialsRemoved verifies that the URL shown
 // to the agent has no userinfo, query string or fragment, since operators put
-// credentials there, and that an unparseable URL is left out rather than shown
-// raw. Configured header values are never part of the response.
+// credentials there, and that a URL that doesn't parse as an absolute http or
+// https URL with a host is left out rather than shown raw. Configured header
+// values are never part of the response.
 func TestListDownstreamServers_URLCredentialsRemoved(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -472,6 +473,26 @@ func TestListDownstreamServers_URLCredentialsRemoved(t *testing.T) {
 			name:    "plain URL unchanged",
 			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "https://api.githubcopilot.com/mcp/"},
 			wantURL: "https://api.githubcopilot.com/mcp/",
+		},
+		{
+			name:    "scheme-less userinfo parses as opaque",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "user:SECRET@host/mcp"},
+			wantURL: "",
+		},
+		{
+			name:    "scheme-less userinfo with port",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "user:SECRET@host:443/mcp"},
+			wantURL: "",
+		},
+		{
+			name:    "secret parsed as scheme",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "SECRET:abc@host/mcp"},
+			wantURL: "",
+		},
+		{
+			name:    "non-http scheme",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "ftp://host.example/SECRET"},
+			wantURL: "",
 		},
 		{
 			name:    "unparseable URL left out",

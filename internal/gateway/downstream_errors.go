@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/maybedont/maybe-dont/internal/config"
@@ -38,21 +39,29 @@ func errDownstreamConnectFailed(clientName string) error {
 
 // safeDownstreamConnectError maps a downstream connect error to an error that
 // can be returned to an MCP caller. It never includes text from err: callers
-// must log err themselves. Recognized failures get a fixed message that says
-// what to check; everything else gets errDownstreamConnectFailed.
+// must log err themselves, with downstreamErrorField. Recognized failures get
+// a fixed message that says what to check; everything else gets
+// errDownstreamConnectFailed.
 func safeDownstreamConnectError(clientName string, cfg config.ClientConfig, err error) error {
 	var detail string
 	switch {
 	case errors.Is(err, errInitializeRejected4xx):
 		detail = errInitializeRejected4xx.Error()
-	case errors.Is(err, transport.ErrAuthorizationRequired) && cfg.Auth.PassThrough.Enabled:
-		detail = msgPassThroughAuthorizationRequired
 	case errors.Is(err, transport.ErrAuthorizationRequired):
-		detail = msgAuthorizationRequired
+		detail = authorizationRequiredHint(cfg)
 	default:
 		return errDownstreamConnectFailed(clientName)
 	}
 	return fmt.Errorf("failed to connect to downstream server '%s': %s", clientName, detail)
+}
+
+// authorizationRequiredHint is the fixed text for a downstream that answered
+// 401, worded for whoever can fix the credentials.
+func authorizationRequiredHint(cfg config.ClientConfig) string {
+	if cfg.Auth.PassThrough.Enabled {
+		return msgPassThroughAuthorizationRequired
+	}
+	return msgAuthorizationRequired
 }
 
 // errDownstreamCallFailed is what a caller sees when a request to a connected
@@ -62,40 +71,58 @@ func errDownstreamCallFailed(clientName string) error {
 	return fmt.Errorf("call to downstream server '%s' failed; see the gateway log for details", clientName)
 }
 
-// isDownstreamTransportError reports whether err from an mcp-go client call
-// is a transport failure rather than the downstream's own answer. The mcp-go
-// client wraps every failure to send a request or read its response in
-// *transport.Error (client/client.go sendRequest). A JSON-RPC error response
-// is converted by JSONRPCErrorDetails.AsError and is never wrapped that way.
-func isDownstreamTransportError(err error) bool {
-	var transportErr *transport.Error
-	return errors.As(err, &transportErr)
-}
-
 // downstreamCallError returns the error a caller sees for a failed tool call,
-// prompt get or resource read on a connected downstream. A JSON-RPC error
-// from the downstream is its own message and the agent needs it, so it passes
-// through. A transport failure is logged here and replaced with
+// prompt get or resource read on a connected downstream.
+//
+// The mcp-go client wraps every failure to send a request or read its
+// response in *transport.Error (client/client.go sendRequest), while a
+// JSON-RPC error response is converted by JSONRPCErrorDetails.AsError and is
+// never wrapped that way. A JSON-RPC error is the downstream's own answer and
+// the agent needs it, so it passes through unlogged. A transport failure is
+// logged here and replaced with a fixed message: the 401 hint for an
+// authorization failure (its text holds no URL), otherwise
 // errDownstreamCallFailed.
-func (g *Gateway) downstreamCallError(ctx context.Context, sessionID, clientName, method string, err error) error {
-	if !isDownstreamTransportError(err) {
+func (g *Gateway) downstreamCallError(ctx context.Context, sessionID, clientName string, cfg config.ClientConfig, method string, err error) error {
+	var transportErr *transport.Error
+	if !errors.As(err, &transportErr) {
 		return err
 	}
-	g.logger.Warn(ctx, "Downstream request failed",
+
+	// A cancelled request is the caller going away, which is expected.
+	log := g.logger.Warn
+	if errors.Is(err, context.Canceled) {
+		log = g.logger.Debug
+	}
+	log(ctx, "Downstream request failed",
 		zap.String("session_id", sessionID),
 		zap.String("client", clientName),
 		zap.String("method", method),
-		zap.Error(err))
+		downstreamErrorField(cfg, err))
+
+	if errors.Is(err, transport.ErrAuthorizationRequired) {
+		return fmt.Errorf("call to downstream server '%s' failed: %s", clientName, authorizationRequiredHint(cfg))
+	}
 	return errDownstreamCallFailed(clientName)
+}
+
+// configuredDownstreamURL returns the URL cfg connects to; url is an alias
+// for downstream_url.
+func configuredDownstreamURL(cfg config.ClientConfig) string {
+	if cfg.DownstreamURL != "" {
+		return cfg.DownstreamURL
+	}
+	return cfg.URL
 }
 
 // redactedDownstreamURL returns rawURL without userinfo, query string or
 // fragment, the parts operators put credentials in, so it can be shown to an
-// agent. It returns "" when rawURL doesn't parse, since the raw string could
-// still hold a credential.
+// agent or logged. It returns "" unless rawURL parses as an absolute http or
+// https URL with a host: anything else (a scheme-less "user:token@host/mcp"
+// parses as scheme "user" with the token in the opaque part) could still
+// hold a credential.
 func redactedDownstreamURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
-	if err != nil {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Opaque != "" || u.Host == "" {
 		return ""
 	}
 	u.User = nil
@@ -104,4 +131,43 @@ func redactedDownstreamURL(rawURL string) string {
 	u.Fragment = ""
 	u.RawFragment = ""
 	return u.String()
+}
+
+// redactedURLMarker stands in for a configured URL that redactedDownstreamURL
+// can't make safe.
+const redactedURLMarker = "<redacted-url>"
+
+// downstreamErrorField returns err as the "error" log field with the client's
+// configured URL replaced by its redacted form. Errors from net/http quote the
+// request URL, with a password masked as *** but the query string intact, so
+// the raw text would log a token kept in the query. Every log of a downstream
+// connect or call error goes through here.
+func downstreamErrorField(cfg config.ClientConfig, err error) zap.Field {
+	return zap.String("error", redactConfiguredURL(cfg, err.Error()))
+}
+
+// redactConfiguredURL replaces each form of cfg's configured URL that can
+// appear in error text (as configured, as re-serialized by net/url, and with
+// the password masked as net/http prints it) with its redacted form.
+func redactConfiguredURL(cfg config.ClientConfig, text string) string {
+	rawURL := configuredDownstreamURL(cfg)
+	if rawURL == "" {
+		return text
+	}
+	replacement := redactedDownstreamURL(rawURL)
+	if replacement == "" {
+		replacement = redactedURLMarker
+	}
+	forms := []string{rawURL}
+	if u, err := url.Parse(rawURL); err == nil {
+		forms = append(forms, u.String())
+		// The same replacement net/http's stripPassword makes for its errors.
+		if _, hasPassword := u.User.Password(); hasPassword {
+			forms = append(forms, strings.Replace(u.String(), u.User.String()+"@", u.User.Username()+":***@", 1))
+		}
+	}
+	for _, form := range forms {
+		text = strings.ReplaceAll(text, form, replacement)
+	}
+	return text
 }

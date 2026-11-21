@@ -544,10 +544,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	if err != nil {
 		// Tool execution error - infrastructure error, skip audit
-		if !isDownstreamTransportError(err) {
-			return nil, fmt.Errorf("tool call failed: %w", err)
-		}
-		return nil, g.downstreamCallError(ctx, sessionID, clientName, "tools/call", err)
+		return nil, g.downstreamCallError(ctx, sessionID, clientName, clientInfo.Config, "tools/call", fmt.Errorf("tool call failed: %w", err))
 	}
 
 	// Record tool call duration
@@ -912,7 +909,7 @@ func (g *Gateway) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest
 
 	result, err := clientInfo.Client.GetPrompt(ctx, originalReq)
 	if err != nil {
-		return nil, g.downstreamCallError(ctx, sessionID, clientName, "prompts/get", err)
+		return nil, g.downstreamCallError(ctx, sessionID, clientName, clientInfo.Config, "prompts/get", err)
 	}
 	return result, nil
 }
@@ -950,7 +947,7 @@ func (g *Gateway) handleResourceRequest(ctx context.Context, req mcp.ReadResourc
 
 	result, err := clientInfo.Client.ReadResource(ctx, originalReq)
 	if err != nil {
-		return nil, g.downstreamCallError(ctx, sessionID, clientName, "resources/read", err)
+		return nil, g.downstreamCallError(ctx, sessionID, clientName, clientInfo.Config, "resources/read", err)
 	}
 	return result.Contents, nil
 }
@@ -1066,7 +1063,7 @@ func (g *Gateway) doDiscoverPassThroughTools(ctx context.Context, sessionID stri
 			g.logger.Warn(ctx, "Failed to connect to pass-through client",
 				zap.String("session_id", sessionID),
 				zap.String("client", name),
-				zap.Error(err))
+				downstreamErrorField(cfg, err))
 			continue
 		}
 

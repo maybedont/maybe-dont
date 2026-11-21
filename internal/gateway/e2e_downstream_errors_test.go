@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,4 +156,35 @@ func TestE2E_DownstreamJSONRPCErrorPassesThrough(t *testing.T) {
 	require.Contains(t, err.Error(), e2eDownstreamRejection)
 	require.True(t, errors.Is(err, mcp.ErrInvalidParams) || errors.Is(err, mcp.ErrInternalError), err.Error())
 	require.NotContains(t, err.Error(), "see the gateway log")
+}
+
+// TestE2E_DownstreamUnauthorizedAfterConnect verifies that when a connected
+// downstream starts answering 401 (a revoked or expired token), the agent
+// gets the fixed "authorization required" hint rather than the generic call
+// message, and still no URL or credential.
+func TestE2E_DownstreamUnauthorizedAfterConnect(t *testing.T) {
+	var unauthorized atomic.Bool
+	mcpHandler := server.NewStreamableHTTPServer(newE2EDownstream("remote"))
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if unauthorized.Load() {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mcpHandler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	gw := startE2EGateway(t, secretURLDownstreamYAML("remote", ts.URL, false))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	c := gw.connect(t, nil)
+	_, err := callTool(ctx, c, "remote__echo", map[string]any{"message": "hi"})
+	require.NoError(t, err)
+
+	unauthorized.Store(true)
+	_, err = callTool(ctx, c, "remote__echo", map[string]any{"message": "hi"})
+	requireSafeError(t, err,
+		"call to downstream server 'remote' failed: authorization required; check the headers configured for this server",
+		ts.Listener.Addr().String())
 }
