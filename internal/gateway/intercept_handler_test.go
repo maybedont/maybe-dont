@@ -1428,6 +1428,14 @@ func TestMergeShellResults_FailedOpenPropagated(t *testing.T) {
 			mcp:  ValidationResults{Allowed: true},
 			want: false,
 		},
+		{
+			// FailedOpen means "allowed because validation could not complete",
+			// so an enforced deny on the other side clears it.
+			name: "CLI failed open but MCP denied",
+			cli:  ValidationResults{Allowed: true, FailedOpen: true},
+			mcp:  ValidationResults{Allowed: false, DenyCount: 1},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {

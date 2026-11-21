@@ -321,3 +321,58 @@ func newTestCELEngineWithCLIDenyRule(t *testing.T) *CELPolicyEngine {
 
 	return engine
 }
+
+// TestFailedOpenClearedWhenAnotherEngineDenies verifies that FailedOpen means
+// "allowed because validation could not complete": when a CEL rule errors (fail-open)
+// but the AI engine enforces a deny, the merged result is denied and not reported
+// as fail_open, through both the PolicyEvaluator and the ToolValidationChain paths.
+// When nothing denies, the CEL error still surfaces as FailedOpen.
+func TestFailedOpenClearedWhenAnotherEngineDenies(t *testing.T) {
+	sessionLogger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	newBrokenCELEngine := func(t *testing.T) *CELPolicyEngine {
+		t.Helper()
+		engine, err := NewCELPolicyEngine(t.Context(), sessionLogger)
+		require.NoError(t, err)
+		require.NoError(t, engine.LoadPolicies([]config.Policy{{
+			Name:       "broken",
+			Expression: `request.params.arguments.missing_key == "x"`,
+			Action:     config.PolicyActionDeny,
+		}}, config.PolicyModeEnforce))
+		return engine
+	}
+
+	tests := []struct {
+		name           string
+		aiEngine       func(t *testing.T) *AIPolicyEngine
+		wantAllowed    bool
+		wantFailedOpen bool
+	}{
+		{name: "AI enforced deny wins over CEL fail-open", aiEngine: newTestAIEngineWithDenyRule, wantAllowed: false, wantFailedOpen: false},
+		{name: "AI allow keeps CEL fail-open", aiEngine: newTestAIEngineWithAllowRule, wantAllowed: true, wantFailedOpen: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" (evaluator)", func(t *testing.T) {
+			evaluator := &PolicyEvaluator{
+				CELEngine: newBrokenCELEngine(t),
+				AIEngine:  tt.aiEngine(t),
+				Logger:    sessionLogger,
+			}
+			results := evaluator.EvaluateToolCall(t.Context(), createTestToolRequest("test_tool"))
+			assert.Equal(t, tt.wantAllowed, results.Allowed, "Allowed")
+			assert.Equal(t, tt.wantFailedOpen, results.FailedOpen, "FailedOpen")
+		})
+		t.Run(tt.name+" (chain)", func(t *testing.T) {
+			chain := NewToolValidationChain(
+				NewToolCELValidationHandler(sessionLogger, newBrokenCELEngine(t)),
+				NewToolAIValidationHandler(sessionLogger, tt.aiEngine(t)),
+			)
+			ctx := WithBlockingBudget(t.Context(), NewBlockingBudget(90000))
+			results, err := chain.Handle(ctx, createTestToolRequest("test_tool"))
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAllowed, results.Allowed, "Allowed")
+			assert.Equal(t, tt.wantFailedOpen, results.FailedOpen, "FailedOpen")
+		})
+	}
+}

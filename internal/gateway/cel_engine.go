@@ -206,6 +206,7 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 	finalAction := "allow"
 	earlyTerminated := false
 	auditOnlyDeny := false
+	enforcedRuleErrored := false
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
@@ -242,14 +243,11 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("compile_error", issues.Err()),
 			})
-			// Fail-open on compilation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -271,14 +269,11 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("program_error", err),
 			})
-			// Fail-open on program creation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -301,14 +296,11 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("eval_error", err),
 			})
-			// Fail-open on evaluation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -324,14 +316,11 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 				EvaluationMs: ruleDurationMs,
 				Error:        "policy did not return a boolean",
 			})
-			// Fail-open on type error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -399,6 +388,11 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 			}
 		}
 	}
+
+	// FailedOpen means the call was allowed because a rule could not be evaluated.
+	// When a later enforced deny decided the outcome, the erroring rule let nothing
+	// through; its "error" result stays in the per-rule audit results.
+	results.FailedOpen = enforcedRuleErrored && finalAction != "deny"
 
 	// Finalize phase timing
 	var blockedMs, evaluationMs int64
@@ -505,6 +499,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 	finalAction := "allow"
 	earlyTerminated := false
 	auditOnlyDeny := false
+	enforcedRuleErrored := false
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
@@ -541,14 +536,11 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("compile_error", issues.Err()),
 			})
-			// Fail-open on compilation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -570,14 +562,11 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("program_error", err),
 			})
-			// Fail-open on program creation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -600,14 +589,11 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("eval_error", err),
 			})
-			// Fail-open on evaluation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -623,14 +609,11 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 				EvaluationMs: ruleDurationMs,
 				Error:        "policy did not return a boolean",
 			})
-			// Fail-open on type error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -698,6 +681,11 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 			}
 		}
 	}
+
+	// FailedOpen means the call was allowed because a rule could not be evaluated.
+	// When a later enforced deny decided the outcome, the erroring rule let nothing
+	// through; its "error" result stays in the per-rule audit results.
+	results.FailedOpen = enforcedRuleErrored && finalAction != "deny"
 
 	// Finalize phase timing
 	var blockedMs, evaluationMs int64

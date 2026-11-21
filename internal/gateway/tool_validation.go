@@ -91,6 +91,8 @@ type ValidationResults struct {
 	// Empty when action == recommended_action with no special circumstances.
 	ActionReason ActionReason `json:"action_reason,omitempty"`
 	// FailedOpen indicates validation couldn't complete and defaulted to allow.
+	// It is never set on a denied result: an enforced deny from another rule or
+	// engine decides the outcome even when some rule errored.
 	// When true, RecommendedAction should be empty and ActionReason should be ActionReasonFailOpen.
 	FailedOpen bool `json:"-"`
 	// AuditModeBypass indicates the request was allowed despite a deny recommendation
@@ -203,8 +205,10 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.RecommendedAction = config.PolicyActionDeny
 		// An enforced deny overrides any audit-mode bypass — the request was
 		// actually denied, so no bypass occurred. This matches finalizeResults
-		// in PolicyEvaluator.
+		// in PolicyEvaluator. The same holds for FailedOpen: a handler that
+		// failed open did not let this request through.
 		finalResults.AuditModeBypass = false
+		finalResults.FailedOpen = false
 	} else if foundAllow {
 		finalResults.Allowed = true
 		finalResults.Message = allowMessage

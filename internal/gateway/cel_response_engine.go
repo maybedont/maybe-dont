@@ -169,6 +169,7 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 	finalAction := "allow"
 	earlyTerminated := false
 	var redactedContent *string
+	enforcedRuleErrored := false
 
 	// Evaluate each policy in order
 	for _, policy := range e.policies {
@@ -198,14 +199,11 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("compile_error", issues.Err()),
 			})
-			// Fail-open on compilation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -227,14 +225,11 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("program_error", err),
 			})
-			// Fail-open on program creation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -257,14 +252,11 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				EvaluationMs: ruleDurationMs,
 				Error:        formatAuditError("eval_error", err),
 			})
-			// Fail-open on evaluation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -280,14 +272,11 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 				EvaluationMs: ruleDurationMs,
 				Error:        "policy did not return a boolean",
 			})
-			// Fail-open on type error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
@@ -377,6 +366,11 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 		}
 	}
 
+	// FailedOpen means the call was allowed because a rule could not be evaluated.
+	// When a later enforced deny decided the outcome, the erroring rule let nothing
+	// through; its "error" result stays in the per-rule audit results.
+	results.FailedOpen = enforcedRuleErrored && finalAction != "deny"
+
 	// Finalize phase timing
 	var blockedMs, evaluationMs int64
 	if phaseTracker != nil {
@@ -392,20 +386,18 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 
 	// Set final result message if not already set
 	if results.Message == "" {
-		if results.FailedOpen {
-			results.Message = "CEL response evaluation failed, allowing response (fail-open)"
-		} else {
-			switch finalAction {
-			case "deny":
-				results.Message = decidingReason
-				if results.Message == "" {
-					results.Message = "Response denied by CEL policy"
-				}
-			case "redact":
-				results.Message = "Response content redacted by CEL policy"
-			default:
-				results.Message = "No CEL response policies matched"
+		switch {
+		case finalAction == "deny":
+			results.Message = decidingReason
+			if results.Message == "" {
+				results.Message = "Response denied by CEL policy"
 			}
+		case finalAction == "redact":
+			results.Message = "Response content redacted by CEL policy"
+		case results.FailedOpen:
+			results.Message = "CEL response evaluation failed, allowing response (fail-open)"
+		default:
+			results.Message = "No CEL response policies matched"
 		}
 	}
 

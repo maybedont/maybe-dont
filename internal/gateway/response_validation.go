@@ -31,6 +31,7 @@ type ResponseValidationResults struct {
 	// Empty when fail-open prevents complete evaluation.
 	RecommendedAction config.PolicyAction `json:"recommended_action,omitempty"`
 	// FailedOpen indicates validation couldn't complete and defaulted to allow.
+	// It is never set on a denied result.
 	FailedOpen bool `json:"-"`
 	// AuditModeBypass indicates the response was allowed despite a deny/redact recommendation
 	// because the deciding rule was in audit_only mode.
@@ -177,6 +178,12 @@ func (c *ResponseValidationChain) Handle(ctx context.Context, req mcp.CallToolRe
 				finalResults.RecommendedAction = results.RecommendedAction
 			}
 		}
+	}
+
+	// FailedOpen means the response was allowed because validation could not
+	// complete. A denied response was not allowed, so it is not reported as fail_open.
+	if !finalResults.Allowed {
+		finalResults.FailedOpen = false
 	}
 
 	// Set final message if not already set

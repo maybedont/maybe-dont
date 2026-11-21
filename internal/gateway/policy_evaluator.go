@@ -229,8 +229,11 @@ func finalizeResults(results *ValidationResults, subjectLabel string) {
 	// AuditModeBypass only applies when the final action is allow (the deny was bypassed).
 	// If an enforced deny from any engine overrides it, clear the bypass flag —
 	// the request was denied, no bypass occurred.
+	// Likewise FailedOpen means "allowed because validation could not complete";
+	// a denied request was not allowed, so it is not reported as fail_open.
 	if !results.Allowed {
 		results.AuditModeBypass = false
+		results.FailedOpen = false
 	}
 
 	// Set default message if none set

@@ -488,9 +488,11 @@ func mergeShellResults(cliResults, mcpResults ValidationResults) ValidationResul
 		}
 	}
 
-	// Clear AuditModeBypass if an enforced deny overrides it
+	// Clear AuditModeBypass and FailedOpen if an enforced deny overrides them:
+	// both describe a call that was allowed, and this one was denied.
 	if !merged.Allowed {
 		merged.AuditModeBypass = false
+		merged.FailedOpen = false
 	}
 
 	// Set default message
