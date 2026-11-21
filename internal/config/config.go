@@ -133,13 +133,6 @@ type Config struct {
 	Server struct {
 		Type       ServerType `mapstructure:"type"` // stdio, http, sse
 		ListenAddr string     `mapstructure:"listen_addr"`
-		SSE        struct {
-			TLS struct {
-				Enabled  bool   `mapstructure:"enabled"`
-				CertFile string `mapstructure:"cert_file"`
-				KeyFile  string `mapstructure:"key_file"`
-			} `mapstructure:"tls"`
-		} `mapstructure:"sse"`
 		// TrustedProxies is a list of IP addresses, IPv6 addresses, or CIDR blocks
 		// that are trusted to provide accurate X-Forwarded-For headers.
 		// When configured, only the rightmost IP in X-Forwarded-For that is NOT a trusted proxy
@@ -1500,6 +1493,10 @@ For each concern, estimate the potential impact category and explain the reasoni
 		config.DownstreamMCPServers[name] = client
 	}
 
+	if removedSSETLSConfigured(v) {
+		loadErrors = append(loadErrors, removedSSETLSMessage)
+	}
+
 	// Normalize policy modes before validation (converts empty string → enforce)
 	normalizePolicyModes(&config)
 
@@ -1509,6 +1506,28 @@ For each concern, estimate the potential impact category and explain the reasoni
 	}
 
 	return &config, nil
+}
+
+const removedSSETLSMessage = "server.sse.tls is not supported and has been removed; " +
+	"terminate TLS in a reverse proxy in front of the gateway, then remove server.sse.tls from your config"
+
+// removedSSETLSConfigured reports whether the removed server.sse.tls setting is
+// present in the config file or the environment. It never enabled TLS, so startup
+// fails rather than ignoring it and letting someone believe the gateway serves HTTPS.
+// The env vars are scanned directly because the setting no longer exists in the
+// Config struct, so neither viper nor applyEnvironmentOverrides would see them.
+func removedSSETLSConfigured(v *viper.Viper) bool {
+	if v.InConfig("server.sse.tls") {
+		return true
+	}
+	envPrefix := v.GetEnvPrefix() + "_SERVER_SSE_TLS"
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if name == envPrefix || strings.HasPrefix(name, envPrefix+"_") {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidationContext provides additional context for configuration validation
@@ -1624,18 +1643,6 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 	// Validate server configuration
 	if cfg.Server.Type != ServerTypeSTDIO && cfg.Server.ListenAddr == "" {
 		errors = append(errors, configError("server.listen_addr", fmt.Sprintf("required for %s server type", cfg.Server.Type)))
-	}
-
-	// Validate SSE server configuration if SSE type
-	if cfg.Server.Type == ServerTypeSSE {
-		if cfg.Server.SSE.TLS.Enabled {
-			if cfg.Server.SSE.TLS.CertFile == "" {
-				errors = append(errors, "server.sse.tls.cert_file is required when TLS is enabled")
-			}
-			if cfg.Server.SSE.TLS.KeyFile == "" {
-				errors = append(errors, "server.sse.tls.key_file is required when TLS is enabled")
-			}
-		}
 	}
 
 	// Validate each client in the map

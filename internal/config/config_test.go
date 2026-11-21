@@ -64,17 +64,10 @@ func TestServerTypeValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := &Config{
 				Server: struct {
-					Type       ServerType `mapstructure:"type"`
-					ListenAddr string     `mapstructure:"listen_addr"`
-					SSE        struct {
-						TLS struct {
-							Enabled  bool   `mapstructure:"enabled"`
-							CertFile string `mapstructure:"cert_file"`
-							KeyFile  string `mapstructure:"key_file"`
-						} `mapstructure:"tls"`
-					} `mapstructure:"sse"`
-					TrustedProxies        []string `mapstructure:"trusted_proxies"`
-					SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+					Type                  ServerType `mapstructure:"type"`
+					ListenAddr            string     `mapstructure:"listen_addr"`
+					TrustedProxies        []string   `mapstructure:"trusted_proxies"`
+					SessionTimeoutMinutes int        `mapstructure:"session_timeout_minutes"`
 				}{
 					Type:       tt.serverType,
 					ListenAddr: tt.listenAddr,
@@ -128,17 +121,10 @@ func TestListenAddrValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := &Config{
 				Server: struct {
-					Type       ServerType `mapstructure:"type"`
-					ListenAddr string     `mapstructure:"listen_addr"`
-					SSE        struct {
-						TLS struct {
-							Enabled  bool   `mapstructure:"enabled"`
-							CertFile string `mapstructure:"cert_file"`
-							KeyFile  string `mapstructure:"key_file"`
-						} `mapstructure:"tls"`
-					} `mapstructure:"sse"`
-					TrustedProxies        []string `mapstructure:"trusted_proxies"`
-					SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+					Type                  ServerType `mapstructure:"type"`
+					ListenAddr            string     `mapstructure:"listen_addr"`
+					TrustedProxies        []string   `mapstructure:"trusted_proxies"`
+					SessionTimeoutMinutes int        `mapstructure:"session_timeout_minutes"`
 				}{
 					Type:       tt.serverType,
 					ListenAddr: tt.listenAddr,
@@ -272,17 +258,10 @@ func TestValidateConfigCollectsAllErrors(t *testing.T) {
 	// Test configuration with multiple errors
 	config := &Config{
 		Server: struct {
-			Type       ServerType `mapstructure:"type"`
-			ListenAddr string     `mapstructure:"listen_addr"`
-			SSE        struct {
-				TLS struct {
-					Enabled  bool   `mapstructure:"enabled"`
-					CertFile string `mapstructure:"cert_file"`
-					KeyFile  string `mapstructure:"key_file"`
-				} `mapstructure:"tls"`
-			} `mapstructure:"sse"`
-			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			Type                  ServerType `mapstructure:"type"`
+			ListenAddr            string     `mapstructure:"listen_addr"`
+			TrustedProxies        []string   `mapstructure:"trusted_proxies"`
+			SessionTimeoutMinutes int        `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: "invalid-type", // Error 1: invalid server type
 		},
@@ -351,17 +330,10 @@ func TestValidateConfigSuccess(t *testing.T) {
 	// Test configuration with no errors
 	config := &Config{
 		Server: struct {
-			Type       ServerType `mapstructure:"type"`
-			ListenAddr string     `mapstructure:"listen_addr"`
-			SSE        struct {
-				TLS struct {
-					Enabled  bool   `mapstructure:"enabled"`
-					CertFile string `mapstructure:"cert_file"`
-					KeyFile  string `mapstructure:"key_file"`
-				} `mapstructure:"tls"`
-			} `mapstructure:"sse"`
-			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			Type                  ServerType `mapstructure:"type"`
+			ListenAddr            string     `mapstructure:"listen_addr"`
+			TrustedProxies        []string   `mapstructure:"trusted_proxies"`
+			SessionTimeoutMinutes int        `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerTypeSTDIO,
 		},
@@ -393,17 +365,10 @@ func TestAIProviderValidation(t *testing.T) {
 	baseConfig := func() *Config {
 		return &Config{
 			Server: struct {
-				Type       ServerType `mapstructure:"type"`
-				ListenAddr string     `mapstructure:"listen_addr"`
-				SSE        struct {
-					TLS struct {
-						Enabled  bool   `mapstructure:"enabled"`
-						CertFile string `mapstructure:"cert_file"`
-						KeyFile  string `mapstructure:"key_file"`
-					} `mapstructure:"tls"`
-				} `mapstructure:"sse"`
-				TrustedProxies        []string `mapstructure:"trusted_proxies"`
-				SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+				Type                  ServerType `mapstructure:"type"`
+				ListenAddr            string     `mapstructure:"listen_addr"`
+				TrustedProxies        []string   `mapstructure:"trusted_proxies"`
+				SessionTimeoutMinutes int        `mapstructure:"session_timeout_minutes"`
 			}{
 				Type: ServerTypeSTDIO,
 			},
@@ -1789,17 +1754,10 @@ func TestValidateConfigWithContext_NoConfigFileShowsGuidance(t *testing.T) {
 	// we get helpful guidance about using environment variables
 	config := &Config{
 		Server: struct {
-			Type       ServerType `mapstructure:"type"`
-			ListenAddr string     `mapstructure:"listen_addr"`
-			SSE        struct {
-				TLS struct {
-					Enabled  bool   `mapstructure:"enabled"`
-					CertFile string `mapstructure:"cert_file"`
-					KeyFile  string `mapstructure:"key_file"`
-				} `mapstructure:"tls"`
-			} `mapstructure:"sse"`
-			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			Type                  ServerType `mapstructure:"type"`
+			ListenAddr            string     `mapstructure:"listen_addr"`
+			TrustedProxies        []string   `mapstructure:"trusted_proxies"`
+			SessionTimeoutMinutes int        `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerType("invalid"), // Invalid server type triggers a validation error
 		},
@@ -1832,17 +1790,10 @@ func TestValidateConfigWithContext_WithConfigFileNoGuidance(t *testing.T) {
 	// we do NOT show guidance about environment variables
 	config := &Config{
 		Server: struct {
-			Type       ServerType `mapstructure:"type"`
-			ListenAddr string     `mapstructure:"listen_addr"`
-			SSE        struct {
-				TLS struct {
-					Enabled  bool   `mapstructure:"enabled"`
-					CertFile string `mapstructure:"cert_file"`
-					KeyFile  string `mapstructure:"key_file"`
-				} `mapstructure:"tls"`
-			} `mapstructure:"sse"`
-			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			Type                  ServerType `mapstructure:"type"`
+			ListenAddr            string     `mapstructure:"listen_addr"`
+			TrustedProxies        []string   `mapstructure:"trusted_proxies"`
+			SessionTimeoutMinutes int        `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerType("invalid"), // Invalid server type triggers a validation error
 		},
@@ -1887,17 +1838,10 @@ func TestValidateConfig_DownstreamServersOptional(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
 				Server: struct {
-					Type       ServerType `mapstructure:"type"`
-					ListenAddr string     `mapstructure:"listen_addr"`
-					SSE        struct {
-						TLS struct {
-							Enabled  bool   `mapstructure:"enabled"`
-							CertFile string `mapstructure:"cert_file"`
-							KeyFile  string `mapstructure:"key_file"`
-						} `mapstructure:"tls"`
-					} `mapstructure:"sse"`
-					TrustedProxies        []string `mapstructure:"trusted_proxies"`
-					SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+					Type                  ServerType `mapstructure:"type"`
+					ListenAddr            string     `mapstructure:"listen_addr"`
+					TrustedProxies        []string   `mapstructure:"trusted_proxies"`
+					SessionTimeoutMinutes int        `mapstructure:"session_timeout_minutes"`
 				}{
 					Type: ServerTypeSTDIO,
 				},
@@ -2020,17 +1964,10 @@ native_tools:
 func createValidBaseConfig() *Config {
 	return &Config{
 		Server: struct {
-			Type       ServerType `mapstructure:"type"`
-			ListenAddr string     `mapstructure:"listen_addr"`
-			SSE        struct {
-				TLS struct {
-					Enabled  bool   `mapstructure:"enabled"`
-					CertFile string `mapstructure:"cert_file"`
-					KeyFile  string `mapstructure:"key_file"`
-				} `mapstructure:"tls"`
-			} `mapstructure:"sse"`
-			TrustedProxies        []string `mapstructure:"trusted_proxies"`
-			SessionTimeoutMinutes int      `mapstructure:"session_timeout_minutes"`
+			Type                  ServerType `mapstructure:"type"`
+			ListenAddr            string     `mapstructure:"listen_addr"`
+			TrustedProxies        []string   `mapstructure:"trusted_proxies"`
+			SessionTimeoutMinutes int        `mapstructure:"session_timeout_minutes"`
 		}{
 			Type: ServerTypeSTDIO,
 		},
@@ -4131,6 +4068,87 @@ native_tools:
 			if tc.wantNoErrText != "" {
 				require.NotContains(t, err.Error(), tc.wantNoErrText)
 			}
+		})
+	}
+}
+
+// TestLoadConfig_RemovedSSETLSRejected verifies that startup fails when the removed
+// server.sse.tls setting is present in the config file or environment. The setting never
+// enabled TLS, so silently ignoring it would let someone believe the gateway serves HTTPS.
+// A config without it must still load.
+func TestLoadConfig_RemovedSSETLSRejected(t *testing.T) {
+	const baseConfig = `
+server:
+  type: sse
+  listen_addr: "127.0.0.1:8080"
+%s
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+
+native_tools:
+  audit_report:
+    enabled: false
+`
+	const wantErr = "server.sse.tls is not supported and has been removed; " +
+		"terminate TLS in a reverse proxy in front of the gateway, then remove server.sse.tls from your config"
+
+	tests := []struct {
+		name    string
+		sseYAML string
+		env     map[string]string
+		wantErr bool
+	}{
+		{
+			name:    "tls enabled in config file",
+			sseYAML: "  sse:\n    tls:\n      enabled: true\n      cert_file: cert.pem\n      key_file: key.pem",
+			wantErr: true,
+		},
+		{
+			name:    "tls disabled in config file",
+			sseYAML: "  sse:\n    tls:\n      enabled: false",
+			wantErr: true,
+		},
+		{
+			name:    "tls enabled via env var",
+			env:     map[string]string{"MAYBE_DONT_SERVER_SSE_TLS_ENABLED": "true"},
+			wantErr: true,
+		},
+		{
+			name:    "tls cert file via env var",
+			env:     map[string]string{"MAYBE_DONT_SERVER_SSE_TLS_CERT_FILE": "cert.pem"},
+			wantErr: true,
+		},
+		{
+			name:    "no tls key",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			viper.Reset()
+			tmpDir := t.TempDir()
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			configContent := fmt.Sprintf(baseConfig, tt.sseYAML)
+			require.NoError(t, os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644))
+
+			_, err := LoadConfig(tmpDir, "")
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), wantErr)
+				return
+			}
+			require.NoError(t, err)
 		})
 	}
 }

@@ -351,12 +351,6 @@ security:
     required: bool
     config: {}  # Type-specific configuration
     
-  tls:
-    enabled: bool
-    cert_file: string
-    key_file: string
-    ca_file: string
-    
   permissions:
     default_deny: bool
     roles: []
