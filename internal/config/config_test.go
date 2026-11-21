@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -4040,6 +4041,7 @@ native_tools:
 		fileName        string // file written to the config dir; empty writes nothing
 		content         string
 		configFileName  string // passed to LoadConfig
+		unreadable      bool   // chmod the written file to 000
 		wantErrContains []string
 		wantNoErrText   string
 	}{
@@ -4073,6 +4075,14 @@ native_tools:
 			wantNoErrText:   "No configuration file was found",
 		},
 		{
+			name:            "unreadable config file",
+			fileName:        "maybe-dont.yaml",
+			content:         validBody,
+			unreadable:      true,
+			wantErrContains: []string{"failed to read config file", "permission denied"},
+			wantNoErrText:   "No configuration file was found",
+		},
+		{
 			name:            "missing default config file",
 			wantErrContains: []string{"No configuration file was found"},
 			wantNoErrText:   "Current directory", // viper only searches the resolved config dir
@@ -4091,10 +4101,19 @@ native_tools:
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.unreadable && (runtime.GOOS == "windows" || os.Geteuid() == 0) {
+				t.Skip("chmod 000 does not block reads on Windows or as root")
+			}
 			viper.Reset()
 			tmpDir := t.TempDir()
 			if tc.fileName != "" {
-				require.NoError(t, os.WriteFile(filepath.Join(tmpDir, tc.fileName), []byte(tc.content), 0o644))
+				path := filepath.Join(tmpDir, tc.fileName)
+				require.NoError(t, os.WriteFile(path, []byte(tc.content), 0o644))
+				if tc.unreadable {
+					require.NoError(t, os.Chmod(path, 0o000))
+					// Restore permissions so t.TempDir cleanup can remove the file.
+					t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+				}
 			}
 
 			cfg, err := LoadConfig(tmpDir, tc.configFileName)
