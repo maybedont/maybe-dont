@@ -147,11 +147,7 @@ func (h *NativeToolsHandler) handleListDownstreamServers(ctx context.Context, re
 		// Set URL or command based on type
 		switch cfg.Type {
 		case "http", "sse":
-			url := cfg.DownstreamURL
-			if url == "" {
-				url = cfg.URL
-			}
-			info.URL = url
+			info.URL = redactedDownstreamURL(configuredDownstreamURL(cfg))
 		case "stdio":
 			// Build command string
 			if len(cfg.CommandArgs) > 0 || len(cfg.Args) > 0 {

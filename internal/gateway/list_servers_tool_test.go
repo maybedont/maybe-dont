@@ -442,3 +442,90 @@ func TestListDownstreamServers_NoServersConfigured(t *testing.T) {
 func withMockSession(ctx context.Context, sessionID string) context.Context {
 	return context.WithValue(ctx, testSessionIDKey, sessionID)
 }
+
+// TestListDownstreamServers_URLCredentialsRemoved verifies that the URL shown
+// to the agent has no userinfo, query string or fragment, since operators put
+// credentials there, and that a URL that doesn't parse as an absolute http or
+// https URL with a host is left out rather than shown raw. Configured header
+// values are never part of the response.
+func TestListDownstreamServers_URLCredentialsRemoved(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     config.ClientConfig
+		wantURL string
+	}{
+		{
+			name:    "userinfo and query",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "https://user:pass@host.example/mcp?token=SECRET"},
+			wantURL: "https://host.example/mcp",
+		},
+		{
+			name:    "fragment and port",
+			cfg:     config.ClientConfig{Type: "sse", URL: "http://host.example:8080/sse#SECRET"},
+			wantURL: "http://host.example:8080/sse",
+		},
+		{
+			name:    "username only",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "https://SECRET@host.example/mcp"},
+			wantURL: "https://host.example/mcp",
+		},
+		{
+			name:    "plain URL unchanged",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "https://api.githubcopilot.com/mcp/"},
+			wantURL: "https://api.githubcopilot.com/mcp/",
+		},
+		{
+			name:    "scheme-less userinfo parses as opaque",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "user:SECRET@host/mcp"},
+			wantURL: "",
+		},
+		{
+			name:    "scheme-less userinfo with port",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "user:SECRET@host:443/mcp"},
+			wantURL: "",
+		},
+		{
+			name:    "secret parsed as scheme",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "SECRET:abc@host/mcp"},
+			wantURL: "",
+		},
+		{
+			name:    "non-http scheme",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "ftp://host.example/SECRET"},
+			wantURL: "",
+		},
+		{
+			name:    "unparseable URL left out",
+			cfg:     config.ClientConfig{Type: "http", DownstreamURL: "https://user:pass@host.example/%zz?token=SECRET"},
+			wantURL: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			cfg.HTTPConfig.Headers = map[string]string{"Authorization": "Bearer SECRET"}
+
+			handler := NewNativeToolsHandler(&config.Config{}, newTestLogger(t), "")
+			handler.SetClientConfigProvider(&mockClientConfigProvider{
+				configs: map[string]config.ClientConfig{"remote": cfg},
+			})
+
+			req := mcp.CallToolRequest{}
+			req.Params.Name = ToolListDownstreamServers
+			result, err := handler.handleListDownstreamServers(context.Background(), req)
+			require.NoError(t, err)
+			require.False(t, result.IsError)
+
+			text, ok := mcp.AsTextContent(result.Content[0])
+			require.True(t, ok)
+			assert.NotContains(t, text.Text, "SECRET")
+			assert.NotContains(t, text.Text, "pass")
+
+			var response ListDownstreamServersResponse
+			require.NoError(t, json.Unmarshal([]byte(text.Text), &response))
+			require.Len(t, response.Servers, 1)
+			assert.Equal(t, tt.wantURL, response.Servers[0].URL)
+		})
+	}
+}

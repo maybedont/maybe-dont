@@ -105,7 +105,7 @@ func (cm *ClientManager) DiscoverAllCapabilities(ctx context.Context) (*Discover
 			errs = append(errs, errMsg)
 			cm.logger.Error(ctx, "Probe client creation failed",
 				zap.String("client", name),
-				zap.Error(err))
+				downstreamErrorField(err))
 			continue
 		}
 
@@ -203,7 +203,7 @@ func (cm *ClientManager) CreateSessionClients(ctx context.Context, sessionID str
 			cm.logger.Error(ctx, "Client creation failed for session",
 				zap.String("session_id", sessionID),
 				zap.String("client", name),
-				zap.Error(err))
+				downstreamErrorField(err))
 			continue
 		}
 
@@ -352,10 +352,13 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 	case "sse":
 		cm.logger.Debug(ctx, "Initializing SSE MCP client",
 			zap.String("name", name),
-			zap.String("downstream_url", cfg.DownstreamURL))
+			zap.String("downstream_url", redactedDownstreamURL(configuredDownstreamURL(cfg))))
 
 		// Build SSE client options
-		sseOpts := []transport.ClientOption{transport.WithHTTPClient(newDownstreamHTTPClient(cfg.AllowCrossOriginRedirects))}
+		sseOpts := []transport.ClientOption{
+			transport.WithHTTPClient(newDownstreamHTTPClient(cfg.AllowCrossOriginRedirects)),
+			transport.WithSSELogger(newDownstreamSlogLogger(cm.logger.Logger(), name)),
+		}
 
 		// Add static headers if configured
 		if len(cfg.SSEConfig.Headers) > 0 {
@@ -376,10 +379,13 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 	case "http":
 		cm.logger.Debug(ctx, "Initializing HTTP MCP client",
 			zap.String("name", name),
-			zap.String("downstream_url", cfg.DownstreamURL))
+			zap.String("downstream_url", redactedDownstreamURL(configuredDownstreamURL(cfg))))
 
 		// Build HTTP client options
-		httpOpts := []transport.StreamableHTTPCOption{transport.WithHTTPBasicClient(newDownstreamHTTPClient(cfg.AllowCrossOriginRedirects))}
+		httpOpts := []transport.StreamableHTTPCOption{
+			transport.WithHTTPBasicClient(newDownstreamHTTPClient(cfg.AllowCrossOriginRedirects)),
+			transport.WithHTTPLogger(newDownstreamSlogLogger(cm.logger.Logger(), name)),
+		}
 
 		// Add static headers if configured
 		if len(cfg.HTTPConfig.Headers) > 0 {
@@ -419,9 +425,7 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		// token with 400. Point the user at credentials and URL first.
 		if cfg.Type == "http" && errors.Is(err, transport.ErrLegacySSEServer) {
 			// Callers add the client name, so it is left out here.
-			return nil, fmt.Errorf("rejected the MCP initialize request with a 4xx status; "+
-				"check its credentials (headers or pass-through auth) and URL; "+
-				"only servers that use the old SSE transport need `type: sse`: %w", err)
+			return nil, fmt.Errorf("%w: %w", errInitializeRejected4xx, err)
 		}
 		return nil, fmt.Errorf("failed to check capabilities: %w", err)
 	}
@@ -658,7 +662,7 @@ func (cm *ClientManager) discoverSessionClientCapabilities(ctx context.Context, 
 		prompts, err := cm.discoverSessionPromptsWithRetry(ctx, clientInfo)
 		if err != nil {
 			cm.logger.Warn(ctx, "Prompt discovery failed, continuing without prompts",
-				zap.String("client", clientInfo.Name), zap.Error(err))
+				zap.String("client", clientInfo.Name), downstreamErrorField(err))
 		}
 		clientInfo.Prompts = prompts
 	}
@@ -668,7 +672,7 @@ func (cm *ClientManager) discoverSessionClientCapabilities(ctx context.Context, 
 		resources, err := cm.discoverSessionResourcesWithRetry(ctx, clientInfo)
 		if err != nil {
 			cm.logger.Warn(ctx, "Resource discovery failed, continuing without resources",
-				zap.String("client", clientInfo.Name), zap.Error(err))
+				zap.String("client", clientInfo.Name), downstreamErrorField(err))
 		}
 		clientInfo.Resources = resources
 
@@ -676,7 +680,7 @@ func (cm *ClientManager) discoverSessionClientCapabilities(ctx context.Context, 
 		templates, err := cm.discoverSessionResourceTemplatesWithRetry(ctx, clientInfo)
 		if err != nil {
 			cm.logger.Warn(ctx, "Resource template discovery failed, continuing without templates",
-				zap.String("client", clientInfo.Name), zap.Error(err))
+				zap.String("client", clientInfo.Name), downstreamErrorField(err))
 		}
 		clientInfo.Templates = templates
 	}
@@ -715,7 +719,7 @@ func sessionRetryWithDelay[T any](
 				logger.Debug(ctx, titleCaser.String(operation)+" attempt failed",
 					zap.String("client", clientInfo.Name),
 					zap.Int("attempt", attempt+1),
-					zap.Error(err),
+					downstreamErrorField(err),
 				)
 			}
 		} else {
@@ -893,7 +897,7 @@ func (cm *ClientManager) initializeSessionClientWithRetry(ctx context.Context, c
 			cm.logger.Error(timeoutCtx, "MCP initialization failed after all retries",
 				zap.String("client", clientInfo.Name),
 				zap.Int("attempts", attempt+1),
-				zap.Error(err),
+				downstreamErrorField(err),
 			)
 			break
 		}
@@ -914,7 +918,7 @@ func (cm *ClientManager) initializeSessionClientWithRetry(ctx context.Context, c
 		cm.logger.Debug(timeoutCtx, "Waiting before retry",
 			zap.String("client", clientInfo.Name),
 			zap.Duration("delay", delay),
-			zap.Error(err),
+			downstreamErrorField(err),
 		)
 
 		// Wait before next attempt

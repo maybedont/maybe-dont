@@ -544,7 +544,7 @@ func (g *Gateway) HandleToolCall(ctx context.Context, req mcp.CallToolRequest) (
 
 	if err != nil {
 		// Tool execution error - infrastructure error, skip audit
-		return nil, fmt.Errorf("tool call failed: %w", err)
+		return nil, g.downstreamCallError(ctx, sessionID, clientName, clientInfo.Config, "tools/call", fmt.Errorf("tool call failed: %w", err))
 	}
 
 	// Record tool call duration
@@ -907,7 +907,11 @@ func (g *Gateway) HandlePromptCall(ctx context.Context, req mcp.GetPromptRequest
 	originalReq := req
 	originalReq.Params.Name = originalPromptName
 
-	return clientInfo.Client.GetPrompt(ctx, originalReq)
+	result, err := clientInfo.Client.GetPrompt(ctx, originalReq)
+	if err != nil {
+		return nil, g.downstreamCallError(ctx, sessionID, clientName, clientInfo.Config, "prompts/get", err)
+	}
+	return result, nil
 }
 
 // handleResourceRequest is a helper function that handles both resource and resource template requests
@@ -943,7 +947,7 @@ func (g *Gateway) handleResourceRequest(ctx context.Context, req mcp.ReadResourc
 
 	result, err := clientInfo.Client.ReadResource(ctx, originalReq)
 	if err != nil {
-		return nil, err
+		return nil, g.downstreamCallError(ctx, sessionID, clientName, clientInfo.Config, "resources/read", err)
 	}
 	return result.Contents, nil
 }
@@ -1050,14 +1054,16 @@ func (g *Gateway) doDiscoverPassThroughTools(ctx context.Context, sessionID stri
 		cfg := configs[name]
 		clientInfo, err := g.clientManager.CreateSingleSessionClient(ctx, sessionID, name, cfg)
 		if err != nil {
+			// The raw error can carry the downstream URL and any credential in
+			// it, so the agent gets a fixed message and the log gets the detail.
 			result.Errors = append(result.Errors, DiscoveryError{
 				ClientName: name,
-				Error:      err.Error(),
+				Error:      safeDownstreamConnectError(name, cfg, err).Error(),
 			})
 			g.logger.Warn(ctx, "Failed to connect to pass-through client",
 				zap.String("session_id", sessionID),
 				zap.String("client", name),
-				zap.Error(err))
+				downstreamErrorField(err))
 			continue
 		}
 
