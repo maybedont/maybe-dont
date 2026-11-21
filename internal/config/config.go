@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -1302,23 +1303,23 @@ func LoadConfig(configDir, configFileName string) (*Config, error) {
 		"Bash", "execute_command", "shell", "run_terminal_command", "run_command",
 	})
 
-	// Try to find config file
-	configFileFound := false
-
+	// Look for the config file. Default to maybe-dont.yaml unless the user named one.
+	// Strip .yaml/.yml extension if present for viper.
+	configName := "maybe-dont"
 	if configFileName != "" {
-		// User specified a config file name - use it directly
-		// Strip .yaml/.yml extension if present for viper
-		baseName := strings.TrimSuffix(strings.TrimSuffix(configFileName, ".yaml"), ".yml")
-		v.SetConfigName(baseName)
-		if err := v.ReadInConfig(); err == nil {
-			configFileFound = true
-		}
-	} else {
-		// Look for maybe-dont.yaml
-		v.SetConfigName("maybe-dont")
-		if err := v.ReadInConfig(); err == nil {
-			configFileFound = true
-		}
+		configName = strings.TrimSuffix(strings.TrimSuffix(configFileName, ".yaml"), ".yml")
+	}
+	v.SetConfigName(configName)
+
+	// A missing config file is fine because the gateway can be configured entirely
+	// via environment variables. Any other error means the file exists but could not
+	// be read or parsed, and silently falling back to defaults would hide the problem.
+	configFileFound := false
+	var notFoundErr viper.ConfigFileNotFoundError
+	if err := v.ReadInConfig(); err == nil {
+		configFileFound = true
+	} else if !errors.As(err, &notFoundErr) {
+		return nil, fmt.Errorf("failed to read config file %s: %w", v.ConfigFileUsed(), err)
 	}
 
 	// Get the directory for resolving relative rules file paths
@@ -1839,7 +1840,6 @@ func validateConfigWithOptions(cfg *Config, configFileFound bool, loadErrors []s
 			errMsg += "  - MAYBE_DONT_VALIDATION_AI_API_KEY=your-api-key\n"
 			errMsg += "\nAlternatively, create a config file (maybe-dont.yaml) in one of these locations:\n"
 			errMsg += "  - $XDG_CONFIG_HOME/maybe-dont/ (or ~/.config/maybe-dont/)\n"
-			errMsg += "  - Current directory\n"
 		}
 		return fmt.Errorf("%s", errMsg)
 	}

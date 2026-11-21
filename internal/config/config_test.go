@@ -4014,3 +4014,104 @@ func TestExtractClientNameAndPath_EnvField(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadConfig_ConfigFileReadErrors verifies that a config file which exists
+// but cannot be parsed fails LoadConfig with an error naming the file and the
+// parser's message, while a genuinely missing file keeps today's behavior
+// (fall through to defaults and env vars, then report "No configuration file
+// was found" when validation fails).
+func TestLoadConfig_ConfigFileReadErrors(t *testing.T) {
+	validBody := `
+downstream_mcp_servers:
+  test:
+    type: stdio
+    command: echo
+request_validation:
+  cel:
+    enabled: false
+  ai:
+    enabled: false
+native_tools:
+  audit_report:
+    enabled: false
+`
+	tests := []struct {
+		name            string
+		fileName        string // file written to the config dir; empty writes nothing
+		content         string
+		configFileName  string // passed to LoadConfig
+		wantErrContains []string
+		wantNoErrText   string
+	}{
+		{
+			name:            "duplicate top-level key",
+			fileName:        "maybe-dont.yaml",
+			content:         validBody + "native_tools:\n  audit_log:\n    enabled: false\n",
+			wantErrContains: []string{"maybe-dont.yaml", `"native_tools" already defined`},
+			wantNoErrText:   "No configuration file was found",
+		},
+		{
+			name:            "tab indentation",
+			fileName:        "maybe-dont.yaml",
+			content:         "downstream_mcp_servers:\n\ttest:\n\t\ttype: stdio\n",
+			wantErrContains: []string{"maybe-dont.yaml", "found character that cannot start any token"},
+			wantNoErrText:   "No configuration file was found",
+		},
+		{
+			name:            "bad indentation",
+			fileName:        "maybe-dont.yaml",
+			content:         "downstream_mcp_servers:\n  test:\n    type: stdio\n   command: echo\n",
+			wantErrContains: []string{"maybe-dont.yaml", "did not find expected key"},
+			wantNoErrText:   "No configuration file was found",
+		},
+		{
+			name:            "explicit config file name with invalid yaml",
+			fileName:        "custom.yaml",
+			content:         validBody + "native_tools:\n  audit_log:\n    enabled: false\n",
+			configFileName:  "custom.yaml",
+			wantErrContains: []string{"custom.yaml", `"native_tools" already defined`},
+			wantNoErrText:   "No configuration file was found",
+		},
+		{
+			name:            "missing default config file",
+			wantErrContains: []string{"No configuration file was found"},
+			wantNoErrText:   "Current directory", // viper only searches the resolved config dir
+		},
+		{
+			name:            "missing explicit config file",
+			configFileName:  "does-not-exist.yaml",
+			wantErrContains: []string{"No configuration file was found"},
+		},
+		{
+			name:     "valid config file",
+			fileName: "maybe-dont.yaml",
+			content:  validBody,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			viper.Reset()
+			tmpDir := t.TempDir()
+			if tc.fileName != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(tmpDir, tc.fileName), []byte(tc.content), 0o644))
+			}
+
+			cfg, err := LoadConfig(tmpDir, tc.configFileName)
+			if len(tc.wantErrContains) == 0 {
+				require.NoError(t, err)
+				require.NotNil(t, cfg)
+				return
+			}
+
+			require.Error(t, err)
+			require.Nil(t, cfg)
+			for _, want := range tc.wantErrContains {
+				require.Contains(t, err.Error(), want)
+			}
+			if tc.wantNoErrText != "" {
+				require.NotContains(t, err.Error(), tc.wantNoErrText)
+			}
+		})
+	}
+}
