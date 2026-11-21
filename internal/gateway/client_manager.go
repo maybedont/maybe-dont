@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -412,6 +413,14 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 			cm.logger.Error(ctx, "failed to close client after capability check error",
 				zap.String("name", name),
 				zap.Error(closeErr))
+		}
+		// mcp-go reports any 4xx other than 401 on the initialize POST as a
+		// likely legacy SSE server, but servers such as GitHub's answer a bad
+		// token with 400. Point the user at credentials and URL first.
+		if cfg.Type == "http" && errors.Is(err, transport.ErrLegacySSEServer) {
+			return nil, fmt.Errorf("downstream %q rejected the MCP initialize request with a 4xx status; "+
+				"check its credentials (headers or pass-through auth) and URL; "+
+				"only servers that use the old SSE transport need `type: sse`: %w", name, err)
 		}
 		return nil, fmt.Errorf("failed to check capabilities: %w", err)
 	}
