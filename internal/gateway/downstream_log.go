@@ -11,10 +11,11 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// urlPattern matches an http or https URL up to whitespace, a quote or angle
-// bracket. A backslash escape counts as part of the URL, so a URL inside Go's
-// %q quoting (as *url.Error prints it) isn't cut short by an escaped quote.
-var urlPattern = regexp.MustCompile(`(?i)https?://(?:\\.|[^\s"'<>\\])+`)
+// urlPattern matches an http or https URL. A URL in double quotes, as Go's
+// %q prints it in *url.Error and url.Parse errors, runs to the closing quote,
+// with backslash escapes and spaces inside it; the quotes are part of the
+// match. A bare URL runs to whitespace, a quote or an angle bracket.
+var urlPattern = regexp.MustCompile(`"(?i:https?)://(?:\\.|[^"\\])*"|(?i:https?)://(?:\\.|[^\s"'<>\\])+`)
 
 // redactURLs drops the userinfo, query string and fragment, the parts that
 // can hold credentials, from every http or https URL in text, keeping scheme,
@@ -24,18 +25,39 @@ var urlPattern = regexp.MustCompile(`(?i)https?://(?:\\.|[^\s"'<>\\])+`)
 // here rather than matching known URLs.
 func redactURLs(text string) string {
 	return urlPattern.ReplaceAllStringFunc(text, func(match string) string {
-		authorityStart := strings.Index(match, "://") + len("://")
-		rest := match[authorityStart:]
-		if i := strings.IndexAny(rest, "?#"); i >= 0 {
-			rest = rest[:i]
+		if strings.HasPrefix(match, `"`) {
+			return `"` + redactURL(match[1:len(match)-1]) + `"`
 		}
-		// A well-formed URL escapes "@" everywhere but the userinfo
-		// separator, so the last one ends the userinfo.
-		if i := strings.LastIndex(rest, "@"); i >= 0 {
-			rest = rest[i+1:]
-		}
-		return match[:authorityStart] + rest
+		return redactURL(match)
 	})
+}
+
+// redactURL redacts one URL for redactURLs.
+func redactURL(rawURL string) string {
+	authorityStart := strings.Index(rawURL, "://") + len("://")
+	rest := rawURL[authorityStart:]
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	authority, path, _ := strings.Cut(rest, "/")
+	if i := strings.LastIndex(authority, "@"); i >= 0 {
+		authority = authority[i+1:]
+	}
+	if path != "" {
+		path = "/" + path
+	}
+	// A path segment may start with "@" (/users/@me, /@org/mcp), and
+	// url.String() leaves it unescaped. One inside a segment can be a
+	// userinfo with a raw "/" in it (https://user/name:token@host/mcp parses
+	// as host "user"), so the path is dropped rather than risk keeping the
+	// token.
+	for segment := range strings.SplitSeq(path, "/") {
+		if strings.LastIndex(segment, "@") > 0 {
+			path = ""
+			break
+		}
+	}
+	return rawURL[:authorityStart] + authority + path
 }
 
 // downstreamErrorField returns err as the "error" log field with URLs
@@ -60,11 +82,11 @@ type redactingZapHandler struct {
 }
 
 func (h *redactingZapHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return h.logger.Core().Enabled(zapLevel(level))
+	return h.logger.Core().Enabled(downstreamZapLevel(level))
 }
 
 func (h *redactingZapHandler) Handle(_ context.Context, record slog.Record) error {
-	entry := h.logger.Check(zapLevel(record.Level), redactURLs(record.Message))
+	entry := h.logger.Check(downstreamZapLevel(record.Level), redactURLs(record.Message))
 	if entry == nil {
 		return nil
 	}
@@ -112,10 +134,12 @@ func appendRedactedAttr(fields []zap.Field, prefix string, attr slog.Attr) []zap
 	return append(fields, zap.String(prefix+attr.Key, redactURLs(attr.Value.String())))
 }
 
-func zapLevel(level slog.Level) zapcore.Level {
+// downstreamZapLevel maps an mcp-go slog level to zap, capped at Warn. mcp-go
+// logs expected conditions at Error (a failed session DELETE on every close
+// of a client whose downstream has gone away), and the gateway keeps Error
+// for unexpected problems.
+func downstreamZapLevel(level slog.Level) zapcore.Level {
 	switch {
-	case level >= slog.LevelError:
-		return zapcore.ErrorLevel
 	case level >= slog.LevelWarn:
 		return zapcore.WarnLevel
 	case level >= slog.LevelInfo:

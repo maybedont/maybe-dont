@@ -64,7 +64,37 @@ func TestRedactURLs(t *testing.T) {
 		{
 			name: "slash in userinfo",
 			in:   `https://us/er:SECRET@host.example/mcp`,
-			want: `https://host.example/mcp`,
+			want: `https://us`,
+		},
+		{
+			name: "user-only token with a slash",
+			in:   `https://to/ken@host.example/mcp`,
+			want: `https://to`,
+		},
+		{
+			name: "@ at the start of a path segment",
+			in:   `https://host/users/@me?t=SECRET`,
+			want: `https://host/users/@me`,
+		},
+		{
+			name: "scoped path unchanged",
+			in:   `https://mcp.example/@org/mcp`,
+			want: `https://mcp.example/@org/mcp`,
+		},
+		{
+			name: "@ inside a path segment drops the path",
+			in:   `https://host.example/users/a@b.example/SECRET`,
+			want: `https://host.example`,
+		},
+		{
+			name: "space in quoted userinfo",
+			in:   `parse "https://user:pa ss@h/x?t=SECRET": net/url: invalid userinfo`,
+			want: `parse "https://h/x": net/url: invalid userinfo`,
+		},
+		{
+			name: "space in quoted query",
+			in:   `Get "http://127.0.0.1:1/x?t=SE CRET": connection refused`,
+			want: `Get "http://127.0.0.1:1/x": connection refused`,
 		},
 		{
 			name: "fragment",
@@ -103,13 +133,14 @@ func TestRedactURLs(t *testing.T) {
 			got := redactURLs(tt.in)
 			assert.Equal(t, tt.want, got)
 			assert.NotContains(t, got, "SECRET")
+			assert.NotContains(t, got, "CRET")
 		})
 	}
 }
 
 // TestDownstreamSlogLogger verifies that the slog logger handed to mcp-go
-// writes through the gateway's zap logger at the matching level, drops
-// records below the zap level, and redacts URLs in the message and in every
+// writes through the gateway's zap logger at the matching level, capped at
+// Warn, drops records below the zap level, and redacts URLs in the message and in every
 // attribute, including grouped and pre-bound ones.
 func TestDownstreamSlogLogger(t *testing.T) {
 	core, logs := observer.New(zapcore.InfoLevel)
@@ -125,7 +156,7 @@ func TestDownstreamSlogLogger(t *testing.T) {
 	entries := logs.All()
 	require.Len(t, entries, 2)
 
-	assert.Equal(t, zapcore.ErrorLevel, entries[0].Level)
+	assert.Equal(t, zapcore.WarnLevel, entries[0].Level, "mcp-go errors are capped at Warn")
 	assert.Equal(t, "failed to send close request", entries[0].Message)
 	assert.Equal(t, map[string]any{
 		"client": "github",
