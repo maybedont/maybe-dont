@@ -4078,6 +4078,7 @@ native_tools:
 // A config without it must still load.
 func TestLoadConfig_RemovedSSETLSRejected(t *testing.T) {
 	const baseConfig = `
+%s
 server:
   type: sse
   listen_addr: "127.0.0.1:8080"
@@ -4102,6 +4103,7 @@ native_tools:
 
 	tests := []struct {
 		name    string
+		topYAML string
 		sseYAML string
 		env     map[string]string
 		wantErr bool
@@ -4127,6 +4129,26 @@ native_tools:
 			wantErr: true,
 		},
 		{
+			name:    "uppercase TLS key in config file",
+			sseYAML: "  sse:\n    TLS:\n      enabled: true",
+			wantErr: true,
+		},
+		{
+			name:    "flat dotted tls key at top level of config file",
+			topYAML: "server.sse.tls.enabled: true",
+			wantErr: true,
+		},
+		{
+			name:    "lowercase env var name",
+			env:     map[string]string{"maybe_dont_server_sse_tls_enabled": "true"},
+			wantErr: true,
+		},
+		{
+			name:    "env var that only shares the prefix",
+			env:     map[string]string{"MAYBE_DONT_SERVER_SSE_TLSX": "1"},
+			wantErr: false,
+		},
+		{
 			name:    "no tls key",
 			wantErr: false,
 		},
@@ -4139,7 +4161,7 @@ native_tools:
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			configContent := fmt.Sprintf(baseConfig, tt.sseYAML)
+			configContent := fmt.Sprintf(baseConfig, tt.topYAML, tt.sseYAML)
 			require.NoError(t, os.WriteFile(tmpDir+"/maybe-dont.yaml", []byte(configContent), 0o644))
 
 			_, err := LoadConfig(tmpDir, "")

@@ -1517,12 +1517,24 @@ const removedSSETLSMessage = "server.sse.tls is not supported and has been remov
 // The env vars are scanned directly because the setting no longer exists in the
 // Config struct, so neither viper nor applyEnvironmentOverrides would see them.
 func removedSSETLSConfigured(v *viper.Viper) bool {
-	if v.InConfig("server.sse.tls") {
+	const key = "server.sse.tls"
+	if v.InConfig(key) {
 		return true
 	}
-	envPrefix := v.GetEnvPrefix() + "_SERVER_SSE_TLS"
+	// InConfig only walks nested maps, so a flat dotted key such as
+	// "server.sse.tls.enabled: true" at the top level of the file is only
+	// visible in viper's flattened key list.
+	for _, k := range v.AllKeys() {
+		if k == key || strings.HasPrefix(k, key+".") {
+			return true
+		}
+	}
+	// Compare case-insensitively so a lowercase name (which Windows treats as
+	// the same variable) is caught too.
+	envPrefix := strings.ToUpper(v.GetEnvPrefix() + "_SERVER_SSE_TLS")
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
+		name = strings.ToUpper(name)
 		if name == envPrefix || strings.HasPrefix(name, envPrefix+"_") {
 			return true
 		}
