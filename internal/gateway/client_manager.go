@@ -418,9 +418,10 @@ func (cm *ClientManager) createClient(ctx context.Context, name string, cfg conf
 		// likely legacy SSE server, but servers such as GitHub's answer a bad
 		// token with 400. Point the user at credentials and URL first.
 		if cfg.Type == "http" && errors.Is(err, transport.ErrLegacySSEServer) {
-			return nil, fmt.Errorf("downstream %q rejected the MCP initialize request with a 4xx status; "+
+			// Callers add the client name, so it is left out here.
+			return nil, fmt.Errorf("rejected the MCP initialize request with a 4xx status; "+
 				"check its credentials (headers or pass-through auth) and URL; "+
-				"only servers that use the old SSE transport need `type: sse`: %w", name, err)
+				"only servers that use the old SSE transport need `type: sse`: %w", err)
 		}
 		return nil, fmt.Errorf("failed to check capabilities: %w", err)
 	}

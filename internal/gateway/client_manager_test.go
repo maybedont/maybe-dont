@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -13,8 +14,8 @@ import (
 )
 
 // TestCreateClientHTTPInitializeRejected verifies that when an http downstream
-// rejects the initialize POST with a 4xx other than 401, the error names the
-// downstream and points at credentials and URL rather than only reporting
+// rejects the initialize POST with a 4xx other than 401, the error points at
+// credentials and URL rather than only reporting
 // mcp-go's "likely a legacy SSE server". A 401 keeps mcp-go's authorization
 // error and is not rewritten. The original error stays in the chain.
 func TestCreateClientHTTPInitializeRejected(t *testing.T) {
@@ -56,7 +57,7 @@ func TestCreateClientHTTPInitializeRejected(t *testing.T) {
 			assert.NotContains(t, err.Error(), token, "error must not include credentials")
 
 			if tt.wantHint {
-				assert.Contains(t, err.Error(), `downstream "github" rejected the MCP initialize request with a 4xx status`)
+				assert.True(t, strings.HasPrefix(err.Error(), "rejected the MCP initialize request with a 4xx status; check its credentials"), err.Error())
 				assert.Contains(t, err.Error(), "type: sse")
 			} else {
 				assert.NotContains(t, err.Error(), "rejected the MCP initialize request")
