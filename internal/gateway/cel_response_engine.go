@@ -23,6 +23,10 @@ type CELResponsePolicy struct {
 	Mode                 config.PolicyMode   `yaml:"mode"` // "audit_only" or "enforce"
 	RedactionPattern     string              `yaml:"redaction_pattern"`
 	RedactionReplacement string              `yaml:"redaction_replacement"`
+
+	// program is built once in LoadPolicies and shared by every evaluation;
+	// cel.Program is stateless and safe for concurrent Eval.
+	program cel.Program
 }
 
 // CELResponsePolicyEngine handles CEL policy evaluation for responses
@@ -96,10 +100,10 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy,
 			zap.String("mode", string(effectiveMode)),
 		)
 
-		// Compile the expression
-		_, issues := e.env.Compile(policy.Expression)
-		if issues != nil && issues.Err() != nil {
-			return fmt.Errorf("failed to compile response policy %s: %w", policy.Name, issues.Err())
+		// Build the program once here; evaluation reuses it for every response.
+		program, err := compileCELProgram(e.env, policy.Expression)
+		if err != nil {
+			return fmt.Errorf("failed to compile response policy %s: %w", policy.Name, err)
 		}
 
 		// Validate action, a response policy can be 'allow', 'deny' or 'redact'
@@ -117,6 +121,7 @@ func (e *CELResponsePolicyEngine) LoadPolicies(policies []config.ResponsePolicy,
 			Mode:                 effectiveMode,
 			RedactionPattern:     policy.RedactionPattern,
 			RedactionReplacement: policy.RedactionReplacement,
+			program:              program,
 		})
 	}
 
@@ -182,60 +187,8 @@ func (e *CELResponsePolicyEngine) EvaluateResponse(ctx context.Context, req mcp.
 			zap.String("expression", policy.Expression),
 		)
 
-		// Compile the expression
-		ast, issues := e.env.Compile(policy.Expression)
-		if issues != nil && issues.Err() != nil {
-			ruleDurationMs := time.Since(ruleStart).Milliseconds()
-			e.logger.Error(ctx, "CEL response policy compilation error",
-				zap.String("rule", policy.Name),
-				zap.Int64("evaluation_ms", ruleDurationMs),
-				zap.Error(issues.Err()),
-			)
-			ruleResults = append(ruleResults, AuditRulesRuleResult{
-				Rule:         policy.Name,
-				Action:       string(policy.Action),
-				Mode:         modeToAuditString(policy.Mode),
-				Result:       "error",
-				EvaluationMs: ruleDurationMs,
-				Error:        formatAuditError("compile_error", issues.Err()),
-			})
-			// Fail open for this rule only and keep evaluating, so a later
-			// enforced deny still applies. The phase is not marked decided here:
-			// the remaining rules still block the request and count toward the budget.
-			if !policy.Mode.IsAuditOnly() {
-				enforcedRuleErrored = true
-			}
-			continue
-		}
-
-		// Create program
-		prg, err := e.env.Program(ast)
-		if err != nil {
-			ruleDurationMs := time.Since(ruleStart).Milliseconds()
-			e.logger.Error(ctx, "CEL response policy program error",
-				zap.String("rule", policy.Name),
-				zap.Int64("evaluation_ms", ruleDurationMs),
-				zap.Error(err),
-			)
-			ruleResults = append(ruleResults, AuditRulesRuleResult{
-				Rule:         policy.Name,
-				Action:       string(policy.Action),
-				Mode:         modeToAuditString(policy.Mode),
-				Result:       "error",
-				EvaluationMs: ruleDurationMs,
-				Error:        formatAuditError("program_error", err),
-			})
-			// Fail open for this rule only and keep evaluating, so a later
-			// enforced deny still applies. The phase is not marked decided here:
-			// the remaining rules still block the request and count toward the budget.
-			if !policy.Mode.IsAuditOnly() {
-				enforcedRuleErrored = true
-			}
-			continue
-		}
-
 		// Evaluate the expression
-		out, _, err := prg.Eval(vars)
+		out, _, err := policy.program.Eval(vars)
 		ruleDurationMs := time.Since(ruleStart).Milliseconds()
 
 		if err != nil {
