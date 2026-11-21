@@ -22,6 +22,12 @@ type CELPolicy struct {
 	Action        config.PolicyAction `yaml:"action"`         // allow or deny
 	Message       string              `yaml:"message"`
 	Mode          config.PolicyMode   `yaml:"mode"` // "audit_only" or "enforce"
+
+	// Programs are built once in LoadPolicies and shared by every evaluation;
+	// cel.Program is stateless and safe for concurrent Eval. Nil when the
+	// corresponding expression is empty.
+	mcpProgram cel.Program
+	cliProgram cel.Program
 }
 
 // CELPolicyEngine handles CEL policy evaluation.
@@ -118,20 +124,22 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.Policy, topLevelMode co
 			return fmt.Errorf("policy %s has no mcp_expression or cli_expression", policy.Name)
 		}
 
-		// Compile the MCP expression if provided (CLI expression compilation is deferred to CLI evaluation)
+		// Build each program once here; evaluation reuses it for every request.
+		// A nil program means the policy does not apply to that request type.
+		var mcpProgram, cliProgram cel.Program
 		if mcpExpr != "" {
-			_, issues := e.env.Compile(mcpExpr)
-			if issues != nil && issues.Err() != nil {
-				return fmt.Errorf("failed to compile mcp_expression for policy %s: %w", policy.Name, issues.Err())
+			prg, err := compileCELProgram(e.env, mcpExpr)
+			if err != nil {
+				return fmt.Errorf("failed to compile mcp_expression for policy %s: %w", policy.Name, err)
 			}
+			mcpProgram = prg
 		}
-
-		// Validate CLI expression compiles if provided (actual evaluation deferred to CLI evaluation)
 		if policy.CLIExpression != "" {
-			_, issues := e.env.Compile(policy.CLIExpression)
-			if issues != nil && issues.Err() != nil {
-				return fmt.Errorf("failed to compile cli_expression for policy %s: %w", policy.Name, issues.Err())
+			prg, err := compileCELProgram(e.env, policy.CLIExpression)
+			if err != nil {
+				return fmt.Errorf("failed to compile cli_expression for policy %s: %w", policy.Name, err)
 			}
+			cliProgram = prg
 		}
 
 		// Validate action, request validation can only be 'allow' or 'deny'
@@ -148,6 +156,8 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.Policy, topLevelMode co
 			Action:        policy.Action,
 			Message:       policy.Message,
 			Mode:          effectiveMode,
+			mcpProgram:    mcpProgram,
+			cliProgram:    cliProgram,
 		})
 	}
 
@@ -162,12 +172,6 @@ func (e *CELPolicyEngine) LoadPolicies(policies []config.Policy, topLevelMode co
 func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallToolRequest, budget *BlockingBudget) (ValidationResults, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
-	phaseStart := time.Now()
-	var phaseTracker *PhaseTracker
-	if budget != nil {
-		phaseTracker = budget.StartPhase()
-	}
 
 	e.logger.Debug(ctx, "Evaluating tool call with CEL policies",
 		zap.String("tool", req.Params.Name),
@@ -196,279 +200,8 @@ func (e *CELPolicyEngine) EvaluateToolCall(ctx context.Context, req mcp.CallTool
 		celToolVariable: buildToolVariable(req),
 	}
 
-	results := ValidationResults{
-		Results: make([]ValidationResult, 0),
-	}
-
-	// Track per-rule results for audit
-	ruleResults := make([]AuditRulesRuleResult, 0, len(e.policies))
-	var decidingRule, decidingReason string
-	finalAction := "allow"
-	earlyTerminated := false
-	auditOnlyDeny := false
-
-	// Evaluate each policy in order
-	for _, policy := range e.policies {
-		// Skip policies without MCP expression (CLI-only rules)
-		if policy.MCPExpression == "" {
-			e.logger.Debug(ctx, "Skipping policy without MCP expression",
-				zap.String("name", policy.Name),
-			)
-			continue
-		}
-
-		// Track timing for this policy evaluation
-		ruleStart := time.Now()
-
-		e.logger.Debug(ctx, "Evaluating CEL policy",
-			zap.String("name", policy.Name),
-			zap.String("action", string(policy.Action)),
-		)
-
-		// Compile the MCP expression for tool call evaluation
-		ast, issues := e.env.Compile(policy.MCPExpression)
-		if issues != nil && issues.Err() != nil {
-			ruleDurationMs := time.Since(ruleStart).Milliseconds()
-			e.logger.Error(ctx, "CEL policy compilation error",
-				zap.String("rule", policy.Name),
-				zap.Int64("evaluation_ms", ruleDurationMs),
-				zap.Error(issues.Err()),
-			)
-			ruleResults = append(ruleResults, AuditRulesRuleResult{
-				Rule:         policy.Name,
-				Action:       string(policy.Action),
-				Mode:         modeToAuditString(policy.Mode),
-				Result:       "error",
-				EvaluationMs: ruleDurationMs,
-				Error:        formatAuditError("compile_error", issues.Err()),
-			})
-			// Fail-open on compilation error for enforced rules
-			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
-			}
-			continue
-		}
-
-		// Create program
-		prg, err := e.env.Program(ast)
-		if err != nil {
-			ruleDurationMs := time.Since(ruleStart).Milliseconds()
-			e.logger.Error(ctx, "CEL policy program error",
-				zap.String("rule", policy.Name),
-				zap.Int64("evaluation_ms", ruleDurationMs),
-				zap.Error(err),
-			)
-			ruleResults = append(ruleResults, AuditRulesRuleResult{
-				Rule:         policy.Name,
-				Action:       string(policy.Action),
-				Mode:         modeToAuditString(policy.Mode),
-				Result:       "error",
-				EvaluationMs: ruleDurationMs,
-				Error:        formatAuditError("program_error", err),
-			})
-			// Fail-open on program creation error for enforced rules
-			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
-			}
-			continue
-		}
-
-		// Evaluate the expression
-		out, _, err := prg.Eval(vars)
-		ruleDurationMs := time.Since(ruleStart).Milliseconds()
-
-		if err != nil {
-			e.logger.Error(ctx, "CEL policy evaluation error",
-				zap.String("rule", policy.Name),
-				zap.Int64("evaluation_ms", ruleDurationMs),
-				zap.Error(err),
-			)
-			ruleResults = append(ruleResults, AuditRulesRuleResult{
-				Rule:         policy.Name,
-				Action:       string(policy.Action),
-				Mode:         modeToAuditString(policy.Mode),
-				Result:       "error",
-				EvaluationMs: ruleDurationMs,
-				Error:        formatAuditError("eval_error", err),
-			})
-			// Fail-open on evaluation error for enforced rules
-			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
-			}
-			continue
-		}
-
-		// Check result
-		result, ok := out.Value().(bool)
-		if !ok {
-			ruleResults = append(ruleResults, AuditRulesRuleResult{
-				Rule:         policy.Name,
-				Action:       string(policy.Action),
-				Mode:         modeToAuditString(policy.Mode),
-				Result:       "error",
-				EvaluationMs: ruleDurationMs,
-				Error:        "policy did not return a boolean",
-			})
-			// Fail-open on type error for enforced rules
-			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
-			}
-			continue
-		}
-
-		e.logger.Debug(ctx, "CEL policy evaluation result",
-			zap.String("name", policy.Name),
-			zap.Bool("result", result),
-			zap.String("action", string(policy.Action)),
-			zap.Int64("evaluation_ms", ruleDurationMs),
-		)
-
-		// Determine the effective result based on expression match and action
-		// If matched, the result is the action; if not matched, the result is the opposite
-		var ruleResult string
-		if result {
-			ruleResult = string(policy.Action) // "allow" or "deny"
-		} else {
-			// No match: deny rules effectively allow, allow rules effectively deny
-			if policy.Action == config.PolicyActionDeny {
-				ruleResult = string(config.PolicyActionAllow)
-			} else {
-				ruleResult = string(config.PolicyActionDeny)
-			}
-		}
-
-		ruleResults = append(ruleResults, AuditRulesRuleResult{
-			Rule:         policy.Name,
-			Action:       string(policy.Action),
-			Mode:         modeToAuditString(policy.Mode),
-			Result:       ruleResult,
-			EvaluationMs: ruleDurationMs,
-		})
-
-		// Also add to legacy results for compatibility
-		if result {
-			results.Results = append(results.Results, ValidationResult{
-				PolicyName: policy.Name,
-				PolicyType: "cel",
-				Action:     policy.Action,
-				Mode:       policy.Mode,
-				Message:    policy.Message,
-				DurationMs: ruleDurationMs,
-			})
-
-			if policy.Action == config.PolicyActionDeny {
-				// Only count toward final decision if mode is enforce (not audit_only)
-				if !policy.Mode.IsAuditOnly() {
-					if phaseTracker != nil {
-						phaseTracker.MarkDecided()
-					}
-					finalAction = "deny"
-					decidingRule = policy.Name
-					decidingReason = policy.Message
-					results.DenyCount++
-					earlyTerminated = true
-					break // Early termination on first enabled deny
-				} else {
-					auditOnlyDeny = true
-				}
-			} else if policy.Action == config.PolicyActionAllow {
-				// Only count toward final decision if mode is enforce (not audit_only)
-				if !policy.Mode.IsAuditOnly() {
-					results.AllowCount++
-				}
-			}
-		}
-	}
-
-	// Finalize phase timing
-	var blockedMs, evaluationMs int64
-	if phaseTracker != nil {
-		blockedMs, evaluationMs = phaseTracker.Finalize()
-	} else {
-		evaluationMs = time.Since(phaseStart).Milliseconds()
-	}
-
-	// Set final result
-	if finalAction == "deny" {
-		results.Allowed = false
-		results.Message = decidingReason
-		results.RecommendedAction = config.PolicyActionDeny
-	} else if auditOnlyDeny {
-		results.Allowed = true
-		results.AuditModeBypass = true
-		results.RecommendedAction = config.PolicyActionDeny
-		results.Message = "CEL policy would deny but mode is audit_only"
-	} else if results.FailedOpen {
-		results.Allowed = true
-		results.Message = "CEL evaluation failed, allowing request (fail-open)"
-	} else if results.AllowCount > 0 {
-		results.Allowed = true
-		results.RecommendedAction = config.PolicyActionAllow
-		// Find the first allow message
-		for _, r := range results.Results {
-			if r.Action == config.PolicyActionAllow && !r.Mode.IsAuditOnly() && r.Message != "" {
-				results.Message = r.Message
-				break
-			}
-		}
-	} else {
-		results.Allowed = true // Default to allow if no policies matched
-		results.Message = "No policies matched"
-	}
-
-	// Build CELDetails for audit
-	celDetails := &AuditRulesResult{
-		Action:       finalAction,
-		BlockedMs:    blockedMs,
-		EvaluationMs: evaluationMs,
-		Results:      ruleResults,
-	}
-	if decidingRule != "" {
-		celDetails.DecidingRule = decidingRule
-		celDetails.Reason = decidingReason
-	}
-	results.RulesDetails = celDetails
-
-	e.logger.Debug(ctx, "CEL policy evaluation complete",
-		zap.Bool("allowed", results.Allowed),
-		zap.String("message", results.Message),
-		zap.String("final_action", finalAction),
-		zap.Bool("early_terminated", earlyTerminated),
-		zap.Bool("failed_open", results.FailedOpen),
-		zap.Int64("blocked_ms", blockedMs),
-		zap.Int64("evaluation_ms", evaluationMs),
-	)
-
-	return results, nil
-}
-
-// modeToAuditString converts PolicyMode to audit string representation.
-// Returns empty string for enforce mode (omit in JSON), "audit_only" otherwise.
-func modeToAuditString(mode config.PolicyMode) string {
-	if mode == config.PolicyModeAuditOnly {
-		return "audit_only"
-	}
-	return "" // Omit "enforce" mode in audit output
+	// Policies without an MCP expression are CLI-only and have no MCP program.
+	return e.evaluatePolicies(ctx, vars, budget, "CEL", func(p *CELPolicy) cel.Program { return p.mcpProgram }), nil
 }
 
 // EvaluateCLICommand evaluates a CLI command against all policies.
@@ -479,12 +212,6 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	phaseStart := time.Now()
-	var phaseTracker *PhaseTracker
-	if budget != nil {
-		phaseTracker = budget.StartPhase()
-	}
-
 	e.logger.Debug(ctx, "Evaluating CLI command with CEL policies",
 		zap.String("command", req.Command),
 		zap.Strings("argument_flags", extractCLIArgumentFlags(req.Arguments)),
@@ -492,8 +219,26 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 		zap.Int("policy_count", len(e.policies)),
 	)
 
-	// Create evaluation context using BuildCLIContext
-	vars := BuildCLIContext(req)
+	// Policies without a CLI expression are MCP-only and have no CLI program.
+	return e.evaluatePolicies(ctx, BuildCLIContext(req), budget, "CLI CEL", func(p *CELPolicy) cel.Program { return p.cliProgram }), nil
+}
+
+// evaluatePolicies runs each policy's precompiled program (selected by programFor)
+// against vars, in order. Policies for which programFor returns nil are skipped.
+// logLabel prefixes log messages so MCP and CLI evaluations can be told apart.
+// Must be called with e.mu held for reading.
+func (e *CELPolicyEngine) evaluatePolicies(
+	ctx context.Context,
+	vars map[string]any,
+	budget *BlockingBudget,
+	logLabel string,
+	programFor func(*CELPolicy) cel.Program,
+) ValidationResults {
+	phaseStart := time.Now()
+	var phaseTracker *PhaseTracker
+	if budget != nil {
+		phaseTracker = budget.StartPhase()
+	}
 
 	results := ValidationResults{
 		Results: make([]ValidationResult, 0),
@@ -505,12 +250,14 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 	finalAction := "allow"
 	earlyTerminated := false
 	auditOnlyDeny := false
+	enforcedRuleErrored := false
 
 	// Evaluate each policy in order
-	for _, policy := range e.policies {
-		// Skip policies without CLI expression (MCP-only rules)
-		if policy.CLIExpression == "" {
-			e.logger.Debug(ctx, "Skipping policy without CLI expression",
+	for i := range e.policies {
+		policy := &e.policies[i]
+		prg := programFor(policy)
+		if prg == nil {
+			e.logger.Debug(ctx, logLabel+" policy skipped, no expression for this request type",
 				zap.String("name", policy.Name),
 			)
 			continue
@@ -519,125 +266,50 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 		// Track timing for this policy evaluation
 		ruleStart := time.Now()
 
-		e.logger.Debug(ctx, "Evaluating CLI CEL policy",
+		e.logger.Debug(ctx, "Evaluating "+logLabel+" policy",
 			zap.String("name", policy.Name),
 			zap.String("action", string(policy.Action)),
 		)
 
-		// Compile the CLI expression
-		ast, issues := e.env.Compile(policy.CLIExpression)
-		if issues != nil && issues.Err() != nil {
-			ruleDurationMs := time.Since(ruleStart).Milliseconds()
-			e.logger.Error(ctx, "CLI CEL policy compilation error",
-				zap.String("rule", policy.Name),
-				zap.Int64("evaluation_ms", ruleDurationMs),
-				zap.Error(issues.Err()),
-			)
-			ruleResults = append(ruleResults, AuditRulesRuleResult{
-				Rule:         policy.Name,
-				Action:       string(policy.Action),
-				Mode:         modeToAuditString(policy.Mode),
-				Result:       "error",
-				EvaluationMs: ruleDurationMs,
-				Error:        formatAuditError("compile_error", issues.Err()),
-			})
-			// Fail-open on compilation error for enforced rules
-			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
-			}
-			continue
-		}
-
-		// Create program
-		prg, err := e.env.Program(ast)
-		if err != nil {
-			ruleDurationMs := time.Since(ruleStart).Milliseconds()
-			e.logger.Error(ctx, "CLI CEL policy program error",
-				zap.String("rule", policy.Name),
-				zap.Int64("evaluation_ms", ruleDurationMs),
-				zap.Error(err),
-			)
-			ruleResults = append(ruleResults, AuditRulesRuleResult{
-				Rule:         policy.Name,
-				Action:       string(policy.Action),
-				Mode:         modeToAuditString(policy.Mode),
-				Result:       "error",
-				EvaluationMs: ruleDurationMs,
-				Error:        formatAuditError("program_error", err),
-			})
-			// Fail-open on program creation error for enforced rules
-			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
-			}
-			continue
-		}
-
-		// Evaluate the expression
 		out, _, err := prg.Eval(vars)
 		ruleDurationMs := time.Since(ruleStart).Milliseconds()
 
+		var ruleErr string
+		var matched bool
 		if err != nil {
-			e.logger.Error(ctx, "CLI CEL policy evaluation error",
+			e.logger.Error(ctx, logLabel+" policy evaluation error",
 				zap.String("rule", policy.Name),
 				zap.Int64("evaluation_ms", ruleDurationMs),
 				zap.Error(err),
 			)
+			ruleErr = formatAuditError("eval_error", err)
+		} else if b, ok := out.Value().(bool); ok {
+			matched = b
+		} else {
+			ruleErr = "policy did not return a boolean"
+		}
+
+		if ruleErr != "" {
 			ruleResults = append(ruleResults, AuditRulesRuleResult{
 				Rule:         policy.Name,
 				Action:       string(policy.Action),
 				Mode:         modeToAuditString(policy.Mode),
 				Result:       "error",
 				EvaluationMs: ruleDurationMs,
-				Error:        formatAuditError("eval_error", err),
+				Error:        ruleErr,
 			})
-			// Fail-open on evaluation error for enforced rules
+			// Fail open for this rule only and keep evaluating, so a later
+			// enforced deny still applies. The phase is not marked decided here:
+			// the remaining rules still block the request and count toward the budget.
 			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
+				enforcedRuleErrored = true
 			}
 			continue
 		}
 
-		// Check result
-		result, ok := out.Value().(bool)
-		if !ok {
-			ruleResults = append(ruleResults, AuditRulesRuleResult{
-				Rule:         policy.Name,
-				Action:       string(policy.Action),
-				Mode:         modeToAuditString(policy.Mode),
-				Result:       "error",
-				EvaluationMs: ruleDurationMs,
-				Error:        "policy did not return a boolean",
-			})
-			// Fail-open on type error for enforced rules
-			if !policy.Mode.IsAuditOnly() {
-				if phaseTracker != nil {
-					phaseTracker.MarkDecided()
-				}
-				results.FailedOpen = true
-				earlyTerminated = true
-				break
-			}
-			continue
-		}
-
-		e.logger.Debug(ctx, "CLI CEL policy evaluation result",
+		e.logger.Debug(ctx, logLabel+" policy evaluation result",
 			zap.String("name", policy.Name),
-			zap.Bool("result", result),
+			zap.Bool("result", matched),
 			zap.String("action", string(policy.Action)),
 			zap.Int64("evaluation_ms", ruleDurationMs),
 		)
@@ -645,7 +317,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 		// Determine the effective result based on expression match and action
 		// If matched, the result is the action; if not matched, the result is the opposite
 		var ruleResult string
-		if result {
+		if matched {
 			ruleResult = string(policy.Action) // "allow" or "deny"
 		} else {
 			// No match: deny rules effectively allow, allow rules effectively deny
@@ -665,7 +337,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 		})
 
 		// Also add to legacy results for compatibility
-		if result {
+		if matched {
 			results.Results = append(results.Results, ValidationResult{
 				PolicyName: policy.Name,
 				PolicyType: "cel",
@@ -698,6 +370,11 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 			}
 		}
 	}
+
+	// FailedOpen means the call was allowed because a rule could not be evaluated.
+	// When a later enforced deny decided the outcome, the erroring rule let nothing
+	// through; its "error" result stays in the per-rule audit results.
+	results.FailedOpen = enforcedRuleErrored && finalAction != "deny"
 
 	// Finalize phase timing
 	var blockedMs, evaluationMs int64
@@ -748,7 +425,7 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 	}
 	results.RulesDetails = celDetails
 
-	e.logger.Debug(ctx, "CLI CEL policy evaluation complete",
+	e.logger.Debug(ctx, logLabel+" policy evaluation complete",
 		zap.Bool("allowed", results.Allowed),
 		zap.String("message", results.Message),
 		zap.String("final_action", finalAction),
@@ -758,7 +435,16 @@ func (e *CELPolicyEngine) EvaluateCLICommand(ctx context.Context, req *CLIValida
 		zap.Int64("evaluation_ms", evaluationMs),
 	)
 
-	return results, nil
+	return results
+}
+
+// modeToAuditString converts PolicyMode to audit string representation.
+// Returns empty string for enforce mode (omit in JSON), "audit_only" otherwise.
+func modeToAuditString(mode config.PolicyMode) string {
+	if mode == config.PolicyModeAuditOnly {
+		return "audit_only"
+	}
+	return "" // Omit "enforce" mode in audit output
 }
 
 // BuildCLIContext creates the CEL evaluation context for a CLI command.

@@ -366,3 +366,124 @@ func TestCELResponsePolicyEngine_ToolVariable(t *testing.T) {
 		})
 	}
 }
+
+// TestCELResponsePolicyEngine_ContinuesAfterRuleError verifies that an enforced
+// response rule that errors at runtime fails open for itself only: later rules
+// still run, so a later redact rule still redacts and a later deny rule still
+// denies (without the response being reported as fail-open).
+func TestCELResponsePolicyEngine_ContinuesAfterRuleError(t *testing.T) {
+	sessionLogger := config.NewSessionLogger(zap.NewNop())
+
+	broken := func(expression string) config.ResponsePolicy {
+		return config.ResponsePolicy{Name: "broken", Expression: expression, Action: config.PolicyActionDeny}
+	}
+	redactSecrets := config.ResponsePolicy{
+		Name:                 "redact-secrets",
+		Expression:           `size(response.content) > 0 && response.content[0].text.contains("secret")`,
+		Action:               config.PolicyActionRedact,
+		RedactionPattern:     "secret[0-9]+",
+		RedactionReplacement: "[REDACTED]",
+	}
+	denyErrors := config.ResponsePolicy{
+		Name:       "deny-errors",
+		Expression: `response.isError == true`,
+		Action:     config.PolicyActionDeny,
+		Message:    "Error responses are not allowed",
+	}
+	const evalErrorExpr = `response.missing_key == "x"`
+	const nonBoolExpr = `response.isError ? "yes" : "no"`
+
+	tests := []struct {
+		name             string
+		policies         []config.ResponsePolicy
+		text             string
+		isError          bool
+		wantAllowed      bool
+		wantFailedOpen   bool
+		wantRedacted     string
+		wantRecommended  config.PolicyAction
+		wantRuleResults  []string
+		wantDecidingRule string
+	}{
+		{
+			name:            "eval error then matching redact redacts",
+			policies:        []config.ResponsePolicy{broken(evalErrorExpr), redactSecrets},
+			text:            "token is secret123",
+			wantAllowed:     true,
+			wantFailedOpen:  true,
+			wantRedacted:    "token is [REDACTED]",
+			wantRuleResults: []string{"broken=error", "redact-secrets=redact"},
+		},
+		{
+			name:             "eval error then matching deny denies",
+			policies:         []config.ResponsePolicy{broken(evalErrorExpr), denyErrors},
+			text:             "boom",
+			isError:          true,
+			wantAllowed:      false,
+			wantFailedOpen:   false,
+			wantRecommended:  config.PolicyActionDeny,
+			wantRuleResults:  []string{"broken=error", "deny-errors=deny"},
+			wantDecidingRule: "deny-errors",
+		},
+		{
+			name:            "non-boolean result then matching redact redacts",
+			policies:        []config.ResponsePolicy{broken(nonBoolExpr), redactSecrets},
+			text:            "token is secret123",
+			wantAllowed:     true,
+			wantFailedOpen:  true,
+			wantRedacted:    "token is [REDACTED]",
+			wantRuleResults: []string{"broken=error", "redact-secrets=redact"},
+		},
+		{
+			name:             "non-boolean result then matching deny denies",
+			policies:         []config.ResponsePolicy{broken(nonBoolExpr), denyErrors},
+			text:             "boom",
+			isError:          true,
+			wantAllowed:      false,
+			wantFailedOpen:   false,
+			wantRecommended:  config.PolicyActionDeny,
+			wantRuleResults:  []string{"broken=error", "deny-errors=deny"},
+			wantDecidingRule: "deny-errors",
+		},
+		{
+			name:            "eval error then non-matching rules allows with fail-open",
+			policies:        []config.ResponsePolicy{broken(evalErrorExpr), redactSecrets, denyErrors},
+			text:            "nothing to see",
+			wantAllowed:     true,
+			wantFailedOpen:  true,
+			wantRuleResults: []string{"broken=error", "redact-secrets=allow", "deny-errors=allow"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, err := NewCELResponsePolicyEngine(context.Background(), sessionLogger)
+			require.NoError(t, err)
+			require.NoError(t, engine.LoadPolicies(tt.policies, config.PolicyModeEnforce))
+
+			req := mcp.CallToolRequest{
+				Request: mcp.Request{Method: "tools/call"},
+				Params:  mcp.CallToolParams{Name: "github__get_file"},
+			}
+			result := &mcp.CallToolResult{
+				Content: []mcp.Content{mcp.TextContent{Type: "text", Text: tt.text}},
+				IsError: tt.isError,
+			}
+			results, err := engine.EvaluateResponse(context.Background(), req, result, NewBlockingBudget(90000))
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantAllowed, results.Allowed, "Allowed")
+			assert.Equal(t, tt.wantFailedOpen, results.FailedOpen, "FailedOpen")
+			assert.Equal(t, tt.wantRecommended, results.RecommendedAction, "RecommendedAction")
+			if tt.wantRedacted != "" {
+				require.NotNil(t, results.RedactedContent, "RedactedContent")
+				assert.Equal(t, tt.wantRedacted, *results.RedactedContent)
+			} else {
+				assert.Nil(t, results.RedactedContent, "RedactedContent")
+			}
+			require.NotNil(t, results.RulesDetails)
+			assert.Equal(t, tt.wantRuleResults, ruleResultSummary(results.RulesDetails), "rule results")
+			assert.Equal(t, tt.wantDecidingRule, results.RulesDetails.DecidingRule, "DecidingRule")
+		})
+	}
+}

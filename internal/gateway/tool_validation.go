@@ -28,16 +28,19 @@ const (
 // if no specific deny reason should be recorded (e.g., CLI/Action handlers where
 // the deny action itself is self-explanatory).
 //
-// Priority: denied → denyReason, audit_mode bypass → "audit_mode", fail_open → "fail_open".
+// Priority: denied → denyReason, fail_open → "fail_open", audit_mode bypass → "audit_mode".
+// fail_open outranks audit_mode because a rule that could not be evaluated means the
+// allow is not explained by audit_only rules alone. This matches the MCP proxy path
+// in Gateway, which checks FailedOpen before AuditModeBypass.
 func DeriveAuditActionReason(allowed, auditModeBypass, failedOpen bool, denyReason ActionReason) string {
 	if !allowed {
 		return string(denyReason)
 	}
-	if auditModeBypass {
-		return string(ActionReasonAuditMode)
-	}
 	if failedOpen {
 		return string(ActionReasonFailOpen)
+	}
+	if auditModeBypass {
+		return string(ActionReasonAuditMode)
 	}
 	return ""
 }
@@ -91,6 +94,8 @@ type ValidationResults struct {
 	// Empty when action == recommended_action with no special circumstances.
 	ActionReason ActionReason `json:"action_reason,omitempty"`
 	// FailedOpen indicates validation couldn't complete and defaulted to allow.
+	// It is never set on a denied result: an enforced deny from another rule or
+	// engine decides the outcome even when some rule errored.
 	// When true, RecommendedAction should be empty and ActionReason should be ActionReasonFailOpen.
 	FailedOpen bool `json:"-"`
 	// AuditModeBypass indicates the request was allowed despite a deny recommendation
@@ -203,8 +208,10 @@ func (c *ToolValidationChain) Handle(ctx context.Context, req mcp.CallToolReques
 		finalResults.RecommendedAction = config.PolicyActionDeny
 		// An enforced deny overrides any audit-mode bypass — the request was
 		// actually denied, so no bypass occurred. This matches finalizeResults
-		// in PolicyEvaluator.
+		// in PolicyEvaluator. The same holds for FailedOpen: a handler that
+		// failed open did not let this request through.
 		finalResults.AuditModeBypass = false
+		finalResults.FailedOpen = false
 	} else if foundAllow {
 		finalResults.Allowed = true
 		finalResults.Message = allowMessage

@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"fmt"
+
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
@@ -13,6 +15,21 @@ import (
 // (e.g. tool.name == "github__delete_file"), so every CEL environment that
 // evaluates MCP tool-call expressions must declare it.
 const celToolVariable = "tool"
+
+// compileCELProgram compiles and type-checks expression in env and builds its
+// program. Engines call it once per rule at load time and reuse the program:
+// cel-go documents cel.Program as stateless and safe for concurrent Eval.
+func compileCELProgram(env *cel.Env, expression string) (cel.Program, error) {
+	ast, issues := env.Compile(expression)
+	if issues != nil && issues.Err() != nil {
+		return nil, issues.Err()
+	}
+	prg, err := env.Program(ast)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build program: %w", err)
+	}
+	return prg, nil
+}
 
 // celMapHelperFunctions returns the custom has(map, key) and get(map, key, default)
 // functions shared by all CEL environments. They give rules safe field access on

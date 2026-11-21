@@ -1875,3 +1875,253 @@ func TestCELEngine_EvaluateCLICommand_ToolVariableInMCPExpression(t *testing.T) 
 		})
 	}
 }
+
+// ruleResultSummary flattens per-rule audit results into "rule=result" strings so
+// tests can assert which rules ran, in what order, and what each one decided.
+func ruleResultSummary(details *AuditRulesResult) []string {
+	if details == nil {
+		return nil
+	}
+	summary := make([]string, 0, len(details.Results))
+	for _, r := range details.Results {
+		summary = append(summary, r.Rule+"="+r.Result)
+	}
+	return summary
+}
+
+// TestCELPolicyEngine_ContinuesAfterRuleError verifies that an enforced rule that
+// errors at runtime (eval error or non-boolean result) fails open for itself only:
+// it is recorded as "error", later rules still run, a later enforced deny still
+// denies (and the call is then not reported as fail_open), and a call that no rule
+// denies is allowed with FailedOpen set. audit_only erroring rules never set FailedOpen.
+func TestCELPolicyEngine_ContinuesAfterRuleError(t *testing.T) {
+	sessionLogger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	allowReads := config.Policy{
+		Name:       "allow-reads",
+		Expression: `request.params.name.startsWith("github__get_")`,
+		Action:     config.PolicyActionAllow,
+	}
+	denyDeleteRepo := config.Policy{
+		Name:       "deny-delete-repo",
+		Expression: `request.params.name == "github__delete_repo"`,
+		Action:     config.PolicyActionDeny,
+		Message:    "Deleting repositories is not allowed",
+	}
+	broken := func(expression string, mode config.PolicyMode) config.Policy {
+		return config.Policy{
+			Name:       "broken",
+			Expression: expression,
+			Action:     config.PolicyActionDeny,
+			Mode:       mode,
+			Message:    "broken rule matched",
+		}
+	}
+	// Both compile, but the first errors at runtime when the key is absent and the
+	// second evaluates to a string instead of a bool.
+	const evalErrorExpr = `request.params.arguments.missing_key == "x"`
+	const nonBoolExpr = `request.params.name`
+
+	tests := []struct {
+		name              string
+		policies          []config.Policy
+		tool              string
+		wantAllowed       bool
+		wantFailedOpen    bool
+		wantRecommended   config.PolicyAction
+		wantDecidingRule  string
+		wantRuleResults   []string
+		wantActionReason  string
+		wantMessageSubstr string
+	}{
+		{
+			name:             "eval error then matching enforced deny denies",
+			policies:         []config.Policy{allowReads, broken(evalErrorExpr, ""), denyDeleteRepo},
+			tool:             "github__delete_repo",
+			wantAllowed:      false,
+			wantFailedOpen:   false,
+			wantRecommended:  config.PolicyActionDeny,
+			wantDecidingRule: "deny-delete-repo",
+			wantRuleResults:  []string{"allow-reads=deny", "broken=error", "deny-delete-repo=deny"},
+			wantActionReason: string(ActionReasonRequestPolicy),
+		},
+		{
+			name:              "eval error then non-matching rules allows with fail-open",
+			policies:          []config.Policy{allowReads, broken(evalErrorExpr, ""), denyDeleteRepo},
+			tool:              "github__get_file",
+			wantAllowed:       true,
+			wantFailedOpen:    true,
+			wantRuleResults:   []string{"allow-reads=allow", "broken=error", "deny-delete-repo=allow"},
+			wantActionReason:  string(ActionReasonFailOpen),
+			wantMessageSubstr: "fail-open",
+		},
+		{
+			name:             "non-boolean result then matching enforced deny denies",
+			policies:         []config.Policy{allowReads, broken(nonBoolExpr, ""), denyDeleteRepo},
+			tool:             "github__delete_repo",
+			wantAllowed:      false,
+			wantFailedOpen:   false,
+			wantRecommended:  config.PolicyActionDeny,
+			wantDecidingRule: "deny-delete-repo",
+			wantRuleResults:  []string{"allow-reads=deny", "broken=error", "deny-delete-repo=deny"},
+			wantActionReason: string(ActionReasonRequestPolicy),
+		},
+		{
+			name:              "non-boolean result then non-matching rules allows with fail-open",
+			policies:          []config.Policy{allowReads, broken(nonBoolExpr, ""), denyDeleteRepo},
+			tool:              "github__get_file",
+			wantAllowed:       true,
+			wantFailedOpen:    true,
+			wantRuleResults:   []string{"allow-reads=allow", "broken=error", "deny-delete-repo=allow"},
+			wantActionReason:  string(ActionReasonFailOpen),
+			wantMessageSubstr: "fail-open",
+		},
+		{
+			name:             "audit_only eval error then matching deny denies",
+			policies:         []config.Policy{broken(evalErrorExpr, config.PolicyModeAuditOnly), denyDeleteRepo},
+			tool:             "github__delete_repo",
+			wantAllowed:      false,
+			wantFailedOpen:   false,
+			wantRecommended:  config.PolicyActionDeny,
+			wantDecidingRule: "deny-delete-repo",
+			wantRuleResults:  []string{"broken=error", "deny-delete-repo=deny"},
+			wantActionReason: string(ActionReasonRequestPolicy),
+		},
+		{
+			// The broken rule no longer stops the loop, so the audit_only deny after it
+			// runs and sets AuditModeBypass. The call was still allowed because a rule
+			// errored, so it must be reported as fail_open, matching the MCP proxy path.
+			name: "eval error then audit_only deny reports fail_open",
+			policies: []config.Policy{broken(evalErrorExpr, ""), {
+				Name:       "audit-deny",
+				Expression: `true`,
+				Action:     config.PolicyActionDeny,
+				Mode:       config.PolicyModeAuditOnly,
+			}},
+			tool:             "github__get_file",
+			wantAllowed:      true,
+			wantFailedOpen:   true,
+			wantRecommended:  config.PolicyActionDeny,
+			wantRuleResults:  []string{"broken=error", "audit-deny=deny"},
+			wantActionReason: string(ActionReasonFailOpen),
+		},
+		{
+			name:            "audit_only eval error alone does not fail open",
+			policies:        []config.Policy{broken(evalErrorExpr, config.PolicyModeAuditOnly), denyDeleteRepo},
+			tool:            "github__get_file",
+			wantAllowed:     true,
+			wantFailedOpen:  false,
+			wantRuleResults: []string{"broken=error", "deny-delete-repo=allow"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
+			require.NoError(t, err)
+			require.NoError(t, engine.LoadPolicies(tt.policies, config.PolicyModeEnforce))
+
+			req := mcp.CallToolRequest{
+				Request: mcp.Request{Method: "tools/call"},
+				Params: mcp.CallToolParams{
+					Name:      tt.tool,
+					Arguments: map[string]any{"owner": "maybedont"},
+				},
+			}
+			results, err := engine.EvaluateToolCall(context.Background(), req, NewBlockingBudget(90000))
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantAllowed, results.Allowed, "Allowed")
+			assert.Equal(t, tt.wantFailedOpen, results.FailedOpen, "FailedOpen")
+			assert.Equal(t, tt.wantRecommended, results.RecommendedAction, "RecommendedAction")
+			require.NotNil(t, results.RulesDetails)
+			assert.Equal(t, tt.wantRuleResults, ruleResultSummary(results.RulesDetails), "rule results")
+			assert.Equal(t, tt.wantDecidingRule, results.RulesDetails.DecidingRule, "DecidingRule")
+			assert.Equal(t, tt.wantActionReason,
+				DeriveAuditActionReason(results.Allowed, results.AuditModeBypass, results.FailedOpen, ActionReasonRequestPolicy),
+				"action_reason")
+			if tt.wantMessageSubstr != "" {
+				assert.Contains(t, results.Message, tt.wantMessageSubstr)
+			}
+		})
+	}
+}
+
+// TestCELEngine_EvaluateCLICommand_ContinuesAfterRuleError verifies the CLI path
+// applies the same continue-after-error behavior as the MCP path.
+func TestCELEngine_EvaluateCLICommand_ContinuesAfterRuleError(t *testing.T) {
+	sessionLogger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	denyRepoDelete := config.Policy{
+		Name:          "deny-repo-delete",
+		CLIExpression: `cli.command == "gh" && size(cli.arguments) > 1 && cli.arguments[0] == "repo" && cli.arguments[1] == "delete"`,
+		Action:        config.PolicyActionDeny,
+		Message:       "Deleting repositories is not allowed",
+	}
+	broken := func(expression string) config.Policy {
+		return config.Policy{Name: "broken", CLIExpression: expression, Action: config.PolicyActionDeny}
+	}
+
+	tests := []struct {
+		name             string
+		brokenExpr       string
+		arguments        []string
+		wantAllowed      bool
+		wantFailedOpen   bool
+		wantRuleResults  []string
+		wantDecidingRule string
+	}{
+		{
+			name:             "eval error then matching deny denies",
+			brokenExpr:       `cli.missing_key == "x"`,
+			arguments:        []string{"repo", "delete", "maybedont/x"},
+			wantAllowed:      false,
+			wantRuleResults:  []string{"broken=error", "deny-repo-delete=deny"},
+			wantDecidingRule: "deny-repo-delete",
+		},
+		{
+			name:            "eval error then non-matching deny allows with fail-open",
+			brokenExpr:      `cli.missing_key == "x"`,
+			arguments:       []string{"repo", "view"},
+			wantAllowed:     true,
+			wantFailedOpen:  true,
+			wantRuleResults: []string{"broken=error", "deny-repo-delete=allow"},
+		},
+		{
+			name:             "non-boolean result then matching deny denies",
+			brokenExpr:       `cli.command`,
+			arguments:        []string{"repo", "delete", "maybedont/x"},
+			wantAllowed:      false,
+			wantRuleResults:  []string{"broken=error", "deny-repo-delete=deny"},
+			wantDecidingRule: "deny-repo-delete",
+		},
+		{
+			name:            "non-boolean result then non-matching deny allows with fail-open",
+			brokenExpr:      `cli.command`,
+			arguments:       []string{"repo", "view"},
+			wantAllowed:     true,
+			wantFailedOpen:  true,
+			wantRuleResults: []string{"broken=error", "deny-repo-delete=allow"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, err := NewCELPolicyEngine(context.Background(), sessionLogger)
+			require.NoError(t, err)
+			require.NoError(t, engine.LoadPolicies([]config.Policy{broken(tt.brokenExpr), denyRepoDelete}, config.PolicyModeEnforce))
+
+			results, err := engine.EvaluateCLICommand(context.Background(), &CLIValidationRequest{
+				Command:   "gh",
+				Arguments: tt.arguments,
+			}, NewBlockingBudget(90000))
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantAllowed, results.Allowed, "Allowed")
+			assert.Equal(t, tt.wantFailedOpen, results.FailedOpen, "FailedOpen")
+			require.NotNil(t, results.RulesDetails)
+			assert.Equal(t, tt.wantRuleResults, ruleResultSummary(results.RulesDetails), "rule results")
+			assert.Equal(t, tt.wantDecidingRule, results.RulesDetails.DecidingRule, "DecidingRule")
+		})
+	}
+}

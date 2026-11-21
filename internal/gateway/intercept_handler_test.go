@@ -1428,6 +1428,14 @@ func TestMergeShellResults_FailedOpenPropagated(t *testing.T) {
 			mcp:  ValidationResults{Allowed: true},
 			want: false,
 		},
+		{
+			// FailedOpen means "allowed because validation could not complete",
+			// so an enforced deny on the other side clears it.
+			name: "CLI failed open but MCP denied",
+			cli:  ValidationResults{Allowed: true, FailedOpen: true},
+			mcp:  ValidationResults{Allowed: false, DenyCount: 1},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1725,4 +1733,107 @@ func sendIntercept(t *testing.T, handler *InterceptHandler, body string) (string
 	handler.ServeHTTP(w, req)
 
 	return w.Body.String(), w.Code
+}
+
+// TestErrorThenAuditOnlyDeny_ActionReasonFailOpen verifies that when an enforced
+// rule errors and a later audit_only rule would deny, the CLI, intercept request
+// and intercept response audit entries report action_reason "fail_open", matching
+// the MCP proxy path. The call is allowed because a rule could not be evaluated,
+// even though AuditModeBypass is also set.
+func TestErrorThenAuditOnlyDeny_ActionReasonFailOpen(t *testing.T) {
+	logger := config.NewSessionLogger(zaptest.NewLogger(t))
+
+	newErrorThenAuditDenyEngine := func(t *testing.T) *CELPolicyEngine {
+		t.Helper()
+		engine, err := NewCELPolicyEngine(t.Context(), logger)
+		require.NoError(t, err)
+		require.NoError(t, engine.LoadPolicies([]config.Policy{
+			{
+				Name:          "broken",
+				MCPExpression: `request.params.arguments.missing_key == "x"`,
+				CLIExpression: `cli.missing_key == "x"`,
+				Action:        config.PolicyActionDeny,
+			},
+			{
+				Name:          "audit-deny",
+				MCPExpression: `true`,
+				CLIExpression: `true`,
+				Action:        config.PolicyActionDeny,
+				Mode:          config.PolicyModeAuditOnly,
+			},
+		}, config.PolicyModeEnforce))
+		return engine
+	}
+
+	tests := []struct {
+		name string
+		send func(t *testing.T, auditWriter *mockAuditWriter)
+	}{
+		{
+			name: "CLI validation",
+			send: func(t *testing.T, auditWriter *mockAuditWriter) {
+				handler := NewCLIValidationHandler(CLIValidationHandlerConfig{
+					Enabled:          true,
+					ValidateCommands: []string{"*"},
+					Logger:           logger,
+					Version:          "1.0.0-test",
+					AuditWriter:      auditWriter,
+					Evaluator:        &PolicyEvaluator{CELEngine: newErrorThenAuditDenyEngine(t), Logger: logger},
+				})
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/cli/validate", strings.NewReader(`{"command": "gh", "arguments": ["repo", "view"]}`))
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, req)
+				assert.Equal(t, http.StatusOK, w.Code)
+			},
+		},
+		{
+			name: "intercept request phase",
+			send: func(t *testing.T, auditWriter *mockAuditWriter) {
+				handler := NewInterceptHandler(InterceptHandlerConfig{
+					Enabled:     true,
+					Logger:      logger,
+					Version:     "1.0.0-test",
+					Evaluator:   &PolicyEvaluator{CELEngine: newErrorThenAuditDenyEngine(t), Logger: logger},
+					AuditWriter: auditWriter,
+				})
+				_, code := sendIntercept(t, handler, `{"event": "tools/call", "phase": "request", "payload": {"name": "test_tool", "arguments": {"owner": "x"}}}`)
+				assert.Equal(t, http.StatusOK, code)
+			},
+		},
+		{
+			// The CEL response engine has no audit_only bypass of its own, so a stub
+			// supplies the merged flags a response chain produces for this case.
+			name: "intercept response phase",
+			send: func(t *testing.T, auditWriter *mockAuditWriter) {
+				chain := NewResponseValidationChain(logger, &stubResponseHandler{results: ResponseValidationResults{
+					Allowed:           true,
+					FailedOpen:        true,
+					AuditModeBypass:   true,
+					RecommendedAction: config.PolicyActionDeny,
+				}})
+				handler := NewInterceptHandler(InterceptHandlerConfig{
+					Enabled:     true,
+					Logger:      logger,
+					Version:     "1.0.0-test",
+					Evaluator:   &PolicyEvaluator{ResponseChain: chain, Logger: logger},
+					AuditWriter: auditWriter,
+				})
+				_, code := sendIntercept(t, handler, `{"event": "tools/call", "phase": "response", "payload": {"name": "test_tool", "result": {"content": [{"type": "text", "text": "some content"}]}}}`)
+				assert.Equal(t, http.StatusOK, code)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auditWriter := &mockAuditWriter{}
+			tt.send(t, auditWriter)
+
+			entries := auditWriter.getEntries()
+			require.Len(t, entries, 1)
+			assert.Equal(t, "allow", entries[0].Action)
+			assert.Equal(t, string(ActionReasonFailOpen), entries[0].ActionReason)
+		})
+	}
 }
