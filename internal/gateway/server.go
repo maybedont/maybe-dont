@@ -1139,9 +1139,9 @@ func (g *Gateway) ensurePassThroughClient(ctx context.Context, sessionID, client
 		return errDownstreamConnectFailed(clientName)
 	}
 	if len(result.Errors) > 0 {
-		// Discovery already logged the raw error and made this message safe
-		// for the caller with safeDownstreamConnectError.
-		g.logger.Warn(ctx, "Failed to connect pass-through client for session",
+		// Discovery already logged the raw error at Warn and made this
+		// message safe for the caller with safeDownstreamConnectError.
+		g.logger.Debug(ctx, "Failed to connect pass-through client for session",
 			zap.String("session_id", sessionID),
 			zap.String("client", clientName),
 			zap.String("error", result.Errors[0].Error))

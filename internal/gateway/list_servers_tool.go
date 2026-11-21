@@ -151,7 +151,7 @@ func (h *NativeToolsHandler) handleListDownstreamServers(ctx context.Context, re
 			if url == "" {
 				url = cfg.URL
 			}
-			info.URL = url
+			info.URL = redactedDownstreamURL(url)
 		case "stdio":
 			// Build command string
 			if len(cfg.CommandArgs) > 0 || len(cfg.Args) > 0 {
